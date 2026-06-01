@@ -187,7 +187,7 @@ public partial class MainViewModel : ObservableObject
                 extractedOtp = otpMatch.Value;
                 
                 // GỌI HÀM BẮN TELEGRAM
-                _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>");
+                _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
             }
 
             // 3. Đưa lên UI (Cập nhật Tab SMS)

@@ -90,17 +90,32 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+COPS?");
     }
 
-    private void HandleDataReceived(string portName, SerialPort sp)
+    private async void HandleDataReceived(string portName, SerialPort sp)
     {
         try
         {
             string data = sp.ReadExisting();
             if (!string.IsNullOrWhiteSpace(data))
             {
-                // Bắt sự kiện tin nhắn mới (URC: Unsolicited Result Code)
+                // Bắt sự kiện có tin nhắn mới tới
                 if (data.Contains("+CMTI:"))
                 {
-                    SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = data });
+                    // Dùng Regex tìm vị trí lưu tin nhắn. VD: +CMTI: "SM",1 -> Lấy số 1
+                    var match = Regex.Match(data, @"\+CMTI:\s*""[^""]+"",(\d+)");
+                    if (match.Success)
+                    {
+                        string msgIndex = match.Groups[1].Value;
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Phát hiện tin nhắn ở vị trí {msgIndex}, đang đọc..." });
+                        
+                        // Gửi lệnh ĐỌC tin nhắn đó
+                        string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
+                        
+                        // Gắn vào sự kiện để ném sang ViewModel
+                        SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
+
+                        // Tùy chọn: Xóa tin nhắn sau khi đọc để tránh đầy SIM (AT+CMGD=1)
+                        await SendCommandAsync(portName, $"AT+CMGD={msgIndex},4");
+                    }
                 }
                 else if (data.Contains("+CUSD:") || data.Contains("+CMGL:"))
                 {

@@ -137,55 +137,51 @@ public partial class MainViewModel : ObservableObject
         });
     }
 
-    private async void ModemService_SmsReceived(object? sender, GsmDataEventArgs e)
+    private void ModemService_SmsReceived(object? sender, GsmDataEventArgs e)
     {
-        // 1. Lấy vị trí tin nhắn từ chuỗi +CMTI: "SM",X
-        var match = Regex.Match(e.Data, @"\+CMTI:\s*""[^""]+"",\s*(\d+)");
-        if (match.Success)
+        // Raw Data trả về thường có dạng:
+        // +CMGR: "REC UNREAD","+84999999999",,"26/05/01,10:00:00+28"
+        // Ma xac nhan Zalo cua ban la 123456
+
+        Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            string msgIndex = match.Groups[1].Value;
-
-            // 2. Gửi lệnh đọc tin nhắn thật ở vị trí đó
-            string rawSms = await _modemService.SendCommandAsync(e.PortName, $"AT+CMGR={msgIndex}");
-
-            // 3. Xử lý Regex bóc tách nội dung
-            string[] lines = rawSms.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
-            
             string senderPhone = "UNKNOWN";
-            string content = "";
-            string otpCode = "";
+            string extractedOtp = "N/A";
+            string cleanContent = e.Data;
 
-            if (lines.Length >= 2)
+            // 1. Tìm người gửi (Sender)
+            var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
+            if (senderMatch.Success)
             {
-                // Dòng 1 chứa số người gửi
-                var senderMatch = Regex.Match(lines[0], @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
-                if (senderMatch.Success) senderPhone = senderMatch.Groups[1].Value;
-
-                // Dòng 2 trở đi là nội dung
-                content = string.Join(" ", lines.Skip(1)).Trim();
-
-                // Tìm OTP (Ví dụ: 4 đến 6 chữ số liên tiếp)
-                var otpMatch = Regex.Match(content, @"\b\d{4,6}\b");
-                if (otpMatch.Success) otpCode = otpMatch.Value;
+                senderPhone = senderMatch.Groups[1].Value;
+                // Xóa dòng header +CMGR đi để lấy nội dung text sạch
+                cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
+                cleanContent = cleanContent.Replace("OK", "").Trim();
             }
 
-            // 4. Đẩy lên Giao diện
-            Application.Current.Dispatcher.Invoke(() =>
+            // 2. Tìm OTP (Lọc ra chuỗi từ 4-6 số liên tiếp)
+            var otpMatch = Regex.Match(cleanContent, @"\b\d{4,6}\b");
+            if (otpMatch.Success)
             {
-                SmsMessages.Insert(0, new SmsMessage
-                {
-                    PortName = e.PortName,
-                    ReceivedTime = DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"),
-                    Content = content,
-                    Sender = senderPhone,
-                    Otp = otpCode
-                });
-                SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có OTP mới: {otpCode}");
-            });
+                extractedOtp = otpMatch.Value;
+                
+                // TODO: GỌI HÀM BẮN TELEGRAM Ở ĐÂY (NẾU CÓ)
+                // TelegramService.SendMessageAsync($"Cổng: {e.PortName} | OTP: {extractedOtp}");
+            }
 
-            // 5. Xóa tin nhắn khỏi SIM để tránh đầy bộ nhớ
-            await _modemService.SendCommandAsync(e.PortName, "AT+CMGD=1,4");
-        }
+            // 3. Đưa lên UI
+            SmsMessages.Insert(0, new SmsMessage
+            {
+                PortName = e.PortName,
+                ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
+                Content = cleanContent,
+                Sender = senderPhone,
+                Otp = extractedOtp,
+                ReceiverPhone = Ports.FirstOrDefault(p => p.PortName == e.PortName)?.PhoneNumber ?? ""
+            });
+            
+            SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
+        });
     }
 
     [RelayCommand]

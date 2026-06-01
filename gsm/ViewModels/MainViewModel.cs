@@ -118,38 +118,74 @@ public partial class MainViewModel : ObservableObject
                 if (match.Success)
                 {
                     string ussdContent = match.Groups[1].Value;
-                    
-                    // Thử tìm số tiền
                     var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
-                    if (moneyMatch.Success)
-                    {
-                        port.Balance = moneyMatch.Value;
-                    }
-                    else
-                    {
-                        port.Balance = "Thành công";
-                    }
-                    
+                    if (moneyMatch.Success) port.Balance = moneyMatch.Value;
+                    else port.Balance = "Thành công";
                     SnackbarMessageQueue.Enqueue($"[{e.PortName}] USSD: {ussdContent}");
+                }
+            }
+            else if (e.Data.Contains("+COPS:"))
+            {
+                // Parse Network Provider from AT+COPS?
+                // Example: +COPS: 0,0,"VIETTEL"
+                var match = Regex.Match(e.Data, @"\+COPS:\s*\d+,\d+,""([^""]+)""");
+                if (match.Success)
+                {
+                    port.NetworkProvider = match.Groups[1].Value;
                 }
             }
         });
     }
 
-    private void ModemService_SmsReceived(object? sender, GsmDataEventArgs e)
+    private async void ModemService_SmsReceived(object? sender, GsmDataEventArgs e)
     {
-        Application.Current.Dispatcher.InvokeAsync(() =>
+        // 1. Lấy vị trí tin nhắn từ chuỗi +CMTI: "SM",X
+        var match = Regex.Match(e.Data, @"\+CMTI:\s*""[^""]+"",\s*(\d+)");
+        if (match.Success)
         {
-            SmsMessages.Insert(0, new SmsMessage
+            string msgIndex = match.Groups[1].Value;
+
+            // 2. Gửi lệnh đọc tin nhắn thật ở vị trí đó
+            string rawSms = await _modemService.SendCommandAsync(e.PortName, $"AT+CMGR={msgIndex}");
+
+            // 3. Xử lý Regex bóc tách nội dung
+            string[] lines = rawSms.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
+            
+            string senderPhone = "UNKNOWN";
+            string content = "";
+            string otpCode = "";
+
+            if (lines.Length >= 2)
             {
-                PortName = e.PortName,
-                ReceivedTime = DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"),
-                Content = e.Data,
-                Sender = "UNKNOWN",
-                Otp = ""
+                // Dòng 1 chứa số người gửi
+                var senderMatch = Regex.Match(lines[0], @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
+                if (senderMatch.Success) senderPhone = senderMatch.Groups[1].Value;
+
+                // Dòng 2 trở đi là nội dung
+                content = string.Join(" ", lines.Skip(1)).Trim();
+
+                // Tìm OTP (Ví dụ: 4 đến 6 chữ số liên tiếp)
+                var otpMatch = Regex.Match(content, @"\b\d{4,6}\b");
+                if (otpMatch.Success) otpCode = otpMatch.Value;
+            }
+
+            // 4. Đẩy lên Giao diện
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                SmsMessages.Insert(0, new SmsMessage
+                {
+                    PortName = e.PortName,
+                    ReceivedTime = DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"),
+                    Content = content,
+                    Sender = senderPhone,
+                    Otp = otpCode
+                });
+                SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có OTP mới: {otpCode}");
             });
-            SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có tin nhắn mới!");
-        });
+
+            // 5. Xóa tin nhắn khỏi SIM để tránh đầy bộ nhớ
+            await _modemService.SendCommandAsync(e.PortName, "AT+CMGD=1,4");
+        }
     }
 
     [RelayCommand]

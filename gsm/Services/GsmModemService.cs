@@ -82,6 +82,12 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "ATZ"); // Reset
         await SendCommandAsync(portName, "ATE0"); // Turn off echo
         await SendCommandAsync(portName, "AT+CMGF=1"); // Set SMS to text mode
+        
+        // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
+        await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0"); 
+        
+        // Gửi lệnh lấy nhà mạng
+        await SendCommandAsync(portName, "AT+COPS?");
     }
 
     private void HandleDataReceived(string portName, SerialPort sp)
@@ -126,6 +132,9 @@ public class GsmModemService : IGsmModemService
 
     public async Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000)
     {
+        // Kéo dài thời gian chờ cho các lệnh USSD do mạng di động phản hồi chậm
+        if (command.StartsWith("AT+CUSD")) timeoutMs = 15000;
+
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen)
         {
             return "ERROR: Port not open";
@@ -166,7 +175,6 @@ public class GsmModemService : IGsmModemService
                     if (fullResp.Contains("OK\r\n") || fullResp.Contains("ERROR\r\n") || fullResp.Contains("> "))
                     {
                         // Some commands like USSD take longer to respond with +CUSD after OK.
-                        // We will add specific waiting logic here if needed.
                         if (command.StartsWith("AT+CUSD") && fullResp.Contains("OK\r\n") && !fullResp.Contains("+CUSD:"))
                         {
                             // Wait for the actual USSD response

@@ -95,6 +95,11 @@ public partial class MainViewModel : ObservableObject
     {
         Ports.Clear();
         SmsMessages.Clear();
+        
+        var availablePorts = _modemService.GetAvailablePorts();
+        foreach (var p in availablePorts)
+            Ports.Add(new SimPort { PortName = p, Status = "Đang kết nối...", SignalStrength = 0 });
+            
         _modemService.ConnectAll(115200);
     }
 
@@ -162,6 +167,20 @@ public partial class MainViewModel : ObservableObject
                 {
                     port.NetworkProvider = match.Groups[1].Value;
                 }
+            }
+            else if (e.Data.StartsWith("[PARSE_IMEI]"))
+            {
+                port.Imei = e.Data.Replace("[PARSE_IMEI]", "").Trim();
+            }
+            else if (e.Data.StartsWith("[PARSE_CCID]"))
+            {
+                port.Serial = e.Data.Replace("[PARSE_CCID]", "").Replace("+CCID:", "").Trim();
+            }
+            else if (e.Data.StartsWith("[PARSE_CNUM]"))
+            {
+                var match = Regex.Match(e.Data, @"\+CNUM:\s*""[^""]*"",""([^""]+)""");
+                if (match.Success) port.PhoneNumber = match.Groups[1].Value;
+                else port.PhoneNumber = e.Data.Replace("[PARSE_CNUM]", "").Replace("+CNUM:", "").Trim();
             }
         });
     }

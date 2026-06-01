@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Ports;
 using System.Text;
@@ -94,13 +94,23 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "ATZ"); // Reset
         await SendCommandAsync(portName, "ATE0"); // Turn off echo
         await SendCommandAsync(portName, "AT+CMGF=1"); // Set SMS to text mode
-        await SendCommandAsync(portName, "AT+CSCS=\"GSM\""); // Ép bảng mã chuẩn để đọc Tiếng Việt không bị lỗi HEX
+        await SendCommandAsync(portName, "AT+CSCS=\"UCS2\""); // Đọc được tiếng Việt
         
         // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
         await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0"); 
         
-        // Gửi lệnh lấy nhà mạng
+        // Lấy thông tin mạng và thông tin thiết bị
         await SendCommandAsync(portName, "AT+COPS?");
+        await SendCommandAsync(portName, "AT+CSQ");
+        
+        string imei = await SendCommandAsync(portName, "AT+CGSN");
+        string ccid = await SendCommandAsync(portName, "AT+CCID");
+        string cnum = await SendCommandAsync(portName, "AT+CNUM");
+
+        // Gửi thông tin sang ViewModel qua event log với Prefix đặc biệt
+        if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
+        if (!ccid.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
+        if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
     }
 
     private void HandleDataReceived(string portName, SerialPort sp)
@@ -189,7 +199,10 @@ public class GsmModemService : IGsmModemService
         {
             PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Mất quyền truy cập COM Port!" });
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi không xác định: {ex.Message}" });
+        }
     }
 
     public void DisconnectAll()
@@ -202,6 +215,10 @@ public class GsmModemService : IGsmModemService
                 kvp.Value.Dispose();
             }
             catch { }
+        }
+        foreach (var kvp in _semaphores)
+        {
+            try { kvp.Value.Dispose(); } catch { }
         }
         _serialPorts.Clear();
         _semaphores.Clear();

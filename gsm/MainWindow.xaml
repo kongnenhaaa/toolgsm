@@ -279,8 +279,8 @@
                             <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             <DataGridTextColumn Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
-                            <DataGridTextColumn Header="Cuộc gọi" Width="100"/>
-                            <DataGridTextColumn Header="Chuyển lời" Width="100"/>
+                            <DataGridTextColumn Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
+                            <DataGridTextColumn Header="Chuyển lời" Binding="{Binding ForwardContent}" Width="100"/>
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="400"/>
                         </DataGrid.Columns>
                     </DataGrid>

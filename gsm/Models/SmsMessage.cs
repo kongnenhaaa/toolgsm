@@ -9,4 +9,6 @@ public class SmsMessage
     public string Otp { get; set; } = string.Empty;
     public string PortName { get; set; } = string.Empty;
     public string NetworkProvider { get; set; } = string.Empty;
+    public string CallCount { get; set; } = string.Empty;
+    public string ForwardContent { get; set; } = string.Empty;
 }

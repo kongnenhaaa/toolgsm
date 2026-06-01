@@ -190,7 +190,7 @@ public partial class MainViewModel : ObservableObject
                 _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>");
             }
 
-            // 3. Đưa lên UI
+            // 3. Đưa lên UI (Cập nhật Tab SMS)
             SmsMessages.Insert(0, new SmsMessage
             {
                 PortName = e.PortName,
@@ -200,6 +200,16 @@ public partial class MainViewModel : ObservableObject
                 Otp = extractedOtp,
                 ReceiverPhone = Ports.FirstOrDefault(p => p.PortName == e.PortName)?.PhoneNumber ?? ""
             });
+            
+            // 4. Đưa lên UI (Cập nhật Tab GSM)
+            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+            if (port != null)
+            {
+                port.Sender = senderPhone;
+                port.Otp = extractedOtp;
+                port.LastMessageContent = cleanContent;
+                port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+            }
             
             SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
         });
@@ -242,6 +252,23 @@ public partial class MainViewModel : ObservableObject
     {
         SnackbarMessageQueue.Enqueue("Đang thực hiện đổi IMEI...");
         AddLog("Bắt đầu đổi IMEI thiết bị.");
+    }
+
+    [RelayCommand]
+    private void SimulateSms()
+    {
+        // Tin nhắn ảo giống hệt định dạng trả về từ phần cứng
+        string rawSms = "+CMGR: \"REC UNREAD\",\"+84123456789\",,\"26/05/01,10:00:00+28\"\r\nMa xac nhan Facebook cua ban la 889922. Vui long khong chia se cho bat ky ai.\r\n\r\nOK";
+        
+        // Tạo một cổng ảo để test nếu chưa có
+        if (!Ports.Any(p => p.PortName == "COM_VIRTUAL"))
+        {
+            Ports.Insert(0, new SimPort { PortName = "COM_VIRTUAL", Status = "Đang hoạt động", SignalStrength = 100, PhoneNumber = "0987654321" });
+        }
+
+        // Bắn trực tiếp dữ liệu vào event như cách GsmModemService làm
+        ModemService_SmsReceived(this, new GsmDataEventArgs { PortName = "COM_VIRTUAL", Data = rawSms });
+        AddLog("Đã giả lập 1 tin nhắn nhận được trên cổng COM_VIRTUAL.");
     }
 
     private string DecodeUcs2(string hexString)

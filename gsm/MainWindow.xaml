@@ -120,6 +120,7 @@
                             <Button Content="IMEI" Background="#29B6F6" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Nạp thẻ" Background="#26C6DA" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Test OTP (Máy ảo)" Background="#FF5722" Command="{Binding SimulateSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tạo một tin nhắn chứa OTP ảo để test hệ thống"/>
                         </WrapPanel>
                     </Border>
                     
@@ -192,9 +193,7 @@
                             <DataGridTextColumn Header="SĐT nhận" Binding="{Binding PhoneNumber}" Width="150"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
-                            <DataGridTextColumn Header="Cuộc gọi " Width="100"/>
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="250"/>
-                            <DataGridTextColumn Header="Nhận lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
                         </DataGrid.Columns>
                     </DataGrid>
                     </ScrollViewer>

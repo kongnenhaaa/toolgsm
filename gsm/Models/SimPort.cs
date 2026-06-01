@@ -7,9 +7,17 @@ public partial class SimPort : ObservableObject
     public string PortName { get; set; } = string.Empty;
     public string PhoneNumber { get; set; } = string.Empty;
     public string NetworkProvider { get; set; } = string.Empty;
-    public string LastReceivedTime { get; set; } = string.Empty;
-    public string Otp { get; set; } = string.Empty;
-    public string LastMessageContent { get; set; } = string.Empty;
+    [ObservableProperty]
+    private string _lastReceivedTime = string.Empty;
+    
+    [ObservableProperty]
+    private string _otp = string.Empty;
+    
+    [ObservableProperty]
+    private string _lastMessageContent = string.Empty;
+
+    [ObservableProperty]
+    private string _sender = string.Empty;
     
     [ObservableProperty]
     private string _status = "Active"; // Active, Inactive, Error

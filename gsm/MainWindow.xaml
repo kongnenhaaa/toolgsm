@@ -1,12 +1,258 @@
-﻿<Window x:Class="gsm.MainWindow"
+<Window x:Class="gsm.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:gsm"
+        xmlns:converters="clr-namespace:gsm.Converters"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="API GSM v1.2.38" Height="700" Width="1200"
+        Background="{StaticResource AppBackground}" Foreground="White"
+        TextElement.Foreground="{DynamicResource MaterialDesignBody}"
+        TextElement.FontWeight="Regular"
+        TextElement.FontSize="13"
+        TextOptions.TextFormattingMode="Ideal"
+        TextOptions.TextRenderingMode="Auto"
+        FontFamily="{DynamicResource MaterialDesignFont}">
 
+    <!-- Convert the string parameter to integer -->
+    <Window.Resources>
+        <converters:EqualityToBooleanConverter x:Key="EqualityToBooleanConverter"/>
+        <Style TargetType="DataGridColumnHeader" x:Key="CustomHeaderStyle" BasedOn="{StaticResource MaterialDesignDataGridColumnHeader}">
+            <Setter Property="Background" Value="#1A1A2A"/>
+            <Setter Property="Foreground" Value="LightGray"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="BorderThickness" Value="0,0,1,0"/>
+            <Setter Property="BorderBrush" Value="#444"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        </Style>
+
+        <DataTemplate x:Key="SearchHeaderTemplate">
+            <StackPanel Margin="0,5">
+                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
+                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}"/>
+                </Grid>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="FilterHeaderTemplate">
+            <StackPanel Margin="0,5">
+                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
+                <Button Content="Lọc" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="0">
+                    <Button.ContentTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="Filter" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </Button.ContentTemplate>
+                </Button>
+            </StackPanel>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Title Bar / Top Nav -->
+            <RowDefinition Height="*"/>    <!-- Main Content -->
+            <RowDefinition Height="Auto"/> <!-- Status Bar -->
+        </Grid.RowDefinitions>
+
+        <!-- Top Navigation -->
+        <Grid Grid.Row="0" Background="{StaticResource PanelBackground}" Height="50">
+            <!-- Segmented Control for Tabs -->
+            <Border Background="#12121E" CornerRadius="15" HorizontalAlignment="Center" Padding="4" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton Content="GSM" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=0}" 
+                                 Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
+                    <RadioButton Content="SMS" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
+                                 Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
+                </StackPanel>
+            </Border>
+            
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="15,0">
+                <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="Thông báo 0" Foreground="#E91E63" BorderBrush="#E91E63" Height="28" Padding="10,0" materialDesign:ButtonAssist.CornerRadius="14"/>
+                <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Settings" Height="36" Width="36" Margin="10,0,0,0">
+                    <materialDesign:PackIcon Kind="Cog" Foreground="White" Width="20" Height="20"/>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- Tab Content -->
+        <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0" SelectedIndex="{Binding SelectedTabIndex}">
+            <TabControl.ItemContainerStyle>
+                <Style TargetType="TabItem">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Style>
+            </TabControl.ItemContainerStyle>
+
+            <!-- TAB 1: GSM -->
+            <TabItem>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- ToolBar GSM -->
+                    <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1">
+                        <WrapPanel Margin="10,5">
+                            <Button Content="Bảng lệnh" Background="#5C6BC0" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Trình sắp xếp cổng" Background="#F06292" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Gọi lọc số" Background="#26A69A" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Gia hạn SIM" Background="#FFA726" Command="{Binding RenewSimCommand}" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Kiểm tra số dư" Background="#424242" Command="{Binding CheckBalanceCommand}" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Kết nối lại" Background="#424242" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Đổi IMEI" Background="#424242" Command="{Binding ChangeImeiCommand}" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="IMEI" Background="#29B6F6" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Nạp thẻ" Background="#26C6DA" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Style="{StaticResource ModernButtonStyle}"/>
+                        </WrapPanel>
+                    </Border>
+                    
+                    <!-- GSM DataGrid -->
+                    <DataGrid Grid.Row="1" Margin="10" ItemsSource="{Binding Ports}" SelectedItem="{Binding SelectedPort}" 
+                              AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
+                              RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
+                              Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
+                              HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
+                              ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <DataGrid.Columns>
+                            <!-- Dot indicator -->
+                            <DataGridTemplateColumn Width="40">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Ellipse Width="8" Height="8" Fill="#4CAF50" Margin="10,0"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" Width="120" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+                            <DataGridTextColumn Header="#" Binding="{Binding CallCount}" Width="50"/>
+                            <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
+                            <DataGridTextColumn Header="Tín hiệu" Width="100"/>
+                            <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120" HeaderTemplate="{StaticResource FilterHeaderTemplate}"/>
+                            <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
+                            <DataGridTextColumn Header="TKKM" Width="100"/>
+                            <DataGridTextColumn Header="HSD" Binding="{Binding ExpiryDate}" Width="120" HeaderTemplate="{StaticResource FilterHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
+                            <DataGridTextColumn Header="Cuộc gọi" Width="100"/>
+                            
+                            <!-- Messages section -->
+                            <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
+                            <DataGridTextColumn Header="SĐT nhận" Binding="{Binding PhoneNumber}" Width="150"/>
+                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
+                            <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
+                            <DataGridTextColumn Header="Cuộc gọi " Width="100"/>
+                            <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="250"/>
+                            <DataGridTextColumn Header="Nhận lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
+            <!-- TAB 2: SMS -->
+            <TabItem>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Top filter bar for SMS -->
+                    <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1" Padding="15,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="FilterOutline" VerticalAlignment="Center" Foreground="#F06292" Width="20" Height="20" Margin="0,0,15,0"/>
+                                
+                                <StackPanel Orientation="Vertical" Margin="0,0,15,0">
+                                    <TextBlock Text="SỐ ĐIỆN THOẠI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="140" materialDesign:HintAssist.Hint="Nhập SĐT..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                
+                                <StackPanel Orientation="Vertical" Margin="0,0,15,0">
+                                    <TextBlock Text="CỔNG" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="100" materialDesign:HintAssist.Hint="Tìm cổng..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                
+                                <StackPanel Orientation="Vertical" Margin="0,0,15,0">
+                                    <TextBlock Text="NGƯỜI GỬI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="140" materialDesign:HintAssist.Hint="Tìm người gửi..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                
+                                <Button Content="Lọc Dữ Liệu" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
+                            </StackPanel>
+
+                            <!-- Action Buttons for SMS -->
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                                <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
+                                    <materialDesign:PackIcon Kind="CheckAll" Foreground="White"/>
+                                </Button>
+                                <Button Background="#E53935" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa tin nhắn" Width="34" Padding="0" Margin="0,0,8,0">
+                                    <materialDesign:PackIcon Kind="DeleteOutline" Foreground="White"/>
+                                </Button>
+                                <Button Content="Xuất Excel" Background="#4CAF50" Style="{StaticResource ModernButtonStyle}" Margin="0"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- SMS DataGrid -->
+                    <DataGrid Grid.Row="1" Margin="10" ItemsSource="{Binding SmsMessages}"
+                              AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
+                              RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
+                              Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
+                              HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
+                              ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <DataGrid.Columns>
+                            <!-- Dot indicator -->
+                            <DataGridTemplateColumn Width="40">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Ellipse Width="8" Height="8" Fill="#4CAF50" Margin="10,0"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" Width="120"/>
+                            <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
+                            <DataGridTextColumn Header="Số điện thoại" Binding="{Binding ReceiverPhone}" Width="150"/>
+                            <DataGridTextColumn Header="Nhà mạng" Width="120"/>
+                            <DataGridTextColumn Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
+                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
+                            <DataGridTextColumn Header="Cuộc gọi" Width="100"/>
+                            <DataGridTextColumn Header="Chuyển lời" Width="100"/>
+                            <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="400"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <!-- Status Bar -->
+        <StatusBar Grid.Row="2" Background="#1A1A2A" Foreground="Gray" Padding="10,5">
+            <StatusBarItem>
+                <TextBlock Text="Đang chọn 0 hàng"/>
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Text="Mẹo: Giữ Ctrl và lăn chuột để phóng to/thu nhỏ bảng | 0/0"/>
+            </StatusBarItem>
+        </StatusBar>
     </Grid>
 </Window>

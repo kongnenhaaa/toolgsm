@@ -124,13 +124,16 @@
                     </Border>
                     
                     <!-- GSM DataGrid -->
-                    <DataGrid Grid.Row="1" Margin="10" ItemsSource="{Binding Ports}" SelectedItem="{Binding SelectedPort}" 
-                              AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
-                              RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
-                              Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
-                              HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
-                              ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
-                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                        <DataGrid Margin="10" ItemsSource="{Binding Ports}" SelectedItem="{Binding SelectedPort}" 
+                                  AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
+                                  RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
+                                  Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
+                                  HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
+                                  ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.CanContentScroll="True">
                         
                         <!-- Context Menu -->
                         <DataGrid.ContextMenu>
@@ -194,6 +197,7 @@
                             <DataGridTextColumn Header="Nhận lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                    </ScrollViewer>
                 </Grid>
             </TabItem>
 
@@ -242,13 +246,16 @@
                         </Grid>
                     </Border>
                     
-                    <DataGrid Grid.Row="1" Margin="10" ItemsSource="{Binding SmsMessages}"
-                              AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
-                              RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
-                              Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
-                              HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
-                              ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
-                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                        <DataGrid Margin="10" ItemsSource="{Binding SmsMessages}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
+                                  RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
+                                  Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
+                                  HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
+                                  ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.CanContentScroll="True">
                         <DataGrid.ContextMenu>
                             <ContextMenu Background="#1E1E2F" Foreground="White">
                                 <MenuItem Header="Sao chép OTP" Padding="10">
@@ -278,6 +285,7 @@
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="400"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                    </ScrollViewer>
                 </Grid>
             </TabItem>
 

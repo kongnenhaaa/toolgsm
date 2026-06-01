@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.IO.Ports;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,6 +21,7 @@ public interface IGsmModemService
     // Events
     event EventHandler<GsmDataEventArgs> SmsReceived;
     event EventHandler<GsmDataEventArgs> LogMessage;
+    event EventHandler<GsmDataEventArgs> PortDisconnected;
 }
 
 public class GsmDataEventArgs : EventArgs
@@ -33,9 +35,11 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, SerialPort> _serialPorts = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new();
     private readonly ConcurrentDictionary<string, StringBuilder> _portBuffers = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _commandTcs = new();
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
+    public event EventHandler<GsmDataEventArgs>? PortDisconnected;
 
     public List<string> GetAvailablePorts()
     {
@@ -60,6 +64,7 @@ public class GsmModemService : IGsmModemService
                     };
                     
                     sp.DataReceived += (s, e) => HandleDataReceived(p, sp);
+                    sp.ErrorReceived += (s, e) => HandleErrorReceived(p, sp);
                     sp.Open();
                     
                     _serialPorts.TryAdd(p, sp);
@@ -79,11 +84,17 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    private void HandleErrorReceived(string portName, SerialPort sp)
+    {
+        PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Lỗi phần cứng (Có thể bị rút cáp)" });
+    }
+
     private async Task InitializeModemAsync(string portName)
     {
         await SendCommandAsync(portName, "ATZ"); // Reset
         await SendCommandAsync(portName, "ATE0"); // Turn off echo
         await SendCommandAsync(portName, "AT+CMGF=1"); // Set SMS to text mode
+        await SendCommandAsync(portName, "AT+CSCS=\"GSM\""); // Ép bảng mã chuẩn để đọc Tiếng Việt không bị lỗi HEX
         
         // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
         await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0"); 
@@ -104,38 +115,65 @@ public class GsmModemService : IGsmModemService
             
             string currentData = buffer.ToString();
 
-            // Nếu đã nhận được ký tự ngắt dòng (đủ 1 tin nhắn URC)
-            if (currentData.Contains("\r\n"))
+            // 1. NẾU CÓ LỆNH ĐANG ĐỢI KẾT QUẢ
+            if (_commandTcs.TryGetValue(portName, out var tcs))
             {
-                // Bắt sự kiện có tin nhắn mới tới
-                if (currentData.Contains("+CMTI:"))
+                // Lệnh AT thông thường kết thúc bằng OK\r\n hoặc ERROR\r\n
+                if (currentData.Contains("OK\r\n") || currentData.Contains("ERROR\r\n") || currentData.EndsWith("> "))
                 {
-                    // Dùng Regex tìm vị trí lưu tin nhắn. VD: +CMTI: "SM",1 -> Lấy số 1
-                    var match = Regex.Match(currentData, @"\+CMTI:\s*""[^""]+"",(\d+)");
-                    if (match.Success)
+                    // Lệnh USSD đôi khi trả OK trước rồi mới trả +CUSD:.
+                    if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
                     {
-                        string msgIndex = match.Groups[1].Value;
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Phát hiện tin nhắn ở vị trí {msgIndex}, đang đọc..." });
-                        
-                        // Gửi lệnh ĐỌC tin nhắn đó
-                        string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
-                        
-                        // Gắn vào sự kiện để ném sang ViewModel
-                        SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
-
-                        // Xóa tin nhắn sau khi đọc để tránh đầy SIM (AT+CMGD=1,4 xóa tất cả)
-                        await SendCommandAsync(portName, $"AT+CMGD={msgIndex},4");
+                        if (currentData.Contains("OK\r\n") && !currentData.Contains("+CUSD:"))
+                        {
+                            return; // Tiếp tục đợi USSD từ tổng đài
+                        }
                     }
+
+                    // Bơm dữ liệu cho SendCommandAsync và xóa Buffer
+                    tcs.TrySetResult(currentData);
+                    buffer.Clear();
                 }
-                else if (!currentData.Contains("OK") && !currentData.Contains("ERROR") && !currentData.Contains("+CUSD:") && !currentData.Contains("+CMGL:"))
-                {
-                    // In ra Log những đoạn text URC lạ
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[URC] {currentData.Trim()}" });
-                }
-                
-                // Clear buffer sau khi đã xử lý xong ngắt dòng để tránh tràn bộ nhớ
-                buffer.Clear();
             }
+            // 2. NẾU KHÔNG CÓ LỆNH ĐANG ĐỢI (ĐÂY LÀ TIN NHẮN RÁC / URC TỰ ĐẨY)
+            else
+            {
+                if (currentData.Contains("\r\n"))
+                {
+                    if (currentData.Contains("+CMTI:"))
+                    {
+                        var match = Regex.Match(currentData, @"\+CMTI:\s*""[^""]+"",\s*(\d+)");
+                        if (match.Success)
+                        {
+                            string msgIndex = match.Groups[1].Value;
+                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Phát hiện tin nhắn ở vị trí {msgIndex}, đang đọc..." });
+                            
+                            // Gửi lệnh ĐỌC tin nhắn đó
+                            string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
+                            
+                            // Gắn vào sự kiện để ném sang ViewModel
+                            SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
+
+                            // Xóa tin nhắn sau khi đọc để tránh đầy SIM
+                            await SendCommandAsync(portName, $"AT+CMGD={msgIndex},4");
+                        }
+                    }
+                    else if (!currentData.Contains("OK") && !currentData.Contains("ERROR") && !currentData.Contains("+CUSD:") && !currentData.Contains("+CMGL:"))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[URC] {currentData.Trim()}" });
+                    }
+                    
+                    buffer.Clear();
+                }
+            }
+        }
+        catch (IOException)
+        {
+            PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Bị rút cáp USB đột ngột!" });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Mất quyền truy cập COM Port!" });
         }
         catch { }
     }
@@ -154,6 +192,7 @@ public class GsmModemService : IGsmModemService
         _serialPorts.Clear();
         _semaphores.Clear();
         _portBuffers.Clear();
+        _commandTcs.Clear();
     }
 
     public async Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000)
@@ -177,45 +216,37 @@ public class GsmModemService : IGsmModemService
             return "ERROR: Timeout waiting for lock";
         }
 
+        var tcs = new TaskCompletionSource<string>(command);
+        _commandTcs[portName] = tcs;
+
         try
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> {command}" });
+            
+            if (_portBuffers.TryGetValue(portName, out var buffer)) buffer.Clear();
             
             sp.DiscardInBuffer();
             sp.DiscardOutBuffer();
             
             sp.Write(command + "\r\n");
             
-            StringBuilder response = new StringBuilder();
-            Stopwatch sw = Stopwatch.StartNew();
+            // Đứng chờ HandleDataReceived bơm dữ liệu vào TCS, hoặc bị quá giờ (Timeout)
+            var timeoutTask = Task.Delay(timeoutMs);
+            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
             
-            while (sw.ElapsedMilliseconds < timeoutMs)
+            if (completedTask == timeoutTask)
             {
-                if (sp.BytesToRead > 0)
-                {
-                    string chunk = sp.ReadExisting();
-                    response.Append(chunk);
-                    
-                    string fullResp = response.ToString();
-                    // End markers for AT commands
-                    if (fullResp.Contains("OK\r\n") || fullResp.Contains("ERROR\r\n") || fullResp.Contains("> "))
-                    {
-                        // Some commands like USSD take longer to respond with +CUSD after OK.
-                        if (command.StartsWith("AT+CUSD") && fullResp.Contains("OK\r\n") && !fullResp.Contains("+CUSD:"))
-                        {
-                            // Wait for the actual USSD response
-                            continue;
-                        }
-                        
-                        break;
-                    }
-                }
-                await Task.Delay(50);
+                return "ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)";
             }
             
-            string finalResp = response.ToString().Trim();
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"< {finalResp}" });
-            return finalResp;
+            string finalResp = await tcs.Task;
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"< {finalResp.Trim()}" });
+            return finalResp.Trim();
+        }
+        catch (IOException ex)
+        {
+            PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Cáp bị rút khi đang gửi lệnh!" });
+            return $"ERROR: Rút cáp đột ngột - {ex.Message}";
         }
         catch (Exception ex)
         {
@@ -223,6 +254,7 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
+            _commandTcs.TryRemove(portName, out _);
             semaphore.Release();
         }
     }

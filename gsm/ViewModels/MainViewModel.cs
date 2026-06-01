@@ -45,6 +45,7 @@ public partial class MainViewModel : ObservableObject
         _modemService = new GsmModemService();
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
+        _modemService.PortDisconnected += ModemService_PortDisconnected;
         
         InitializeHardware();
         
@@ -142,6 +143,21 @@ public partial class MainViewModel : ObservableObject
         });
     }
 
+    private void ModemService_PortDisconnected(object? sender, GsmDataEventArgs e)
+    {
+        Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+            if (port != null)
+            {
+                port.Status = "Mất kết nối";
+                port.SignalStrength = 0;
+            }
+            AddLog($"[{e.PortName}] {e.Data}", "ERROR");
+            SnackbarMessageQueue.Enqueue($"Cổng {e.PortName} bị ngắt kết nối!");
+        });
+    }
+
     private void ModemService_SmsReceived(object? sender, GsmDataEventArgs e)
     {
         // Raw Data trả về thường có dạng:
@@ -170,8 +186,8 @@ public partial class MainViewModel : ObservableObject
             {
                 extractedOtp = otpMatch.Value;
                 
-                // TODO: GỌI HÀM BẮN TELEGRAM Ở ĐÂY (NẾU CÓ)
-                // TelegramService.SendMessageAsync($"Cổng: {e.PortName} | OTP: {extractedOtp}");
+                // GỌI HÀM BẮN TELEGRAM
+                _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>");
             }
 
             // 3. Đưa lên UI

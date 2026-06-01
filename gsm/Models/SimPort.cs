@@ -5,8 +5,11 @@ namespace gsm.Models;
 public partial class SimPort : ObservableObject
 {
     public string PortName { get; set; } = string.Empty;
-    public string PhoneNumber { get; set; } = string.Empty;
-    public string NetworkProvider { get; set; } = string.Empty;
+    [ObservableProperty]
+    private string _phoneNumber = string.Empty;
+    
+    [ObservableProperty]
+    private string _networkProvider = string.Empty;
     [ObservableProperty]
     private string _lastReceivedTime = string.Empty;
     

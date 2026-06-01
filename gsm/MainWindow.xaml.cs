@@ -17,10 +17,19 @@ namespace gsm
     /// </summary>
     public partial class MainWindow : Window
     {
+        private readonly MainViewModel _viewModel;
+
         public MainWindow()
         {
             InitializeComponent();
-            DataContext = new MainViewModel();
+            _viewModel = new MainViewModel();
+            DataContext = _viewModel;
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _viewModel.ModemService.DisconnectAll();
+            base.OnClosed(e);
         }
     }
 }

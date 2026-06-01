@@ -15,12 +15,6 @@ public static class TelegramService
 
     public static async Task SendMessageAsync(string message)
     {
-        if (BotToken == "YOUR_BOT_TOKEN_HERE" || ChatId == "YOUR_CHAT_ID_HERE")
-        {
-            // Bỏ qua nếu chưa được cấu hình
-            return;
-        }
-
         try
         {
             string url = $"https://api.telegram.org/bot{BotToken}/sendMessage";

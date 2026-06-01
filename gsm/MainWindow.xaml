@@ -110,16 +110,16 @@
                     <!-- ToolBar GSM -->
                     <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1">
                         <WrapPanel Margin="10,5">
-                            <Button Content="Bảng lệnh" Background="#5C6BC0" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Trình sắp xếp cổng" Background="#F06292" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Gọi lọc số" Background="#26A69A" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Bảng lệnh" Background="#5C6BC0" Command="{Binding DummyFeatureCommand}" CommandParameter="Bảng lệnh" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Trình sắp xếp cổng" Background="#F06292" Command="{Binding DummyFeatureCommand}" CommandParameter="Trình sắp xếp cổng" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Gọi lọc số" Background="#26A69A" Command="{Binding DummyFeatureCommand}" CommandParameter="Gọi lọc số" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Gia hạn SIM" Background="#FFA726" Command="{Binding RenewSimCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Kiểm tra số dư" Background="#424242" Command="{Binding CheckBalanceCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Làm mới cổng" Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Đổi IMEI" Background="#424242" Command="{Binding ChangeImeiCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="IMEI" Background="#29B6F6" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Nạp thẻ" Background="#26C6DA" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="IMEI" Background="#29B6F6" Command="{Binding DummyFeatureCommand}" CommandParameter="IMEI" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Nạp thẻ" Background="#26C6DA" Command="{Binding DummyFeatureCommand}" CommandParameter="Nạp thẻ" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Command="{Binding DummyFeatureCommand}" CommandParameter="Quản lý cuộc gọi" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Test OTP (Máy ảo)" Background="#FF5722" Command="{Binding SimulateSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tạo một tin nhắn chứa OTP ảo để test hệ thống"/>
                         </WrapPanel>
                     </Border>
@@ -240,7 +240,7 @@
                                 <Button Background="#E53935" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa tin nhắn" Width="34" Padding="0" Margin="0,0,8,0">
                                     <materialDesign:PackIcon Kind="DeleteOutline" Foreground="White"/>
                                 </Button>
-                                <Button Content="Xuất Excel" Background="#4CAF50" Style="{StaticResource ModernButtonStyle}" Margin="0"/>
+                                <Button Content="Xuất Excel" Background="#4CAF50" Command="{Binding DummyFeatureCommand}" CommandParameter="Xuất Excel" Style="{StaticResource ModernButtonStyle}" Margin="0"/>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -257,10 +257,10 @@
                                   ScrollViewer.CanContentScroll="True">
                         <DataGrid.ContextMenu>
                             <ContextMenu Background="#1E1E2F" Foreground="White">
-                                <MenuItem Header="Sao chép OTP" Padding="10">
+                                <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}" Padding="10">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Xóa tin nhắn này" Padding="10" Foreground="#E53935">
+                                <MenuItem Header="Xóa tin nhắn này" Command="{Binding Path=DataContext.DeleteSmsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}" Padding="10" Foreground="#E53935">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="Delete"/></MenuItem.Icon>
                                 </MenuItem>
                             </ContextMenu>
@@ -352,10 +352,10 @@
         <!-- Status Bar -->
         <StatusBar Grid.Row="3" Background="#1A1A2A" Foreground="Gray" Padding="10,5">
             <StatusBarItem>
-                <TextBlock Text="Đang chọn 0 hàng"/>
+                <TextBlock Text="{Binding Ports.Count, StringFormat='Số lượng cổng: \{0\}'}"/>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
-                <TextBlock Text="Mẹo: Giữ Ctrl và lăn chuột để phóng to/thu nhỏ bảng | 0/0"/>
+                <TextBlock Text="{Binding SmsMessages.Count, StringFormat='Mẹo: Giữ Ctrl và lăn chuột để phóng to/thu nhỏ bảng | Tổng SMS: \{0\}'}"/>
             </StatusBarItem>
         </StatusBar>
 

@@ -18,6 +18,7 @@ namespace gsm.ViewModels;
 public partial class MainViewModel : ObservableObject
 {
     private readonly IGsmModemService _modemService;
+    public IGsmModemService ModemService => _modemService;
 
     [ObservableProperty]
     private ObservableCollection<SimPort> _ports = new();
@@ -51,16 +52,38 @@ public partial class MainViewModel : ObservableObject
         
         ConnectionSeries = new ISeries[]
         {
-            new PieSeries<int> { Values = new[] { 80 }, Name = "Đang hoạt động" },
-            new PieSeries<int> { Values = new[] { 20 }, Name = "Mất kết nối" }
+            new PieSeries<int> { Values = new[] { 0 }, Name = "Đang hoạt động" },
+            new PieSeries<int> { Values = new[] { 0 }, Name = "Mất kết nối" }
         };
 
         SmsSeries = new ISeries[]
         {
-            new ColumnSeries<int> { Values = new[] { 150, 300, 250, 400, 350, 600, 850 }, Name = "Tin nhắn nhận được" }
+            new ColumnSeries<int> { Values = new[] { 0 }, Name = "Tin nhắn nhận được" }
         };
 
         AddLog("Hệ thống khởi động thành công.");
+        Ports.CollectionChanged += (s, e) => UpdateDashboard();
+        SmsMessages.CollectionChanged += (s, e) => UpdateDashboard();
+    }
+
+    private void UpdateDashboard()
+    {
+        int activeCount = Ports.Count(p => p.Status == "Đang hoạt động");
+        int disconnectedCount = Ports.Count - activeCount;
+
+        ConnectionSeries = new ISeries[]
+        {
+            new PieSeries<int> { Values = new[] { activeCount }, Name = "Đang hoạt động" },
+            new PieSeries<int> { Values = new[] { disconnectedCount }, Name = "Mất kết nối" }
+        };
+
+        SmsSeries = new ISeries[]
+        {
+            new ColumnSeries<int> { Values = new[] { SmsMessages.Count }, Name = "Tin nhắn nhận được" }
+        };
+
+        OnPropertyChanged(nameof(ConnectionSeries));
+        OnPropertyChanged(nameof(SmsSeries));
     }
 
     private void AddLog(string message, string level = "INFO")
@@ -180,11 +203,13 @@ public partial class MainViewModel : ObservableObject
                 cleanContent = cleanContent.Replace("OK", "").Trim();
             }
 
-            // 2. Tìm OTP (Lọc ra chuỗi từ 4-6 số liên tiếp)
-            var otpMatch = Regex.Match(cleanContent, @"\b\d{4,6}\b");
+            // 2. Tìm OTP
+            var otpMatch = Regex.Match(cleanContent, @"(?:mã|code|otp|là|la)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
+            if (!otpMatch.Success) otpMatch = Regex.Match(cleanContent, @"\b\d{4,6}\b"); // Fallback
+
             if (otpMatch.Success)
             {
-                extractedOtp = otpMatch.Value;
+                extractedOtp = otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : otpMatch.Value;
                 
                 // GỌI HÀM BẮN TELEGRAM
                 _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
@@ -255,6 +280,32 @@ public partial class MainViewModel : ObservableObject
     {
         SnackbarMessageQueue.Enqueue("Đang thực hiện đổi IMEI...");
         AddLog("Bắt đầu đổi IMEI thiết bị.");
+    }
+
+    [RelayCommand]
+    private void DummyFeature(string featureName)
+    {
+        SnackbarMessageQueue.Enqueue($"Tính năng {featureName} đang được phát triển.");
+    }
+
+    [RelayCommand]
+    private void CopyOtp(SmsMessage? sms)
+    {
+        if (sms != null && !string.IsNullOrEmpty(sms.Otp))
+        {
+            Clipboard.SetText(sms.Otp);
+            SnackbarMessageQueue.Enqueue("Đã sao chép OTP vào Clipboard.");
+        }
+    }
+
+    [RelayCommand]
+    private void DeleteSms(SmsMessage? sms)
+    {
+        if (sms != null)
+        {
+            SmsMessages.Remove(sms);
+            SnackbarMessageQueue.Enqueue("Đã xóa tin nhắn.");
+        }
     }
 
     [RelayCommand]

@@ -32,6 +32,7 @@ public class GsmModemService : IGsmModemService
 {
     private readonly ConcurrentDictionary<string, SerialPort> _serialPorts = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new();
+    private readonly ConcurrentDictionary<string, StringBuilder> _portBuffers = new();
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
@@ -63,6 +64,7 @@ public class GsmModemService : IGsmModemService
                     
                     _serialPorts.TryAdd(p, sp);
                     _semaphores.TryAdd(p, new SemaphoreSlim(1, 1));
+                    _portBuffers.TryAdd(p, new StringBuilder());
                     
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Đã kết nối thành công {p} (Baud: {baudRate})" });
                     
@@ -94,14 +96,22 @@ public class GsmModemService : IGsmModemService
     {
         try
         {
-            string data = sp.ReadExisting();
-            if (!string.IsNullOrWhiteSpace(data))
+            string chunk = sp.ReadExisting();
+            if (string.IsNullOrWhiteSpace(chunk)) return;
+
+            if (!_portBuffers.TryGetValue(portName, out var buffer)) return;
+            buffer.Append(chunk);
+            
+            string currentData = buffer.ToString();
+
+            // Nếu đã nhận được ký tự ngắt dòng (đủ 1 tin nhắn URC)
+            if (currentData.Contains("\r\n"))
             {
                 // Bắt sự kiện có tin nhắn mới tới
-                if (data.Contains("+CMTI:"))
+                if (currentData.Contains("+CMTI:"))
                 {
                     // Dùng Regex tìm vị trí lưu tin nhắn. VD: +CMTI: "SM",1 -> Lấy số 1
-                    var match = Regex.Match(data, @"\+CMTI:\s*""[^""]+"",(\d+)");
+                    var match = Regex.Match(currentData, @"\+CMTI:\s*""[^""]+"",(\d+)");
                     if (match.Success)
                     {
                         string msgIndex = match.Groups[1].Value;
@@ -113,18 +123,18 @@ public class GsmModemService : IGsmModemService
                         // Gắn vào sự kiện để ném sang ViewModel
                         SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
 
-                        // Tùy chọn: Xóa tin nhắn sau khi đọc để tránh đầy SIM (AT+CMGD=1)
+                        // Xóa tin nhắn sau khi đọc để tránh đầy SIM (AT+CMGD=1,4 xóa tất cả)
                         await SendCommandAsync(portName, $"AT+CMGD={msgIndex},4");
                     }
                 }
-                else if (data.Contains("+CUSD:") || data.Contains("+CMGL:"))
+                else if (!currentData.Contains("OK") && !currentData.Contains("ERROR") && !currentData.Contains("+CUSD:") && !currentData.Contains("+CMGL:"))
                 {
-                    // Ignore, these are usually caught by the SendCommandAsync loop
+                    // In ra Log những đoạn text URC lạ
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[URC] {currentData.Trim()}" });
                 }
-                else
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[URC] {data.Trim()}" });
-                }
+                
+                // Clear buffer sau khi đã xử lý xong ngắt dòng để tránh tràn bộ nhớ
+                buffer.Clear();
             }
         }
         catch { }
@@ -143,6 +153,7 @@ public class GsmModemService : IGsmModemService
         }
         _serialPorts.Clear();
         _semaphores.Clear();
+        _portBuffers.Clear();
     }
 
     public async Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000)

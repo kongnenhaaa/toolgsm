@@ -8,6 +8,7 @@ using LiveChartsCore.SkiaSharpView;
 using MaterialDesignThemes.Wpf;
 using System;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -118,6 +119,10 @@ public partial class MainViewModel : ObservableObject
                 if (match.Success)
                 {
                     string ussdContent = match.Groups[1].Value;
+                    
+                    // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
+                    ussdContent = DecodeUcs2(ussdContent);
+                    
                     var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
                     if (moneyMatch.Success) port.Balance = moneyMatch.Value;
                     else port.Balance = "Thành công";
@@ -221,5 +226,29 @@ public partial class MainViewModel : ObservableObject
     {
         SnackbarMessageQueue.Enqueue("Đang thực hiện đổi IMEI...");
         AddLog("Bắt đầu đổi IMEI thiết bị.");
+    }
+
+    private string DecodeUcs2(string hexString)
+    {
+        try
+        {
+            // Kiểm tra xem có phải chuỗi HEX không và độ dài phải chia hết cho 4
+            if (!Regex.IsMatch(hexString, @"^[0-9A-Fa-f]+$") || hexString.Length % 4 != 0)
+            {
+                return hexString; // Không phải UCS2
+            }
+
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < hexString.Length; i += 4)
+            {
+                string hexChar = hexString.Substring(i, 4);
+                sb.Append((char)Convert.ToInt32(hexChar, 16));
+            }
+            return sb.ToString();
+        }
+        catch
+        {
+            return hexString; // Trả về nguyên bản nếu lỗi
+        }
     }
 }

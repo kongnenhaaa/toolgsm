@@ -1,6 +1,8 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+
 namespace gsm.Models;
 
-public class SimPort
+public partial class SimPort : ObservableObject
 {
     public string PortName { get; set; } = string.Empty;
     public string PhoneNumber { get; set; } = string.Empty;
@@ -8,7 +10,9 @@ public class SimPort
     public string LastReceivedTime { get; set; } = string.Empty;
     public string Otp { get; set; } = string.Empty;
     public string LastMessageContent { get; set; } = string.Empty;
-    public string Status { get; set; } = "Active"; // Active, Inactive, Error
+    
+    [ObservableProperty]
+    private string _status = "Active"; // Active, Inactive, Error
     
     // Additional properties based on UI
     public int CallCount { get; set; }
@@ -17,10 +21,14 @@ public class SimPort
     // Tab 2 Info
     public string Imei { get; set; } = string.Empty;
     public string Serial { get; set; } = string.Empty;
-    public string Balance { get; set; } = string.Empty;
+    
+    [ObservableProperty]
+    private string _balance = string.Empty;
+    
     public string ExpiryDate { get; set; } = string.Empty;
     public string UpdatedAt { get; set; } = string.Empty;
     
     // New Pro Features
-    public int SignalStrength { get; set; } = 100; // 0 to 100
+    [ObservableProperty]
+    private int _signalStrength = 0; // 0 to 100
 }

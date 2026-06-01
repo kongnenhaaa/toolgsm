@@ -115,7 +115,7 @@
                             <Button Content="Gọi lọc số" Background="#26A69A" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Gia hạn SIM" Background="#FFA726" Command="{Binding RenewSimCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Kiểm tra số dư" Background="#424242" Command="{Binding CheckBalanceCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Kết nối lại" Background="#424242" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Làm mới cổng" Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Đổi IMEI" Background="#424242" Command="{Binding ChangeImeiCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="IMEI" Background="#29B6F6" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Nạp thẻ" Background="#26C6DA" Style="{StaticResource ModernButtonStyle}"/>

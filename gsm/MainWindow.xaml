@@ -6,8 +6,9 @@
         xmlns:local="clr-namespace:gsm"
         xmlns:converters="clr-namespace:gsm.Converters"
         xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF"
         mc:Ignorable="d"
-        Title="API GSM v1.2.38" Height="700" Width="1200"
+        Title="API GSM Pro v1.2.38" Height="750" Width="1250"
         Background="{StaticResource AppBackground}" Foreground="White"
         TextElement.Foreground="{DynamicResource MaterialDesignBody}"
         TextElement.FontWeight="Regular"
@@ -16,9 +17,9 @@
         TextOptions.TextRenderingMode="Auto"
         FontFamily="{DynamicResource MaterialDesignFont}">
 
-    <!-- Convert the string parameter to integer -->
     <Window.Resources>
         <converters:EqualityToBooleanConverter x:Key="EqualityToBooleanConverter"/>
+        
         <Style TargetType="DataGridColumnHeader" x:Key="CustomHeaderStyle" BasedOn="{StaticResource MaterialDesignDataGridColumnHeader}">
             <Setter Property="Background" Value="#1A1A2A"/>
             <Setter Property="Foreground" Value="LightGray"/>
@@ -62,8 +63,9 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/> <!-- Title Bar / Top Nav -->
+            <RowDefinition Height="Auto"/> <!-- Top Nav -->
             <RowDefinition Height="*"/>    <!-- Main Content -->
+            <RowDefinition Height="Auto"/> <!-- Terminal -->
             <RowDefinition Height="Auto"/> <!-- Status Bar -->
         </Grid.RowDefinitions>
 
@@ -75,6 +77,8 @@
                     <RadioButton Content="GSM" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=0}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                     <RadioButton Content="SMS" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
+                                 Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
+                    <RadioButton Content="Tổng quan" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                 </StackPanel>
             </Border>
@@ -127,8 +131,27 @@
                               HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
                               ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        
+                        <!-- Context Menu -->
+                        <DataGrid.ContextMenu>
+                            <ContextMenu Background="#1E1E2F" Foreground="White">
+                                <MenuItem Header="Sao chép SĐT" Padding="10">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Đọc tin nhắn (1 mới)" Padding="10">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="MessageText"/></MenuItem.Icon>
+                                </MenuItem>
+                                <Separator Background="#444"/>
+                                <MenuItem Header="Nạp thẻ nhanh" Padding="10" Foreground="#4CAF50">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="CashPlus"/></MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Kiểm tra số dư" Command="{Binding CheckBalanceCommand}" Padding="10">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="Magnify"/></MenuItem.Icon>
+                                </MenuItem>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
+                        
                         <DataGrid.Columns>
-                            <!-- Dot indicator -->
                             <DataGridTemplateColumn Width="40">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -141,7 +164,19 @@
                             <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
-                            <DataGridTextColumn Header="Tín hiệu" Width="100"/>
+                            
+                            <!-- Tín hiệu Signal Bars -->
+                            <DataGridTemplateColumn Header="Tín hiệu" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="5,0">
+                                            <ProgressBar Value="{Binding SignalStrength}" Maximum="100" Height="10" Width="40" Background="#444" Foreground="#4CAF50" materialDesign:TransitionAssist.DisableTransitions="True"/>
+                                            <TextBlock Text="{Binding SignalStrength, StringFormat={}{0}%}" Margin="5,0,0,0" FontSize="11" Foreground="LightGray"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            
                             <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120" HeaderTemplate="{StaticResource FilterHeaderTemplate}"/>
                             <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
@@ -150,7 +185,6 @@
                             <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
                             <DataGridTextColumn Header="Cuộc gọi" Width="100"/>
                             
-                            <!-- Messages section -->
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
                             <DataGridTextColumn Header="SĐT nhận" Binding="{Binding PhoneNumber}" Width="150"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
@@ -181,26 +215,21 @@
                             
                             <StackPanel Grid.Column="0" Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="FilterOutline" VerticalAlignment="Center" Foreground="#F06292" Width="20" Height="20" Margin="0,0,15,0"/>
-                                
                                 <StackPanel Orientation="Vertical" Margin="0,0,15,0">
                                     <TextBlock Text="SỐ ĐIỆN THOẠI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
                                     <TextBox Width="140" materialDesign:HintAssist.Hint="Nhập SĐT..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
-                                
                                 <StackPanel Orientation="Vertical" Margin="0,0,15,0">
                                     <TextBlock Text="CỔNG" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
                                     <TextBox Width="100" materialDesign:HintAssist.Hint="Tìm cổng..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
-                                
                                 <StackPanel Orientation="Vertical" Margin="0,0,15,0">
                                     <TextBlock Text="NGƯỜI GỬI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
                                     <TextBox Width="140" materialDesign:HintAssist.Hint="Tìm người gửi..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
-                                
                                 <Button Content="Lọc Dữ Liệu" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
                             </StackPanel>
 
-                            <!-- Action Buttons for SMS -->
                             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
                                 <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
                                     <materialDesign:PackIcon Kind="CheckAll" Foreground="White"/>
@@ -213,7 +242,6 @@
                         </Grid>
                     </Border>
                     
-                    <!-- SMS DataGrid -->
                     <DataGrid Grid.Row="1" Margin="10" ItemsSource="{Binding SmsMessages}"
                               AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
                               RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
@@ -221,8 +249,17 @@
                               HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
                               ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
                               ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu Background="#1E1E2F" Foreground="White">
+                                <MenuItem Header="Sao chép OTP" Padding="10">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Xóa tin nhắn này" Padding="10" Foreground="#E53935">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="Delete"/></MenuItem.Icon>
+                                </MenuItem>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.Columns>
-                            <!-- Dot indicator -->
                             <DataGridTemplateColumn Width="40">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -243,10 +280,70 @@
                     </DataGrid>
                 </Grid>
             </TabItem>
+
+            <!-- TAB 3: DASHBOARD -->
+            <TabItem>
+                <Grid Margin="20">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <TextBlock Grid.Row="0" Text="Bảng Thống Kê Tổng Quan" FontSize="24" FontWeight="Bold" Margin="0,0,0,20"/>
+                    
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="2*"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <!-- Connection Pie Chart -->
+                        <Border Grid.Column="0" Background="{StaticResource PanelBackground}" CornerRadius="12" Padding="20" Margin="0,0,10,0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Tình trạng thiết bị" FontSize="16" FontWeight="SemiBold" Foreground="LightGray" Margin="0,0,0,10"/>
+                                <lvc:PieChart Grid.Row="1" Series="{Binding ConnectionSeries}" LegendPosition="Bottom"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- SMS Column Chart -->
+                        <Border Grid.Column="1" Background="{StaticResource PanelBackground}" CornerRadius="12" Padding="20" Margin="10,0,0,0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <TextBlock Text="Lưu lượng tin nhắn tuần qua" FontSize="16" FontWeight="SemiBold" Foreground="LightGray" Margin="0,0,0,10"/>
+                                <lvc:CartesianChart Grid.Row="1" Series="{Binding SmsSeries}" TooltipPosition="Top"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
         </TabControl>
 
+        <!-- Terminal Log Expander -->
+        <Expander Grid.Row="2" Background="#0C0C14" Foreground="#4CAF50" ExpandDirection="Up" Padding="0" Header="Lịch sử AT Commands (Terminal)" FontFamily="Consolas">
+            <Border BorderBrush="#333" BorderThickness="0,1,0,0" Height="150">
+                <ListBox ItemsSource="{Binding SystemLogs}" Background="Transparent" BorderThickness="0" Margin="10">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Time}" Foreground="Gray" Margin="0,0,10,0"/>
+                                <TextBlock Text="{Binding Level}" Foreground="Cyan" Margin="0,0,10,0" Width="50"/>
+                                <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+        </Expander>
+
         <!-- Status Bar -->
-        <StatusBar Grid.Row="2" Background="#1A1A2A" Foreground="Gray" Padding="10,5">
+        <StatusBar Grid.Row="3" Background="#1A1A2A" Foreground="Gray" Padding="10,5">
             <StatusBarItem>
                 <TextBlock Text="Đang chọn 0 hàng"/>
             </StatusBarItem>
@@ -254,5 +351,8 @@
                 <TextBlock Text="Mẹo: Giữ Ctrl và lăn chuột để phóng to/thu nhỏ bảng | 0/0"/>
             </StatusBarItem>
         </StatusBar>
+
+        <!-- Global Snackbar Notifications -->
+        <materialDesign:Snackbar MessageQueue="{Binding SnackbarMessageQueue}" Grid.RowSpan="4"/>
     </Grid>
 </Window>

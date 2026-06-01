@@ -20,4 +20,7 @@ public class SimPort
     public string Balance { get; set; } = string.Empty;
     public string ExpiryDate { get; set; } = string.Empty;
     public string UpdatedAt { get; set; } = string.Empty;
+    
+    // New Pro Features
+    public int SignalStrength { get; set; } = 100; // 0 to 100
 }

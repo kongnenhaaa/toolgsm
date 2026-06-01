@@ -103,7 +103,7 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+COPS?");
     }
 
-    private async void HandleDataReceived(string portName, SerialPort sp)
+    private void HandleDataReceived(string portName, SerialPort sp)
     {
         try
         {
@@ -115,54 +115,68 @@ public class GsmModemService : IGsmModemService
             
             string currentData = buffer.ToString();
 
-            // 1. NẾU CÓ LỆNH ĐANG ĐỢI KẾT QUẢ
-            if (_commandTcs.TryGetValue(portName, out var tcs))
+            // ---------------------------------------------------------
+            // 1. ƯU TIÊN SỐ 1: BẮT TIN NHẮN XEN NGANG (URC)
+            // (Luôn quét tin nhắn đến trước, bất kể có lệnh nào đang chạy)
+            // ---------------------------------------------------------
+            if (currentData.Contains("+CMTI:"))
             {
-                // Lệnh AT thông thường kết thúc bằng OK\r\n hoặc ERROR\r\n
-                if (currentData.Contains("OK\r\n") || currentData.Contains("ERROR\r\n") || currentData.EndsWith("> "))
+                var match = Regex.Match(currentData, @"\+CMTI:\s*""[^""]+"",\s*(\d+)");
+                if (match.Success)
                 {
-                    // Lệnh USSD đôi khi trả OK trước rồi mới trả +CUSD:.
-                    if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
+                    string msgIndex = match.Groups[1].Value;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Phát hiện tin nhắn ở vị trí {msgIndex}, đang đọc..." });
+                    
+                    // Cắt bỏ phần thông báo này khỏi bộ đệm để không xử lý lại
+                    // (Giữ nguyên các dữ liệu khác đang chờ nếu có)
+                    buffer.Replace(match.Value, ""); 
+                    currentData = buffer.ToString();
+                    
+                    // Đẩy việc đọc tin nhắn vào Task chạy ngầm.
+                    // Nó sẽ tự động xếp hàng đợi Semaphore mà không làm kẹt luồng đọc hiện tại!
+                    _ = Task.Run(async () => 
                     {
-                        if (currentData.Contains("OK\r\n") && !currentData.Contains("+CUSD:"))
-                        {
-                            return; // Tiếp tục đợi USSD từ tổng đài
-                        }
-                    }
-
-                    // Bơm dữ liệu cho SendCommandAsync và xóa Buffer
-                    tcs.TrySetResult(currentData);
-                    buffer.Clear();
+                        string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
+                        SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
+                        await SendCommandAsync(portName, $"AT+CMGD={msgIndex},4"); // Đọc xong xóa luôn
+                    });
                 }
             }
-            // 2. NẾU KHÔNG CÓ LỆNH ĐANG ĐỢI (ĐÂY LÀ TIN NHẮN RÁC / URC TỰ ĐẨY)
-            else
-            {
-                if (currentData.Contains("\r\n"))
-                {
-                    if (currentData.Contains("+CMTI:"))
-                    {
-                        var match = Regex.Match(currentData, @"\+CMTI:\s*""[^""]+"",\s*(\d+)");
-                        if (match.Success)
-                        {
-                            string msgIndex = match.Groups[1].Value;
-                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Phát hiện tin nhắn ở vị trí {msgIndex}, đang đọc..." });
-                            
-                            // Gửi lệnh ĐỌC tin nhắn đó
-                            string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
-                            
-                            // Gắn vào sự kiện để ném sang ViewModel
-                            SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
 
-                            // Xóa tin nhắn sau khi đọc để tránh đầy SIM
-                            await SendCommandAsync(portName, $"AT+CMGD={msgIndex},4");
+            // ---------------------------------------------------------
+            // 2. XỬ LÝ LỆNH TỪ PHẦN MỀM ĐANG GỬI XUỐNG (TCS)
+            // ---------------------------------------------------------
+            if (_commandTcs.TryGetValue(portName, out var tcs))
+            {
+                // Kiểm tra dấu hiệu kết thúc của lệnh AT
+                if (currentData.Contains("OK\r\n") || currentData.Contains("ERROR\r\n") || currentData.EndsWith("> "))
+                {
+                    if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
+                    {
+                        // Đợi USSD từ tổng đài, không thoát sớm
+                        if (currentData.Contains("OK\r\n") && !currentData.Contains("+CUSD:"))
+                        {
+                            return; 
                         }
                     }
-                    else if (!currentData.Contains("OK") && !currentData.Contains("ERROR") && !currentData.Contains("+CUSD:") && !currentData.Contains("+CMGL:"))
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[URC] {currentData.Trim()}" });
-                    }
-                    
+
+                    tcs.TrySetResult(currentData);
+                    buffer.Clear(); // An toàn để xóa vì đã nhặt SMS ra ở bước 1
+                }
+            }
+            // ---------------------------------------------------------
+            // 3. DỌN DẸP RÁC BỘ ĐỆM AN TOÀN
+            // ---------------------------------------------------------
+            else
+            {
+                // Chỉ xóa bộ đệm khi thiết bị nhả rác có chữ OK/ERROR chuẩn
+                if (currentData.Contains("OK\r\n") || currentData.Contains("ERROR\r\n"))
+                {
+                    buffer.Clear();
+                }
+                // Nếu bị nhiễu sóng, dữ liệu rác dồn quá nhiều thì xóa để chống tràn RAM
+                else if (currentData.Length > 2000) 
+                {
                     buffer.Clear();
                 }
             }

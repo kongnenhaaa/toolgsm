@@ -8,4 +8,5 @@ public class SmsMessage
     public string ReceiverPhone { get; set; } = string.Empty;
     public string Otp { get; set; } = string.Empty;
     public string PortName { get; set; } = string.Empty;
+    public string NetworkProvider { get; set; } = string.Empty;
 }

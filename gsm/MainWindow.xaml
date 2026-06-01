@@ -276,7 +276,7 @@
                             <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" Width="120"/>
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
                             <DataGridTextColumn Header="Số điện thoại" Binding="{Binding ReceiverPhone}" Width="150"/>
-                            <DataGridTextColumn Header="Nhà mạng" Width="120"/>
+                            <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             <DataGridTextColumn Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn Header="Cuộc gọi" Width="100"/>

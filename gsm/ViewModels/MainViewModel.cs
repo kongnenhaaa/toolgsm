@@ -190,7 +190,10 @@ public partial class MainViewModel : ObservableObject
                 _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
             }
 
-            // 3. Đưa lên UI (Cập nhật Tab SMS)
+            // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
+            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+
+            // 4. Đưa lên UI (Cập nhật Tab SMS)
             SmsMessages.Insert(0, new SmsMessage
             {
                 PortName = e.PortName,
@@ -198,11 +201,11 @@ public partial class MainViewModel : ObservableObject
                 Content = cleanContent,
                 Sender = senderPhone,
                 Otp = extractedOtp,
-                ReceiverPhone = Ports.FirstOrDefault(p => p.PortName == e.PortName)?.PhoneNumber ?? ""
+                ReceiverPhone = port?.PhoneNumber ?? "",
+                NetworkProvider = port?.NetworkProvider ?? "UNKNOWN"
             });
             
-            // 4. Đưa lên UI (Cập nhật Tab GSM)
-            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+            // 5. Đưa lên UI (Cập nhật Tab GSM)
             if (port != null)
             {
                 port.Sender = senderPhone;
@@ -258,12 +261,24 @@ public partial class MainViewModel : ObservableObject
     private void SimulateSms()
     {
         // Tin nhắn ảo giống hệt định dạng trả về từ phần cứng
-        string rawSms = "+CMGR: \"REC UNREAD\",\"+84123456789\",,\"26/05/01,10:00:00+28\"\r\nMa xac nhan Facebook cua ban la 889922. Vui long khong chia se cho bat ky ai.\r\n\r\nOK";
+        string rawSms = "+CMGR: \"REC UNREAD\",\"+84123456789\",,\"26/05/01,10:00:00+28\"\r\nMa xac nhan Facebook cua ban la 889933. Vui long khong chia se cho bat ky ai.\r\n\r\nOK";
         
         // Tạo một cổng ảo để test nếu chưa có
         if (!Ports.Any(p => p.PortName == "COM_VIRTUAL"))
         {
-            Ports.Insert(0, new SimPort { PortName = "COM_VIRTUAL", Status = "Đang hoạt động", SignalStrength = 100, PhoneNumber = "0987654321" });
+            Ports.Insert(0, new SimPort 
+            { 
+                PortName = "COM_VIRTUAL", 
+                Status = "Đang hoạt động", 
+                SignalStrength = 100, 
+                PhoneNumber = "0987654321",
+                NetworkProvider = "VIETTEL",
+                Imei = "359837042531092",
+                Serial = "8984040001234567890",
+                Balance = "50,000 đ",
+                ExpiryDate = "31/12/2026",
+                UpdatedAt = DateTime.Now.ToString("HH:mm:ss")
+            });
         }
 
         // Bắn trực tiếp dữ liệu vào event như cách GsmModemService làm

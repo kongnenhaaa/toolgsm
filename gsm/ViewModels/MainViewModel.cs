@@ -161,7 +161,7 @@ public partial class MainViewModel : ObservableObject
                 var match = Regex.Match(e.Data, @"\+CSQ:\s*(\d+)");
                 if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
                 {
-                    port.SignalStrength = (int)((csq / 31.0) * 100);
+                    port.SignalStrength = csq >= 99 ? 0 : (int)((csq / 31.0) * 100);
                 }
             }
             else if (e.Data.Contains("+CUSD:"))

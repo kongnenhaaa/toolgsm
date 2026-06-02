@@ -30,14 +30,20 @@ public partial class SimPort : ObservableObject
     public int ForwardCount { get; set; }
     
     // Tab 2 Info
-    public string Imei { get; set; } = string.Empty;
-    public string Serial { get; set; } = string.Empty;
+    [ObservableProperty]
+    private string _imei = string.Empty;
+    
+    [ObservableProperty]
+    private string _serial = string.Empty;
     
     [ObservableProperty]
     private string _balance = string.Empty;
     
-    public string ExpiryDate { get; set; } = string.Empty;
-    public string UpdatedAt { get; set; } = string.Empty;
+    [ObservableProperty]
+    private string _expiryDate = string.Empty;
+    
+    [ObservableProperty]
+    private string _updatedAt = string.Empty;
     
     // New Pro Features
     [ObservableProperty]

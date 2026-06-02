@@ -335,7 +335,17 @@
         <!-- Terminal Log Expander -->
         <Expander Grid.Row="2" Background="#0C0C14" Foreground="#4CAF50" ExpandDirection="Up" Padding="0" Header="Lịch sử AT Commands (Terminal)" FontFamily="Consolas">
             <Border BorderBrush="#333" BorderThickness="0,1,0,0" Height="150">
-                <ListBox ItemsSource="{Binding SystemLogs}" Background="Transparent" BorderThickness="0" Margin="10">
+                <ListBox ItemsSource="{Binding SystemLogs}" SelectedItem="{Binding SelectedLog}" Background="Transparent" BorderThickness="0" Margin="10">
+                    <ListBox.ContextMenu>
+                        <ContextMenu Background="#1E1E2F" Foreground="White">
+                            <MenuItem Header="Sao chép" Command="{Binding Path=DataContext.CopySelectedLogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                                <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                            </MenuItem>
+                            <MenuItem Header="Sao chép tất cả" Command="{Binding Path=DataContext.CopyAllLogsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                                <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                            </MenuItem>
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal">

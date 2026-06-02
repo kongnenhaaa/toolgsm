@@ -48,6 +48,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private ObservableCollection<LogMessage> _systemLogs = new();
 
+    [ObservableProperty]
+    private LogMessage? _selectedLog;
+
     public ISeries[] ConnectionSeries { get; set; }
     public ISeries[] SmsSeries { get; set; }
 
@@ -103,6 +106,36 @@ public partial class MainViewModel : ObservableObject
         {
             SystemLogs.RemoveAt(SystemLogs.Count - 1);
         }
+    }
+
+    [RelayCommand]
+    private void CopySelectedLog(LogMessage? log)
+    {
+        var target = log ?? SelectedLog;
+        if (target == null) return;
+
+        Clipboard.SetText(FormatLogLine(target));
+        SnackbarMessageQueue.Enqueue("Đã sao chép log.");
+    }
+
+    [RelayCommand]
+    private void CopyAllLogs()
+    {
+        if (SystemLogs.Count == 0) return;
+
+        var builder = new StringBuilder();
+        for (int i = SystemLogs.Count - 1; i >= 0; i--)
+        {
+            builder.AppendLine(FormatLogLine(SystemLogs[i]));
+        }
+
+        Clipboard.SetText(builder.ToString().TrimEnd());
+        SnackbarMessageQueue.Enqueue("Đã sao chép toàn bộ log.");
+    }
+
+    private static string FormatLogLine(LogMessage log)
+    {
+        return $"{log.Time} {log.Level} {log.Message}";
     }
 
     private void InitializeHardware()

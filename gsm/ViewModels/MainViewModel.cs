@@ -149,7 +149,8 @@ public partial class MainViewModel : ObservableObject
     {
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            AddLog($"[{e.PortName}] {e.Data}");
+            bool isInternalEvent = e.Data.StartsWith("[PARSE_") || e.Data == "[STATUS_ACTIVE]";
+            if (!isInternalEvent) AddLog($"[{e.PortName}] {e.Data}");
             
             // Xử lý cập nhật giao diện dựa trên Log
             var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
@@ -207,6 +208,7 @@ public partial class MainViewModel : ObservableObject
             {
                 port.Status = "Đang hoạt động";
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                UpdateDashboard();
             }
         });
     }
@@ -220,6 +222,7 @@ public partial class MainViewModel : ObservableObject
             {
                 port.Status = "Mất kết nối";
                 port.SignalStrength = 0;
+                UpdateDashboard();
             }
             AddLog($"[{e.PortName}] {e.Data}", "ERROR");
             SnackbarMessageQueue.Enqueue($"Cổng {e.PortName} bị ngắt kết nối!");
@@ -245,7 +248,7 @@ public partial class MainViewModel : ObservableObject
                 senderPhone = senderMatch.Groups[1].Value;
                 // Xóa dòng header +CMGR đi để lấy nội dung text sạch
                 cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
-                cleanContent = cleanContent.Replace("OK", "").Trim();
+                cleanContent = Regex.Replace(cleanContent, @"\r?\nOK\r?\n?$", "").Trim();
                 cleanContent = DecodeUcs2(cleanContent); // Giải mã Tiếng Việt
             }
 
@@ -285,7 +288,10 @@ public partial class MainViewModel : ObservableObject
                 port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
             }
             
-            SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
+            if (extractedOtp != "N/A")
+                SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
+            else
+                SnackbarMessageQueue.Enqueue($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
         });
     }
 

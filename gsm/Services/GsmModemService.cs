@@ -248,8 +248,12 @@ public class GsmModemService : IGsmModemService
             return "ERROR: Timeout waiting for lock";
         }
 
-        var tcs = new TaskCompletionSource<string>(command);
-        _commandTcs[portName] = tcs;
+        var tcs = new TaskCompletionSource<string>(command, TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_commandTcs.TryAdd(portName, tcs))
+        {
+            semaphore.Release();
+            return "ERROR: Another command is already in progress";
+        }
 
         try
         {
@@ -268,6 +272,7 @@ public class GsmModemService : IGsmModemService
             
             if (completedTask == timeoutTask)
             {
+                tcs.TrySetCanceled();
                 return "ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)";
             }
             
@@ -286,7 +291,10 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
-            _commandTcs.TryRemove(portName, out _);
+            if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
+            {
+                _commandTcs.TryRemove(portName, out _);
+            }
             semaphore.Release();
         }
     }

@@ -20,6 +20,16 @@ public partial class MainViewModel : ObservableObject
     private readonly IGsmModemService _modemService;
     public IGsmModemService ModemService => _modemService;
 
+    private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "VIETTEL", "*101#" },
+            { "MOBIFONE", "*101#" },
+            { "VMS", "*101#" },
+            { "VINAPHONE", "*101#" },
+            { "VINA", "*101#" }
+        };
+
     [ObservableProperty]
     private ObservableCollection<SimPort> _ports = new();
 
@@ -175,6 +185,10 @@ public partial class MainViewModel : ObservableObject
                     var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
                     if (moneyMatch.Success) port.Balance = moneyMatch.Value;
                     else port.Balance = "Thành công";
+
+                    var expiryMatch = Regex.Match(ussdContent, @"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b");
+                    if (expiryMatch.Success) port.ExpiryDate = expiryMatch.Groups[1].Value;
+
                     SnackbarMessageQueue.Enqueue($"[{e.PortName}] USSD: {ussdContent}");
                 }
             }
@@ -312,8 +326,20 @@ public partial class MainViewModel : ObservableObject
     {
         if (SelectedPort != null)
         {
+            if (string.IsNullOrWhiteSpace(SelectedPort.NetworkProvider))
+            {
+                SnackbarMessageQueue.Enqueue("Chưa xác định được nhà mạng để chọn mã USSD.");
+                return;
+            }
+
+            if (!BalanceUssdByProvider.TryGetValue(SelectedPort.NetworkProvider.Trim(), out var ussdCode))
+            {
+                SnackbarMessageQueue.Enqueue($"Chưa hỗ trợ mã USSD cho nhà mạng: {SelectedPort.NetworkProvider}");
+                return;
+            }
+
             AddLog($"Đang gửi lệnh kiểm tra số dư tới {SelectedPort.PortName}...");
-            string result = await _modemService.SendCommandAsync(SelectedPort.PortName, "AT+CUSD=1,\"*101#\",15");
+            string result = await _modemService.SendCommandAsync(SelectedPort.PortName, $"AT+CUSD=1,\"{ussdCode}\",15");
             AddLog($"Kết quả từ {SelectedPort.PortName}: {result}", "SUCCESS");
             SnackbarMessageQueue.Enqueue($"Đã kiểm tra số dư cổng {SelectedPort.PortName}");
         }

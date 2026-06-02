@@ -149,7 +149,7 @@ public class GsmModemService : IGsmModemService
                     {
                         string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
                         SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
-                        await SendCommandAsync(portName, $"AT+CMGD={msgIndex},4"); // Đọc xong xóa luôn
+                        await SendCommandAsync(portName, $"AT+CMGD={msgIndex},0"); // Đọc xong xóa luôn tin đó
                     });
                 }
             }

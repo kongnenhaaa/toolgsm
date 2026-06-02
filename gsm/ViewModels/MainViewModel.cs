@@ -109,12 +109,11 @@ public partial class MainViewModel : ObservableObject
     {
         Ports.Clear();
         SmsMessages.Clear();
-        
-        var availablePorts = _modemService.GetAvailablePorts();
-        foreach (var p in availablePorts)
-            Ports.Add(new SimPort { PortName = p, Status = "Đang kết nối...", SignalStrength = 0 });
-            
-        _modemService.ConnectAll(115200);
+
+        Task.Run(() =>
+        {
+            _modemService.ConnectAll(115200);
+        });
     }
 
     [RelayCommand]
@@ -126,31 +125,21 @@ public partial class MainViewModel : ObservableObject
         Application.Current.Dispatcher.Invoke(() =>
         {
             var availablePorts = _modemService.GetAvailablePorts();
-            
-            var removedPorts = Ports.Where(p => !availablePorts.Contains(p.PortName)).ToList();
+            var removedPorts = Ports.Where(p => !availablePorts.Contains(p.PortName) && p.PortName != "COM_VIRTUAL").ToList();
             foreach (var p in removedPorts) Ports.Remove(p);
-            
-            foreach (var p in availablePorts)
+        });
+
+        Task.Run(() =>
+        {
+            _modemService.ConnectAll(115200);
+
+            var currentPorts = Ports.Where(p => p.PortName != "COM_VIRTUAL").Select(p => p.PortName).ToList();
+            foreach (var p in currentPorts)
             {
-                if (!Ports.Any(port => port.PortName == p))
-                {
-                    Ports.Add(new SimPort { PortName = p, Status = "Đang kết nối...", SignalStrength = 0 });
-                }
+                _ = _modemService.SendCommandAsync(p, "AT+CSQ");
+                _ = _modemService.SendCommandAsync(p, "AT+COPS?");
             }
         });
-        
-        // Kết nối các cổng mới (ConnectAll tự động bỏ qua các cổng đang mở)
-        _modemService.ConnectAll(115200);
-
-        // Lấy lại thông tin (Sóng, Nhà mạng) cho các cổng đang mở
-        foreach (var p in Ports)
-        {
-            if (p.Status == "Đang hoạt động")
-            {
-                _ = _modemService.SendCommandAsync(p.PortName, "AT+CSQ");
-                _ = _modemService.SendCommandAsync(p.PortName, "AT+COPS?");
-            }
-        }
     }
 
     private void ModemService_LogMessage(object? sender, GsmDataEventArgs e)
@@ -160,9 +149,20 @@ public partial class MainViewModel : ObservableObject
             bool isInternalEvent = e.Data.StartsWith("[PARSE_") || e.Data == "[STATUS_ACTIVE]";
             if (!isInternalEvent) AddLog($"[{e.PortName}] {e.Data}");
             
-            // Xử lý cập nhật giao diện dựa trên Log
             var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
-            if (port == null) return;
+
+            if (port == null)
+            {
+                if (e.Data.StartsWith("[PARSE_IMEI]") || e.Data.Contains("+CSQ:") || e.Data.Contains("+COPS:"))
+                {
+                    port = new SimPort { PortName = e.PortName, Status = "Đang hoạt động", SignalStrength = 0 };
+                    Ports.Add(port);
+                }
+                else
+                {
+                    return;
+                }
+            }
 
             if (e.Data.Contains("+CSQ:"))
             {
@@ -181,6 +181,14 @@ public partial class MainViewModel : ObservableObject
                     
                     // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
                     ussdContent = DecodeUcs2(ussdContent);
+
+                    var phoneMatch = Regex.Match(ussdContent, @"([345789][0-9]{8})");
+                    if (phoneMatch.Success)
+                    {
+                        string foundNumber = "0" + phoneMatch.Groups[1].Value;
+                        port.PhoneNumber = foundNumber;
+                        AddLog($"[THÀNH CÔNG] Đã bắt được số: {foundNumber}", "SUCCESS");
+                    }
                     
                     var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
                     if (moneyMatch.Success) port.Balance = moneyMatch.Value;
@@ -200,6 +208,16 @@ public partial class MainViewModel : ObservableObject
                 if (match.Success)
                 {
                     port.NetworkProvider = match.Groups[1].Value;
+
+                    string networkUpper = port.NetworkProvider.ToUpperInvariant();
+                    if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA"))
+                    {
+                        _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*110#\",15");
+                    }
+                    else if (networkUpper.Contains("VIETTEL") || networkUpper.Contains("MOBIFONE"))
+                    {
+                        _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*0#\",15");
+                    }
                 }
             }
             else if (e.Data.StartsWith("[PARSE_IMEI]"))

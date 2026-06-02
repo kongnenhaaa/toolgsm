@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using gsm.Models;
 using gsm.Services;
@@ -10,6 +11,7 @@ using System;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 
@@ -19,6 +21,12 @@ public partial class MainViewModel : ObservableObject
 {
     private readonly IGsmModemService _modemService;
     public IGsmModemService ModemService => _modemService;
+
+    private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan UssdMinIntervalGlobal = TimeSpan.FromSeconds(2);
+    private readonly ConcurrentDictionary<string, DateTime> _lastUssdByPort = new();
+    private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(1, 1);
+    private DateTime _lastUssdGlobalUtc = DateTime.MinValue;
 
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -246,15 +254,15 @@ public partial class MainViewModel : ObservableObject
                     string networkUpper = port.NetworkProvider.ToUpperInvariant();
                     if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA"))
                     {
-                        _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*110#\",15");
+                        _ = SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT");
                     }
                     else if (networkUpper.Contains("VIETTEL"))
                     {
-                        _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*0#\",15");
+                        _ = SendUssdThrottledAsync(port.PortName, "*0#", "Tự động lấy SĐT");
                     }
                     else if (networkUpper.Contains("MOBIFONE") || networkUpper.Contains("VMS"))
                     {
-                        _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*101#\",15");
+                        _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT");
                     }
                 }
             }
@@ -420,14 +428,68 @@ public partial class MainViewModel : ObservableObject
             }
 
             AddLog($"Đang gửi lệnh kiểm tra số dư tới {SelectedPort.PortName}...");
-            string result = await _modemService.SendCommandAsync(SelectedPort.PortName, $"AT+CUSD=1,\"{ussdCode}\",15");
-            AddLog($"Kết quả từ {SelectedPort.PortName}: {result}", "SUCCESS");
+            string result = await SendUssdThrottledAsync(SelectedPort.PortName, ussdCode, "Kiểm tra số dư", logResult: true);
             SnackbarMessageQueue.Enqueue($"Đã kiểm tra số dư cổng {SelectedPort.PortName}");
         }
         else
         {
             SnackbarMessageQueue.Enqueue("Vui lòng chọn một cổng để kiểm tra số dư.");
         }
+    }
+
+    private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false)
+    {
+        if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(ussdCode))
+        {
+            return "ERROR: Invalid USSD request";
+        }
+
+        await _ussdSendLock.WaitAsync();
+        try
+        {
+            var now = DateTime.UtcNow;
+
+            if (_lastUssdByPort.TryGetValue(portName, out var lastPortUtc))
+            {
+                var remaining = UssdMinIntervalPerPort - (now - lastPortUtc);
+                if (remaining > TimeSpan.Zero)
+                {
+                    WarnUssdThrottle(portName, reason, remaining, "SIM");
+                    await Task.Delay(remaining);
+                    now = DateTime.UtcNow;
+                }
+            }
+
+            var globalRemaining = UssdMinIntervalGlobal - (now - _lastUssdGlobalUtc);
+            if (globalRemaining > TimeSpan.Zero)
+            {
+                WarnUssdThrottle(portName, reason, globalRemaining, "GLOBAL");
+                await Task.Delay(globalRemaining);
+                now = DateTime.UtcNow;
+            }
+
+            _lastUssdByPort[portName] = now;
+            _lastUssdGlobalUtc = now;
+        }
+        finally
+        {
+            _ussdSendLock.Release();
+        }
+
+        string result = await _modemService.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
+        if (logResult)
+        {
+            AddLog($"Kết quả từ {portName}: {result}", "SUCCESS");
+        }
+
+        return result;
+    }
+
+    private void WarnUssdThrottle(string portName, string reason, TimeSpan remaining, string scope)
+    {
+        string message = $"USSD bị giới hạn ({scope}) trên {portName} - {reason}. Đợi {remaining.TotalSeconds:0.#}s.";
+        AddLog(message, "WARN");
+        SnackbarMessageQueue.Enqueue(message);
     }
 
     [RelayCommand]

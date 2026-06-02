@@ -274,7 +274,10 @@ public partial class MainViewModel : ObservableObject
                 Sender = senderPhone,
                 Otp = extractedOtp,
                 ReceiverPhone = port?.PhoneNumber ?? "",
-                NetworkProvider = port?.NetworkProvider ?? "UNKNOWN"
+                NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
+                Status = port?.Status ?? "Đang kết nối...",
+                CallCount = "0",
+                ForwardContent = "Không"
             });
             
             // 5. Đưa lên UI (Cập nhật Tab GSM)

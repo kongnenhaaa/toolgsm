@@ -18,6 +18,7 @@
         FontFamily="{DynamicResource MaterialDesignFont}">
 
     <Window.Resources>
+        <converters:StatusToColorConverter x:Key="StatusToColorConverter"/>
         <converters:EqualityToBooleanConverter x:Key="EqualityToBooleanConverter"/>
         
         <Style TargetType="DataGridColumnHeader" x:Key="CustomHeaderStyle" BasedOn="{StaticResource MaterialDesignDataGridColumnHeader}">
@@ -159,7 +160,7 @@
                             <DataGridTemplateColumn Width="40">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Ellipse Width="8" Height="8" Fill="#4CAF50" Margin="10,0"/>
+                                        <Ellipse Width="8" Height="8" Fill="{Binding Status, Converter={StaticResource StatusToColorConverter}}" Margin="10,0"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -269,7 +270,7 @@
                             <DataGridTemplateColumn Width="40">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Ellipse Width="8" Height="8" Fill="#4CAF50" Margin="10,0"/>
+                                        <Ellipse Width="8" Height="8" Fill="{Binding Status, Converter={StaticResource StatusToColorConverter}}" Margin="10,0"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>

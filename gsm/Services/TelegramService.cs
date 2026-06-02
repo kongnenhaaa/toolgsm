@@ -31,7 +31,6 @@ public static class TelegramService
         }
         catch
         {
-            // Bỏ qua lỗi mạng khi gửi Telegram để không làm treo luồng chính
         }
     }
 }

@@ -25,10 +25,14 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _status = "Active"; // Active, Inactive, Error
     
-    // Additional properties based on UI
-    public int CallCount { get; set; }
-    public int ForwardCount { get; set; }
+    [ObservableProperty]
+    private int _callCount = 0;
     
+    [ObservableProperty]
+    private int _forwardCount = 0;
+
+    [ObservableProperty]
+    private string _promotionBalance = string.Empty;
     // Tab 2 Info
     [ObservableProperty]
     private string _imei = string.Empty;

@@ -30,7 +30,7 @@ public partial class MainViewModel : ObservableObject
     private SimPort? _selectedPort;
 
     [ObservableProperty]
-    private int _selectedTabIndex = 0; // 0 for GSM, 1 for SMS, 2 for Dashboard
+    private int _selectedTabIndex = 0; 
 
     [ObservableProperty]
     private ISnackbarMessageQueue _snackbarMessageQueue = new SnackbarMessageQueue(TimeSpan.FromSeconds(3));
@@ -117,11 +117,9 @@ public partial class MainViewModel : ObservableObject
         {
             var availablePorts = _modemService.GetAvailablePorts();
             
-            // Xóa những cổng không còn tồn tại trên máy tính
             var removedPorts = Ports.Where(p => !availablePorts.Contains(p.PortName)).ToList();
             foreach (var p in removedPorts) Ports.Remove(p);
             
-            // Thêm những cổng mới
             foreach (var p in availablePorts)
             {
                 if (!Ports.Any(port => port.PortName == p))

@@ -184,10 +184,10 @@
                             <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120" HeaderTemplate="{StaticResource FilterHeaderTemplate}"/>
                             <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
-                            <DataGridTextColumn Header="TKKM" Width="100"/>
+                            <DataGridTextColumn Header="TKKM" Binding="{Binding PromotionBalance}" Width="100"/>
                             <DataGridTextColumn Header="HSD" Binding="{Binding ExpiryDate}" Width="120" HeaderTemplate="{StaticResource FilterHeaderTemplate}"/>
                             <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
-                            <DataGridTextColumn Header="Cuộc gọi" Width="100"/>
+                            <DataGridTextColumn Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
                             
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
                             <DataGridTextColumn Header="SĐT nhận" Binding="{Binding PhoneNumber}" Width="150"/>

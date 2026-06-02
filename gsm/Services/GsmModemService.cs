@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Collections.Generic;
 using System.IO;
 using System.IO.Ports;
 using System.Text;
@@ -111,6 +110,8 @@ public class GsmModemService : IGsmModemService
         if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
         if (!ccid.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
         if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
+
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_ACTIVE]" });
     }
 
     private void HandleDataReceived(string portName, SerialPort sp)

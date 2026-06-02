@@ -89,6 +89,10 @@ public partial class MainViewModel : ObservableObject
     private void AddLog(string message, string level = "INFO")
     {
         SystemLogs.Insert(0, new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = level, Message = message });
+        if (SystemLogs.Count > 500)
+        {
+            SystemLogs.RemoveAt(SystemLogs.Count - 1);
+        }
     }
 
     private void InitializeHardware()
@@ -106,22 +110,39 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void RefreshPorts()
     {
-        SnackbarMessageQueue.Enqueue("Đang quét lại danh sách Cổng COM...");
-        AddLog("Bắt đầu quét lại danh sách Cổng COM...");
+        SnackbarMessageQueue.Enqueue("Đang cập nhật tình trạng thiết bị...");
+        AddLog("Bắt đầu cập nhật tình trạng thiết bị...");
         
-        // Cập nhật lại UI
         Application.Current.Dispatcher.Invoke(() =>
         {
-            Ports.Clear();
             var availablePorts = _modemService.GetAvailablePorts();
-            foreach(var p in availablePorts)
+            
+            // Xóa những cổng không còn tồn tại trên máy tính
+            var removedPorts = Ports.Where(p => !availablePorts.Contains(p.PortName)).ToList();
+            foreach (var p in removedPorts) Ports.Remove(p);
+            
+            // Thêm những cổng mới
+            foreach (var p in availablePorts)
             {
-                Ports.Add(new SimPort { PortName = p, Status = "Đã tìm thấy", SignalStrength = 0 });
+                if (!Ports.Any(port => port.PortName == p))
+                {
+                    Ports.Add(new SimPort { PortName = p, Status = "Đang kết nối...", SignalStrength = 0 });
+                }
             }
         });
         
-        // Kết nối
+        // Kết nối các cổng mới (ConnectAll tự động bỏ qua các cổng đang mở)
         _modemService.ConnectAll(115200);
+
+        // Lấy lại thông tin (Sóng, Nhà mạng) cho các cổng đang mở
+        foreach (var p in Ports)
+        {
+            if (p.Status == "Đang hoạt động")
+            {
+                _ = _modemService.SendCommandAsync(p.PortName, "AT+CSQ");
+                _ = _modemService.SendCommandAsync(p.PortName, "AT+COPS?");
+            }
+        }
     }
 
     private void ModemService_LogMessage(object? sender, GsmDataEventArgs e)
@@ -182,6 +203,11 @@ public partial class MainViewModel : ObservableObject
                 if (match.Success) port.PhoneNumber = match.Groups[1].Value;
                 else port.PhoneNumber = e.Data.Replace("[PARSE_CNUM]", "").Replace("+CNUM:", "").Trim();
             }
+            else if (e.Data == "[STATUS_ACTIVE]")
+            {
+                port.Status = "Đang hoạt động";
+                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+            }
         });
     }
 
@@ -220,6 +246,7 @@ public partial class MainViewModel : ObservableObject
                 // Xóa dòng header +CMGR đi để lấy nội dung text sạch
                 cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
                 cleanContent = cleanContent.Replace("OK", "").Trim();
+                cleanContent = DecodeUcs2(cleanContent); // Giải mã Tiếng Việt
             }
 
             // 2. Tìm OTP

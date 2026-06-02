@@ -140,14 +140,14 @@
                         <!-- Context Menu -->
                         <DataGrid.ContextMenu>
                             <ContextMenu Background="#1E1E2F" Foreground="White">
-                                <MenuItem Header="Sao chép SĐT" Padding="10">
+                                <MenuItem Header="Sao chép SĐT" Command="{Binding Path=DataContext.DummyFeatureCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Sao chép SĐT" Padding="10">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Đọc tin nhắn (1 mới)" Padding="10">
+                                <MenuItem Header="Đọc tin nhắn (1 mới)" Command="{Binding Path=DataContext.DummyFeatureCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Đọc tin nhắn" Padding="10">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="MessageText"/></MenuItem.Icon>
                                 </MenuItem>
                                 <Separator Background="#444"/>
-                                <MenuItem Header="Nạp thẻ nhanh" Padding="10" Foreground="#4CAF50">
+                                <MenuItem Header="Nạp thẻ nhanh" Command="{Binding Path=DataContext.DummyFeatureCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Nạp thẻ nhanh" Padding="10" Foreground="#4CAF50">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="CashPlus"/></MenuItem.Icon>
                                 </MenuItem>
                                 <MenuItem Header="Kiểm tra số dư" Command="{Binding CheckBalanceCommand}" Padding="10">
@@ -165,7 +165,6 @@
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" Width="120" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
-                            <DataGridTextColumn Header="#" Binding="{Binding CallCount}" Width="50"/>
                             <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
@@ -231,14 +230,14 @@
                                     <TextBlock Text="NGƯỜI GỬI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
                                     <TextBox Width="140" materialDesign:HintAssist.Hint="Tìm người gửi..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
-                                <Button Content="Lọc Dữ Liệu" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
+                                <Button Content="Lọc Dữ Liệu" Command="{Binding DummyFeatureCommand}" CommandParameter="Lọc Dữ Liệu" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
                             </StackPanel>
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
-                                <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
+                                <Button Command="{Binding DummyFeatureCommand}" CommandParameter="Đánh dấu đã đọc" Background="#424242" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
                                     <materialDesign:PackIcon Kind="CheckAll" Foreground="White"/>
                                 </Button>
-                                <Button Background="#E53935" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa tin nhắn" Width="34" Padding="0" Margin="0,0,8,0">
+                                <Button Command="{Binding DummyFeatureCommand}" CommandParameter="Xóa tin nhắn" Background="#E53935" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa tin nhắn" Width="34" Padding="0" Margin="0,0,8,0">
                                     <materialDesign:PackIcon Kind="DeleteOutline" Foreground="White"/>
                                 </Button>
                                 <Button Content="Xuất Excel" Background="#4CAF50" Command="{Binding DummyFeatureCommand}" CommandParameter="Xuất Excel" Style="{StaticResource ModernButtonStyle}" Margin="0"/>

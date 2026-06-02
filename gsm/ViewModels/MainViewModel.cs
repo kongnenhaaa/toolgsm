@@ -207,6 +207,7 @@ public partial class MainViewModel : ObservableObject
                 port.Status = "Đang hoạt động";
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
+                foreach (var sms in SmsMessages.Where(s => s.PortName == e.PortName)) sms.Status = "Đang hoạt động";
             }
         });
     }
@@ -221,6 +222,7 @@ public partial class MainViewModel : ObservableObject
                 port.Status = "Mất kết nối";
                 port.SignalStrength = 0;
                 UpdateDashboard();
+                foreach (var sms in SmsMessages.Where(s => s.PortName == e.PortName)) sms.Status = "Mất kết nối";
             }
             AddLog($"[{e.PortName}] {e.Data}", "ERROR");
             SnackbarMessageQueue.Enqueue($"Cổng {e.PortName} bị ngắt kết nối!");

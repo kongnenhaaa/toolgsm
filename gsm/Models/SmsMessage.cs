@@ -1,6 +1,8 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+
 namespace gsm.Models;
 
-public class SmsMessage
+public partial class SmsMessage : ObservableObject
 {
     public string Sender { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
@@ -11,5 +13,7 @@ public class SmsMessage
     public string NetworkProvider { get; set; } = string.Empty;
     public string CallCount { get; set; } = string.Empty;
     public string ForwardContent { get; set; } = string.Empty;
-    public string Status { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    private string _status = string.Empty;
 }

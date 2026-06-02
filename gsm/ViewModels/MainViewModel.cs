@@ -153,7 +153,7 @@ public partial class MainViewModel : ObservableObject
 
             if (port == null)
             {
-                if (e.Data.StartsWith("[PARSE_IMEI]") || e.Data.Contains("+CSQ:") || e.Data.Contains("+COPS:"))
+                if (e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+CSQ:") || e.Data.Contains("+COPS:"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = "Đang hoạt động", SignalStrength = 0 };
                     Ports.Add(port);
@@ -187,7 +187,8 @@ public partial class MainViewModel : ObservableObject
                     {
                         string foundNumber = "0" + phoneMatch.Groups[1].Value;
                         port.PhoneNumber = foundNumber;
-                        AddLog($"[THÀNH CÔNG] Đã bắt được số: {foundNumber}", "SUCCESS");
+                        string networkLabel = string.IsNullOrWhiteSpace(port.NetworkProvider) ? "UNKNOWN" : port.NetworkProvider;
+                        AddLog($"[{e.PortName}] SĐT chuẩn: {foundNumber} ({networkLabel})", "SUCCESS");
                     }
                     
                     var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
@@ -214,9 +215,13 @@ public partial class MainViewModel : ObservableObject
                     {
                         _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*110#\",15");
                     }
-                    else if (networkUpper.Contains("VIETTEL") || networkUpper.Contains("MOBIFONE"))
+                    else if (networkUpper.Contains("VIETTEL"))
                     {
                         _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*0#\",15");
+                    }
+                    else if (networkUpper.Contains("MOBIFONE") || networkUpper.Contains("VMS"))
+                    {
+                        _ = _modemService.SendCommandAsync(port.PortName, "AT+CUSD=1,\"*101#\",15");
                     }
                 }
             }

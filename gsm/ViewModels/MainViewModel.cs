@@ -212,9 +212,34 @@ public partial class MainViewModel : ObservableObject
             }
             else if (e.Data.StartsWith("[PARSE_CNUM]"))
             {
-                var match = Regex.Match(e.Data, @"\+CNUM:\s*""[^""]*"",""([^""]+)""");
-                if (match.Success) port.PhoneNumber = match.Groups[1].Value;
-                else port.PhoneNumber = e.Data.Replace("[PARSE_CNUM]", "").Replace("+CNUM:", "").Trim();
+                string cnumRaw = e.Data.Replace("[PARSE_CNUM]", "").Trim();
+
+                var quotedMatch = Regex.Match(cnumRaw, @"\+CNUM:\s*""[^""]*"",""([^""]+)""");
+                string rawNumber = quotedMatch.Success ? quotedMatch.Groups[1].Value : string.Empty;
+
+                if (string.IsNullOrWhiteSpace(rawNumber))
+                {
+                    var numMatch = Regex.Match(cnumRaw, @"(\+?\d{9,15})");
+                    rawNumber = numMatch.Success ? numMatch.Groups[1].Value : string.Empty;
+                }
+
+                if (rawNumber.StartsWith("+84", StringComparison.Ordinal))
+                {
+                    rawNumber = "0" + rawNumber.Substring(3);
+                }
+                else if (rawNumber.StartsWith("84", StringComparison.Ordinal) && rawNumber.Length >= 11)
+                {
+                    rawNumber = "0" + rawNumber.Substring(2);
+                }
+                else if (rawNumber.Length == 9 && Regex.IsMatch(rawNumber, @"^[35789]"))
+                {
+                    rawNumber = "0" + rawNumber;
+                }
+
+                if (!string.IsNullOrWhiteSpace(rawNumber))
+                {
+                    port.PhoneNumber = rawNumber;
+                }
             }
             else if (e.Data == "[STATUS_ACTIVE]")
             {

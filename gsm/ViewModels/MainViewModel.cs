@@ -347,7 +347,7 @@ public partial class MainViewModel : ObservableObject
             // 2. Tìm OTP
             var otpMatch = Regex.Match(cleanContent, @"(?:mã|code|otp|là|la)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
             if (!otpMatch.Success)
-                otpMatch = Regex.Match(cleanContent, @"(?<![\d:])\b(\d{4,6})\b(?![\d:]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
+                otpMatch = Regex.Match(cleanContent, @"(?<![\d:/])\b(\d{4,6})\b(?![\d:/]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
 
             if (otpMatch.Success)
             {

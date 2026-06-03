@@ -190,7 +190,6 @@
                             <DataGridTextColumn Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
                             
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
-                            <DataGridTextColumn Header="SĐT nhận" Binding="{Binding ReceiverPhone}" Width="150"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="250"/>

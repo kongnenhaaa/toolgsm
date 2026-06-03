@@ -34,8 +34,8 @@ public partial class MainViewModel : ObservableObject
             { "VIETTEL", "*101#" },
             { "MOBIFONE", "*101#" },
             { "VMS", "*101#" },
-            { "VINAPHONE", "*101#" },
-            { "VINA", "*101#" }
+            { "VINAPHONE", "*110#" },
+            { "VINA", "*110#" }
         };
 
     [ObservableProperty]
@@ -357,7 +357,8 @@ public partial class MainViewModel : ObservableObject
 
             // 2. Tìm OTP
             var otpMatch = Regex.Match(cleanContent, @"(?:mã|code|otp|là|la)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
-            if (!otpMatch.Success) otpMatch = Regex.Match(cleanContent, @"\b\d{4,6}\b"); // Fallback
+            if (!otpMatch.Success)
+                otpMatch = Regex.Match(cleanContent, @"\b(\d{4,6})\b(?!\s*[đdvnd])", RegexOptions.IgnoreCase); // Fallback
 
             if (otpMatch.Success)
             {

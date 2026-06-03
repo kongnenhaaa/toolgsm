@@ -31,9 +31,6 @@ public partial class MainViewModel : ObservableObject
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            { "VIETTEL", "*101#" },
-            { "MOBIFONE", "*101#" },
-            { "VMS", "*101#" },
             { "VINAPHONE", "*110#" },
             { "VINA", "*110#" }
         };
@@ -215,7 +212,7 @@ public partial class MainViewModel : ObservableObject
             }
             else if (e.Data.Contains("+CUSD:"))
             {
-                var match = Regex.Match(e.Data, @"\+CUSD:.*?""(.*?)""");
+                var match = Regex.Match(e.Data, @"\+CUSD:.*?""(.*?)(?:""|$)", RegexOptions.Singleline);
                 if (match.Success)
                 {
                     string ussdContent = match.Groups[1].Value;
@@ -255,14 +252,6 @@ public partial class MainViewModel : ObservableObject
                     if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA"))
                     {
                         _ = SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT");
-                    }
-                    else if (networkUpper.Contains("VIETTEL"))
-                    {
-                        _ = SendUssdThrottledAsync(port.PortName, "*0#", "Tự động lấy SĐT");
-                    }
-                    else if (networkUpper.Contains("MOBIFONE") || networkUpper.Contains("VMS"))
-                    {
-                        _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT");
                     }
                 }
             }
@@ -358,7 +347,7 @@ public partial class MainViewModel : ObservableObject
             // 2. Tìm OTP
             var otpMatch = Regex.Match(cleanContent, @"(?:mã|code|otp|là|la)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
             if (!otpMatch.Success)
-                otpMatch = Regex.Match(cleanContent, @"\b(\d{4,6})\b(?!\s*[đdvnd])", RegexOptions.IgnoreCase); // Fallback
+                otpMatch = Regex.Match(cleanContent, @"(?<![\d:])\b(\d{4,6})\b(?![\d:]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
 
             if (otpMatch.Success)
             {
@@ -548,7 +537,7 @@ public partial class MainViewModel : ObservableObject
                 Status = "Đang hoạt động", 
                 SignalStrength = 100, 
                 PhoneNumber = "0987654321",
-                NetworkProvider = "VIETTEL",
+                NetworkProvider = "VINAPHONE",
                 Imei = "359837042531092",
                 Serial = "8984040001234567890",
                 Balance = "50,000 đ",

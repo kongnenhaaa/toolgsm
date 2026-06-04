@@ -416,20 +416,31 @@ public partial class MainViewModel : ObservableObject
                 var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
                 if (senderMatch.Success)
                 {
-                    senderPhone = senderMatch.Groups[1].Value;
+                    senderPhone = DecodeUcs2(senderMatch.Groups[1].Value); // Giải mã HEX nếu có
+                    
                     // Xóa dòng header +CMGR đi để lấy nội dung text sạch
                     cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
                     cleanContent = Regex.Replace(cleanContent, @"\r?\nOK\r?\n?$", "").Trim();
                     cleanContent = DecodeUcs2(cleanContent); // Giải mã Tiếng Việt
+                    
+                    // Gộp nội dung thành 1 dòng để tránh lỗi hiển thị trên UI bị mất chữ (do rớt dòng)
+                    cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
+                    // Thay thế khoảng trắng kép
+                    cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                 }
 
                 // 2. Tìm OTP
                 // Xóa các mẫu số điện thoại bị che (VD: ***7628) để tránh việc regex bị nhận nhầm
                 string textForOtp = Regex.Replace(cleanContent, @"\*+\d+", "");
 
-                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|:)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
+                // Tìm các mẫu OTP có từ khóa đi kèm
+                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|viber|telegram|facebook|google|apple|tiktok|tinder)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
                 if (!otpMatch.Success)
-                    otpMatch = Regex.Match(textForOtp, @"(?<![\d:/])\b(\d{4,8})\b(?![\d:/]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
+                {
+                    // Fallback: Tìm một dãy số đứng riêng lẻ (không liền kề chữ cái)
+                    // Loại trừ luôn các đầu số tổng đài (1800, 1900, 190, 180) để không bắt nhầm thành OTP
+                    otpMatch = Regex.Match(textForOtp, @"(?<![\w:/])(?!1900|1800|190|180|09|08|03|07|05)\b(\d{4,8})\b(?![\w:/])", RegexOptions.IgnoreCase);
+                }
 
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
                 var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);

@@ -82,6 +82,9 @@ public partial class MainViewModel : ObservableObject
         AddLog("Hệ thống khởi động thành công.");
         Ports.CollectionChanged += (s, e) => UpdateDashboard();
         SmsMessages.CollectionChanged += (s, e) => UpdateDashboard();
+
+        // Khởi động API Server chạy ngầm
+        new ApiServer(this).Start();
     }
 
     private void UpdateDashboard()

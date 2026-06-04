@@ -356,67 +356,89 @@ public partial class MainViewModel : ObservableObject
         // +CMGR: "REC UNREAD","+84999999999",,"26/05/01,10:00:00+28"
         // Ma xac nhan Zalo cua ban la 123456
 
-        Application.Current.Dispatcher.InvokeAsync(() =>
+        Application.Current.Dispatcher.InvokeAsync(async () =>
         {
-            string senderPhone = "UNKNOWN";
-            string extractedOtp = "N/A";
-            string cleanContent = e.Data;
-
-            // 1. Tìm người gửi (Sender)
-            var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
-            if (senderMatch.Success)
+            try
             {
-                senderPhone = senderMatch.Groups[1].Value;
-                // Xóa dòng header +CMGR đi để lấy nội dung text sạch
-                cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
-                cleanContent = Regex.Replace(cleanContent, @"\r?\nOK\r?\n?$", "").Trim();
-                cleanContent = DecodeUcs2(cleanContent); // Giải mã Tiếng Việt
-            }
+                string senderPhone = "UNKNOWN";
+                string extractedOtp = "N/A";
+                string cleanContent = e.Data;
 
-            // 2. Tìm OTP
-            var otpMatch = Regex.Match(cleanContent, @"(?:mã|code|otp|là|la)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
-            if (!otpMatch.Success)
-                otpMatch = Regex.Match(cleanContent, @"(?<![\d:/])\b(\d{4,6})\b(?![\d:/]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
+                // 1. Tìm người gửi (Sender)
+                var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
+                if (senderMatch.Success)
+                {
+                    senderPhone = senderMatch.Groups[1].Value;
+                    // Xóa dòng header +CMGR đi để lấy nội dung text sạch
+                    cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
+                    cleanContent = Regex.Replace(cleanContent, @"\r?\nOK\r?\n?$", "").Trim();
+                    cleanContent = DecodeUcs2(cleanContent); // Giải mã Tiếng Việt
+                }
 
-            if (otpMatch.Success)
-            {
-                extractedOtp = otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : otpMatch.Value;
+                // 2. Tìm OTP
+                var otpMatch = Regex.Match(cleanContent, @"(?:mã|code|otp|là|la)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
+                if (!otpMatch.Success)
+                    otpMatch = Regex.Match(cleanContent, @"(?<![\d:/])\b(\d{4,6})\b(?![\d:/]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
+
+                if (otpMatch.Success)
+                {
+                    extractedOtp = otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : otpMatch.Value;
+                    
+                    // GỌI HÀM BẮN TELEGRAM
+                    _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
+                }
+
+                // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
+                var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+
+                // 4. Đưa lên UI (Cập nhật Tab SMS)
+                SmsMessages.Insert(0, new SmsMessage
+                {
+                    PortName = e.PortName,
+                    ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
+                    Content = cleanContent,
+                    Sender = senderPhone,
+                    Otp = extractedOtp,
+                    ReceiverPhone = port?.PhoneNumber ?? "",
+                    NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
+                    Status = port?.Status ?? "Đang kết nối...",
+                    CallCount = "0",
+                    ForwardContent = "Không"
+                });
                 
-                // GỌI HÀM BẮN TELEGRAM
-                _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
+                // 5. Đưa lên UI (Cập nhật Tab GSM)
+                if (port != null)
+                {
+                    port.Sender = senderPhone;
+                    port.Otp = extractedOtp;
+                    port.LastMessageContent = cleanContent;
+                    port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+                }
+                
+                if (extractedOtp != "N/A")
+                {
+                    SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
+                    
+                    // Chỉ xóa tin nhắn sau khi đã trích xuất OTP thành công
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+                }
+                else
+                {
+                    SnackbarMessageQueue.Enqueue($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
+                    // Giữ lại SMS để debug nếu không bắt được OTP
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        AddLog($"[{e.PortName}] Giữ lại tin nhắn {e.MsgIndex} để debug do không thấy OTP.", "WARN");
+                    }
+                }
             }
-
-            // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
-            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
-
-            // 4. Đưa lên UI (Cập nhật Tab SMS)
-            SmsMessages.Insert(0, new SmsMessage
+            catch (Exception ex)
             {
-                PortName = e.PortName,
-                ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
-                Content = cleanContent,
-                Sender = senderPhone,
-                Otp = extractedOtp,
-                ReceiverPhone = port?.PhoneNumber ?? "",
-                NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
-                Status = port?.Status ?? "Đang kết nối...",
-                CallCount = "0",
-                ForwardContent = "Không"
-            });
-            
-            // 5. Đưa lên UI (Cập nhật Tab GSM)
-            if (port != null)
-            {
-                port.Sender = senderPhone;
-                port.Otp = extractedOtp;
-                port.LastMessageContent = cleanContent;
-                port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+                AddLog($"[{e.PortName}] Lỗi xử lý SMS: {ex.Message}", "ERROR");
             }
-            
-            if (extractedOtp != "N/A")
-                SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
-            else
-                SnackbarMessageQueue.Enqueue($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
         });
     }
 

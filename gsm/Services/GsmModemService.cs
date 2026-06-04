@@ -27,6 +27,7 @@ public class GsmDataEventArgs : EventArgs
 {
     public string PortName { get; set; } = string.Empty;
     public string Data { get; set; } = string.Empty;
+    public string MsgIndex { get; set; } = string.Empty;
 }
 
 public class GsmModemService : IGsmModemService
@@ -119,6 +120,12 @@ public class GsmModemService : IGsmModemService
         try
         {
             string chunk = sp.ReadExisting();
+            while (sp.BytesToRead > 0)
+            {
+                Thread.Sleep(10);
+                chunk += sp.ReadExisting();
+            }
+
             if (string.IsNullOrWhiteSpace(chunk)) return;
 
             if (!_portBuffers.TryGetValue(portName, out var buffer)) return;
@@ -148,8 +155,8 @@ public class GsmModemService : IGsmModemService
                     _ = Task.Run(async () => 
                     {
                         string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
-                        SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent });
-                        await SendCommandAsync(portName, $"AT+CMGD={msgIndex},0"); // Đọc xong xóa luôn tin đó
+                        SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent, MsgIndex = msgIndex });
+                        // Không tự động xóa tin nhắn ở đây nữa, đẩy việc quyết định xóa lên ViewModel
                     });
                 }
             }
@@ -159,8 +166,9 @@ public class GsmModemService : IGsmModemService
             // ---------------------------------------------------------
             if (_commandTcs.TryGetValue(portName, out var tcs))
             {
-                // Kiểm tra dấu hiệu kết thúc của lệnh AT
-                if (currentData.Contains("OK\r\n") || currentData.Contains("ERROR\r\n") || currentData.EndsWith("> "))
+                // Kiểm tra dấu hiệu kết thúc của lệnh AT (OK, ERROR, hoặc CMS/CME ERROR)
+                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:|> $");
+                if (isCompleted)
                 {
                     if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
                     {
@@ -181,7 +189,8 @@ public class GsmModemService : IGsmModemService
             else
             {
                 // Chỉ xóa bộ đệm khi thiết bị nhả rác có chữ OK/ERROR chuẩn
-                if (currentData.Contains("OK\r\n") || currentData.Contains("ERROR\r\n"))
+                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:");
+                if (isCompleted)
                 {
                     buffer.Clear();
                 }
@@ -229,8 +238,9 @@ public class GsmModemService : IGsmModemService
 
     public async Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000)
     {
-        // Kéo dài thời gian chờ cho các lệnh USSD do mạng di động phản hồi chậm
+        // Kéo dài thời gian chờ cho các lệnh đặc biệt
         if (command.StartsWith("AT+CUSD")) timeoutMs = 15000;
+        else if (command.StartsWith("AT+CMGR")) timeoutMs = 10000;
 
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen)
         {

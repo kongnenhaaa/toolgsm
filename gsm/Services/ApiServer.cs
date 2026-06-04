@@ -31,7 +31,7 @@ namespace gsm.Services
                     id = p.PortName,
                     phone = p.PhoneNumber,
                     status = p.Status == "Đang hoạt động" ? "online" : "offline",
-                    otp = p.Otp,
+                    otp = string.IsNullOrEmpty(p.Otp) || p.Otp == "N/A" ? null : p.Otp,
                     network = p.NetworkProvider,
                     balance = p.Balance,
                     signal = p.SignalStrength

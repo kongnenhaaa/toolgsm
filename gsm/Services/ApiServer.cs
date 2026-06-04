@@ -43,7 +43,8 @@ namespace gsm.Services
             {
                 string result = await _vm.ModemService.SendCommandAsync(
                     req.PortId,
-                    $"AT+CMGS=\"{req.Recipient}\"\r{req.Content}\x1A"
+                    $"AT+CMGS=\"{req.Recipient}\"\r{req.Content}\x1A",
+                    timeoutMs: 15000
                 );
                 return result.Contains("ERROR")
                     ? Results.BadRequest(result)

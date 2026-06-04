@@ -380,16 +380,17 @@ public partial class MainViewModel : ObservableObject
                 if (!otpMatch.Success)
                     otpMatch = Regex.Match(cleanContent, @"(?<![\d:/])\b(\d{4,6})\b(?![\d:/]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
 
+                // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
+                var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+                string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
+
                 if (otpMatch.Success)
                 {
                     extractedOtp = otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : otpMatch.Value;
                     
                     // GỌI HÀM BẮN TELEGRAM
-                    _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
+                    _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
                 }
-
-                // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
-                var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
 
                 // 4. Đưa lên UI (Cập nhật Tab SMS)
                 SmsMessages.Insert(0, new SmsMessage

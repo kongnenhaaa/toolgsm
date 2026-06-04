@@ -15,8 +15,14 @@ namespace gsm.Services
 
         public void Start()
         {
-            var builder = WebApplication.CreateBuilder();
-            builder.WebHost.UseUrls("http://localhost:5000");
+            try
+            {
+                var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+                {
+                    Args = new string[0],
+                    ContentRootPath = System.AppContext.BaseDirectory
+                });
+                builder.WebHost.UseUrls("http://localhost:5000");
             
             builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
                 p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
@@ -59,7 +65,21 @@ namespace gsm.Services
                     : Results.Ok(new { success = true });
             });
 
-            app.RunAsync(); // không block UI thread
+            app.RunAsync().ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        System.Windows.MessageBox.Show("Lỗi khởi tạo API Server (Kestrel): " + t.Exception?.ToString(), "Lỗi", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                    });
+                }
+            }); // không block UI thread
+            }
+            catch (System.Exception ex)
+            {
+                System.Windows.MessageBox.Show("Lỗi khởi tạo API Server: " + ex.ToString(), "Lỗi", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+            }
         }
     }
 

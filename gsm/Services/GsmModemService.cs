@@ -98,21 +98,21 @@ public class GsmModemService : IGsmModemService
         // Chờ 2 giây để thiết bị khởi động hoàn toàn trước khi gửi lệnh AT, tránh bị treo hoặc timeout
         await Task.Delay(2000);
         
-        await SendCommandAsync(portName, "ATZ"); // Reset
-        await SendCommandAsync(portName, "ATE0"); // Turn off echo
-        await SendCommandAsync(portName, "AT+CMGF=1"); // Set SMS to text mode
-        await SendCommandAsync(portName, "AT+CSCS=\"UCS2\""); // Đọc được tiếng Việt
+        await SendCommandAsync(portName, "ATZ", 30000); // Reset
+        await SendCommandAsync(portName, "ATE0", 30000); // Turn off echo
+        await SendCommandAsync(portName, "AT+CMGF=1", 30000); // Set SMS to text mode
+        await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
         
         // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
-        await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0"); 
+        await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 30000); 
         
         // Lấy thông tin mạng và thông tin thiết bị
-        await SendCommandAsync(portName, "AT+COPS?");
-        await SendCommandAsync(portName, "AT+CSQ");
+        await SendCommandAsync(portName, "AT+COPS?", 30000);
+        await SendCommandAsync(portName, "AT+CSQ", 30000);
         
-        string imei = await SendCommandAsync(portName, "AT+CGSN");
-        string ccid = await SendCommandAsync(portName, "AT+CCID");
-        string cnum = await SendCommandAsync(portName, "AT+CNUM");
+        string imei = await SendCommandAsync(portName, "AT+CGSN", 30000);
+        string ccid = await SendCommandAsync(portName, "AT+CCID", 30000);
+        string cnum = await SendCommandAsync(portName, "AT+CNUM", 30000);
 
         // Gửi thông tin sang ViewModel qua event log với Prefix đặc biệt
         if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });

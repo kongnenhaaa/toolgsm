@@ -8,8 +8,10 @@ using LiveChartsCore;
 using LiveChartsCore.SkiaSharpView;
 using MaterialDesignThemes.Wpf;
 using System;
+using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,6 +29,9 @@ public partial class MainViewModel : ObservableObject
     private readonly ConcurrentDictionary<string, DateTime> _lastUssdByPort = new();
     private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(1, 1);
     private DateTime _lastUssdGlobalUtc = DateTime.MinValue;
+
+    private readonly string _cacheFilePath = "sim_cache.json";
+    private ConcurrentDictionary<string, string> _simCache = new();
 
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -61,6 +66,7 @@ public partial class MainViewModel : ObservableObject
 
     public MainViewModel()
     {
+        LoadSimCache();
         _modemService = new GsmModemService();
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
@@ -223,13 +229,28 @@ public partial class MainViewModel : ObservableObject
                     // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
                     ussdContent = DecodeUcs2(ussdContent);
 
-                    var phoneMatch = Regex.Match(ussdContent, @"([345789][0-9]{8})");
+                    var phoneMatch = Regex.Match(ussdContent, @"(?:84|0)(8[1-5|8]|9[1|4])\d{7}");
+                    if (!phoneMatch.Success)
+                    {
+                        // Fallback
+                        phoneMatch = Regex.Match(ussdContent, @"([345789][0-9]{8})");
+                    }
+
                     if (phoneMatch.Success)
                     {
-                        string foundNumber = "0" + phoneMatch.Groups[1].Value;
+                        string foundNumber = phoneMatch.Value;
+                        if (foundNumber.StartsWith("84")) foundNumber = "0" + foundNumber.Substring(2);
+                        else if (!foundNumber.StartsWith("0")) foundNumber = "0" + foundNumber;
+
                         port.PhoneNumber = foundNumber;
                         string networkLabel = string.IsNullOrWhiteSpace(port.NetworkProvider) ? "UNKNOWN" : port.NetworkProvider;
                         AddLog($"[{e.PortName}] SĐT chuẩn: {foundNumber} ({networkLabel})", "SUCCESS");
+
+                        if (!string.IsNullOrWhiteSpace(port.Serial))
+                        {
+                            _simCache[port.Serial] = foundNumber;
+                            SaveSimCache();
+                        }
                     }
                     
                     var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
@@ -265,6 +286,11 @@ public partial class MainViewModel : ObservableObject
             else if (e.Data.StartsWith("[PARSE_CCID]"))
             {
                 port.Serial = e.Data.Replace("[PARSE_CCID]", "").Replace("+CCID:", "").Trim();
+                if (_simCache.TryGetValue(port.Serial, out var cachedPhone))
+                {
+                    port.PhoneNumber = cachedPhone;
+                    AddLog($"[{e.PortName}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
+                }
             }
             else if (e.Data.StartsWith("[PARSE_CNUM]"))
             {
@@ -437,6 +463,12 @@ public partial class MainViewModel : ObservableObject
             return "ERROR: Invalid USSD request";
         }
 
+        var port = Ports.FirstOrDefault(p => p.PortName == portName);
+        if (reason == "Tự động lấy SĐT" && port != null && !string.IsNullOrWhiteSpace(port.PhoneNumber))
+        {
+            return "SKIPPED: Đã có SĐT";
+        }
+
         await _ussdSendLock.WaitAsync();
         try
         {
@@ -469,7 +501,15 @@ public partial class MainViewModel : ObservableObject
             _ussdSendLock.Release();
         }
 
+        // 1. Chuyển bảng mã về GSM
+        await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"");
+
+        // 2. Gửi lệnh USSD
         string result = await _modemService.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
+
+        // 3. Chuyển lại UCS2
+        await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"");
+
         if (logResult)
         {
             AddLog($"Kết quả từ {portName}: {result}", "SUCCESS");
@@ -480,9 +520,8 @@ public partial class MainViewModel : ObservableObject
 
     private void WarnUssdThrottle(string portName, string reason, TimeSpan remaining, string scope)
     {
-        string message = $"USSD bị giới hạn ({scope}) trên {portName} - {reason}. Đợi {remaining.TotalSeconds:0.#}s.";
-        AddLog(message, "WARN");
-        SnackbarMessageQueue.Enqueue(message);
+        string message = $"USSD đang xếp hàng ({scope}) cho {portName} - {reason}. Đợi {remaining.TotalSeconds:0.#}s.";
+        AddLog(message, "INFO");
     }
 
     [RelayCommand]
@@ -576,5 +615,29 @@ public partial class MainViewModel : ObservableObject
         {
             return hexString; // Trả về nguyên bản nếu lỗi
         }
+    }
+
+    private void LoadSimCache()
+    {
+        if (File.Exists(_cacheFilePath))
+        {
+            try
+            {
+                string json = File.ReadAllText(_cacheFilePath);
+                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                if (dict != null) _simCache = new ConcurrentDictionary<string, string>(dict);
+            }
+            catch { }
+        }
+    }
+
+    private void SaveSimCache()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(_simCache);
+            File.WriteAllText(_cacheFilePath, json);
+        }
+        catch { }
     }
 }

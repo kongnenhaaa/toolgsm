@@ -24,10 +24,10 @@ public partial class MainViewModel : ObservableObject
     private readonly IGsmModemService _modemService;
     public IGsmModemService ModemService => _modemService;
 
-    private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan UssdMinIntervalGlobal = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan UssdMinIntervalGlobal = TimeSpan.FromMilliseconds(10);
     private readonly ConcurrentDictionary<string, DateTime> _lastUssdByPort = new();
-    private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(100, 100);
     private DateTime _lastUssdGlobalUtc = DateTime.MinValue;
 
     private readonly string _cacheFilePath = "sim_cache.json";
@@ -302,7 +302,7 @@ public partial class MainViewModel : ObservableObject
                     
                     var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
                     if (moneyMatch.Success) port.Balance = moneyMatch.Value;
-                    else port.Balance = "Thành công";
+                    // Không set "Thành công" nữa vì dễ gây hiểu nhầm cho cột Số dư (TKC)
 
                     var expiryMatch = Regex.Match(ussdContent, @"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b");
                     if (expiryMatch.Success) port.ExpiryDate = expiryMatch.Groups[1].Value;
@@ -320,10 +320,16 @@ public partial class MainViewModel : ObservableObject
                     port.NetworkProvider = match.Groups[1].Value;
 
                     string networkUpper = port.NetworkProvider.ToUpperInvariant();
-                    if (string.IsNullOrWhiteSpace(port.PhoneNumber) && 
-                       (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA")))
+                    if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA"))
                     {
-                        _ = SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT");
+                        if (string.IsNullOrWhiteSpace(port.PhoneNumber))
+                        {
+                            _ = SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT");
+                        }
+                        if (string.IsNullOrWhiteSpace(port.Balance))
+                        {
+                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC");
+                        }
                     }
                 }
             }

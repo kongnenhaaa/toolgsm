@@ -5,6 +5,17 @@ namespace gsm.Models;
 public partial class SimPort : ObservableObject
 {
     public string PortName { get; set; } = string.Empty;
+    
+    public int PortNumber
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(PortName)) return int.MaxValue;
+            var match = System.Text.RegularExpressions.Regex.Match(PortName, @"\d+");
+            return match.Success ? int.Parse(match.Value) : int.MaxValue;
+        }
+    }
+
     [ObservableProperty]
     private bool _isSelected;
 

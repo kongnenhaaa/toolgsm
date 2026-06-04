@@ -142,7 +142,6 @@
                         <WrapPanel Margin="10,5">
                             <Button Content="Bảng lệnh" Background="#5C6BC0" Command="{Binding DummyFeatureCommand}" CommandParameter="Bảng lệnh" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Trình sắp xếp cổng" Background="#F06292" Command="{Binding DummyFeatureCommand}" CommandParameter="Trình sắp xếp cổng" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Gọi lọc số" Background="#26A69A" Command="{Binding DummyFeatureCommand}" CommandParameter="Gọi lọc số" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Gia hạn SIM" Background="#FFA726" Command="{Binding RenewSimCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Kiểm tra số dư" Background="#424242" Command="{Binding CheckBalanceCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Làm mới cổng" Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
@@ -186,7 +185,7 @@
                         </DataGrid.ContextMenu>
                         
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Width="40">
+                            <DataGridTemplateColumn Width="60">
                                 <DataGridTemplateColumn.HeaderTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="☑" ToolTip="Tick để chọn nhiều SIM"/>
@@ -198,14 +197,8 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Width="40">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Ellipse Width="8" Height="8" Fill="{Binding Status, Converter={StaticResource StatusToColorConverter}}" Margin="10,0"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" Width="120" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+
+                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
@@ -223,12 +216,10 @@
                             </DataGridTemplateColumn>
                             
                             <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
-                            <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120" HeaderTemplate="{StaticResource FilterHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
-                            <DataGridTextColumn Header="TKKM" Binding="{Binding PromotionBalance}" Width="100"/>
-                            <DataGridTextColumn Header="HSD" Binding="{Binding ExpiryDate}" Width="120" HeaderTemplate="{StaticResource FilterHeaderTemplate}"/>
+                            <DataGridTextColumn Header="HSD" Binding="{Binding ExpiryDate}" Width="120"/>
                             <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
-                            <DataGridTextColumn Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
                             
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>

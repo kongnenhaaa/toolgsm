@@ -6,6 +6,9 @@ public partial class SimPort : ObservableObject
 {
     public string PortName { get; set; } = string.Empty;
     [ObservableProperty]
+    private bool _isSelected;
+
+    [ObservableProperty]
     private string _phoneNumber = string.Empty;
     
     [ObservableProperty]

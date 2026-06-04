@@ -61,6 +61,15 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private LogMessage? _selectedLog;
 
+    [ObservableProperty]
+    private string _topUpInput = string.Empty;
+
+    [ObservableProperty]
+    private bool _isTopUpDialogOpen;
+
+    [ObservableProperty]
+    private string _topUpMode = "Selected";
+
     public ISeries[] ConnectionSeries { get; set; }
     public ISeries[] SmsSeries { get; set; }
 
@@ -183,8 +192,46 @@ public partial class MainViewModel : ObservableObject
             var currentPorts = Ports.Where(p => p.PortName != "COM_VIRTUAL").Select(p => p.PortName).ToList();
             foreach (var p in currentPorts)
             {
-                _ = _modemService.SendCommandAsync(p, "AT+CSQ");
-                _ = _modemService.SendCommandAsync(p, "AT+COPS?");
+                _ = Task.Run(async () =>
+                {
+                    await _modemService.SendCommandAsync(p, "AT+CSQ", 5000, true);
+                    await _modemService.SendCommandAsync(p, "AT+COPS?", 5000, true);
+                    
+                    // Nạp lại CCID để phát hiện nếu người dùng thay SIM sống (hot-plug)
+                    string ccid = await _modemService.SendCommandAsync(p, "AT+CCID", 5000, true);
+                    if (!ccid.Contains("ERROR"))
+                    {
+                        var match = Regex.Match(ccid, @"\+CCID:\s*([A-Za-z0-9]+)");
+                        if (match.Success)
+                        {
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                var port = Ports.FirstOrDefault(x => x.PortName == p);
+                                if (port != null)
+                                {
+                                    string newSerial = match.Groups[1].Value;
+                                    if (port.Serial != newSerial)
+                                    {
+                                        port.Serial = newSerial;
+                                        port.NetworkProvider = string.Empty;
+                                        
+                                        if (_simCache.TryGetValue(port.Serial, out var cachedPhone))
+                                        {
+                                            port.PhoneNumber = cachedPhone;
+                                            AddLog($"[{p}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
+                                        }
+                                        else
+                                        {
+                                            // SIM mới không có trong cache, xóa SĐT cũ và khởi động lại luồng quét nhà mạng
+                                            port.PhoneNumber = string.Empty;
+                                            _modemService.StartPollingNetwork(p);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+                });
             }
         });
     }
@@ -273,7 +320,8 @@ public partial class MainViewModel : ObservableObject
                     port.NetworkProvider = match.Groups[1].Value;
 
                     string networkUpper = port.NetworkProvider.ToUpperInvariant();
-                    if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA"))
+                    if (string.IsNullOrWhiteSpace(port.PhoneNumber) && 
+                       (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA")))
                     {
                         _ = SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT");
                     }
@@ -376,9 +424,12 @@ public partial class MainViewModel : ObservableObject
                 }
 
                 // 2. Tìm OTP
-                var otpMatch = Regex.Match(cleanContent, @"(?:mã|code|otp|là|la)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
+                // Xóa các mẫu số điện thoại bị che (VD: ***7628) để tránh việc regex bị nhận nhầm
+                string textForOtp = Regex.Replace(cleanContent, @"\*+\d+", "");
+
+                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|:)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
                 if (!otpMatch.Success)
-                    otpMatch = Regex.Match(cleanContent, @"(?<![\d:/])\b(\d{4,6})\b(?![\d:/]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
+                    otpMatch = Regex.Match(textForOtp, @"(?<![\d:/])\b(\d{4,8})\b(?![\d:/]|[đdvnd])", RegexOptions.IgnoreCase); // Fallback
 
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
                 var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
@@ -584,6 +635,60 @@ public partial class MainViewModel : ObservableObject
         {
             SmsMessages.Remove(sms);
             SnackbarMessageQueue.Enqueue("Đã xóa tin nhắn.");
+        }
+    }
+
+    [RelayCommand]
+    private void OpenTopUpDialog(string mode)
+    {
+        TopUpMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
+        TopUpInput = string.Empty;
+        IsTopUpDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private async Task ExecuteTopUpAsync()
+    {
+        IsTopUpDialogOpen = false;
+        if (string.IsNullOrWhiteSpace(TopUpInput))
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng nhập mã thẻ cào hoặc cú pháp USSD.");
+            return;
+        }
+
+        string ussdCode = TopUpInput.Trim();
+        if (Regex.IsMatch(ussdCode, @"^\d+$"))
+        {
+            // Tự động format mã thẻ cào thành cú pháp USSD nạp tiền (Chuẩn Vinaphone)
+            ussdCode = $"*100*{ussdCode}#";
+        }
+
+        var targetPorts = new System.Collections.Generic.List<SimPort>();
+        if (TopUpMode == "Selected")
+        {
+            if (SelectedPort != null) targetPorts.Add(SelectedPort);
+        }
+        else if (TopUpMode == "Checked")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        }
+        else if (TopUpMode == "All")
+        {
+            targetPorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
+        }
+
+        if (targetPorts.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Không có cổng nào được chọn để nạp thẻ.");
+            return;
+        }
+
+        SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh nạp thẻ cho {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu nạp thẻ cho {targetPorts.Count} cổng với cú pháp: {ussdCode}");
+
+        foreach (var port in targetPorts)
+        {
+            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Nạp tiền", logResult: true);
         }
     }
 

@@ -62,6 +62,35 @@
         </DataTemplate>
     </Window.Resources>
 
+    <materialDesign:DialogHost IsOpen="{Binding IsTopUpDialogOpen}" CloseOnClickAway="True">
+        <materialDesign:DialogHost.DialogContent>
+            <Grid Width="400" Margin="20" Background="{StaticResource PanelBackground}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Nạp thẻ / Top-up" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
+                
+                <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Nhập mã thẻ cào (tự động thêm *100*...#) hoặc tự nhập USSD" 
+                         Text="{Binding TopUpInput, UpdateSourceTrigger=PropertyChanged}" 
+                         Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,20" FontSize="16"/>
+
+                <StackPanel Grid.Row="2" Margin="0,0,0,20">
+                    <TextBlock Text="Đối tượng nạp thẻ:" Margin="0,0,0,10" Foreground="Gray" FontWeight="SemiBold"/>
+                    <RadioButton Content="Chỉ nạp cổng đang chọn" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,5"/>
+                    <RadioButton Content="Nạp các cổng đã được tick chọn (☑)" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,5"/>
+                    <RadioButton Content="Nạp cho TẤT CẢ cổng đang hoạt động" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,5"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
+                    <Button Content="Nạp Tiền" Command="{Binding ExecuteTopUpCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50"/>
+                </StackPanel>
+            </Grid>
+        </materialDesign:DialogHost.DialogContent>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Top Nav -->
@@ -119,7 +148,7 @@
                             <Button Content="Làm mới cổng" Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Đổi IMEI" Background="#424242" Command="{Binding ChangeImeiCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="IMEI" Background="#29B6F6" Command="{Binding DummyFeatureCommand}" CommandParameter="IMEI" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Nạp thẻ" Background="#26C6DA" Command="{Binding DummyFeatureCommand}" CommandParameter="Nạp thẻ" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Nạp thẻ" Background="#26C6DA" Command="{Binding OpenTopUpDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Command="{Binding DummyFeatureCommand}" CommandParameter="Quản lý cuộc gọi" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Test OTP (Máy ảo)" Background="#FF5722" Command="{Binding SimulateSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tạo một tin nhắn chứa OTP ảo để test hệ thống"/>
                         </WrapPanel>
@@ -147,7 +176,7 @@
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="MessageText"/></MenuItem.Icon>
                                 </MenuItem>
                                 <Separator Background="#444"/>
-                                <MenuItem Header="Nạp thẻ nhanh" Command="{Binding Path=DataContext.DummyFeatureCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Nạp thẻ nhanh" Padding="10" Foreground="#4CAF50">
+                                <MenuItem Header="Nạp thẻ nhanh" Command="{Binding Path=DataContext.OpenTopUpDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10" Foreground="#4CAF50">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="CashPlus"/></MenuItem.Icon>
                                 </MenuItem>
                                 <MenuItem Header="Kiểm tra số dư" Command="{Binding CheckBalanceCommand}" Padding="10">
@@ -157,6 +186,18 @@
                         </DataGrid.ContextMenu>
                         
                         <DataGrid.Columns>
+                            <DataGridTemplateColumn Width="40">
+                                <DataGridTemplateColumn.HeaderTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="☑" ToolTip="Tick để chọn nhiều SIM"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.HeaderTemplate>
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTemplateColumn Width="40">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -371,4 +412,5 @@
         <!-- Global Snackbar Notifications -->
         <materialDesign:Snackbar MessageQueue="{Binding SnackbarMessageQueue}" Grid.RowSpan="4"/>
     </Grid>
+    </materialDesign:DialogHost>
 </Window>

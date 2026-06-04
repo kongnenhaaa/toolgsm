@@ -41,9 +41,10 @@ namespace gsm.Services
             // POST /api/sms — gửi SMS từ cổng chỉ định
             app.MapPost("/api/sms", async (SmsRequest req) =>
             {
-                string result = await _vm.ModemService.SendCommandAsync(
+                string result = await _vm.ModemService.SendSmsAsync(
                     req.PortId,
-                    $"AT+CMGS=\"{req.Recipient}\"\r{req.Content}\x1A",
+                    req.Recipient,
+                    req.Content,
                     timeoutMs: 15000
                 );
                 return result.Contains("ERROR")

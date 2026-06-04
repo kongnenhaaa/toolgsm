@@ -41,12 +41,19 @@ namespace gsm.Services
             // POST /api/sms — gửi SMS từ cổng chỉ định
             app.MapPost("/api/sms", async (SmsRequest req) =>
             {
+                // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
+                await _vm.ModemService.SendCommandAsync(req.PortId, "AT+CSCS=\"GSM\"", 5000, true);
+
                 string result = await _vm.ModemService.SendSmsAsync(
                     req.PortId,
                     req.Recipient,
                     req.Content,
                     timeoutMs: 15000
                 );
+
+                // Trả lại UCS2 để đọc tiếng Việt
+                await _vm.ModemService.SendCommandAsync(req.PortId, "AT+CSCS=\"UCS2\"", 5000, true);
+
                 return result.Contains("ERROR")
                     ? Results.BadRequest(result)
                     : Results.Ok(new { success = true });

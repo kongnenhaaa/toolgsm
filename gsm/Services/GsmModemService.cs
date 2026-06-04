@@ -384,7 +384,7 @@ public class GsmModemService : IGsmModemService
             sp.DiscardInBuffer();
             sp.DiscardOutBuffer();
 
-            sp.Write($"AT+CMGS=\"{phoneNumber}\"\r\n");
+            sp.Write($"AT+CMGS=\"{phoneNumber}\"\r");
 
             var timeoutTask = Task.Delay(5000);
             var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);

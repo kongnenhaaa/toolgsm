@@ -17,6 +17,7 @@ public interface IGsmModemService
     void StartPollingNetwork(string portName);
     List<string> GetAvailablePorts();
     void ConnectAll(int baudRate = 115200);
+    void Disconnect(string portName);
     void DisconnectAll();
     
     // Events
@@ -88,11 +89,15 @@ public class GsmModemService : IGsmModemService
 
     private void HandleErrorReceived(string portName, SerialPort sp)
     {
+        Disconnect(portName);
         PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Lỗi phần cứng (Có thể bị rút cáp)" });
     }
 
     private async Task InitializeModemAsync(string portName)
     {
+        // Chờ 2 giây để thiết bị khởi động hoàn toàn trước khi gửi lệnh AT, tránh bị treo hoặc timeout
+        await Task.Delay(2000);
+        
         await SendCommandAsync(portName, "ATZ"); // Reset
         await SendCommandAsync(portName, "ATE0"); // Turn off echo
         await SendCommandAsync(portName, "AT+CMGF=1"); // Set SMS to text mode
@@ -287,6 +292,29 @@ public class GsmModemService : IGsmModemService
         _semaphores.Clear();
         _portBuffers.Clear();
         _commandTcs.Clear();
+    }
+
+    public void Disconnect(string portName)
+    {
+        if (_serialPorts.TryGetValue(portName, out var sp))
+        {
+            try
+            {
+                sp.Close();
+                sp.Dispose();
+            }
+            catch { }
+            _serialPorts.TryRemove(portName, out _);
+        }
+        
+        if (_semaphores.TryGetValue(portName, out var sem))
+        {
+            try { sem.Dispose(); } catch { }
+            _semaphores.TryRemove(portName, out _);
+        }
+
+        _portBuffers.TryRemove(portName, out _);
+        _commandTcs.TryRemove(portName, out _);
     }
 
     public async Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000, bool silent = false)

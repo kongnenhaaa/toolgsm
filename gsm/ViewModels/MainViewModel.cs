@@ -170,69 +170,67 @@ public partial class MainViewModel : ObservableObject
         {
             _modemService.ConnectAll(115200);
         });
+        
+        StartAutoPortWatcher();
+    }
+
+    private void StartAutoPortWatcher()
+    {
+        Task.Run(async () =>
+        {
+            while (true)
+            {
+                await Task.Delay(3000); // Quét 3 giây 1 lần
+                
+                var availablePorts = _modemService.GetAvailablePorts();
+                bool hasChanges = false;
+                
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    // 1. Kiểm tra thiết bị bị rút ra
+                    var removedPorts = Ports.Where(p => !availablePorts.Contains(p.PortName) && p.PortName != "COM_VIRTUAL").ToList();
+                    foreach (var p in removedPorts)
+                    {
+                        Ports.Remove(p);
+                        _modemService.Disconnect(p.PortName);
+                        AddLog($"[{p.PortName}] Bị rút khỏi máy tính, đã xóa khỏi danh sách.", "WARN");
+                        SnackbarMessageQueue.Enqueue($"Đã rút thiết bị: {p.PortName}");
+                        hasChanges = true;
+                    }
+                });
+
+                // 2. Kiểm tra thiết bị mới cắm vào
+                if (availablePorts.Any(p => !Ports.Any(port => port.PortName == p)))
+                {
+                    hasChanges = true;
+                    _modemService.ConnectAll(115200);
+                }
+
+                if (hasChanges)
+                {
+                    Application.Current.Dispatcher.Invoke(() => UpdateDashboard());
+                }
+            }
+        });
     }
 
     [RelayCommand]
     private void RefreshPorts()
     {
-        SnackbarMessageQueue.Enqueue("Đang cập nhật tình trạng thiết bị...");
-        AddLog("Bắt đầu cập nhật tình trạng thiết bị...");
+        SnackbarMessageQueue.Enqueue("Đang khởi tạo lại toàn bộ thiết bị...");
+        AddLog("Bắt đầu khởi tạo lại toàn bộ thiết bị từ đầu...");
         
         Application.Current.Dispatcher.Invoke(() =>
         {
-            var availablePorts = _modemService.GetAvailablePorts();
-            var removedPorts = Ports.Where(p => !availablePorts.Contains(p.PortName) && p.PortName != "COM_VIRTUAL").ToList();
-            foreach (var p in removedPorts) Ports.Remove(p);
+            Ports.Clear();
         });
 
-        Task.Run(() =>
+        Task.Run(async () =>
         {
+            _modemService.DisconnectAll();
+            // Đợi 1 giây để các cổng COM nhả hoàn toàn khỏi máy tính
+            await Task.Delay(1000); 
             _modemService.ConnectAll(115200);
-
-            var currentPorts = Ports.Where(p => p.PortName != "COM_VIRTUAL").Select(p => p.PortName).ToList();
-            foreach (var p in currentPorts)
-            {
-                _ = Task.Run(async () =>
-                {
-                    await _modemService.SendCommandAsync(p, "AT+CSQ", 5000, true);
-                    await _modemService.SendCommandAsync(p, "AT+COPS?", 5000, true);
-                    
-                    // Nạp lại CCID để phát hiện nếu người dùng thay SIM sống (hot-plug)
-                    string ccid = await _modemService.SendCommandAsync(p, "AT+CCID", 5000, true);
-                    if (!ccid.Contains("ERROR"))
-                    {
-                        var match = Regex.Match(ccid, @"\+CCID:\s*([A-Za-z0-9]+)");
-                        if (match.Success)
-                        {
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                var port = Ports.FirstOrDefault(x => x.PortName == p);
-                                if (port != null)
-                                {
-                                    string newSerial = match.Groups[1].Value;
-                                    if (port.Serial != newSerial)
-                                    {
-                                        port.Serial = newSerial;
-                                        port.NetworkProvider = string.Empty;
-                                        
-                                        if (_simCache.TryGetValue(port.Serial, out var cachedPhone))
-                                        {
-                                            port.PhoneNumber = cachedPhone;
-                                            AddLog($"[{p}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
-                                        }
-                                        else
-                                        {
-                                            // SIM mới không có trong cache, xóa SĐT cũ và khởi động lại luồng quét nhà mạng
-                                            port.PhoneNumber = string.Empty;
-                                            _modemService.StartPollingNetwork(p);
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                    }
-                });
-            }
         });
     }
 
@@ -247,7 +245,7 @@ public partial class MainViewModel : ObservableObject
 
             if (port == null)
             {
-                if (e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+CSQ:") || e.Data.Contains("+COPS:"))
+                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = "Đang hoạt động", SignalStrength = 0 };
                     Ports.Add(port);
@@ -307,7 +305,7 @@ public partial class MainViewModel : ObservableObject
                     var expiryMatch = Regex.Match(ussdContent, @"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b");
                     if (expiryMatch.Success) port.ExpiryDate = expiryMatch.Groups[1].Value;
 
-                    SnackbarMessageQueue.Enqueue($"[{e.PortName}] USSD: {ussdContent}");
+                    // SnackbarMessageQueue.Enqueue($"[{e.PortName}] USSD: {ussdContent}");
                 }
             }
             else if (e.Data.Contains("+COPS:"))
@@ -335,15 +333,20 @@ public partial class MainViewModel : ObservableObject
             }
             else if (e.Data.StartsWith("[PARSE_IMEI]"))
             {
-                port.Imei = e.Data.Replace("[PARSE_IMEI]", "").Trim();
+                var match = Regex.Match(e.Data, @"\b(\d{14,17})\b");
+                if (match.Success) port.Imei = match.Groups[1].Value;
             }
             else if (e.Data.StartsWith("[PARSE_CCID]"))
             {
-                port.Serial = e.Data.Replace("[PARSE_CCID]", "").Replace("+CCID:", "").Trim();
-                if (_simCache.TryGetValue(port.Serial, out var cachedPhone))
+                var match = Regex.Match(e.Data, @"\b([A-Za-z0-9]{18,22})\b");
+                if (match.Success)
                 {
-                    port.PhoneNumber = cachedPhone;
-                    AddLog($"[{e.PortName}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
+                    port.Serial = match.Groups[1].Value;
+                    if (_simCache.TryGetValue(port.Serial, out var cachedPhone))
+                    {
+                        port.PhoneNumber = cachedPhone;
+                        AddLog($"[{e.PortName}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
+                    }
                 }
             }
             else if (e.Data.StartsWith("[PARSE_CNUM]"))
@@ -394,10 +397,8 @@ public partial class MainViewModel : ObservableObject
             var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
             if (port != null)
             {
-                port.Status = "Mất kết nối";
-                port.SignalStrength = 0;
+                Ports.Remove(port);
                 UpdateDashboard();
-                foreach (var sms in SmsMessages.Where(s => s.PortName == e.PortName)) sms.Status = "Mất kết nối";
             }
             AddLog($"[{e.PortName}] {e.Data}", "ERROR");
             SnackbarMessageQueue.Enqueue($"Cổng {e.PortName} bị ngắt kết nối!");

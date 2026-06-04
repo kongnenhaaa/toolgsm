@@ -18,16 +18,22 @@ namespace gsm
     public partial class MainWindow : Window
     {
         private readonly MainViewModel _viewModel;
+        private readonly gsm.Services.WebServerService _webServer;
 
         public MainWindow()
         {
             InitializeComponent();
             _viewModel = new MainViewModel();
             DataContext = _viewModel;
+            
+            // Khởi động Web Server ngầm
+            _webServer = new gsm.Services.WebServerService(_viewModel);
+            _ = _webServer.StartAsync();
         }
 
         protected override void OnClosed(EventArgs e)
         {
+            _ = _webServer.StopAsync();
             _viewModel.ModemService.DisconnectAll();
             base.OnClosed(e);
         }

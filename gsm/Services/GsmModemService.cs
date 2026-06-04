@@ -191,20 +191,27 @@ public class GsmModemService : IGsmModemService
             // ---------------------------------------------------------
             if (currentData.Contains("+CUSD:") && !currentData.StartsWith("AT+CUSD"))
             {
-                // Vì vòng lặp ReadExisting ở trên đã gom đủ chunk, nên currentData ở đây đã chứa trọn vẹn chuỗi USSD
-                if (_commandTcs.TryGetValue(portName, out var t) && t.Task.AsyncState is string c && c.StartsWith("AT+CUSD"))
+                // USSD của nhà mạng thường kết thúc bằng ",15 hoặc ",72 hoặc không có text gì (+CUSD: 2)
+                bool isUssdComplete = Regex.IsMatch(currentData, @"\+CUSD:\s*\d+\r?\n?$") || 
+                                      Regex.IsMatch(currentData, @"\+CUSD:\s*\d+,\""[\s\S]*?\""(,\d+)?\r?\n?$");
+
+                if (isUssdComplete)
                 {
-                    // Đang chờ lệnh AT+CUSD, nhả kết quả cho SendCommandAsync để nó tự log
-                    t.TrySetResult(currentData.Trim());
+                    if (_commandTcs.TryGetValue(portName, out var t) && t.Task.AsyncState is string c && c.StartsWith("AT+CUSD"))
+                    {
+                        // Đang chờ lệnh AT+CUSD, nhả kết quả cho SendCommandAsync để nó tự log
+                        t.TrySetResult(currentData.Trim());
+                    }
+                    else
+                    {
+                        // Nhận được USSD tự do (không có lệnh nào đang đợi), nên ta chủ động log để MainViewModel bắt
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = currentData.Trim() });
+                    }
+                    
+                    buffer.Clear();
+                    return;
                 }
-                else
-                {
-                    // Nhận được USSD tự do (không có lệnh nào đang đợi), nên ta chủ động log để MainViewModel bắt
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = currentData.Trim() });
-                }
-                
-                buffer.Clear();
-                return;
+                // Nếu chưa complete thì không return, để vòng lặp tiếp tục nối chuỗi
             }
 
             // ---------------------------------------------------------

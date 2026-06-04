@@ -438,8 +438,8 @@ public partial class MainViewModel : ObservableObject
                 if (!otpMatch.Success)
                 {
                     // Fallback: Tìm một dãy số đứng riêng lẻ (không liền kề chữ cái)
-                    // Loại trừ luôn các đầu số tổng đài (1800, 1900, 190, 180) để không bắt nhầm thành OTP
-                    otpMatch = Regex.Match(textForOtp, @"(?<![\w:/])(?!1900|1800|190|180|09|08|03|07|05)\b(\d{4,8})\b(?![\w:/])", RegexOptions.IgnoreCase);
+                    // Loại trừ luôn các đầu số tổng đài (1900, 1800) để không bắt nhầm thành OTP
+                    otpMatch = Regex.Match(textForOtp, @"(?<![\w:/])(?!1900|1800)\b(\d{4,8})\b(?![\w:/])", RegexOptions.IgnoreCase);
                 }
 
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
@@ -449,9 +449,12 @@ public partial class MainViewModel : ObservableObject
                 if (otpMatch.Success)
                 {
                     extractedOtp = otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : otpMatch.Value;
+                    // Escape HTML characters for Telegram parse_mode = HTML
+                    string safeContent = System.Net.WebUtility.HtmlEncode(cleanContent);
+                    string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
                     
                     // GỌI HÀM BẮN TELEGRAM
-                    _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {senderPhone}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{cleanContent}</i>");
+                    _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {safeSender}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{safeContent}</i>");
                 }
 
                 // 4. Đưa lên UI (Cập nhật Tab SMS)

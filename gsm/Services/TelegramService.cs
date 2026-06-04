@@ -53,8 +53,9 @@ public static class TelegramService
                     var content = new FormUrlEncodedContent(payload);
                     await _httpClient.PostAsync(url, content);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    System.IO.File.AppendAllText("tele_error.txt", $"{DateTime.Now}: {ex.Message}\n{message}\n");
                 }
 
                 await Task.Delay(_sendDelay);

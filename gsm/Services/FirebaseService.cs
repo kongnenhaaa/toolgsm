@@ -25,6 +25,7 @@ namespace gsm.Services
         {
             _vm = vm;
             _httpClient = new HttpClient();
+            _httpClient.Timeout = Timeout.InfiniteTimeSpan; // Ngăn không bị ngắt kết nối SSE tự động
         }
 
         public void Start()
@@ -86,9 +87,20 @@ namespace gsm.Services
                     using var stream = await response.Content.ReadAsStreamAsync();
                     using var reader = new StreamReader(stream);
 
-                    string? line;
-                    while ((line = await reader.ReadLineAsync()) != null)
+                    while (true)
                     {
+                        var readTask = reader.ReadLineAsync();
+                        // Firebase gửi keep-alive mỗi ~30s. Nếu 45s không có tín hiệu, ngắt để nối lại.
+                        var completedTask = await Task.WhenAny(readTask, Task.Delay(45000));
+                        
+                        if (completedTask != readTask)
+                        {
+                            throw new Exception("SSE Timeout (No keep-alive received)");
+                        }
+                        
+                        string? line = await readTask;
+                        if (line == null) break;
+
                         if (string.IsNullOrWhiteSpace(line)) continue;
 
                         if (line.StartsWith("data: "))
@@ -103,8 +115,8 @@ namespace gsm.Services
                 }
                 catch (Exception)
                 {
-                    // Lỗi mạng hoặc Firebase bị gián đoạn, thử lại sau 5s
-                    await Task.Delay(5000); 
+                    // Lỗi mạng hoặc Firebase bị gián đoạn, thử lại gần như ngay lập tức (chờ 1s để tránh vắt kiệt CPU nếu mất mạng hoàn toàn)
+                    await Task.Delay(1000); 
                 }
             }
         }
@@ -154,11 +166,13 @@ namespace gsm.Services
                     string recipient = recipientEl.GetString() ?? "";
                     string content = contentEl.GetString() ?? "";
 
-                    // Xóa command khỏi Firebase để tránh gửi SMS hai lần
-                    _ = _httpClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
-
-                    // Thực thi gửi SMS
-                    _ = ExecuteSmsAsync(portId, recipient, content);
+                    // Xử lý gửi SMS ngầm, đợi kết quả rồi mới xóa khỏi Firebase
+                    _ = Task.Run(async () =>
+                    {
+                        await ExecuteSmsAsync(portId, recipient, content);
+                        // Chỉ xóa khi đã xử lý xong, tránh bị mất lệnh khi modem bận
+                        await _httpClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                    });
                 }
             }
             catch { }
@@ -173,17 +187,18 @@ namespace gsm.Services
             try
             {
                 // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 5000, true);
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 10000, true);
 
+                // Cho phép chờ lâu hơn (45s) nếu modem đang bận chạy lệnh USSD hoặc kiểm tra TKC
                 string result = await _vm.ModemService.SendSmsAsync(
                     portId,
                     recipient,
                     content,
-                    timeoutMs: 15000
+                    timeoutMs: 45000
                 );
 
                 // Trả lại UCS2 để đọc tiếng Việt
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 5000, true);
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
             }
             finally
             {

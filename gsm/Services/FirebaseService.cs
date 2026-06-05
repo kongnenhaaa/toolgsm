@@ -172,7 +172,15 @@ namespace gsm.Services
                     // Xử lý gửi SMS ngầm, đợi kết quả rồi mới xóa khỏi Firebase
                     _ = Task.Run(async () =>
                     {
-                        await ExecuteSmsAsync(portId, recipient, content);
+                        if (recipient == "USSD" && content == "BALANCE")
+                        {
+                            await _vm.CheckBalanceForPortAsync(portId);
+                        }
+                        else
+                        {
+                            await ExecuteSmsAsync(portId, recipient, content);
+                        }
+                        
                         // Chỉ xóa khi đã xử lý xong, tránh bị mất lệnh khi modem bận
                         await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
                     });

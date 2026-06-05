@@ -518,8 +518,8 @@ public partial class MainViewModel : ObservableObject
                 // Xóa các mẫu số điện thoại bị che (VD: ***7628) để tránh việc regex bị nhận nhầm
                 string textForOtp = Regex.Replace(cleanContent, @"\*+\d+", "");
 
-                // Tìm các mẫu OTP có từ khóa đi kèm
-                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|viber|telegram|facebook|google|apple|tiktok|tinder)\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
+                // Tìm các mẫu OTP có từ khóa đi kèm (Đã thêm mẫu Zalo cụ thể)
+                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|viber|telegram|facebook|google|apple|tiktok|tinder)\s*(?:cho\s+sdt\s*(?:\(\))?)?\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
                 if (!otpMatch.Success)
                 {
                     // Fallback: Tìm một dãy số đứng riêng lẻ (không liền kề chữ cái)
@@ -570,6 +570,7 @@ public partial class MainViewModel : ObservableObject
                 
                 if (extractedOtp != "N/A")
                 {
+                    AddLog($"[{e.PortName}] Đã bắt được OTP: {extractedOtp} từ {senderPhone}", "SUCCESS");
                     SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
                     
                     // Chỉ xóa tin nhắn sau khi đã trích xuất OTP thành công
@@ -580,6 +581,7 @@ public partial class MainViewModel : ObservableObject
                 }
                 else
                 {
+                    AddLog($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
                     SnackbarMessageQueue.Enqueue($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
                     // Giữ lại SMS để debug nếu không bắt được OTP
                     if (!string.IsNullOrEmpty(e.MsgIndex))

@@ -447,6 +447,17 @@ public partial class MainViewModel : ObservableObject
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                 }
 
+                // Tự động kiểm tra TKC khi có tin nhắn từ 574848
+                if (senderPhone == "574848")
+                {
+                    AddLog($"[{e.PortName}] Phát hiện tin nhắn từ 574848, tự động cập nhật lại số dư...");
+                    _ = Task.Run(async () => 
+                    {
+                        await Task.Delay(2000); // Đợi 2s cho hệ thống mạng ổn định
+                        await CheckBalanceForPortAsync(e.PortName);
+                    });
+                }
+
                 // Thêm block chặn tin nhắn rác từ 49515355, 57515253, 900 và các tin nhắn nạp tiền/rác khác
                 if (senderPhone == "900" || senderPhone == "49515355" || senderPhone == "57515253" || cleanContent.Contains("khoan Airtime") || cleanContent.Contains("ong su dung het") || cleanContent.Contains("ng su dung het") || cleanContent.Contains("chinh sach tai") || cleanContent.Contains("Tu choi nhan loi moi") || cleanContent.Contains("da duoc nap") || cleanContent.Contains("Tai khoan cua Quy khach"))
                 {

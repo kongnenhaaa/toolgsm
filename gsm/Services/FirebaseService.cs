@@ -188,6 +188,7 @@ namespace gsm.Services
             {
                 // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 10000, true);
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,0", 10000, true); // Sửa lỗi 305 Invalid text mode parameter
 
                 // Cho phép chờ lâu hơn (45s) nếu modem đang bận chạy lệnh USSD hoặc kiểm tra TKC
                 string result = await _vm.ModemService.SendSmsAsync(
@@ -199,18 +200,14 @@ namespace gsm.Services
 
                 // Trả lại UCS2 để đọc tiếng Việt
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,8", 10000, true);
             }
             finally
             {
                 sem.Release();
             }
 
-            // Tự động kiểm tra lại số dư (TKC) sau khi gửi tin nhắn
-            _ = Task.Run(async () => 
-            {
-                await Task.Delay(3000); // Chờ 3s để nhà mạng trừ tiền
-                await _vm.CheckBalanceForPortAsync(portId);
-            });
+
         }
     }
 }

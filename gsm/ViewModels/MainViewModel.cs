@@ -566,6 +566,19 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    public async Task CheckBalanceForPortAsync(string portName)
+    {
+        var port = Ports.FirstOrDefault(p => p.PortName == portName);
+        if (port != null && !string.IsNullOrWhiteSpace(port.NetworkProvider))
+        {
+            if (BalanceUssdByProvider.TryGetValue(port.NetworkProvider.Trim(), out var ussdCode))
+            {
+                AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
+                await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", logResult: true);
+            }
+        }
+    }
+
     private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false)
     {
         if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(ussdCode))

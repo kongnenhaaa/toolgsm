@@ -159,20 +159,38 @@ namespace gsm.Services
             catch { }
         }
 
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSemaphores = new();
+
         private async Task ExecuteSmsAsync(string portId, string recipient, string content)
         {
-            // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
-            await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 5000, true);
+            var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
+            await sem.WaitAsync();
+            try
+            {
+                // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 5000, true);
 
-            string result = await _vm.ModemService.SendSmsAsync(
-                portId,
-                recipient,
-                content,
-                timeoutMs: 15000
-            );
+                string result = await _vm.ModemService.SendSmsAsync(
+                    portId,
+                    recipient,
+                    content,
+                    timeoutMs: 15000
+                );
 
-            // Trả lại UCS2 để đọc tiếng Việt
-            await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 5000, true);
+                // Trả lại UCS2 để đọc tiếng Việt
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 5000, true);
+            }
+            finally
+            {
+                sem.Release();
+            }
+
+            // Tự động kiểm tra lại số dư (TKC) sau khi gửi tin nhắn
+            _ = Task.Run(async () => 
+            {
+                await Task.Delay(3000); // Chờ 3s để nhà mạng trừ tiền
+                await _vm.CheckBalanceForPortAsync(portId);
+            });
         }
     }
 }

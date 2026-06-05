@@ -65,6 +65,10 @@ namespace gsm.Services
 
                 // Dùng Task.Run để không block UI thread, dùng PUT để đè lại toàn bộ node ports
                 Task.Run(() => _httpClient.PutAsync($"{_databaseUrl}ports.json", content));
+
+                var statusJson = JsonSerializer.Serialize(new { lastSync = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+                var statusContent = new StringContent(statusJson, Encoding.UTF8, "application/json");
+                Task.Run(() => _httpClient.PutAsync($"{_databaseUrl}server_status.json", statusContent));
             }
             catch { }
         }

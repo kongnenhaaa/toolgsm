@@ -438,10 +438,22 @@ public partial class MainViewModel : ObservableObject
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                 }
 
-                // Thêm block chặn tin nhắn rác từ 49515355, 57515253
-                if (senderPhone == "49515355" || senderPhone == "57515253" || cleanContent.Contains("khoan Airtime") || cleanContent.Contains("ong su dung het") || cleanContent.Contains("ng su dung het") || cleanContent.Contains("chinh sach tai") || cleanContent.Contains("Tu choi nhan loi moi"))
+                // Thêm block chặn tin nhắn rác từ 49515355, 57515253, 900 và các tin nhắn nạp tiền/rác khác
+                if (senderPhone == "900" || senderPhone == "49515355" || senderPhone == "57515253" || cleanContent.Contains("khoan Airtime") || cleanContent.Contains("ong su dung het") || cleanContent.Contains("ng su dung het") || cleanContent.Contains("chinh sach tai") || cleanContent.Contains("Tu choi nhan loi moi") || cleanContent.Contains("da duoc nap") || cleanContent.Contains("Tai khoan cua Quy khach"))
                 {
                     AddLog($"[{e.PortName}] Đã chặn tin nhắn rác từ {senderPhone}");
+                    
+                    // Kích hoạt SỰ KIỆN: Nếu là tin nhắn báo nạp tiền, tự động check lại TKC
+                    if (cleanContent.Contains("da duoc nap") || cleanContent.Contains("Tai khoan cua Quy khach"))
+                    {
+                        AddLog($"[{e.PortName}] Phát hiện tin nhắn nạp thẻ, tự động cập nhật lại số dư...");
+                        _ = Task.Run(async () => 
+                        {
+                            await Task.Delay(2000); // Đợi 2s cho hệ thống mạng ổn định
+                            await CheckBalanceForPortAsync(e.PortName);
+                        });
+                    }
+
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
                         await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");

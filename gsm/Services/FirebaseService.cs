@@ -18,14 +18,17 @@ namespace gsm.Services
     public class FirebaseService
     {
         private readonly MainViewModel _vm;
-        private readonly HttpClient _httpClient;
+        private readonly HttpClient _sseClient;
+        private readonly HttpClient _restClient;
         private readonly string _databaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
 
         public FirebaseService(MainViewModel vm)
         {
             _vm = vm;
-            _httpClient = new HttpClient();
-            _httpClient.Timeout = Timeout.InfiniteTimeSpan; // Ngăn không bị ngắt kết nối SSE tự động
+            _sseClient = new HttpClient();
+            _sseClient.Timeout = Timeout.InfiniteTimeSpan; // Ngăn không bị ngắt kết nối SSE tự động
+            
+            _restClient = new HttpClient();
         }
 
         public void Start()
@@ -65,11 +68,11 @@ namespace gsm.Services
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 // Dùng Task.Run để không block UI thread, dùng PUT để đè lại toàn bộ node ports
-                Task.Run(() => _httpClient.PutAsync($"{_databaseUrl}ports.json", content));
+                Task.Run(() => _restClient.PutAsync($"{_databaseUrl}ports.json", content));
 
                 var statusJson = JsonSerializer.Serialize(new { lastSync = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
                 var statusContent = new StringContent(statusJson, Encoding.UTF8, "application/json");
-                Task.Run(() => _httpClient.PutAsync($"{_databaseUrl}server_status.json", statusContent));
+                Task.Run(() => _restClient.PutAsync($"{_databaseUrl}server_status.json", statusContent));
             }
             catch { }
         }
@@ -83,7 +86,7 @@ namespace gsm.Services
                     using var request = new HttpRequestMessage(HttpMethod.Get, $"{_databaseUrl}commands.json");
                     request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
-                    using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                    using var response = await _sseClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
                     using var stream = await response.Content.ReadAsStreamAsync();
                     using var reader = new StreamReader(stream);
 
@@ -171,7 +174,7 @@ namespace gsm.Services
                     {
                         await ExecuteSmsAsync(portId, recipient, content);
                         // Chỉ xóa khi đã xử lý xong, tránh bị mất lệnh khi modem bận
-                        await _httpClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                        await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
                     });
                 }
             }

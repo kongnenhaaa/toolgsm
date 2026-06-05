@@ -228,21 +228,54 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void RefreshPorts()
     {
-        SnackbarMessageQueue.Enqueue("Đang khởi tạo lại toàn bộ thiết bị...");
-        AddLog("Bắt đầu khởi tạo lại toàn bộ thiết bị từ đầu...");
+        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
         
-        Application.Current.Dispatcher.Invoke(() =>
+        // Nếu không có ô nào được tick (☑), nhưng người dùng đang highlight 1 dòng, thì lấy dòng đó
+        if (!targetPorts.Any() && SelectedPort != null)
         {
-            Ports.Clear();
-        });
+            targetPorts.Add(SelectedPort);
+        }
 
-        Task.Run(async () =>
+        if (targetPorts.Any())
         {
-            _modemService.DisconnectAll();
-            // Đợi 1 giây để các cổng COM nhả hoàn toàn khỏi máy tính
-            await Task.Delay(1000); 
-            _modemService.ConnectAll(115200);
-        });
+            SnackbarMessageQueue.Enqueue($"Đang làm mới {targetPorts.Count} thiết bị được chọn...");
+            AddLog($"Bắt đầu làm mới {targetPorts.Count} cổng đã chọn...");
+            
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                foreach (var p in targetPorts)
+                {
+                    Ports.Remove(p);
+                }
+            });
+
+            Task.Run(async () =>
+            {
+                foreach (var p in targetPorts)
+                {
+                    _modemService.Disconnect(p.PortName);
+                }
+                await Task.Delay(1000);
+                _modemService.ConnectAll(115200);
+            });
+        }
+        else
+        {
+            SnackbarMessageQueue.Enqueue("Đang làm mới toàn bộ thiết bị...");
+            AddLog("Bắt đầu khởi tạo lại toàn bộ thiết bị từ đầu...");
+            
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                Ports.Clear();
+            });
+
+            Task.Run(async () =>
+            {
+                _modemService.DisconnectAll();
+                await Task.Delay(1000); 
+                _modemService.ConnectAll(115200);
+            });
+        }
     }
 
     private void ModemService_LogMessage(object? sender, GsmDataEventArgs e)
@@ -571,30 +604,62 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    private string GetUssdCodeForProvider(string provider)
+    {
+        if (string.IsNullOrWhiteSpace(provider)) return "*101#";
+        
+        string upperProvider = provider.ToUpperInvariant();
+        foreach (var kvp in BalanceUssdByProvider)
+        {
+            if (upperProvider.Contains(kvp.Key.ToUpperInvariant()))
+            {
+                return kvp.Value;
+            }
+        }
+        
+        // Mặc định chuẩn mạng VN là *101#
+        return "*101#";
+    }
+
     [RelayCommand]
     private async Task CheckBalanceAsync()
     {
-        if (SelectedPort != null)
+        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        
+        if (!targetPorts.Any() && SelectedPort != null)
         {
-            if (string.IsNullOrWhiteSpace(SelectedPort.NetworkProvider))
+            targetPorts.Add(SelectedPort);
+        }
+
+        if (!targetPorts.Any())
+        {
+            targetPorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
+            if (!targetPorts.Any())
             {
-                SnackbarMessageQueue.Enqueue("Chưa xác định được nhà mạng để chọn mã USSD.");
+                SnackbarMessageQueue.Enqueue("Không có cổng nào đang hoạt động để kiểm tra số dư.");
                 return;
             }
-
-            if (!BalanceUssdByProvider.TryGetValue(SelectedPort.NetworkProvider.Trim(), out var ussdCode))
-            {
-                SnackbarMessageQueue.Enqueue($"Chưa hỗ trợ mã USSD cho nhà mạng: {SelectedPort.NetworkProvider}");
-                return;
-            }
-
-            AddLog($"Đang gửi lệnh kiểm tra số dư tới {SelectedPort.PortName}...");
-            string result = await SendUssdThrottledAsync(SelectedPort.PortName, ussdCode, "Kiểm tra số dư", logResult: true);
-            SnackbarMessageQueue.Enqueue($"Đã kiểm tra số dư cổng {SelectedPort.PortName}");
+            SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho TOÀN BỘ {targetPorts.Count} cổng...");
+            AddLog($"Bắt đầu kiểm tra số dư cho toàn bộ {targetPorts.Count} cổng...");
         }
         else
         {
-            SnackbarMessageQueue.Enqueue("Vui lòng chọn một cổng để kiểm tra số dư.");
+            SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho {targetPorts.Count} cổng...");
+            AddLog($"Bắt đầu kiểm tra số dư cho {targetPorts.Count} cổng đã chọn...");
+        }
+
+        foreach (var port in targetPorts)
+        {
+            if (string.IsNullOrWhiteSpace(port.NetworkProvider))
+            {
+                AddLog($"[{port.PortName}] Bỏ qua kiểm tra TKC vì chưa xác định được nhà mạng.", "WARN");
+                continue;
+            }
+
+            string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
+
+            // Gọi bất đồng bộ không chờ (để throttler bên trong hàm tự động xếp hàng)
+            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra số dư", logResult: true);
         }
     }
 
@@ -603,11 +668,9 @@ public partial class MainViewModel : ObservableObject
         var port = Ports.FirstOrDefault(p => p.PortName == portName);
         if (port != null && !string.IsNullOrWhiteSpace(port.NetworkProvider))
         {
-            if (BalanceUssdByProvider.TryGetValue(port.NetworkProvider.Trim(), out var ussdCode))
-            {
-                AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
-                await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", logResult: true);
-            }
+            string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
+            AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
+            await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", logResult: true);
         }
     }
 

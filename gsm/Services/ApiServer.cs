@@ -44,6 +44,34 @@ namespace gsm.Services
                 });
             });
 
+            // GET /api/sse — Server-Sent Events cho việc đẩy OTP real-time
+            app.MapGet("/api/sse", async (HttpContext ctx) =>
+            {
+                ctx.Response.Headers["Content-Type"] = "text/event-stream";
+                ctx.Response.Headers["Cache-Control"] = "no-cache";
+                ctx.Response.Headers["Connection"] = "keep-alive";
+
+                var tcs = new System.Threading.Tasks.TaskCompletionSource();
+                ctx.RequestAborted.Register(() => tcs.TrySetResult());
+
+                void OnOtpReceived(string portId, string otp)
+                {
+                    try
+                    {
+                        var data = $"{{\"portId\":\"{portId}\",\"otp\":\"{otp}\"}}";
+                        _ = ctx.Response.WriteAsync($"event: otp_update\ndata: {data}\n\n");
+                        _ = ctx.Response.Body.FlushAsync();
+                    }
+                    catch { }
+                }
+
+                _vm.OtpReceivedEvent += OnOtpReceived;
+
+                await tcs.Task;
+
+                _vm.OtpReceivedEvent -= OnOtpReceived;
+            });
+
             // POST /api/sms — gửi SMS từ cổng chỉ định
             app.MapPost("/api/sms", async (SmsRequest req) =>
             {

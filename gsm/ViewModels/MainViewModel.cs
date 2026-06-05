@@ -24,6 +24,8 @@ public partial class MainViewModel : ObservableObject
     private readonly IGsmModemService _modemService;
     public IGsmModemService ModemService => _modemService;
 
+    public event Action<string, string>? OtpReceivedEvent;
+
     private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan UssdMinIntervalGlobal = TimeSpan.FromMilliseconds(10);
     private readonly ConcurrentDictionary<string, DateTime> _lastUssdByPort = new();
@@ -473,6 +475,8 @@ public partial class MainViewModel : ObservableObject
                     
                     // GỌI HÀM BẮN TELEGRAM
                     _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {safeSender}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{safeContent}</i>");
+
+                    OtpReceivedEvent?.Invoke(e.PortName, extractedOtp);
                 }
 
                 // 4. Đưa lên UI (Cập nhật Tab SMS)

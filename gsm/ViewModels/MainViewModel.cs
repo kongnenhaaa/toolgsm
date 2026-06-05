@@ -436,6 +436,17 @@ public partial class MainViewModel : ObservableObject
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                 }
 
+                // Thêm block chặn tin nhắn rác từ 49515355
+                if (senderPhone == "49515355" || cleanContent.Contains("khoan Airtime") || cleanContent.Contains("ong su dung het"))
+                {
+                    AddLog($"[{e.PortName}] Đã chặn tin nhắn rác từ {senderPhone}");
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+                    return;
+                }
+
                 // 2. Tìm OTP
                 // Xóa các mẫu số điện thoại bị che (VD: ***7628) để tránh việc regex bị nhận nhầm
                 string textForOtp = Regex.Replace(cleanContent, @"\*+\d+", "");

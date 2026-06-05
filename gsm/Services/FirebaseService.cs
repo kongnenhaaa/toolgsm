@@ -68,11 +68,25 @@ namespace gsm.Services
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 // Dùng Task.Run để không block UI thread, dùng PUT để đè lại toàn bộ node ports
-                Task.Run(() => _restClient.PutAsync($"{_databaseUrl}ports.json", content));
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _restClient.PutAsync($"{_databaseUrl}ports.json", content);
+                    }
+                    catch { /* Mất mạng tạm thời, bỏ qua */ }
+                });
 
                 var statusJson = JsonSerializer.Serialize(new { lastSync = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
                 var statusContent = new StringContent(statusJson, Encoding.UTF8, "application/json");
-                Task.Run(() => _restClient.PutAsync($"{_databaseUrl}server_status.json", statusContent));
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _restClient.PutAsync($"{_databaseUrl}server_status.json", statusContent);
+                    }
+                    catch { /* Mất mạng tạm thời, bỏ qua */ }
+                });
             }
             catch { }
         }

@@ -38,8 +38,14 @@ public partial class MainViewModel : ObservableObject
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            { "VINAPHONE", "*110#" },
-            { "VINA", "*110#" }
+            { "VINAPHONE", "*101#" },
+            { "VINA", "*101#" },
+            { "VIETTEL", "*101#" },
+            { "MOBIFONE", "*101#" },
+            { "VIETNAMOBILE", "*101#" },
+            { "WINTEL", "*101#" },
+            { "ITELECOM", "*101#" },
+            { "LOCAL", "*101#" }
         };
 
     [ObservableProperty]
@@ -126,11 +132,14 @@ public partial class MainViewModel : ObservableObject
 
     private void AddLog(string message, string level = "INFO")
     {
-        SystemLogs.Insert(0, new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = level, Message = message });
-        if (SystemLogs.Count > 500)
+        Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            SystemLogs.RemoveAt(SystemLogs.Count - 1);
-        }
+            SystemLogs.Insert(0, new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = level, Message = message });
+            if (SystemLogs.Count > 500)
+            {
+                SystemLogs.RemoveAt(SystemLogs.Count - 1);
+            }
+        });
     }
 
     [RelayCommand]

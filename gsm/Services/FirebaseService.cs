@@ -1,0 +1,178 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using gsm.Models;
+using gsm.ViewModels;
+
+namespace gsm.Services
+{
+    public class FirebaseService
+    {
+        private readonly MainViewModel _vm;
+        private readonly HttpClient _httpClient;
+        private readonly string _databaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+
+        public FirebaseService(MainViewModel vm)
+        {
+            _vm = vm;
+            _httpClient = new HttpClient();
+        }
+
+        public void Start()
+        {
+            // Bắt đầu lắng nghe lệnh gửi SMS từ web
+            _ = ListenForCommandsAsync();
+
+            // Đồng bộ định kỳ mỗi 2 giây
+            _ = PeriodicSyncAsync();
+        }
+
+        private async Task PeriodicSyncAsync()
+        {
+            while (true)
+            {
+                SyncPorts();
+                await Task.Delay(2000);
+            }
+        }
+
+        private void SyncPorts()
+        {
+            try
+            {
+                // Dữ liệu cần thiết cho Web
+                var portsData = _vm.Ports.ToDictionary(p => p.PortName, p => new {
+                    id = p.PortName,
+                    phone = p.PhoneNumber,
+                    status = p.Status == "Đang hoạt động" ? "online" : "offline",
+                    otp = string.IsNullOrEmpty(p.Otp) || p.Otp == "N/A" ? null : p.Otp,
+                    network = p.NetworkProvider,
+                    balance = p.Balance,
+                    signal = p.SignalStrength
+                });
+
+                var json = JsonSerializer.Serialize(portsData);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                // Dùng Task.Run để không block UI thread, dùng PUT để đè lại toàn bộ node ports
+                Task.Run(() => _httpClient.PutAsync($"{_databaseUrl}ports.json", content));
+            }
+            catch { }
+        }
+
+        private async Task ListenForCommandsAsync()
+        {
+            while (true)
+            {
+                try
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get, $"{_databaseUrl}commands.json");
+                    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+
+                    using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                    using var stream = await response.Content.ReadAsStreamAsync();
+                    using var reader = new StreamReader(stream);
+
+                    string? line;
+                    while ((line = await reader.ReadLineAsync()) != null)
+                    {
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+
+                        if (line.StartsWith("data: "))
+                        {
+                            var dataJson = line.Substring(6);
+                            if (dataJson != "null")
+                            {
+                                ProcessCommandData(dataJson);
+                            }
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    // Lỗi mạng hoặc Firebase bị gián đoạn, thử lại sau 5s
+                    await Task.Delay(5000); 
+                }
+            }
+        }
+
+        private void ProcessCommandData(string dataJson)
+        {
+            try
+            {
+                // dataJson của Server-Sent Events Firebase: {"path":"/","data":{...}}
+                using var doc = JsonDocument.Parse(dataJson);
+                var root = doc.RootElement;
+                
+                if (root.TryGetProperty("path", out var pathElement) && root.TryGetProperty("data", out var dataElement))
+                {
+                    string path = pathElement.GetString() ?? "";
+                    
+                    if (dataElement.ValueKind == JsonValueKind.Null) return; // Sự kiện xóa
+
+                    if (path == "/")
+                    {
+                        // Toàn bộ commands hiện tại lúc mới kết nối
+                        foreach (var prop in dataElement.EnumerateObject())
+                        {
+                            ExecuteAndRemoveCommand(prop.Name, prop.Value);
+                        }
+                    }
+                    else
+                    {
+                        // Có command mới thêm vào, path có dạng "/-Nxxxx"
+                        string cmdId = path.Trim('/');
+                        ExecuteAndRemoveCommand(cmdId, dataElement);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void ExecuteAndRemoveCommand(string cmdId, JsonElement cmdData)
+        {
+            try
+            {
+                if (cmdData.TryGetProperty("portId", out var portIdEl) &&
+                    cmdData.TryGetProperty("recipient", out var recipientEl) &&
+                    cmdData.TryGetProperty("content", out var contentEl))
+                {
+                    string portId = portIdEl.GetString() ?? "";
+                    string recipient = recipientEl.GetString() ?? "";
+                    string content = contentEl.GetString() ?? "";
+
+                    // Xóa command khỏi Firebase để tránh gửi SMS hai lần
+                    _ = _httpClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+
+                    // Thực thi gửi SMS
+                    _ = ExecuteSmsAsync(portId, recipient, content);
+                }
+            }
+            catch { }
+        }
+
+        private async Task ExecuteSmsAsync(string portId, string recipient, string content)
+        {
+            // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
+            await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 5000, true);
+
+            string result = await _vm.ModemService.SendSmsAsync(
+                portId,
+                recipient,
+                content,
+                timeoutMs: 15000
+            );
+
+            // Trả lại UCS2 để đọc tiếng Việt
+            await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 5000, true);
+        }
+    }
+}

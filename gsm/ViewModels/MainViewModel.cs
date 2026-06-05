@@ -100,8 +100,8 @@ public partial class MainViewModel : ObservableObject
         Ports.CollectionChanged += (s, e) => UpdateDashboard();
         SmsMessages.CollectionChanged += (s, e) => UpdateDashboard();
 
-        // Khởi động API Server chạy ngầm
-        new ApiServer(this).Start();
+        // Khởi động Firebase Service chạy ngầm
+        new FirebaseService(this).Start();
     }
 
     private void UpdateDashboard()
@@ -438,8 +438,8 @@ public partial class MainViewModel : ObservableObject
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                 }
 
-                // Thêm block chặn tin nhắn rác từ 49515355
-                if (senderPhone == "49515355" || cleanContent.Contains("khoan Airtime") || cleanContent.Contains("ong su dung het"))
+                // Thêm block chặn tin nhắn rác từ 49515355, 57515253
+                if (senderPhone == "49515355" || senderPhone == "57515253" || cleanContent.Contains("khoan Airtime") || cleanContent.Contains("ong su dung het") || cleanContent.Contains("ng su dung het") || cleanContent.Contains("chinh sach tai") || cleanContent.Contains("Tu choi nhan loi moi"))
                 {
                     AddLog($"[{e.PortName}] Đã chặn tin nhắn rác từ {senderPhone}");
                     if (!string.IsNullOrEmpty(e.MsgIndex))

@@ -242,8 +242,20 @@ namespace gsm.Services
             {
                 sem.Release();
             }
+        }
 
-
+        public static async Task SendErrorToWebAsync(string portId, string errorMessage)
+        {
+            try
+            {
+                using var client = new HttpClient();
+                // Escape HTML or use literal string, JSON handles serialization
+                var json = JsonSerializer.Serialize(errorMessage);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                // Cập nhật thuộc tính errorMsg vào nhánh web_states của cổng bị lỗi
+                await client.PutAsync($"https://toolweb-c7702-default-rtdb.firebaseio.com/web_states/ports/{portId}/errorMsg.json", content);
+            }
+            catch { }
         }
     }
 }

@@ -516,11 +516,13 @@ public partial class MainViewModel : ObservableObject
                 if (cleanContentLower.Contains("sai dau so") || cleanContentLower.Contains("sai cú pháp") || cleanContentLower.Contains("sai cu phap"))
                 {
                     AddLog($"[{e.PortName}] LỖI ZALO: Hệ thống Firebase đẩy lệnh gửi sai đầu số dịch vụ (Ví dụ: Zalo yêu cầu gửi 7539 nhưng lại gửi 8500)! Vui lòng sửa mã nguồn trên Web/Firebase.", "ERROR");
+                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Chọn sai mạng rồi kìa");
                     isZaloError = true;
                 }
                 else if (cleanContentLower.Contains("khong du tien") || cleanContentLower.Contains("không đủ tiền"))
                 {
                     AddLog($"[{e.PortName}] LỖI SIM: Tài khoản không đủ tiền để gửi SMS đến tổng đài Zalo! Vui lòng nạp thêm tiền.", "ERROR");
+                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Hết tiền");
                     isZaloError = true;
                 }
 

@@ -795,6 +795,24 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void CopyAllPhones()
+    {
+        var phones = Ports
+            .Where(p => !string.IsNullOrWhiteSpace(p.PhoneNumber))
+            .Select(p => p.PhoneNumber!)
+            .ToList();
+
+        if (phones.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Đang có 0 số điện thoại, chưa có gì để copy!");
+            return;
+        }
+
+        Clipboard.SetText(string.Join("\n", phones));
+        SnackbarMessageQueue.Enqueue($"✅ Đã copy {phones.Count} số điện thoại vào clipboard!");
+    }
+
+    [RelayCommand]
     private void DeleteSms(SmsMessage? sms)
     {
         if (sms != null)

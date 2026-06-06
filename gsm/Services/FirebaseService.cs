@@ -183,6 +183,11 @@ namespace gsm.Services
                     string recipient = recipientEl.GetString() ?? "";
                     string content = contentEl.GetString() ?? "";
 
+                    Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        _vm.SystemLogs.Insert(0, new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = "FIREBASE", Message = $"Nhận lệnh gửi SMS: Cổng={portId}, Gửi đến={recipient}, Nội dung={content}" });
+                    });
+
                     // Xử lý gửi SMS ngầm, đợi kết quả rồi mới xóa khỏi Firebase
                     _ = Task.Run(async () =>
                     {

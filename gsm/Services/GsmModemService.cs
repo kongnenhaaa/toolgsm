@@ -224,8 +224,8 @@ public class GsmModemService : IGsmModemService
             // ---------------------------------------------------------
             if (_commandTcs.TryGetValue(portName, out var tcs))
             {
-                // Kiểm tra dấu hiệu kết thúc của lệnh AT (OK, ERROR, hoặc CMS/CME ERROR)
-                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:|> $");
+                // Kiểm tra dấu hiệu kết thúc của lệnh AT (OK, ERROR, hoặc CMS/CME ERROR, hoặc dấu nhắc >)
+                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:|>\s*$");
                 if (isCompleted)
                 {
                     if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))

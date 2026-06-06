@@ -348,9 +348,21 @@ public partial class MainViewModel : ObservableObject
                         }
                     }
                     
-                    var moneyMatch = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
-                    if (moneyMatch.Success) port.Balance = moneyMatch.Value;
-                    // Không set "Thành công" nữa vì dễ gây hiểu nhầm cho cột Số dư (TKC)
+                    // Sửa lỗi Parse nhầm "1đ" từ tin nhắn báo không đủ tiền hoặc quảng cáo cước phí
+                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|So du|Số dư)[^\d]*?(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
+                    if (strictMatch.Success) 
+                    {
+                        port.Balance = strictMatch.Groups[1].Value + " " + strictMatch.Groups[2].Value;
+                    }
+                    else
+                    {
+                        // Fallback nếu nhà mạng trả về format lạ, nhưng phải tránh các từ khóa rác và tránh cước phí (vd: 1000d/ngay)
+                        if (!Regex.IsMatch(ussdContent, @"khong du|chua du|cuoc|uu dai|tang|gia|khong lo|ho tro|phi", RegexOptions.IgnoreCase))
+                        {
+                            var fallback = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)(?!/)", RegexOptions.IgnoreCase);
+                            if (fallback.Success) port.Balance = fallback.Groups[1].Value + " " + fallback.Groups[2].Value;
+                        }
+                    }
 
                     var expiryMatch = Regex.Match(ussdContent, @"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b");
                     if (expiryMatch.Success) port.ExpiryDate = expiryMatch.Groups[1].Value;

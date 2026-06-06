@@ -132,6 +132,12 @@ public partial class MainViewModel : ObservableObject
 
     private void AddLog(string message, string level = "INFO")
     {
+        try 
+        {
+            System.IO.File.AppendAllText("system_log.txt", $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}\n");
+        }
+        catch { }
+
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
             SystemLogs.Insert(0, new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = level, Message = message });
@@ -507,6 +513,20 @@ public partial class MainViewModel : ObservableObject
                         });
                     }
 
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+                    return;
+                }
+
+                // CHỈ NHẬN ZALO: Nếu không phải tin nhắn Zalo thì xóa luôn
+                bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
+                              senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                if (!isZalo)
+                {
+                    AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không phải Zalo từ {senderPhone}");
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
                         await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");

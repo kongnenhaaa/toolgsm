@@ -51,7 +51,16 @@ public static class TelegramService
                     };
 
                     var content = new FormUrlEncodedContent(payload);
-                    await _httpClient.PostAsync(url, content);
+                    var response = await _httpClient.PostAsync(url, content);
+                    
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        // Thử lại không dùng HTML parse_mode nếu bị lỗi (để tránh mất tin nhắn do sai format)
+                        payload.Remove("parse_mode");
+                        content = new FormUrlEncodedContent(payload);
+                        response = await _httpClient.PostAsync(url, content);
+                        response.EnsureSuccessStatusCode();
+                    }
                 }
                 catch (Exception ex)
                 {

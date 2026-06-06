@@ -603,10 +603,12 @@ public partial class MainViewModel : ObservableObject
                 {
                     AddLog($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
                     SnackbarMessageQueue.Enqueue($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
-                    // Giữ lại SMS để debug nếu không bắt được OTP
+                    
+                    // PHẢI XÓA SMS NGAY CẢ KHI KHÔNG CÓ OTP ĐỂ TRÁNH TRÀN BỘ NHỚ SIM (SIM FULL SẼ KHÔNG NHẬN ĐƯỢC SMS NỮA)
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
-                        AddLog($"[{e.PortName}] Giữ lại tin nhắn {e.MsgIndex} để debug do không thấy OTP.", "WARN");
+                        AddLog($"[{e.PortName}] Đã xóa tin nhắn {e.MsgIndex} (Không tìm thấy OTP) để giải phóng bộ nhớ SIM.", "WARN");
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
                     }
                 }
             }

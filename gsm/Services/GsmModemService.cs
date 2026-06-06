@@ -103,6 +103,9 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CMGF=1", 30000); // Set SMS to text mode
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
         
+        // Xóa toàn bộ SMS cũ trong SIM để tránh bị đầy bộ nhớ khiến không nhận được CMTI mới
+        await SendCommandAsync(portName, "AT+CMGD=1,4", 30000); 
+        
         // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
         await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 30000); 
         

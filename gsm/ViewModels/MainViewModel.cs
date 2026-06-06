@@ -509,13 +509,37 @@ public partial class MainViewModel : ObservableObject
                     });
                 }
 
+                string cleanContentLower = cleanContent.ToLowerInvariant();
+
+                // KIỂM TRA LỖI ZALO / HẾT TIỀN TRƯỚC KHI CHẶN SPAM
+                bool isZaloError = false;
+                if (cleanContentLower.Contains("sai dau so") || cleanContentLower.Contains("sai cú pháp") || cleanContentLower.Contains("sai cu phap"))
+                {
+                    AddLog($"[{e.PortName}] LỖI ZALO: Hệ thống Firebase đẩy lệnh gửi sai đầu số dịch vụ (Ví dụ: Zalo yêu cầu gửi 7539 nhưng lại gửi 8500)! Vui lòng sửa mã nguồn trên Web/Firebase.", "ERROR");
+                    isZaloError = true;
+                }
+                else if (cleanContentLower.Contains("khong du tien") || cleanContentLower.Contains("không đủ tiền"))
+                {
+                    AddLog($"[{e.PortName}] LỖI SIM: Tài khoản không đủ tiền để gửi SMS đến tổng đài Zalo! Vui lòng nạp thêm tiền.", "ERROR");
+                    isZaloError = true;
+                }
+
+                if (isZaloError)
+                {
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+                    return;
+                }
+
                 // Thêm block chặn tin nhắn rác từ 49515355, 57515253, 900 và các tin nhắn nạp tiền/rác khác
-                if (senderPhone == "900" || senderPhone == "49515355" || senderPhone == "57515253" || cleanContent.Contains("khoan Airtime") || cleanContent.Contains("ong su dung het") || cleanContent.Contains("ng su dung het") || cleanContent.Contains("chinh sach tai") || cleanContent.Contains("Tu choi nhan loi moi") || cleanContent.Contains("da duoc nap") || cleanContent.Contains("Tai khoan cua Quy khach"))
+                if (senderPhone == "900" || senderPhone == "49515355" || senderPhone == "57515253" || cleanContentLower.Contains("khoan airtime") || cleanContentLower.Contains("ong su dung het") || cleanContentLower.Contains("ng su dung het") || cleanContentLower.Contains("chinh sach tai") || cleanContentLower.Contains("tu choi nhan loi moi") || cleanContentLower.Contains("da duoc nap") || cleanContentLower.Contains("tai khoan cua quy khach"))
                 {
                     AddLog($"[{e.PortName}] Đã chặn tin nhắn rác từ {senderPhone}");
                     
                     // Kích hoạt SỰ KIỆN: Nếu là tin nhắn báo nạp tiền, tự động check lại TKC
-                    if (cleanContent.Contains("da duoc nap") || cleanContent.Contains("Tai khoan cua Quy khach"))
+                    if (cleanContentLower.Contains("da duoc nap") || cleanContentLower.Contains("tai khoan cua quy khach"))
                     {
                         AddLog($"[{e.PortName}] Phát hiện tin nhắn nạp thẻ, tự động cập nhật lại số dư...");
                         _ = Task.Run(async () => 

@@ -12,7 +12,7 @@ public static class TelegramService
     // Ví dụ Token: "123456789:ABCDefghIJKL..."
     // Ví dụ Chat ID: "987654321" (Lấy từ @userinfobot)
     private static readonly string BotToken = "8926115937:AAFpUEvxfFqRpwGDWChbEQEWsn6xkZ-RTCQ";
-    private static readonly string ChatId = "7035960212";
+    private static readonly string ChatId = "-1003586587027";
     private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly ConcurrentQueue<string> _messageQueue = new ConcurrentQueue<string>();
     private static readonly SemaphoreSlim _queueSignal = new SemaphoreSlim(0);

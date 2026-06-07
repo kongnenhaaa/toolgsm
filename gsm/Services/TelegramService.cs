@@ -13,7 +13,7 @@ public static class TelegramService
     // Ví dụ Chat ID: "987654321" (Lấy từ @userinfobot)
     private static readonly string BotToken = "8926115937:AAFpUEvxfFqRpwGDWChbEQEWsn6xkZ-RTCQ";
     private static readonly string ChatId = "-1003586587027";
-    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     private static readonly ConcurrentQueue<string> _messageQueue = new ConcurrentQueue<string>();
     private static readonly SemaphoreSlim _queueSignal = new SemaphoreSlim(0);
     private static readonly TimeSpan _sendDelay = TimeSpan.FromMilliseconds(1200);
@@ -40,31 +40,46 @@ public static class TelegramService
 
             if (_messageQueue.TryDequeue(out var message))
             {
-                try
+                int retryCount = 0;
+                bool success = false;
+                
+                while (retryCount < 3 && !success)
                 {
-                    string url = $"https://api.telegram.org/bot{BotToken}/sendMessage";
-                    var payload = new System.Collections.Generic.Dictionary<string, string>
+                    try
                     {
-                        { "chat_id", ChatId },
-                        { "text", message },
-                        { "parse_mode", "HTML" }
-                    };
+                        string url = $"https://api.telegram.org/bot{BotToken}/sendMessage";
+                        var payload = new System.Collections.Generic.Dictionary<string, string>
+                        {
+                            { "chat_id", ChatId },
+                            { "text", message },
+                            { "parse_mode", "HTML" }
+                        };
 
-                    var content = new FormUrlEncodedContent(payload);
-                    var response = await _httpClient.PostAsync(url, content);
-                    
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        // Thử lại không dùng HTML parse_mode nếu bị lỗi (để tránh mất tin nhắn do sai format)
-                        payload.Remove("parse_mode");
-                        content = new FormUrlEncodedContent(payload);
-                        response = await _httpClient.PostAsync(url, content);
-                        response.EnsureSuccessStatusCode();
+                        var content = new FormUrlEncodedContent(payload);
+                        var response = await _httpClient.PostAsync(url, content);
+                        
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            // Thử lại không dùng HTML parse_mode nếu bị lỗi (để tránh mất tin nhắn do sai format)
+                            payload.Remove("parse_mode");
+                            content = new FormUrlEncodedContent(payload);
+                            response = await _httpClient.PostAsync(url, content);
+                            response.EnsureSuccessStatusCode();
+                        }
+                        success = true;
                     }
-                }
-                catch (Exception ex)
-                {
-                    System.IO.File.AppendAllText("tele_error.txt", $"{DateTime.Now}: {ex.Message}\n{message}\n");
+                    catch (Exception ex)
+                    {
+                        retryCount++;
+                        if (retryCount >= 3)
+                        {
+                            System.IO.File.AppendAllText("tele_error.txt", $"{DateTime.Now}: {ex.Message} (After 3 retries)\n{message}\n");
+                        }
+                        else
+                        {
+                            await Task.Delay(2000); // Chờ 2s rồi thử lại
+                        }
+                    }
                 }
 
                 await Task.Delay(_sendDelay);

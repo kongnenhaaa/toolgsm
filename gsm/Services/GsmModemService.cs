@@ -39,6 +39,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new();
     private readonly ConcurrentDictionary<string, StringBuilder> _portBuffers = new();
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _commandTcs = new();
+    private readonly ConcurrentDictionary<string, int> _connectionErrors = new();
+    private readonly ConcurrentDictionary<string, DateTime> _sleepingPorts = new();
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
@@ -56,6 +58,14 @@ public class GsmModemService : IGsmModemService
         {
             if (!_serialPorts.ContainsKey(p))
             {
+                if (_sleepingPorts.TryGetValue(p, out var sleepUntil))
+                {
+                    if (DateTime.Now < sleepUntil)
+                        continue; // Đang trong thời gian ngủ, bỏ qua
+                    else
+                        _sleepingPorts.TryRemove(p, out _); // Đã hết thời gian ngủ
+                }
+
                 try
                 {
                     var sp = new SerialPort(p, baudRate, Parity.None, 8, StopBits.One)
@@ -73,6 +83,7 @@ public class GsmModemService : IGsmModemService
                     _serialPorts.TryAdd(p, sp);
                     _semaphores.TryAdd(p, new SemaphoreSlim(1, 1));
                     _portBuffers.TryAdd(p, new StringBuilder());
+                    _connectionErrors.TryRemove(p, out _); // Reset lỗi khi kết nối thành công
                     
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Đã kết nối thành công {p} (Baud: {baudRate})" });
                     
@@ -81,7 +92,17 @@ public class GsmModemService : IGsmModemService
                 }
                 catch (Exception ex)
                 {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p}: {ex.Message}" });
+                    int errors = _connectionErrors.AddOrUpdate(p, 1, (key, old) => old + 1);
+                    if (errors >= 3)
+                    {
+                        _sleepingPorts[p] = DateTime.Now.AddMinutes(5); // Cho cổng ngủ 5 phút
+                        _connectionErrors.TryRemove(p, out _);
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p} quá 3 lần: {ex.Message}. Tạm ngưng kết nối cổng này trong 5 phút để tránh spam log." });
+                    }
+                    else
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p}: {ex.Message}" });
+                    }
                 }
             }
         }

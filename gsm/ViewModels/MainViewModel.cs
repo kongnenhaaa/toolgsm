@@ -284,6 +284,28 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    public async Task RefreshPortAsync(string portName)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var p = Ports.FirstOrDefault(x => x.PortName == portName);
+            if (p != null) Ports.Remove(p);
+        });
+
+        await Task.Run(async () =>
+        {
+            _modemService.Disconnect(portName);
+            await Task.Delay(1000);
+            _modemService.ConnectAll(115200);
+        });
+        
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            AddLog($"Đã nhận lệnh làm mới cổng {portName} từ Web.");
+            SnackbarMessageQueue.Enqueue($"Đang làm mới thiết bị {portName}...");
+        });
+    }
+
     private void ModemService_LogMessage(object? sender, GsmDataEventArgs e)
     {
         Application.Current.Dispatcher.InvokeAsync(() =>

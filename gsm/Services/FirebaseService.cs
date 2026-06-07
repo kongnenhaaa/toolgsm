@@ -197,6 +197,10 @@ namespace gsm.Services
                             {
                                 await _vm.CheckBalanceForPortAsync(portId);
                             }
+                            else if (recipient == "SYSTEM" && content == "REFRESH_PORT")
+                            {
+                                await _vm.RefreshPortAsync(portId);
+                            }
                             else
                             {
                                 await ExecuteSmsAsync(portId, recipient, content);

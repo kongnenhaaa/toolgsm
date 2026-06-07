@@ -238,6 +238,13 @@ namespace gsm.Services
                     timeoutMs: 45000
                 );
 
+                if (result.Contains("ERROR"))
+                {
+                    string errorMsg = GetHumanReadableError(result);
+                    await SendErrorToWebAsync(portId, errorMsg);
+                    _ = TelegramService.SendMessageAsync($"⚠️ <b>Lỗi Gửi SMS Từ {portId}</b>\n📱 Tới: {recipient}\n📝 Nội dung: {content}\n❌ Chi tiết: <code>{errorMsg}</code>");
+                }
+
                 // Trả lại UCS2 để đọc tiếng Việt
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,8", 10000, true);
@@ -246,6 +253,24 @@ namespace gsm.Services
             {
                 sem.Release();
             }
+        }
+
+        private string GetHumanReadableError(string result)
+        {
+            if (result.Contains("+CMS ERROR: 350")) return "Sim bị chặn SMS / DV không hỗ trợ (350)";
+            if (result.Contains("+CMS ERROR: 500")) return "Lỗi thiết bị (500)";
+            if (result.Contains("+CMS ERROR: 302")) return "Không được phép hoạt động (302)";
+            if (result.Contains("+CMS ERROR: 331")) return "Mạng không khả dụng (331)";
+            if (result.Contains("+CMS ERROR: 332")) return "Hết thời gian chờ mạng (332)";
+            if (result.Contains("+CMS ERROR: 512")) return "Nhà mạng từ chối (Có thể hết tiền) (512)";
+            if (result.Contains("+CME ERROR: 10")) return "Không nhận diện được SIM (10)";
+            if (result.Contains("+CME ERROR: 11")) return "Yêu cầu mã PIN (11)";
+            if (result.Contains("+CME ERROR: 13")) return "Lỗi thẻ SIM (13)";
+            if (result.Contains("+CME ERROR: 14")) return "SIM bị khóa cần PUK (14)";
+            if (result.Contains("+CME ERROR: 58")) return "Mạng giới hạn truy cập (58)";
+            if (result.Contains("Timeout")) return "Lỗi thiết bị không phản hồi (Timeout)";
+            
+            return result.Replace("ERROR: ", "").Replace("+CMS ERROR:", "Lỗi SMS:").Replace("+CME ERROR:", "Lỗi Modem:");
         }
 
         public static async Task SendErrorToWebAsync(string portId, string errorMessage)

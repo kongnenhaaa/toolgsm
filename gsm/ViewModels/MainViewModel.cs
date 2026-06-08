@@ -32,6 +32,9 @@ public partial class MainViewModel : ObservableObject
     private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(100, 100);
     private DateTime _lastUssdGlobalUtc = DateTime.MinValue;
 
+    // Đánh dấu cổng nào đang có SMS được gửi để USSD tự nhường đường (tránh tranh Semaphore)
+    public readonly ConcurrentDictionary<string, bool> SmsInProgressPorts = new();
+
     private readonly string _cacheFilePath = "sim_cache.json";
     private ConcurrentDictionary<string, string> _simCache = new();
 
@@ -303,6 +306,23 @@ public partial class MainViewModel : ObservableObject
         {
             AddLog($"Đã nhận lệnh làm mới cổng {portName} từ Web.");
             SnackbarMessageQueue.Enqueue($"Đang làm mới thiết bị {portName}...");
+        });
+    }
+
+    public void RefreshAllPorts()
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            AddLog("Đã nhận lệnh làm mới TẤT CẢ cổng từ Web.");
+            SnackbarMessageQueue.Enqueue("Đang làm mới toàn bộ thiết bị...");
+            Ports.Clear();
+        });
+
+        Task.Run(async () =>
+        {
+            _modemService.DisconnectAll();
+            await Task.Delay(1000); 
+            _modemService.ConnectAll(115200);
         });
     }
 
@@ -752,29 +772,17 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task CheckBalanceAsync()
     {
-        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        // Luôn kiểm tra toàn bộ các cổng đang hoạt động, bỏ qua việc người dùng có chọn hay không
+        var targetPorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
         
-        if (!targetPorts.Any() && SelectedPort != null)
-        {
-            targetPorts.Add(SelectedPort);
-        }
-
         if (!targetPorts.Any())
         {
-            targetPorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
-            if (!targetPorts.Any())
-            {
-                SnackbarMessageQueue.Enqueue("Không có cổng nào đang hoạt động để kiểm tra số dư.");
-                return;
-            }
-            SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho TOÀN BỘ {targetPorts.Count} cổng...");
-            AddLog($"Bắt đầu kiểm tra số dư cho toàn bộ {targetPorts.Count} cổng...");
+            SnackbarMessageQueue.Enqueue("Không có cổng nào đang hoạt động để kiểm tra số dư.");
+            return;
         }
-        else
-        {
-            SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho {targetPorts.Count} cổng...");
-            AddLog($"Bắt đầu kiểm tra số dư cho {targetPorts.Count} cổng đã chọn...");
-        }
+
+        SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho TOÀN BỘ {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu kiểm tra số dư cho toàn bộ {targetPorts.Count} cổng...");
 
         foreach (var port in targetPorts)
         {
@@ -787,7 +795,7 @@ public partial class MainViewModel : ObservableObject
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
 
             // Gọi bất đồng bộ không chờ (để throttler bên trong hàm tự động xếp hàng)
-            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra số dư", logResult: true);
+            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra số dư", maxRetries: 3, logResult: true);
         }
     }
 
@@ -798,9 +806,11 @@ public partial class MainViewModel : ObservableObject
         {
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
             AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
-            await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", logResult: true);
+            await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxRetries: 3, logResult: true);
         }
     }
+
+
 
     private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxRetries = 1)
     {
@@ -864,7 +874,7 @@ public partial class MainViewModel : ObservableObject
             // 3. Chuyển lại UCS2
             await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
 
-            bool isFailed = result.Contains("ERROR") || result.Contains("Thao tac khong hop le") || result.Contains("he thong ban") || result.Contains("+CUSD: 2");
+            bool isFailed = result.Contains("ERROR") || result.Contains("Thao tac khong hop le") || result.Contains("he thong ban") || result.Contains("+CUSD: 2") || result.Contains("+CUSD: 4") || result.Contains("+CUSD: 5");
 
             if (!isFailed)
             {
@@ -874,6 +884,12 @@ public partial class MainViewModel : ObservableObject
 
             if (i < maxRetries - 1)
             {
+                // Nếu đang có SMS chờ xử lý trên cổng này, dừng retry USSD lại ngay
+                if (SmsInProgressPorts.ContainsKey(portName))
+                {
+                    AddLog($"[{portName}] Dừng retry USSD vì có lệnh SMS đang ưu tiên.", "INFO");
+                    break;
+                }
                 AddLog($"[{portName}] Lỗi USSD ({result.Trim()}). Thử lại sau 3 giây... (Lần {i + 1}/{maxRetries})", "WARN");
                 await Task.Delay(3000);
             }

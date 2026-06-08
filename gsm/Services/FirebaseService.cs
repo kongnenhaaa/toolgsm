@@ -201,6 +201,10 @@ namespace gsm.Services
                             {
                                 await _vm.RefreshPortAsync(portId);
                             }
+                            else if (recipient == "SYSTEM" && content == "REFRESH_ALL")
+                            {
+                                _vm.RefreshAllPorts();
+                            }
                             else
                             {
                                 await ExecuteSmsAsync(portId, recipient, content);
@@ -224,6 +228,10 @@ namespace gsm.Services
         {
             var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
             await sem.WaitAsync();
+            
+            // Đánh dấu cổng này đang có SMS sắp gửi, USSD sẽ tự động nhường đường
+            _vm.SmsInProgressPorts.TryAdd(portId, true);
+
             try
             {
                 // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
@@ -247,6 +255,9 @@ namespace gsm.Services
             }
             finally
             {
+                // Xóa dấu hiệu SMS đang chờ sau khi xử lý xong
+                _vm.SmsInProgressPorts.TryRemove(portId, out _);
+
                 // QUAN TRỌNG: Luôn khôi phục về UCS2 dù gửi SMS thành công hay lỗi
                 // Nếu không, modem sẽ kẹt ở GSM mode, không đọc được tiếng Việt/UCS2 nữa!
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
@@ -263,11 +274,14 @@ namespace gsm.Services
             if (result.Contains("+CMS ERROR: 331")) return "Mạng không khả dụng (331)";
             if (result.Contains("+CMS ERROR: 332")) return "Hết thời gian chờ mạng (332)";
             if (result.Contains("+CMS ERROR: 512")) return "Nhà mạng từ chối (Có thể hết tiền) (512)";
+            if (result.Contains("+CMS ERROR: 2162")) return "Từ chối gửi SMS tới đầu số này (2162)";
             if (result.Contains("+CME ERROR: 10")) return "Không nhận diện được SIM (10)";
             if (result.Contains("+CME ERROR: 11")) return "Yêu cầu mã PIN (11)";
             if (result.Contains("+CME ERROR: 13")) return "Lỗi thẻ SIM (13)";
             if (result.Contains("+CME ERROR: 14")) return "SIM bị khóa cần PUK (14)";
+            if (result.Contains("+CME ERROR: 32")) return "Mạng chỉ cho phép gọi khẩn cấp (32)";
             if (result.Contains("+CME ERROR: 58")) return "Mạng giới hạn truy cập (58)";
+            if (result.Contains("+CME ERROR: 100")) return "Lỗi thiết bị không xác định (100)";
             if (result.Contains("Timeout")) return "Lỗi thiết bị không phản hồi (Timeout)";
             
             return result.Replace("ERROR: ", "").Replace("+CMS ERROR:", "Lỗi SMS:").Replace("+CME ERROR:", "Lỗi Modem:");

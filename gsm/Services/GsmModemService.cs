@@ -54,61 +54,76 @@ public class GsmModemService : IGsmModemService
 
     public void ConnectAll(int baudRate = 115200)
     {
+        List<string> newlyOpenedPorts = new List<string>();
+
         lock (_connectLock)
         {
             var ports = GetAvailablePorts();
             foreach (var p in ports)
             {
                 if (!_serialPorts.ContainsKey(p))
-            {
-                if (_sleepingPorts.TryGetValue(p, out var sleepUntil))
                 {
-                    if (DateTime.Now < sleepUntil)
-                        continue; // Đang trong thời gian ngủ, bỏ qua
-                    else
-                        _sleepingPorts.TryRemove(p, out _); // Đã hết thời gian ngủ
-                }
+                    if (_sleepingPorts.TryGetValue(p, out var sleepUntil))
+                    {
+                        if (DateTime.Now < sleepUntil)
+                            continue; // Đang trong thời gian ngủ, bỏ qua
+                        else
+                            _sleepingPorts.TryRemove(p, out _); // Đã hết thời gian ngủ
+                    }
 
-                try
-                {
-                    var sp = new SerialPort(p, baudRate, Parity.None, 8, StopBits.One)
+                    try
                     {
-                        ReadTimeout = 5000,
-                        WriteTimeout = 5000,
-                        DtrEnable = true,
-                        RtsEnable = true
-                    };
-                    
-                    sp.DataReceived += (s, e) => HandleDataReceived(p, sp);
-                    sp.ErrorReceived += (s, e) => HandleErrorReceived(p, sp);
-                    sp.Open();
-                    
-                    _serialPorts.TryAdd(p, sp);
-                    _semaphores.TryAdd(p, new SemaphoreSlim(1, 1));
-                    _portBuffers.TryAdd(p, new StringBuilder());
-                    _connectionErrors.TryRemove(p, out _); // Reset lỗi khi kết nối thành công
-                    
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Đã kết nối thành công {p} (Baud: {baudRate})" });
-                    
-                    // Gửi lệnh khởi tạo
-                    _ = InitializeModemAsync(p);
-                }
-                catch (Exception ex)
-                {
-                    int errors = _connectionErrors.AddOrUpdate(p, 1, (key, old) => old + 1);
-                    if (errors >= 3)
-                    {
-                        _sleepingPorts[p] = DateTime.Now.AddMinutes(5); // Cho cổng ngủ 5 phút
-                        _connectionErrors.TryRemove(p, out _);
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p} quá 3 lần: {ex.Message}. Tạm ngưng kết nối cổng này trong 5 phút để tránh spam log." });
+                        var sp = new SerialPort(p, baudRate, Parity.None, 8, StopBits.One)
+                        {
+                            ReadTimeout = 5000,
+                            WriteTimeout = 5000,
+                            DtrEnable = true,
+                            RtsEnable = true
+                        };
+                        
+                        sp.DataReceived += (s, e) => HandleDataReceived(p, sp);
+                        sp.ErrorReceived += (s, e) => HandleErrorReceived(p, sp);
+                        sp.Open();
+                        
+                        _serialPorts.TryAdd(p, sp);
+                        _semaphores.TryAdd(p, new SemaphoreSlim(1, 1));
+                        _portBuffers.TryAdd(p, new StringBuilder());
+                        _connectionErrors.TryRemove(p, out _); // Reset lỗi khi kết nối thành công
+                        
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Đã kết nối thành công {p} (Baud: {baudRate})" });
+                        
+                        newlyOpenedPorts.Add(p);
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p}: {ex.Message}" });
-                    }
+                        int errors = _connectionErrors.AddOrUpdate(p, 1, (key, old) => old + 1);
+                        if (errors >= 3)
+                        {
+                            _sleepingPorts[p] = DateTime.Now.AddMinutes(5); // Cho cổng ngủ 5 phút
+                            _connectionErrors.TryRemove(p, out _);
+                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p} quá 3 lần: {ex.Message}. Tạm ngưng kết nối cổng này trong 5 phút để tránh spam log." });
+                        }
+                        else
+                        {
+                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p}: {ex.Message}" });
+                        }
                     }
                 }
             }
+        }
+
+        // CHỈ gửi lệnh khởi tạo SAU KHI đã mở kết nối xong toàn bộ các cổng COM.
+        // Điều này đảm bảo quá trình đọc/ghi USB (AT commands) không xung đột với quá trình OS nhận diện cổng COM mới.
+        if (newlyOpenedPorts.Count > 0)
+        {
+            _ = Task.Run(async () =>
+            {
+                foreach (var p in newlyOpenedPorts)
+                {
+                    _ = InitializeModemAsync(p);
+                    await Task.Delay(50); // Giãn cách nhẹ 50ms giữa các cổng để giảm tải băng thông USB
+                }
+            });
         }
     }
 

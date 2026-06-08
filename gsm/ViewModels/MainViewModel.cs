@@ -850,9 +850,6 @@ public partial class MainViewModel : ObservableObject
                 _ussdSendLock.Release();
             }
 
-            // Hủy phiên USSD bị treo trước đó (nếu có) để tránh lỗi Thao tác không hợp lệ
-            await _modemService.SendCommandAsync(portName, "AT+CUSD=2", 3000, true);
-
             // 1. Chuyển bảng mã về GSM
             await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
 

@@ -21,6 +21,7 @@ namespace gsm.Services
         private readonly HttpClient _sseClient;
         private readonly HttpClient _restClient;
         private readonly string _databaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+        private static readonly string _machineId = Environment.MachineName.Replace(".", "_").Replace("$", "").Replace("#", "").Replace("[", "").Replace("]", "");
 
         public FirebaseService(MainViewModel vm)
         {
@@ -68,12 +69,12 @@ namespace gsm.Services
                 var json = JsonSerializer.Serialize(portsData);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                // Dùng Task.Run để không block UI thread, dùng PUT để đè lại toàn bộ node ports
+                // Dùng Task.Run để không block UI thread, dùng PUT để đè lại toàn bộ node ports của máy này
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _restClient.PutAsync($"{_databaseUrl}ports.json", content);
+                        await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/ports.json", content);
                     }
                     catch { /* Mất mạng tạm thời, bỏ qua */ }
                 });
@@ -84,7 +85,7 @@ namespace gsm.Services
                 {
                     try
                     {
-                        await _restClient.PutAsync($"{_databaseUrl}server_status.json", statusContent);
+                        await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/server_status.json", statusContent);
                     }
                     catch { /* Mất mạng tạm thời, bỏ qua */ }
                 });
@@ -176,6 +177,17 @@ namespace gsm.Services
         {
             try
             {
+                // Kiểm tra xem lệnh này có dành cho máy hiện tại không
+                if (cmdData.TryGetProperty("machineId", out var machineIdEl))
+                {
+                    string targetMachine = machineIdEl.GetString() ?? "";
+                    // Nếu có machineId mà không phải máy này thì bỏ qua (không xóa lệnh, để máy khác đọc)
+                    if (!string.IsNullOrEmpty(targetMachine) && targetMachine != _machineId)
+                    {
+                        return;
+                    }
+                }
+
                 if (cmdData.TryGetProperty("portId", out var portIdEl) &&
                     cmdData.TryGetProperty("recipient", out var recipientEl) &&
                     cmdData.TryGetProperty("content", out var contentEl))
@@ -253,6 +265,10 @@ namespace gsm.Services
                     await SendErrorToWebAsync(portId, errorMsg);
                     _ = TelegramService.SendMessageAsync($"⚠️ <b>Lỗi Gửi SMS Từ {portId}</b>\n📱 Tới: {recipient}\n📝 Nội dung: {content}\n❌ Chi tiết: <code>{errorMsg}</code>");
                 }
+                else
+                {
+                    await SendSuccessToWebAsync(portId);
+                }
             }
             finally
             {
@@ -288,17 +304,37 @@ namespace gsm.Services
             return result.Replace("ERROR: ", "").Replace("+CMS ERROR:", "Lỗi SMS:").Replace("+CME ERROR:", "Lỗi Modem:");
         }
 
+        public static async Task SendSuccessToWebAsync(string portId)
+        {
+            if (!SettingsService.Current.EnableWebNotification) return;
+            try
+            {
+                using var client = new HttpClient();
+                client.BaseAddress = new Uri("https://toolweb-c7702-default-rtdb.firebaseio.com/");
+                var json = JsonSerializer.Serialize(new
+                {
+                    smsSent = true,
+                    errorMsg = (string?)null
+                });
+                var contentData = new StringContent(json, Encoding.UTF8, "application/json");
+
+                // Cập nhật lên Firebase ở node web_states của máy tính hiện tại
+                await client.PutAsync($"/web_states/machines/{_machineId}/ports/{portId}.json", contentData);
+            }
+            catch { }
+        }
+
         public static async Task SendErrorToWebAsync(string portId, string errorMsg)
         {
             if (!SettingsService.Current.EnableWebNotification) return;
             try
             {
                 using var client = new HttpClient();
-                // Escape HTML or use literal string, JSON handles serialization
+                client.BaseAddress = new Uri("https://toolweb-c7702-default-rtdb.firebaseio.com/");
                 var json = JsonSerializer.Serialize(errorMsg);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
-                // Cập nhật thuộc tính errorMsg vào nhánh web_states của cổng bị lỗi
-                await client.PutAsync($"https://toolweb-c7702-default-rtdb.firebaseio.com/web_states/ports/{portId}/errorMsg.json", content);
+                // Cập nhật thuộc tính errorMsg vào nhánh web_states của cổng bị lỗi (máy hiện tại)
+                await client.PutAsync($"https://toolweb-c7702-default-rtdb.firebaseio.com/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json", content);
             }
             catch { }
         }

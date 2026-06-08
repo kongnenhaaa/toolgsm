@@ -48,7 +48,8 @@ public partial class MainViewModel : ObservableObject
             { "VIETNAMOBILE", "*101#" },
             { "WINTEL", "*101#" },
             { "ITELECOM", "*101#" },
-            { "LOCAL", "*101#" }
+            { "LOCAL", "*101#" },
+            { "SKY", "*101#" }
         };
 
     [ObservableProperty]
@@ -430,31 +431,35 @@ public partial class MainViewModel : ObservableObject
                     port.NetworkProvider = match.Groups[1].Value;
 
                     string networkUpper = port.NetworkProvider.ToUpperInvariant();
-                    if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA"))
+                    
+                    _ = Task.Run(async () => 
                     {
-                        // Đẩy vào Task ngầm để có thể await tuần tự, tránh gửi dồn dập 2 USSD
-                        _ = Task.Run(async () => 
+                        string phoneUssd = null;
+                        if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA") || networkUpper.Contains("WINTEL") || networkUpper.Contains("ITELECOM") || networkUpper.Contains("ITEL"))
                         {
-                            if (string.IsNullOrWhiteSpace(port.PhoneNumber))
-                            {
-                                await SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT", maxRetries: 3);
-                                await Task.Delay(2000); // Đợi mạng Vina xử lý xong lệnh trước
-                            }
-                            if (string.IsNullOrWhiteSpace(port.Balance))
-                            {
-                                await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC", maxRetries: 3);
-                            }
-                        });
-                    }
-                    else if (networkUpper.Contains("VIETTEL"))
-                    {
-                        // Viettel hiện tại lệnh *101# sẽ trả về CẢ Số Điện Thoại VÀ Số Dư (TKG)
-                        // Do đó chỉ cần gửi duy nhất lệnh *101#, tránh gửi dồn dập nhiều lệnh USSD gây lỗi "Thao tác không hợp lệ"
-                        if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
-                        {
-                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT và TKC", maxRetries: 3);
+                            phoneUssd = "*110#";
                         }
-                    }
+                        else if (networkUpper.Contains("MOBIFONE") || networkUpper.Contains("MOBI") || networkUpper.Contains("LOCAL") || networkUpper.Contains("SKY"))
+                        {
+                            phoneUssd = "*0#";
+                        }
+                        else if (networkUpper.Contains("VIETNAMOBILE") || networkUpper.Contains("VNM"))
+                        {
+                            phoneUssd = "*123#";
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(phoneUssd) && string.IsNullOrWhiteSpace(port.PhoneNumber))
+                        {
+                            await SendUssdThrottledAsync(port.PortName, phoneUssd, "Tự động lấy SĐT", maxRetries: 3);
+                            await Task.Delay(2000); // Đợi mạng xử lý xong lệnh trước
+                        }
+
+                        // Viettel hiện tại lệnh *101# sẽ trả về CẢ Số Điện Thoại VÀ Số Dư (TKG)
+                        if (string.IsNullOrWhiteSpace(port.Balance) || (networkUpper.Contains("VIETTEL") && string.IsNullOrWhiteSpace(port.PhoneNumber)))
+                        {
+                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC", maxRetries: 3);
+                        }
+                    });
                 }
             }
             else if (e.Data.StartsWith("[PARSE_IMEI]"))
@@ -610,7 +615,14 @@ public partial class MainViewModel : ObservableObject
                                   || senderPhone.StartsWith("VNP",      StringComparison.OrdinalIgnoreCase)
                                   || senderPhone.StartsWith("VNPT",     StringComparison.OrdinalIgnoreCase)
                                   || senderPhone.StartsWith("VIETTEL",  StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase);
+                                  || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("MOBIFONE", StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("VIETNAMOBILE", StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("WINTEL",   StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("ITELECOM", StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("ITEL",     StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("SKY",      StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("LOCAL",    StringComparison.OrdinalIgnoreCase);
 
                 // isTopUpContent: nội dung mang dấu hiệu nạp tiền / cập nhật số dư
                 bool isTopUpContent = cleanContentLower.Contains("da duoc nap")

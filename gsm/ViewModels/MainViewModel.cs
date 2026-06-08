@@ -412,14 +412,19 @@ public partial class MainViewModel : ObservableObject
                     string networkUpper = port.NetworkProvider.ToUpperInvariant();
                     if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA"))
                     {
-                        if (string.IsNullOrWhiteSpace(port.PhoneNumber))
+                        // Đẩy vào Task ngầm để có thể await tuần tự, tránh gửi dồn dập 2 USSD
+                        _ = Task.Run(async () => 
                         {
-                            _ = SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT");
-                        }
-                        if (string.IsNullOrWhiteSpace(port.Balance))
-                        {
-                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC");
-                        }
+                            if (string.IsNullOrWhiteSpace(port.PhoneNumber))
+                            {
+                                await SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT", maxRetries: 3);
+                                await Task.Delay(2000); // Đợi mạng Vina xử lý xong lệnh trước
+                            }
+                            if (string.IsNullOrWhiteSpace(port.Balance))
+                            {
+                                await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC", maxRetries: 3);
+                            }
+                        });
                     }
                     else if (networkUpper.Contains("VIETTEL"))
                     {

@@ -427,7 +427,7 @@ public partial class MainViewModel : ObservableObject
                         // Do đó chỉ cần gửi duy nhất lệnh *101#, tránh gửi dồn dập nhiều lệnh USSD gây lỗi "Thao tác không hợp lệ"
                         if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
                         {
-                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT và TKC");
+                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT và TKC", maxRetries: 3);
                         }
                     }
                 }
@@ -797,65 +797,87 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false)
+    private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxRetries = 1)
     {
-        if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(ussdCode))
-        {
-            return "ERROR: Invalid USSD request";
-        }
+        string result = string.Empty;
 
-        var port = Ports.FirstOrDefault(p => p.PortName == portName);
-        if (reason == "Tự động lấy SĐT" && port != null && !string.IsNullOrWhiteSpace(port.PhoneNumber))
+        for (int i = 0; i < maxRetries; i++)
         {
-            return "SKIPPED: Đã có SĐT";
-        }
-
-        await _ussdSendLock.WaitAsync();
-        try
-        {
-            var now = DateTime.UtcNow;
-
-            if (_lastUssdByPort.TryGetValue(portName, out var lastPortUtc))
+            if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(ussdCode))
             {
-                var remaining = UssdMinIntervalPerPort - (now - lastPortUtc);
-                if (remaining > TimeSpan.Zero)
+                return "ERROR: Invalid USSD request";
+            }
+
+            var port = Ports.FirstOrDefault(p => p.PortName == portName);
+            if (reason.Contains("lấy SĐT") && !reason.Contains("TKC") && port != null && !string.IsNullOrWhiteSpace(port.PhoneNumber))
+            {
+                return "SKIPPED: Đã có SĐT";
+            }
+            if (reason == "Tự động lấy SĐT và TKC" && port != null && !string.IsNullOrWhiteSpace(port.PhoneNumber) && !string.IsNullOrWhiteSpace(port.Balance))
+            {
+                return "SKIPPED: Đã đủ thông tin";
+            }
+
+            await _ussdSendLock.WaitAsync();
+            try
+            {
+                var now = DateTime.UtcNow;
+
+                if (_lastUssdByPort.TryGetValue(portName, out var lastPortUtc))
                 {
-                    WarnUssdThrottle(portName, reason, remaining, "SIM");
-                    await Task.Delay(remaining);
+                    var remaining = UssdMinIntervalPerPort - (now - lastPortUtc);
+                    if (remaining > TimeSpan.Zero)
+                    {
+                        WarnUssdThrottle(portName, reason, remaining, "SIM");
+                        await Task.Delay(remaining);
+                        now = DateTime.UtcNow;
+                    }
+                }
+
+                var globalRemaining = UssdMinIntervalGlobal - (now - _lastUssdGlobalUtc);
+                if (globalRemaining > TimeSpan.Zero)
+                {
+                    WarnUssdThrottle(portName, reason, globalRemaining, "GLOBAL");
+                    await Task.Delay(globalRemaining);
                     now = DateTime.UtcNow;
                 }
-            }
 
-            var globalRemaining = UssdMinIntervalGlobal - (now - _lastUssdGlobalUtc);
-            if (globalRemaining > TimeSpan.Zero)
+                _lastUssdByPort[portName] = now;
+                _lastUssdGlobalUtc = now;
+            }
+            finally
             {
-                WarnUssdThrottle(portName, reason, globalRemaining, "GLOBAL");
-                await Task.Delay(globalRemaining);
-                now = DateTime.UtcNow;
+                _ussdSendLock.Release();
             }
 
-            _lastUssdByPort[portName] = now;
-            _lastUssdGlobalUtc = now;
+            // Hủy phiên USSD bị treo trước đó (nếu có) để tránh lỗi Thao tác không hợp lệ
+            await _modemService.SendCommandAsync(portName, "AT+CUSD=2", 3000, true);
+
+            // 1. Chuyển bảng mã về GSM
+            await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
+
+            // 2. Gửi lệnh USSD
+            result = await _modemService.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
+
+            // 3. Chuyển lại UCS2
+            await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
+
+            bool isFailed = result.Contains("ERROR") || result.Contains("Thao tac khong hop le") || result.Contains("he thong ban") || result.Contains("+CUSD: 2");
+
+            if (!isFailed)
+            {
+                if (logResult) AddLog($"Kết quả từ {portName}: {result}", "SUCCESS");
+                return result; // Thành công, thoát vòng lặp
+            }
+
+            if (i < maxRetries - 1)
+            {
+                AddLog($"[{portName}] Lỗi USSD ({result.Trim()}). Thử lại sau 3 giây... (Lần {i + 1}/{maxRetries})", "WARN");
+                await Task.Delay(3000);
+            }
         }
-        finally
-        {
-            _ussdSendLock.Release();
-        }
 
-        // 1. Chuyển bảng mã về GSM
-        await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"");
-
-        // 2. Gửi lệnh USSD
-        string result = await _modemService.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
-
-        // 3. Chuyển lại UCS2
-        await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"");
-
-        if (logResult)
-        {
-            AddLog($"Kết quả từ {portName}: {result}", "SUCCESS");
-        }
-
+        if (logResult) AddLog($"Kết quả từ {portName} (Đã thử {maxRetries} lần): {result}", "ERROR");
         return result;
     }
 

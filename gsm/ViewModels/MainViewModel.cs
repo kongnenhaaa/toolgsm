@@ -423,8 +423,9 @@ public partial class MainViewModel : ObservableObject
                     {
                         if (string.IsNullOrWhiteSpace(port.PhoneNumber))
                         {
-                            // Viettel: *098*6# để tự động trả về số thuê bao qua USSD
-                            _ = SendUssdThrottledAsync(port.PortName, "*098*6#", "Tự động lấy SĐT");
+                            // Viettel: *098*6# thường bị ra menu quảng cáo. Dùng *1# hoặc *888# để lấy SĐT
+                            _ = SendUssdThrottledAsync(port.PortName, "*1#", "Tự động lấy SĐT");
+                            _ = SendUssdThrottledAsync(port.PortName, "*888#", "Tự động lấy SĐT");
                         }
                         if (string.IsNullOrWhiteSpace(port.Balance))
                         {

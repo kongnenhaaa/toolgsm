@@ -41,6 +41,7 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _commandTcs = new();
     private readonly ConcurrentDictionary<string, int> _connectionErrors = new();
     private readonly ConcurrentDictionary<string, DateTime> _sleepingPorts = new();
+    private readonly object _connectLock = new object();
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
@@ -53,10 +54,12 @@ public class GsmModemService : IGsmModemService
 
     public void ConnectAll(int baudRate = 115200)
     {
-        var ports = GetAvailablePorts();
-        foreach (var p in ports)
+        lock (_connectLock)
         {
-            if (!_serialPorts.ContainsKey(p))
+            var ports = GetAvailablePorts();
+            foreach (var p in ports)
+            {
+                if (!_serialPorts.ContainsKey(p))
             {
                 if (_sleepingPorts.TryGetValue(p, out var sleepUntil))
                 {
@@ -102,6 +105,7 @@ public class GsmModemService : IGsmModemService
                     else
                     {
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p}: {ex.Message}" });
+                    }
                     }
                 }
             }

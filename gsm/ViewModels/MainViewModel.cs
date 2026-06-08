@@ -377,8 +377,10 @@ public partial class MainViewModel : ObservableObject
                     }
                     
                     // Sửa lỗi Parse nhầm "1đ" từ tin nhắn báo không đủ tiền hoặc quảng cáo cước phí
-                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|So du|Số dư)[^\d]*?(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
+                    // Cập nhật hỗ trợ TKG (Tài Khoản Gốc) của Viettel
+                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|So du|Số dư)[^\d]*?(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
                     if (strictMatch.Success) 
+
                     {
                         port.Balance = strictMatch.Groups[1].Value + " " + strictMatch.Groups[2].Value;
                     }
@@ -421,15 +423,11 @@ public partial class MainViewModel : ObservableObject
                     }
                     else if (networkUpper.Contains("VIETTEL"))
                     {
-                        if (string.IsNullOrWhiteSpace(port.PhoneNumber))
+                        // Viettel hiện tại lệnh *101# sẽ trả về CẢ Số Điện Thoại VÀ Số Dư (TKG)
+                        // Do đó chỉ cần gửi duy nhất lệnh *101#, tránh gửi dồn dập nhiều lệnh USSD gây lỗi "Thao tác không hợp lệ"
+                        if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
                         {
-                            // Viettel: *098*6# thường bị ra menu quảng cáo. Dùng *1# hoặc *888# để lấy SĐT
-                            _ = SendUssdThrottledAsync(port.PortName, "*1#", "Tự động lấy SĐT");
-                            _ = SendUssdThrottledAsync(port.PortName, "*888#", "Tự động lấy SĐT");
-                        }
-                        if (string.IsNullOrWhiteSpace(port.Balance))
-                        {
-                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC");
+                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT và TKC");
                         }
                     }
                 }

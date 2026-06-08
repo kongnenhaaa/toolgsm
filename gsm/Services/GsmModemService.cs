@@ -24,6 +24,8 @@ public interface IGsmModemService
     event EventHandler<GsmDataEventArgs> SmsReceived;
     event EventHandler<GsmDataEventArgs> LogMessage;
     event EventHandler<GsmDataEventArgs> PortDisconnected;
+    event EventHandler<GsmDataEventArgs> CallIncoming;
+    event EventHandler<GsmDataEventArgs> CallEnded;
 }
 
 public class GsmDataEventArgs : EventArgs
@@ -46,6 +48,8 @@ public class GsmModemService : IGsmModemService
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
     public event EventHandler<GsmDataEventArgs>? PortDisconnected;
+    public event EventHandler<GsmDataEventArgs>? CallIncoming;
+    public event EventHandler<GsmDataEventArgs>? CallEnded;
 
     public List<string> GetAvailablePorts()
     {
@@ -142,6 +146,7 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "ATE0", 30000); // Turn off echo
         await SendCommandAsync(portName, "AT+CMGF=1", 30000); // Set SMS to text mode
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
+        await SendCommandAsync(portName, "AT+CLIP=1", 30000); // Hiển thị thông tin người gọi
         
         // Xóa toàn bộ SMS cũ trong SIM để tránh bị đầy bộ nhớ khiến không nhận được CMTI mới
         await SendCommandAsync(portName, "AT+CMGD=1,4", 30000); 
@@ -232,6 +237,31 @@ public class GsmModemService : IGsmModemService
                         // Không tự động xóa tin nhắn ở đây nữa, đẩy việc quyết định xóa lên ViewModel
                     });
                 }
+            }
+
+            // ---------------------------------------------------------
+            // 1.2 BẮT CUỘC GỌI ĐẾN VÀ KẾT THÚC
+            // ---------------------------------------------------------
+            if (currentData.Contains("+CLIP:"))
+            {
+                var clipMatch = Regex.Match(currentData, @"\+CLIP:\s*""([^""]+)""");
+                if (clipMatch.Success)
+                {
+                    string callerNumber = clipMatch.Groups[1].Value;
+                    CallIncoming?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = callerNumber });
+                    
+                    // Cắt bỏ khỏi buffer
+                    buffer.Replace(clipMatch.Value, "");
+                    buffer.Replace("RING", ""); 
+                    currentData = buffer.ToString();
+                }
+            }
+
+            if (currentData.Contains("NO CARRIER"))
+            {
+                CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "NO CARRIER" });
+                buffer.Replace("NO CARRIER", "");
+                currentData = buffer.ToString();
             }
 
             // ---------------------------------------------------------

@@ -24,6 +24,9 @@ public partial class MainViewModel : ObservableObject
     private readonly IGsmModemService _modemService;
     public IGsmModemService ModemService => _modemService;
 
+    private readonly SpeechToTextService _speechToTextService;
+    private readonly ConcurrentDictionary<string, AudioRecordingService> _activeRecordings = new();
+
     public event Action<string, string>? OtpReceivedEvent;
 
     private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(3);
@@ -82,6 +85,24 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _topUpMode = "Selected";
 
+    [ObservableProperty]
+    private AppSettings _appSettings = new();
+
+    [ObservableProperty]
+    private bool _isSettingsDialogOpen;
+
+    [ObservableProperty]
+    private bool _isAtCommandDialogOpen;
+
+    [ObservableProperty]
+    private string _atCommandInput = "AT";
+
+    [ObservableProperty]
+    private string _atCommandOutput = string.Empty;
+
+    [ObservableProperty]
+    private string _atCommandSelectedPort = string.Empty;
+
     public ISeries[] ConnectionSeries { get; set; }
     public ISeries[] SmsSeries { get; set; }
 
@@ -92,6 +113,12 @@ public partial class MainViewModel : ObservableObject
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
         _modemService.PortDisconnected += ModemService_PortDisconnected;
+        _modemService.CallIncoming += ModemService_CallIncoming;
+        _modemService.CallEnded += ModemService_CallEnded;
+        
+        _speechToTextService = new SpeechToTextService();
+        _speechToTextService.LogMessage += (s, msg) => AddLog(msg);
+        _ = _speechToTextService.InitializeAsync();
         
         InitializeHardware();
         
@@ -132,6 +159,7 @@ public partial class MainViewModel : ObservableObject
 
         OnPropertyChanged(nameof(ConnectionSeries));
         OnPropertyChanged(nameof(SmsSeries));
+        OnPropertyChanged(nameof(AtCommandPortOptions));
     }
 
     private void AddLog(string message, string level = "INFO")
@@ -434,7 +462,7 @@ public partial class MainViewModel : ObservableObject
                     
                     _ = Task.Run(async () => 
                     {
-                        string phoneUssd = null;
+                        string? phoneUssd = null;
                         if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA") || networkUpper.Contains("WINTEL") || networkUpper.Contains("ITELECOM") || networkUpper.Contains("ITEL"))
                         {
                             phoneUssd = "*110#";
@@ -605,69 +633,74 @@ public partial class MainViewModel : ObservableObject
                     return;
                 }
 
-                // Chặn tin nhắn rác từ nhà mạng / tổng đài hệ thống
-                // isTopUpSender: sender là tổng đài nhà mạng Viettel/Vinaphone (không bao giờ là OTP thực)
-                bool isTopUpSender = senderPhone == "8068"    // Viettel báo trừ tiền
-                                  || senderPhone == "900"
-                                  || senderPhone == "49515355"
-                                  || senderPhone == "57515253"
-                                  || senderPhone.StartsWith("VTT",      StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("VNP",      StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("VNPT",     StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("VIETTEL",  StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("MOBIFONE", StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("VIETNAMOBILE", StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("WINTEL",   StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("ITELECOM", StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("ITEL",     StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("SKY",      StringComparison.OrdinalIgnoreCase)
-                                  || senderPhone.StartsWith("LOCAL",    StringComparison.OrdinalIgnoreCase);
+                bool receiveAll = SettingsService.Current.ReceiveAllSms;
 
-                // isTopUpContent: nội dung mang dấu hiệu nạp tiền / cập nhật số dư
-                bool isTopUpContent = cleanContentLower.Contains("da duoc nap")
-                                   || cleanContentLower.Contains("tai khoan cua quy khach")
-                                   || cleanContentLower.Contains("nap tien thanh cong")
-                                   || (cleanContentLower.Contains("so du hien tai") && !cleanContentLower.Contains("zalo"));
-
-                bool isSpamContent = cleanContentLower.Contains("khoan airtime")
-                                  || cleanContentLower.Contains("ong su dung het")
-                                  || cleanContentLower.Contains("ng su dung het")
-                                  || cleanContentLower.Contains("chinh sach tai")
-                                  || cleanContentLower.Contains("tu choi nhan loi moi");
-
-                if (isTopUpSender || isTopUpContent || isSpamContent)
+                if (!receiveAll)
                 {
-                    AddLog($"[{e.PortName}] Đã chặn tin nhắn hệ thống/rác từ {senderPhone}");
-                    
-                    // Nếu là thông báo nạp tiền → tự động cập nhật lại TKC
-                    if (isTopUpContent)
+                    // Chặn tin nhắn rác từ nhà mạng / tổng đài hệ thống
+                    // isTopUpSender: sender là tổng đài nhà mạng Viettel/Vinaphone (không bao giờ là OTP thực)
+                    bool isTopUpSender = senderPhone == "8068"    // Viettel báo trừ tiền
+                                      || senderPhone == "900"
+                                      || senderPhone == "49515355"
+                                      || senderPhone == "57515253"
+                                      || senderPhone.StartsWith("VTT",      StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("VNP",      StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("VNPT",     StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("VIETTEL",  StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("MOBIFONE", StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("VIETNAMOBILE", StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("WINTEL",   StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("ITELECOM", StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("ITEL",     StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("SKY",      StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("LOCAL",    StringComparison.OrdinalIgnoreCase);
+
+                    // isTopUpContent: nội dung mang dấu hiệu nạp tiền / cập nhật số dư
+                    bool isTopUpContent = cleanContentLower.Contains("da duoc nap")
+                                       || cleanContentLower.Contains("tai khoan cua quy khach")
+                                       || cleanContentLower.Contains("nap tien thanh cong")
+                                       || (cleanContentLower.Contains("so du hien tai") && !cleanContentLower.Contains("zalo"));
+
+                    bool isSpamContent = cleanContentLower.Contains("khoan airtime")
+                                      || cleanContentLower.Contains("ong su dung het")
+                                      || cleanContentLower.Contains("ng su dung het")
+                                      || cleanContentLower.Contains("chinh sach tai")
+                                      || cleanContentLower.Contains("tu choi nhan loi moi");
+
+                    if (isTopUpSender || isTopUpContent || isSpamContent)
                     {
-                        AddLog($"[{e.PortName}] Phát hiện tin nhắn nạp thẻ, tự động cập nhật lại số dư...");
-                        _ = Task.Run(async () => 
+                        AddLog($"[{e.PortName}] Đã chặn tin nhắn hệ thống/rác từ {senderPhone}");
+                        
+                        // Nếu là thông báo nạp tiền → tự động cập nhật lại TKC
+                        if (isTopUpContent)
                         {
-                            await Task.Delay(2000);
-                            await CheckBalanceForPortAsync(e.PortName);
-                        });
+                            AddLog($"[{e.PortName}] Phát hiện tin nhắn nạp thẻ, tự động cập nhật lại số dư...");
+                            _ = Task.Run(async () => 
+                            {
+                                await Task.Delay(2000);
+                                await CheckBalanceForPortAsync(e.PortName);
+                            });
+                        }
+
+                        if (!string.IsNullOrEmpty(e.MsgIndex))
+                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                        return;
                     }
 
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    return;
-                }
+                    // CHỈ NHẬN ZALO: Nếu không phải tin nhắn Zalo thì xóa luôn
+                    bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
+                                  senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0;
 
-                // CHỈ NHẬN ZALO: Nếu không phải tin nhắn Zalo thì xóa luôn
-                bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
-                              senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0;
-
-                if (!isZalo)
-                {
-                    AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không phải Zalo từ {senderPhone}");
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    if (!isZalo)
                     {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                        AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không phải Zalo từ {senderPhone}");
+                        if (!string.IsNullOrEmpty(e.MsgIndex))
+                        {
+                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                        }
+                        return;
                     }
-                    return;
                 }
 
                 // 2. Tìm OTP
@@ -687,17 +720,22 @@ public partial class MainViewModel : ObservableObject
                 var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
-                if (otpMatch.Success)
+                if (receiveAll || otpMatch.Success)
                 {
-                    extractedOtp = otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : otpMatch.Value;
+                    extractedOtp = otpMatch.Success && otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : (otpMatch.Success ? otpMatch.Value : "N/A");
                     // Escape HTML characters for Telegram parse_mode = HTML
                     string safeContent = System.Net.WebUtility.HtmlEncode(cleanContent);
                     string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
                     
-                    // GỌI HÀM BẮN TELEGRAM
-                    _ = TelegramService.SendMessageAsync($"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {safeSender}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{safeContent}</i>");
+                    // GỌI HÀM BẮN TELEGRAM (Toàn văn nếu receiveAll)
+                    string teleMsg = receiveAll 
+                        ? $"📩 <b>Tin Nhắn Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {safeSender}\n📝 Nội dung: <i>{safeContent}</i>"
+                        : $"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {safeSender}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{safeContent}</i>";
 
-                    OtpReceivedEvent?.Invoke(e.PortName, extractedOtp);
+                    _ = TelegramService.SendMessageAsync(teleMsg);
+
+                    if (extractedOtp != "N/A")
+                        OtpReceivedEvent?.Invoke(e.PortName, extractedOtp);
                 }
 
                 // 4. Đưa lên UI (Cập nhật Tab SMS)
@@ -751,6 +789,63 @@ public partial class MainViewModel : ObservableObject
             catch (Exception ex)
             {
                 AddLog($"[{e.PortName}] Lỗi xử lý SMS: {ex.Message}", "ERROR");
+            }
+        });
+    }
+
+    private void ModemService_CallIncoming(object? sender, GsmDataEventArgs e)
+    {
+        Application.Current.Dispatcher.InvokeAsync(async () =>
+        {
+            AddLog($"[{e.PortName}] Có cuộc gọi đến từ SĐT: {e.Data}. Đang tự động nhấc máy...", "INFO");
+            SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có cuộc gọi từ {e.Data}");
+
+            // Gửi lệnh nhận cuộc gọi
+            await _modemService.SendCommandAsync(e.PortName, "ATA");
+
+            // Bắt đầu ghi âm
+            var recorder = new AudioRecordingService();
+            recorder.LogMessage += (s, msg) => AddLog($"[{e.PortName}] {msg}");
+            
+            if (_activeRecordings.TryAdd(e.PortName, recorder))
+            {
+                recorder.StartRecording(e.PortName);
+            }
+        });
+    }
+
+    private void ModemService_CallEnded(object? sender, GsmDataEventArgs e)
+    {
+        Application.Current.Dispatcher.InvokeAsync(async () =>
+        {
+            AddLog($"[{e.PortName}] Cuộc gọi đã kết thúc.");
+
+            if (_activeRecordings.TryRemove(e.PortName, out var recorder))
+            {
+                string wavFilePath = recorder.StopRecording();
+                recorder.Dispose();
+
+                if (File.Exists(wavFilePath))
+                {
+                    AddLog($"[{e.PortName}] Đã ghi âm xong, đang phân tích nội dung cuộc gọi...");
+                    
+                    // Chạy dịch trên luồng riêng để không block UI
+                    string text = await Task.Run(() => _speechToTextService.RecognizeWavFile(wavFilePath));
+                    
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        AddLog($"[{e.PortName}] Nội dung cuộc gọi: {text}", "SUCCESS");
+                        
+                        // Gửi qua Telegram
+                        var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+                        string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
+                        _ = TelegramService.SendMessageAsync($"🎙 <b>Cuộc gọi trên {e.PortName}</b>\n📱 SIM nhận: {receiverPhone}\n📝 Nội dung: <i>{text}</i>");
+                    }
+                    else
+                    {
+                        AddLog($"[{e.PortName}] Không có giọng nói trong cuộc gọi này (hoặc âm lượng quá nhỏ).", "WARN");
+                    }
+                }
             }
         });
     }
@@ -931,10 +1026,112 @@ public partial class MainViewModel : ObservableObject
         AddLog("Bắt đầu đổi IMEI thiết bị.");
     }
 
+    public IEnumerable<string> AtCommandPortOptions
+    {
+        get
+        {
+            var list = new List<string> { "Tất cả cổng" };
+            list.AddRange(Ports.Select(p => p.PortName));
+            return list;
+        }
+    }
+
+    [RelayCommand]
+    private void SortPorts()
+    {
+        var sorted = Ports.OrderBy(p => 
+        {
+            var match = Regex.Match(p.PortName, @"\d+");
+            return match.Success ? int.Parse(match.Value) : 0;
+        }).ToList();
+        
+        Ports.Clear();
+        foreach (var port in sorted)
+        {
+            Ports.Add(port);
+        }
+        UpdateDashboard();
+        SnackbarMessageQueue.Enqueue("Đã sắp xếp các cổng theo thứ tự.");
+    }
+
     [RelayCommand]
     private void DummyFeature(string featureName)
     {
-        SnackbarMessageQueue.Enqueue($"Tính năng {featureName} đang được phát triển.");
+        SnackbarMessageQueue.Enqueue($"Tính năng '{featureName}' đang được phát triển.");
+    }
+
+    [RelayCommand]
+    private void OpenAtCommandDialog()
+    {
+        AtCommandSelectedPort = Ports.Count > 0 ? Ports.First().PortName : "Tất cả cổng";
+        AtCommandOutput = string.Empty;
+        AtCommandInput = "AT";
+        IsAtCommandDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private async Task SendAtCommandAsync()
+    {
+        if (string.IsNullOrWhiteSpace(AtCommandSelectedPort) || string.IsNullOrWhiteSpace(AtCommandInput)) return;
+
+        AtCommandOutput += $"> {AtCommandInput}\n";
+        
+        if (AtCommandSelectedPort == "Tất cả cổng")
+        {
+            var targetPorts = Ports.Select(p => p.PortName).ToList();
+            if (targetPorts.Count == 0)
+            {
+                AtCommandOutput += "[WARN] Không có cổng nào đang kết nối.\n";
+                return;
+            }
+            
+            var tasks = targetPorts.Select(async port => 
+            {
+                try
+                {
+                    string res = await _modemService.SendCommandAsync(port, AtCommandInput, timeoutMs: 5000);
+                    return $"[{port}] {res.Trim()}";
+                }
+                catch (Exception ex)
+                {
+                    return $"[{port}] ERROR: {ex.Message}";
+                }
+            });
+            
+            var results = await Task.WhenAll(tasks);
+            foreach (var r in results)
+            {
+                AtCommandOutput += $"{r}\n";
+            }
+        }
+        else
+        {
+            try
+            {
+                string result = await _modemService.SendCommandAsync(AtCommandSelectedPort, AtCommandInput, timeoutMs: 5000);
+                AtCommandOutput += $"{result}\n";
+            }
+            catch (Exception ex)
+            {
+                AtCommandOutput += $"[ERROR] {ex.Message}\n";
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void OpenSettingsDialog()
+    {
+        var json = JsonSerializer.Serialize(SettingsService.Current);
+        AppSettings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+        IsSettingsDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private void SaveSettings()
+    {
+        SettingsService.SaveSettings(AppSettings);
+        IsSettingsDialogOpen = false;
+        SnackbarMessageQueue.Enqueue("Đã lưu cấu hình thành công.");
     }
 
     [RelayCommand]

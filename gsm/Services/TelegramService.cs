@@ -9,23 +9,28 @@ namespace gsm.Services;
 public static class TelegramService
 {
     // Cấu hình Bot (Bạn cần điền thông tin thật của bạn vào đây)
-    // Ví dụ Token: "123456789:ABCDefghIJKL..."
-    // Ví dụ Chat ID: "987654321" (Lấy từ @userinfobot)
-    private static readonly string BotToken = "8926115937:AAFpUEvxfFqRpwGDWChbEQEWsn6xkZ-RTCQ";
-    private static readonly string ChatId = "-1003586587027";
-    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    // Các giá trị này được lấy động từ SettingsService
+    // private static readonly string BotToken = "8926115937:AAFpUEvxfFqRpwGDWChbEQEWsn6xkZ-RTCQ";
+    // private static readonly string ChatId = "-1003586587027";
+    private static readonly HttpClient _httpClient;
     private static readonly ConcurrentQueue<string> _messageQueue = new ConcurrentQueue<string>();
     private static readonly SemaphoreSlim _queueSignal = new SemaphoreSlim(0);
     private static readonly TimeSpan _sendDelay = TimeSpan.FromMilliseconds(1200);
 
     static TelegramService()
     {
+        var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
+        };
+        _httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
         _ = Task.Run(ProcessQueueAsync);
     }
 
     public static async Task SendMessageAsync(string message)
     {
         if (string.IsNullOrWhiteSpace(message)) return;
+        if (!SettingsService.Current.EnableTelegramNotification) return;
 
         _messageQueue.Enqueue(message);
         _queueSignal.Release();
@@ -40,6 +45,17 @@ public static class TelegramService
 
             if (_messageQueue.TryDequeue(out var message))
             {
+                var tokensRaw = SettingsService.Current.TelegramBotToken;
+                var token = string.IsNullOrWhiteSpace(tokensRaw) ? null : tokensRaw.Split(',')[0].Trim();
+                var chatIds = SettingsService.Current.TelegramChatIds?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+
+                if (string.IsNullOrWhiteSpace(token) || chatIds == null || chatIds.Length == 0)
+                {
+                    // Chờ nếu chưa config
+                    await Task.Delay(2000);
+                    continue;
+                }
+
                 int retryCount = 0;
                 bool success = false;
                 
@@ -47,25 +63,34 @@ public static class TelegramService
                 {
                     try
                     {
-                        string url = $"https://api.telegram.org/bot{BotToken}/sendMessage";
-                        var payload = new System.Collections.Generic.Dictionary<string, string>
-                        {
-                            { "chat_id", ChatId },
-                            { "text", message },
-                            { "parse_mode", "HTML" }
-                        };
-
-                        var content = new FormUrlEncodedContent(payload);
-                        var response = await _httpClient.PostAsync(url, content);
+                        string url = $"https://api.telegram.org/bot{token.Trim()}/sendMessage";
                         
-                        if (!response.IsSuccessStatusCode)
+                        foreach (var id in chatIds)
                         {
-                            // Thử lại không dùng HTML parse_mode nếu bị lỗi (để tránh mất tin nhắn do sai format)
-                            payload.Remove("parse_mode");
-                            content = new FormUrlEncodedContent(payload);
-                            response = await _httpClient.PostAsync(url, content);
+                            var chatIdStr = id.Trim();
+                            if (string.IsNullOrEmpty(chatIdStr)) continue;
+
+                            var payload = new System.Collections.Generic.Dictionary<string, string>
+                            {
+                                { "chat_id", chatIdStr },
+                                { "text", message },
+                                { "parse_mode", "HTML" }
+                            };
+
+                            var content = new FormUrlEncodedContent(payload);
+                            var response = await _httpClient.PostAsync(url, content);
+                            
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                // Thử lại không dùng HTML parse_mode
+                                payload.Remove("parse_mode");
+                                content = new FormUrlEncodedContent(payload);
+                                response = await _httpClient.PostAsync(url, content);
+                            }
+                            
                             response.EnsureSuccessStatusCode();
                         }
+                        
                         success = true;
                     }
                     catch (Exception ex)

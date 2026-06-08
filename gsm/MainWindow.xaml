@@ -109,6 +109,93 @@
             </Grid>
         </materialDesign:DialogHost.DialogContent>
 
+        <materialDesign:DialogHost IsOpen="{Binding IsSettingsDialogOpen}" CloseOnClickAway="True">
+            <materialDesign:DialogHost.DialogContent>
+                <Grid Width="500" Margin="20" Background="{StaticResource PanelBackground}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Cài đặt hệ thống" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
+                    
+                    <Border Grid.Row="1" Background="#1E1E2E" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                        <StackPanel>
+                            <TextBlock Text="CẤU HÌNH TELEGRAM BOT" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
+                            <TextBox materialDesign:HintAssist.Hint="Nhập Bot Token (từ @BotFather)" 
+                                     Text="{Binding AppSettings.TelegramBotToken}" 
+                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                            <TextBox materialDesign:HintAssist.Hint="Nhập Chat ID (Ngăn cách dấu phẩy nếu nhiều ID)" 
+                                     Text="{Binding AppSettings.TelegramChatIds}" 
+                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="2" Background="#1E1E2E" CornerRadius="8" Padding="15" Margin="0,0,0,20">
+                        <StackPanel>
+                            <TextBlock Text="CẤU HÌNH NHẬN THÔNG BÁO" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
+                            <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10"/>
+                            <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10"/>
+                            
+                            <Separator Background="#444" Margin="0,15"/>
+                            <TextBlock Text="LỌC TIN NHẮN (SMS)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
+                            <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding AppSettings.ReceiveAllSms}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBlock Text="*Lưu ý: Bật tính năng này bạn sẽ nhận cả tin nhắn rác, quảng cáo từ nhà mạng." FontStyle="Italic" Foreground="Gray" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
+                    
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
+                        <Button Content="Lưu Cài Đặt" Command="{Binding SaveSettingsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50"/>
+                    </StackPanel>
+                </Grid>
+            </materialDesign:DialogHost.DialogContent>
+
+            <materialDesign:DialogHost IsOpen="{Binding IsAtCommandDialogOpen}" CloseOnClickAway="True">
+                <materialDesign:DialogHost.DialogContent>
+                    <Grid Width="600" Margin="20" Background="{StaticResource PanelBackground}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Gửi lệnh AT trực tiếp (AT Commands)" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
+                        
+                        <Grid Grid.Row="1" Margin="0,0,0,15">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox ItemsSource="{Binding AtCommandPortOptions}" SelectedValue="{Binding AtCommandSelectedPort}" 
+                                      materialDesign:HintAssist.Hint="Chọn cổng COM" Style="{StaticResource MaterialDesignFloatingHintComboBox}" 
+                                      Foreground="White" Margin="0,0,10,0">
+                            </ComboBox>
+                            
+                            <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Nhập lệnh (VD: AT+CUSD=1,&#34;*101#&#34;,15)" 
+                                     Text="{Binding AtCommandInput, UpdateSourceTrigger=PropertyChanged}" 
+                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,10,0" FontFamily="Consolas">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Enter" Command="{Binding SendAtCommandCommand}"/>
+                                </TextBox.InputBindings>
+                            </TextBox>
+                            
+                            <Button Grid.Column="2" Content="Gửi Lệnh" Command="{Binding SendAtCommandCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#2196F3" BorderBrush="#2196F3"/>
+                        </Grid>
+
+                        <TextBox Grid.Row="2" Text="{Binding AtCommandOutput}" IsReadOnly="True" 
+                                 VerticalScrollBarVisibility="Auto" Height="250"
+                                 Background="#0C0C14" Foreground="#4CAF50" FontFamily="Consolas" Padding="10"
+                                 Margin="0,0,0,20"/>
+                        
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}"/>
+                        </StackPanel>
+                    </Grid>
+                </materialDesign:DialogHost.DialogContent>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/> <!-- Top Nav -->
@@ -126,14 +213,12 @@
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                     <RadioButton Content="SMS" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
-                    <RadioButton Content="Tổng quan" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
-                                 Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                 </StackPanel>
             </Border>
             
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="15,0">
                 <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="Thông báo 0" Foreground="#E91E63" BorderBrush="#E91E63" Height="28" Padding="10,0" materialDesign:ButtonAssist.CornerRadius="14"/>
-                <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Settings" Height="36" Width="36" Margin="10,0,0,0">
+                <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Settings" Height="36" Width="36" Margin="10,0,0,0" Command="{Binding OpenSettingsDialogCommand}">
                     <materialDesign:PackIcon Kind="Cog" Foreground="White" Width="20" Height="20"/>
                 </Button>
             </StackPanel>
@@ -158,8 +243,8 @@
                     <!-- ToolBar GSM -->
                     <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1">
                         <WrapPanel Margin="10,5">
-                            <Button Content="Bảng lệnh" Background="#5C6BC0" Command="{Binding DummyFeatureCommand}" CommandParameter="Bảng lệnh" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Trình sắp xếp cổng" Background="#F06292" Command="{Binding DummyFeatureCommand}" CommandParameter="Trình sắp xếp cổng" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Bảng lệnh" Background="#5C6BC0" Command="{Binding OpenAtCommandDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Sắp xếp cổng" Background="#F06292" Command="{Binding SortPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Gia hạn SIM" Background="#FFA726" Command="{Binding RenewSimCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Kiểm tra số dư" Background="#424242" Command="{Binding CheckBalanceCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Làm mới cổng" Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
@@ -337,48 +422,6 @@
                 </Grid>
             </TabItem>
 
-            <!-- TAB 3: DASHBOARD -->
-            <TabItem>
-                <Grid Margin="20">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    
-                    <TextBlock Grid.Row="0" Text="Bảng Thống Kê Tổng Quan" FontSize="24" FontWeight="Bold" Margin="0,0,0,20"/>
-                    
-                    <Grid Grid.Row="1">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="2*"/>
-                        </Grid.ColumnDefinitions>
-                        
-                        <!-- Connection Pie Chart -->
-                        <Border Grid.Column="0" Background="{StaticResource PanelBackground}" CornerRadius="12" Padding="20" Margin="0,0,10,0">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="*"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="Tình trạng thiết bị" FontSize="16" FontWeight="SemiBold" Foreground="LightGray" Margin="0,0,0,10"/>
-                                <lvc:PieChart Grid.Row="1" Series="{Binding ConnectionSeries}" LegendPosition="Bottom"/>
-                            </Grid>
-                        </Border>
-
-                        <!-- SMS Column Chart -->
-                        <Border Grid.Column="1" Background="{StaticResource PanelBackground}" CornerRadius="12" Padding="20" Margin="10,0,0,0">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="*"/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="Lưu lượng tin nhắn tuần qua" FontSize="16" FontWeight="SemiBold" Foreground="LightGray" Margin="0,0,0,10"/>
-                                <lvc:CartesianChart Grid.Row="1" Series="{Binding SmsSeries}" TooltipPosition="Top"/>
-                            </Grid>
-                        </Border>
-                    </Grid>
-                </Grid>
-            </TabItem>
         </TabControl>
 
         <!-- Terminal Log Expander -->
@@ -421,5 +464,7 @@
         <!-- Global Snackbar Notifications -->
         <materialDesign:Snackbar MessageQueue="{Binding SnackbarMessageQueue}" Grid.RowSpan="4"/>
     </Grid>
+            </materialDesign:DialogHost>
+        </materialDesign:DialogHost>
     </materialDesign:DialogHost>
 </Window>

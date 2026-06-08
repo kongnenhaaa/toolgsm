@@ -9,4 +9,5 @@ public class AppSettings
     public bool ReceiveAllSms { get; set; } = false;
     public bool EnableTelegramNotification { get; set; } = true;
     public bool EnableWebNotification { get; set; } = true;
+    public string FirebaseUrl { get; set; } = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
 }

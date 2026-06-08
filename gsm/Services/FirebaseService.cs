@@ -20,7 +20,16 @@ namespace gsm.Services
         private readonly MainViewModel _vm;
         private readonly HttpClient _sseClient;
         private readonly HttpClient _restClient;
-        private readonly string _databaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+        private string _databaseUrl 
+        {
+            get 
+            {
+                var url = SettingsService.Current.FirebaseUrl;
+                if (string.IsNullOrEmpty(url)) url = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+                if (!url.EndsWith("/")) url += "/";
+                return url;
+            }
+        }
         private static readonly string _machineId = Environment.MachineName.Replace(".", "_").Replace("$", "").Replace("#", "").Replace("[", "").Replace("]", "");
 
         public FirebaseService(MainViewModel vm)

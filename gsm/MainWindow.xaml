@@ -136,6 +136,10 @@
                         <StackPanel>
                             <TextBlock Text="CẤU HÌNH NHẬN THÔNG BÁO" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
                             <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10"/>
+                            <TextBox materialDesign:HintAssist.Hint="Nhập Link Web Firebase (Database URL)" 
+                                     Text="{Binding AppSettings.FirebaseUrl}" 
+                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,10"/>
+                            
                             <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10"/>
                             
                             <Separator Background="#444" Margin="0,15"/>

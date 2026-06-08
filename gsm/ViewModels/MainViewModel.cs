@@ -48,11 +48,16 @@ public partial class MainViewModel : ObservableObject
             { "VINA", "*101#" },
             { "VIETTEL", "*101#" },
             { "MOBIFONE", "*101#" },
+            { "MOBI", "*101#" },
             { "VIETNAMOBILE", "*101#" },
+            { "GMOBILE", "*101#" },
             { "WINTEL", "*101#" },
             { "ITELECOM", "*101#" },
+            { "ITEL", "*101#" },
             { "LOCAL", "*101#" },
-            { "SKY", "*101#" }
+            { "SKY", "*101#" },
+            { "VNSKY", "*101#" },
+            { "FPT", "*101#" }
         };
 
     [ObservableProperty]
@@ -614,7 +619,7 @@ public partial class MainViewModel : ObservableObject
                 if (cleanContentLower.Contains("sai dau so") || cleanContentLower.Contains("sai cú pháp") || cleanContentLower.Contains("sai cu phap"))
                 {
                     AddLog($"[{e.PortName}] LỖI ZALO: Hệ thống Firebase đẩy lệnh gửi sai đầu số dịch vụ (Ví dụ: Zalo yêu cầu gửi 7539 nhưng lại gửi 8500)! Vui lòng sửa mã nguồn trên Web/Firebase.", "ERROR");
-                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Chọn sai nhà mạng rồi kìa");
+                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Chọn sai đầu số rồi kìa");
                     isZaloError = true;
                 }
                 else if (cleanContentLower.Contains("khong du tien") || cleanContentLower.Contains("không đủ tiền"))
@@ -650,11 +655,14 @@ public partial class MainViewModel : ObservableObject
                                       || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase)
                                       || senderPhone.StartsWith("MOBIFONE", StringComparison.OrdinalIgnoreCase)
                                       || senderPhone.StartsWith("VIETNAMOBILE", StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("GMOBILE",  StringComparison.OrdinalIgnoreCase)
                                       || senderPhone.StartsWith("WINTEL",   StringComparison.OrdinalIgnoreCase)
                                       || senderPhone.StartsWith("ITELECOM", StringComparison.OrdinalIgnoreCase)
                                       || senderPhone.StartsWith("ITEL",     StringComparison.OrdinalIgnoreCase)
                                       || senderPhone.StartsWith("SKY",      StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("LOCAL",    StringComparison.OrdinalIgnoreCase);
+                                      || senderPhone.StartsWith("VNSKY",    StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("LOCAL",    StringComparison.OrdinalIgnoreCase)
+                                      || senderPhone.StartsWith("FPT",      StringComparison.OrdinalIgnoreCase);
 
                     // isTopUpContent: nội dung mang dấu hiệu nạp tiền / cập nhật số dư
                     bool isTopUpContent = cleanContentLower.Contains("da duoc nap")

@@ -107,7 +107,18 @@ public class SpeechToTextService
             var match = System.Text.RegularExpressions.Regex.Match(resultJson, @"""text""\s*:\s*""([^""]+)""");
             if (match.Success)
             {
-                return match.Groups[1].Value.Trim();
+                string text = match.Groups[1].Value.Trim();
+                // Lọc bỏ các câu "ảo giác" (hallucination) kinh điển của model Vosk VN khi gặp tiếng ồn tĩnh (static noise) hoặc im lặng
+                if (text.Contains("ngọ đã đổ ra cửa bám trên toàn ấn độ dương") || 
+                    text == "một con ruồi" || 
+                    text == "tôi" || 
+                    text == "ông" || 
+                    text == "thì" || 
+                    text.Length <= 3)
+                {
+                    return "";
+                }
+                return text;
             }
 
             return "";

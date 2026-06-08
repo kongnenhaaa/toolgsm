@@ -20,7 +20,7 @@ namespace gsm.Services
         private readonly MainViewModel _vm;
         private readonly HttpClient _sseClient;
         private readonly HttpClient _restClient;
-        private readonly string _databaseUrl = "";
+        private readonly string _databaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
 
         public FirebaseService(MainViewModel vm)
         {
@@ -298,7 +298,7 @@ namespace gsm.Services
                 var json = JsonSerializer.Serialize(errorMsg);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 // Cập nhật thuộc tính errorMsg vào nhánh web_states của cổng bị lỗi
-                await client.PutAsync($"/web_states/ports/{portId}/errorMsg.json", content);
+                await client.PutAsync($"https://toolweb-c7702-default-rtdb.firebaseio.com/web_states/ports/{portId}/errorMsg.json", content);
             }
             catch { }
         }

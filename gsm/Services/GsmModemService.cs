@@ -148,6 +148,10 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
         await SendCommandAsync(portName, "AT+CLIP=1", 30000); // Hiển thị thông tin người gọi
         
+        // Bật xuất âm thanh cuộc gọi ra cổng USB (UAC) cho Quectel EC20
+        await SendCommandAsync(portName, "AT+QAUDMOD=2", 30000); 
+        await SendCommandAsync(portName, "AT+QDAI=3", 30000); 
+        
         // Xóa toàn bộ SMS cũ trong SIM để tránh bị đầy bộ nhớ khiến không nhận được CMTI mới
         await SendCommandAsync(portName, "AT+CMGD=1,4", 30000); 
         

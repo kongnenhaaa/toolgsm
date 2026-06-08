@@ -346,10 +346,16 @@ public partial class MainViewModel : ObservableObject
                     // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
                     ussdContent = DecodeUcs2(ussdContent);
 
-                    var phoneMatch = Regex.Match(ussdContent, @"(?:84|0)(8[1-5|8]|9[1|4])\d{7}");
+                    // Thử match đầu số Viettel (032-039, 086, 096, 097, 098) và Vinaphone (081-085, 088, 091, 094)
+                    var phoneMatch = Regex.Match(ussdContent, @"(?:84|0)(3[2-9]|8[1-9]|9[1-9])\d{7}");
                     if (!phoneMatch.Success)
                     {
-                        // Fallback
+                        // Fallback: bắt bất kỳ số 9-10 chữ số bắt đầu bằng 0 hoặc 84
+                        phoneMatch = Regex.Match(ussdContent, @"(?:84|0)([3-9][0-9]{8})");
+                    }
+                    if (!phoneMatch.Success)
+                    {
+                        // Fallback cuối: 9 chữ số đơn thuần
                         phoneMatch = Regex.Match(ussdContent, @"([345789][0-9]{8})");
                     }
 
@@ -407,6 +413,18 @@ public partial class MainViewModel : ObservableObject
                         if (string.IsNullOrWhiteSpace(port.PhoneNumber))
                         {
                             _ = SendUssdThrottledAsync(port.PortName, "*110#", "Tự động lấy SĐT");
+                        }
+                        if (string.IsNullOrWhiteSpace(port.Balance))
+                        {
+                            _ = SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC");
+                        }
+                    }
+                    else if (networkUpper.Contains("VIETTEL"))
+                    {
+                        if (string.IsNullOrWhiteSpace(port.PhoneNumber))
+                        {
+                            // Viettel: *098*6# để tự động trả về số thuê bao qua USSD
+                            _ = SendUssdThrottledAsync(port.PortName, "*098*6#", "Tự động lấy SĐT");
                         }
                         if (string.IsNullOrWhiteSpace(port.Balance))
                         {
@@ -520,10 +538,11 @@ public partial class MainViewModel : ObservableObject
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                 }
 
-                // Tự động kiểm tra TKC khi có tin nhắn từ 574848
-                if (senderPhone == "574848")
+                // Tự động kiểm tra TKC khi nhận thông báo trừ tiền từ tổng đài:
+                // 574848 = Vinaphone báo trừ tiền Zalo | 8068 = Viettel báo trừ tiền Zalo
+                if (senderPhone == "574848" || senderPhone == "8068")
                 {
-                    AddLog($"[{e.PortName}] Phát hiện tin nhắn từ 574848, tự động cập nhật lại số dư...");
+                    AddLog($"[{e.PortName}] Phát hiện thông báo trừ tiền từ {senderPhone}, tự động cập nhật lại số dư...");
                     _ = Task.Run(async () => 
                     {
                         await Task.Delay(2000); // Đợi 2s cho hệ thống mạng ổn định
@@ -557,26 +576,47 @@ public partial class MainViewModel : ObservableObject
                     return;
                 }
 
-                // Thêm block chặn tin nhắn rác từ 49515355, 57515253, 900 và các tin nhắn nạp tiền/rác khác
-                if (senderPhone == "900" || senderPhone == "49515355" || senderPhone == "57515253" || cleanContentLower.Contains("khoan airtime") || cleanContentLower.Contains("ong su dung het") || cleanContentLower.Contains("ng su dung het") || cleanContentLower.Contains("chinh sach tai") || cleanContentLower.Contains("tu choi nhan loi moi") || cleanContentLower.Contains("da duoc nap") || cleanContentLower.Contains("tai khoan cua quy khach"))
+                // Chặn tin nhắn rác từ nhà mạng / tổng đài hệ thống
+                // isTopUpSender: sender là tổng đài nhà mạng Viettel/Vinaphone (không bao giờ là OTP thực)
+                bool isTopUpSender = senderPhone == "8068"    // Viettel báo trừ tiền
+                                  || senderPhone == "900"
+                                  || senderPhone == "49515355"
+                                  || senderPhone == "57515253"
+                                  || senderPhone.StartsWith("VTT",      StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("VNP",      StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("VNPT",     StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("VIETTEL",  StringComparison.OrdinalIgnoreCase)
+                                  || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase);
+
+                // isTopUpContent: nội dung mang dấu hiệu nạp tiền / cập nhật số dư
+                bool isTopUpContent = cleanContentLower.Contains("da duoc nap")
+                                   || cleanContentLower.Contains("tai khoan cua quy khach")
+                                   || cleanContentLower.Contains("nap tien thanh cong")
+                                   || (cleanContentLower.Contains("so du hien tai") && !cleanContentLower.Contains("zalo"));
+
+                bool isSpamContent = cleanContentLower.Contains("khoan airtime")
+                                  || cleanContentLower.Contains("ong su dung het")
+                                  || cleanContentLower.Contains("ng su dung het")
+                                  || cleanContentLower.Contains("chinh sach tai")
+                                  || cleanContentLower.Contains("tu choi nhan loi moi");
+
+                if (isTopUpSender || isTopUpContent || isSpamContent)
                 {
-                    AddLog($"[{e.PortName}] Đã chặn tin nhắn rác từ {senderPhone}");
+                    AddLog($"[{e.PortName}] Đã chặn tin nhắn hệ thống/rác từ {senderPhone}");
                     
-                    // Kích hoạt SỰ KIỆN: Nếu là tin nhắn báo nạp tiền, tự động check lại TKC
-                    if (cleanContentLower.Contains("da duoc nap") || cleanContentLower.Contains("tai khoan cua quy khach"))
+                    // Nếu là thông báo nạp tiền → tự động cập nhật lại TKC
+                    if (isTopUpContent)
                     {
                         AddLog($"[{e.PortName}] Phát hiện tin nhắn nạp thẻ, tự động cập nhật lại số dư...");
                         _ = Task.Run(async () => 
                         {
-                            await Task.Delay(2000); // Đợi 2s cho hệ thống mạng ổn định
+                            await Task.Delay(2000);
                             await CheckBalanceForPortAsync(e.PortName);
                         });
                     }
 
                     if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
                         await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
                     return;
                 }
 

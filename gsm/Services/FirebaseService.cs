@@ -244,13 +244,13 @@ namespace gsm.Services
                     await SendErrorToWebAsync(portId, errorMsg);
                     _ = TelegramService.SendMessageAsync($"⚠️ <b>Lỗi Gửi SMS Từ {portId}</b>\n📱 Tới: {recipient}\n📝 Nội dung: {content}\n❌ Chi tiết: <code>{errorMsg}</code>");
                 }
-
-                // Trả lại UCS2 để đọc tiếng Việt
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,8", 10000, true);
             }
             finally
             {
+                // QUAN TRỌNG: Luôn khôi phục về UCS2 dù gửi SMS thành công hay lỗi
+                // Nếu không, modem sẽ kẹt ở GSM mode, không đọc được tiếng Việt/UCS2 nữa!
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
+                await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,8", 10000, true);
                 sem.Release();
             }
         }

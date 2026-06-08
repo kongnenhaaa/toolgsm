@@ -79,7 +79,8 @@ namespace gsm.Services
                     catch { /* Mất mạng tạm thời, bỏ qua */ }
                 });
 
-                var statusJson = JsonSerializer.Serialize(new { lastSync = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
+                // Sử dụng Server Timestamp của Firebase để tránh lệch giờ giữa PC và Web
+                var statusJson = "{\"lastSync\": {\".sv\": \"timestamp\"}}";
                 var statusContent = new StringContent(statusJson, Encoding.UTF8, "application/json");
                 _ = Task.Run(async () =>
                 {

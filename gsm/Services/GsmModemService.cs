@@ -307,10 +307,14 @@ public class GsmModemService : IGsmModemService
                 {
                     if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
                     {
-                        // Đợi USSD từ tổng đài, không thoát sớm nếu chỉ mới nhận được OK
-                        if (currentData.Contains("OK\r\n") && !currentData.Contains("+CUSD:"))
+                        // Đợi USSD từ tổng đài. VNSKY có lỗi gửi "+CME ERROR: 100" trước "+CUSD:"
+                        if (!currentData.Contains("+CUSD:"))
                         {
-                            return; 
+                            // Bỏ qua OK hoặc CME ERROR 100 để tiếp tục chờ CUSD thực sự
+                            if (currentData.Contains("OK\r\n") || currentData.Contains("+CME ERROR: 100"))
+                            {
+                                return; 
+                            }
                         }
                     }
 

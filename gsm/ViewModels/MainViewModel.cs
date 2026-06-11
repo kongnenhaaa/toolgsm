@@ -91,6 +91,69 @@ public partial class MainViewModel : ObservableObject
     private string _topUpMode = "Selected";
 
     [ObservableProperty]
+    private string _composeSmsPhone = string.Empty;
+
+    [ObservableProperty]
+    private string _composeSmsContent = string.Empty;
+
+    [ObservableProperty]
+    private bool _isComposeSmsDialogOpen;
+
+    [ObservableProperty]
+    private string _composeSmsMode = "Selected";
+
+    [ObservableProperty]
+    private bool _isRegisterEzDialogOpen;
+
+    [ObservableProperty]
+    private string _registerEzMode = "Selected";
+
+    [ObservableProperty]
+    private bool _isCallManagerDialogOpen;
+
+    [ObservableProperty]
+    private string _callManagerSelectedPort = string.Empty;
+
+    [ObservableProperty]
+    private string _callPhoneNumber = string.Empty;
+
+    [ObservableProperty]
+    private string _dtmfTones = string.Empty;
+
+    [ObservableProperty]
+    private string _forwardNumber = string.Empty;
+
+    [ObservableProperty]
+    private string _callManagerOutput = string.Empty;
+
+    [ObservableProperty]
+    private bool _isNetworkSimDialogOpen;
+
+    [ObservableProperty]
+    private string _networkSimSelectedPort = string.Empty;
+
+    [ObservableProperty]
+    private string _networkSimOutput = string.Empty;
+
+    [ObservableProperty]
+    private string _networkOperator = string.Empty;
+
+    [ObservableProperty]
+    private string _pinCode = string.Empty;
+
+    [ObservableProperty]
+    private string _phonebookIndex = string.Empty;
+
+    [ObservableProperty]
+    private string _phonebookNumber = string.Empty;
+
+    [ObservableProperty]
+    private string _phonebookName = string.Empty;
+
+    [ObservableProperty]
+    private string _ussdCommand = string.Empty;
+
+    [ObservableProperty]
     private AppSettings _appSettings = new();
 
     [ObservableProperty]
@@ -165,6 +228,7 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(ConnectionSeries));
         OnPropertyChanged(nameof(SmsSeries));
         OnPropertyChanged(nameof(AtCommandPortOptions));
+        OnPropertyChanged(nameof(CallManagerPortOptions));
     }
 
     private void AddLog(string message, string level = "INFO")
@@ -1044,6 +1108,8 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    public IEnumerable<string> CallManagerPortOptions => Ports.Select(p => p.PortName);
+
     [RelayCommand]
     private void SortPorts()
     {
@@ -1231,6 +1297,318 @@ public partial class MainViewModel : ObservableObject
         foreach (var port in targetPorts)
         {
             _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Nạp tiền", logResult: true);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenComposeSmsDialog(string mode)
+    {
+        ComposeSmsMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
+        ComposeSmsPhone = string.Empty;
+        ComposeSmsContent = string.Empty;
+        IsComposeSmsDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private async Task ExecuteComposeSmsAsync()
+    {
+        IsComposeSmsDialogOpen = false;
+        if (string.IsNullOrWhiteSpace(ComposeSmsPhone) || string.IsNullOrWhiteSpace(ComposeSmsContent))
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng nhập SĐT người nhận và nội dung tin nhắn.");
+            return;
+        }
+
+        var targetPorts = new System.Collections.Generic.List<SimPort>();
+        if (ComposeSmsMode == "Selected")
+        {
+            if (SelectedPort != null) targetPorts.Add(SelectedPort);
+        }
+        else if (ComposeSmsMode == "Checked")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        }
+        else if (ComposeSmsMode == "All")
+        {
+            targetPorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
+        }
+
+        if (targetPorts.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Không có cổng nào được chọn để gửi tin nhắn.");
+            return;
+        }
+
+        SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh gửi tin nhắn từ {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu gửi tin nhắn đến {ComposeSmsPhone} từ {targetPorts.Count} cổng...");
+
+        foreach (var port in targetPorts)
+        {
+            _ = SendSmsThrottledAsync(port.PortName, ComposeSmsPhone, ComposeSmsContent);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenRegisterEzDialog(string mode)
+    {
+        RegisterEzMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
+        IsRegisterEzDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private void ExecuteRegisterEz()
+    {
+        IsRegisterEzDialogOpen = false;
+        
+        List<SimPort> targetPorts = new();
+        if (RegisterEzMode == "Selected")
+        {
+            if (SelectedPort != null) targetPorts.Add(SelectedPort);
+        }
+        else if (RegisterEzMode == "Checked")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        }
+        else if (RegisterEzMode == "All")
+        {
+            targetPorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
+        }
+
+        if (targetPorts.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Không có cổng nào được chọn để đăng ký EZ.");
+            return;
+        }
+
+        SnackbarMessageQueue.Enqueue($"Đang tiến hành đăng ký EZ cho {targetPorts.Count} cổng...");
+        
+        foreach (var port in targetPorts)
+        {
+            string content = port.LastMessageContent ?? string.Empty;
+            var match = Regex.Match(content, @"EZ\s+(\d+)", RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                string code = match.Groups[1].Value;
+                string smsBody = $"EZ {code}";
+                AddLog($"Bắt đầu tự đăng ký EZ ({smsBody}) cho cổng {port.PortName}...");
+                _ = SendSmsThrottledAsync(port.PortName, "888", smsBody);
+            }
+            else
+            {
+                AddLog($"Bỏ qua {port.PortName}: Không tìm thấy mã EZ trong tin nhắn cuối.", "WARNING");
+            }
+        }
+    }
+
+    private async Task SendSmsThrottledAsync(string portName, string phoneNumber, string content)
+    {
+        try
+        {
+            SmsInProgressPorts.TryAdd(portName, true);
+            
+            // 1. Remove diacritics to send via GSM safely without UCS2 hex-encoding complexity
+            string safeContent = RemoveDiacritics(content);
+
+            // 2. Switch to GSM temporarily so that the raw text is accepted
+            await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
+            await _modemService.SendCommandAsync(portName, "AT+CSMP=17,167,0,0", 5000, true);
+
+            // 3. Send the SMS
+            string result = await _modemService.SendSmsAsync(portName, phoneNumber, safeContent);
+            
+            if (result.Contains("OK") || result.Contains("+CMGS:"))
+            {
+                AddLog($"[{portName}] Gửi tin nhắn đến {phoneNumber} thành công.", "SUCCESS");
+            }
+            else
+            {
+                AddLog($"[{portName}] Gửi tin nhắn thất bại: {result}", "ERROR");
+            }
+        }
+        finally
+        {
+            // 4. Always revert back to UCS2 so incoming SMS (Tiếng Việt) doesn't break!
+            await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
+            await _modemService.SendCommandAsync(portName, "AT+CSMP=17,167,0,8", 5000, true);
+            SmsInProgressPorts.TryRemove(portName, out _);
+        }
+    }
+
+    private string RemoveDiacritics(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+        string normalizedString = text.Normalize(NormalizationForm.FormD);
+        StringBuilder stringBuilder = new StringBuilder();
+        foreach (char c in normalizedString)
+        {
+            System.Globalization.UnicodeCategory unicodeCategory = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
+            if (unicodeCategory != System.Globalization.UnicodeCategory.NonSpacingMark)
+            {
+                stringBuilder.Append(c);
+            }
+        }
+        return stringBuilder.ToString().Normalize(NormalizationForm.FormC).Replace("đ", "d").Replace("Đ", "D");
+    }
+
+    [RelayCommand]
+    private void OpenCallManagerDialog()
+    {
+        CallManagerSelectedPort = Ports.Count > 0 ? Ports.FirstOrDefault(p => p.IsSelected)?.PortName ?? Ports.First().PortName : string.Empty;
+        CallPhoneNumber = string.Empty;
+        DtmfTones = string.Empty;
+        ForwardNumber = string.Empty;
+        CallManagerOutput = string.Empty;
+        IsCallManagerDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private async Task CallManagerActionAsync(string action)
+    {
+        if (string.IsNullOrWhiteSpace(CallManagerSelectedPort))
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn cổng để thực hiện.");
+            return;
+        }
+
+        string cmd = string.Empty;
+        
+        switch (action)
+        {
+            case "Dial":
+                if (string.IsNullOrWhiteSpace(CallPhoneNumber)) return;
+                cmd = $"ATD{CallPhoneNumber};";
+                break;
+            case "Answer":
+                cmd = "ATA";
+                break;
+            case "HangUp":
+                cmd = "ATH";
+                break;
+            case "EnableAutoAnswer":
+                cmd = "ATS0=1";
+                break;
+            case "DisableAutoAnswer":
+                cmd = "ATS0=0";
+                break;
+            case "EnableClip":
+                cmd = "AT+CLIP=1";
+                break;
+            case "EnableClir":
+                cmd = "AT+CLIR=1";
+                break;
+            case "SendDtmf":
+                if (string.IsNullOrWhiteSpace(DtmfTones)) return;
+                cmd = $"AT+VTS=\"{DtmfTones}\"";
+                break;
+            case "SetForwarding":
+                if (string.IsNullOrWhiteSpace(ForwardNumber)) return;
+                cmd = $"AT+CCFC=0,3,\"{ForwardNumber}\"";
+                break;
+            case "Hold":
+                cmd = "AT+CHLD=2";
+                break;
+            case "CallStatus":
+                cmd = "AT+CLCC";
+                break;
+            case "CallWaiting":
+                cmd = "AT+CCWA=1,1,1";
+                break;
+        }
+
+        if (string.IsNullOrEmpty(cmd)) return;
+
+        CallManagerOutput += $"> {cmd}\n";
+        try
+        {
+            string result = await _modemService.SendCommandAsync(CallManagerSelectedPort, cmd, timeoutMs: 5000);
+            CallManagerOutput += $"{result}\n";
+        }
+        catch (Exception ex)
+        {
+            CallManagerOutput += $"[ERROR] {ex.Message}\n";
+        }
+    }
+
+    [RelayCommand]
+    private void OpenNetworkSimDialog()
+    {
+        NetworkSimSelectedPort = Ports.Count > 0 ? Ports.FirstOrDefault(p => p.IsSelected)?.PortName ?? Ports.First().PortName : string.Empty;
+        NetworkOperator = string.Empty;
+        PinCode = string.Empty;
+        PhonebookIndex = string.Empty;
+        PhonebookNumber = string.Empty;
+        PhonebookName = string.Empty;
+        UssdCommand = string.Empty;
+        NetworkSimOutput = string.Empty;
+        IsNetworkSimDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private async Task NetworkSimActionAsync(string action)
+    {
+        if (string.IsNullOrWhiteSpace(NetworkSimSelectedPort))
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn cổng để thực hiện.");
+            return;
+        }
+
+        string cmd = string.Empty;
+
+        switch (action)
+        {
+            case "CheckRegistration": cmd = "AT+CREG?"; break;
+            case "CheckOperator": cmd = "AT+COPS?"; break;
+            case "SetOperatorAuto": cmd = "AT+COPS=0"; break;
+            case "SetOperatorManual":
+                if (string.IsNullOrWhiteSpace(NetworkOperator)) return;
+                cmd = $"AT+COPS=1,2,\"{NetworkOperator}\""; 
+                break;
+            case "SignalQuality": cmd = "AT+CSQ"; break;
+            case "NetworkInfo": cmd = "AT+QNWINFO"; break;
+            case "SetScanAuto": cmd = "AT+QCFG=\"nwscanmode\",0"; break;
+            case "SetScanLte": cmd = "AT+QCFG=\"nwscanmode\",3"; break;
+            case "ReadImsi": cmd = "AT+CIMI"; break;
+            case "ReadIccid": cmd = "AT+QCCID"; break;
+            case "EnterPin":
+                if (string.IsNullOrWhiteSpace(PinCode)) return;
+                cmd = $"AT+CPIN=\"{PinCode}\"";
+                break;
+            case "CheckPinStatus": cmd = "AT+CPIN?"; break;
+            case "CheckSimDetect": cmd = "AT+QSIMSTAT?"; break;
+            case "ReadPhonebook":
+                cmd = "AT+CPBR=1,10";
+                break;
+            case "WritePhonebook":
+                if (string.IsNullOrWhiteSpace(PhonebookIndex) || string.IsNullOrWhiteSpace(PhonebookNumber)) return;
+                cmd = $"AT+CPBW={PhonebookIndex},\"{PhonebookNumber}\",129,\"{PhonebookName}\"";
+                break;
+            case "SendUssd":
+                if (string.IsNullOrWhiteSpace(UssdCommand)) return;
+                cmd = $"AT+CUSD=1,\"{UssdCommand}\",15";
+                break;
+        }
+
+        if (string.IsNullOrEmpty(cmd)) return;
+
+        NetworkSimOutput += $"> {cmd}\n";
+        try
+        {
+            if (action == "SendUssd")
+            {
+                await _modemService.SendCommandAsync(NetworkSimSelectedPort, "AT+CSCS=\"GSM\"", 5000, true);
+                string result = await _modemService.SendCommandAsync(NetworkSimSelectedPort, cmd, timeoutMs: 15000);
+                await _modemService.SendCommandAsync(NetworkSimSelectedPort, "AT+CSCS=\"UCS2\"", 5000, true);
+                NetworkSimOutput += $"{result}\n";
+            }
+            else
+            {
+                string result = await _modemService.SendCommandAsync(NetworkSimSelectedPort, cmd, timeoutMs: 8000);
+                NetworkSimOutput += $"{result}\n";
+            }
+        }
+        catch (Exception ex)
+        {
+            NetworkSimOutput += $"[ERROR] {ex.Message}\n";
         }
     }
 

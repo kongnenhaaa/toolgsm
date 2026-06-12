@@ -218,7 +218,16 @@ namespace gsm.Services
                         {
                             if (recipient == "USSD" && content == "BALANCE")
                             {
-                                await _vm.CheckBalanceForPortAsync(portId);
+                                string ussdResult = await _vm.CheckBalanceForPortAsync(portId);
+                                if (ussdResult.Contains("ERROR"))
+                                {
+                                    string err = GetHumanReadableError(ussdResult);
+                                    await SendErrorToWebAsync(portId, err);
+                                }
+                                else 
+                                {
+                                    await SendSuccessToWebAsync(portId);
+                                }
                             }
                             else if (recipient == "SYSTEM" && content == "REFRESH_PORT")
                             {
@@ -309,8 +318,9 @@ namespace gsm.Services
             if (result.Contains("+CME ERROR: 32")) return "Mạng chỉ cho phép gọi khẩn cấp (32)";
             if (result.Contains("+CME ERROR: 58")) return "Mạng giới hạn truy cập (58)";
             if (result.Contains("+CME ERROR: 100")) return "Lỗi thiết bị không xác định (100)";
-            if (result.Contains("Timeout sending SMS payload")) return "Sim không gửi tin nhắn đi được hoặc không nhận được tin nhắn phản hồi";
-            if (result.Contains("Timeout")) return "Lỗi thiết bị không phản hồi (Timeout)";
+            if (result.Contains("Timeout sending SMS payload")) return "Không nhận được phản hồi";
+            if (result.Contains("Timeout waiting for > prompt")) return "Không gửi đi được";
+            if (result.Contains("Timeout")) return "Không gửi đi được";
             
             return result.Replace("ERROR: ", "").Replace("+CMS ERROR:", "Lỗi SMS:").Replace("+CME ERROR:", "Lỗi Modem:");
         }

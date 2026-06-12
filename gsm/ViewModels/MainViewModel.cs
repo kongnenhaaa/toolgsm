@@ -1192,15 +1192,16 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    public async Task CheckBalanceForPortAsync(string portName)
+    public async Task<string> CheckBalanceForPortAsync(string portName)
     {
         var port = Ports.FirstOrDefault(p => p.PortName == portName);
         if (port != null && !string.IsNullOrWhiteSpace(port.NetworkProvider))
         {
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
             AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
-            await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxRetries: 3, logResult: true);
+            return await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxRetries: 3, logResult: true);
         }
+        return "ERROR: Cổng không hợp lệ hoặc không có thông tin nhà mạng";
     }
 
 

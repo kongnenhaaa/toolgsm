@@ -702,6 +702,17 @@ public partial class MainViewModel : ObservableObject
                     return;
                 }
 
+                // LUÔN CHẶN cảnh báo ezCom bất kể cài đặt Nhận tất cả hay không
+                if (cleanContentLower.Contains("thue bao ezcom chi duoc") || cleanContentLower.Contains("dich vu vinaphone khac"))
+                {
+                    AddLog($"[{e.PortName}] Đã chặn tin nhắn hệ thống ezCom.");
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+                    return;
+                }
+
                 bool receiveAll = SettingsService.Current.ReceiveAllSms;
 
                 if (!receiveAll)
@@ -1422,7 +1433,14 @@ public partial class MainViewModel : ObservableObject
             }
             else
             {
-                AddLog($"[{portName}] Gửi tin nhắn thất bại: {result}", "ERROR");
+                if (result.Contains("Timeout sending SMS payload"))
+                {
+                    AddLog($"[{portName}] Sim không gửi tin nhắn đi được hoặc không nhận được tin nhắn phản hồi", "ERROR");
+                }
+                else
+                {
+                    AddLog($"[{portName}] Sim không gửi tin nhắn đi được ({result})", "ERROR");
+                }
             }
         }
         finally

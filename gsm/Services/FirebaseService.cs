@@ -309,6 +309,7 @@ namespace gsm.Services
             if (result.Contains("+CME ERROR: 32")) return "Mạng chỉ cho phép gọi khẩn cấp (32)";
             if (result.Contains("+CME ERROR: 58")) return "Mạng giới hạn truy cập (58)";
             if (result.Contains("+CME ERROR: 100")) return "Lỗi thiết bị không xác định (100)";
+            if (result.Contains("Timeout sending SMS payload")) return "Sim không gửi tin nhắn đi được hoặc không nhận được tin nhắn phản hồi";
             if (result.Contains("Timeout")) return "Lỗi thiết bị không phản hồi (Timeout)";
             
             return result.Replace("ERROR: ", "").Replace("+CMS ERROR:", "Lỗi SMS:").Replace("+CME ERROR:", "Lỗi Modem:");

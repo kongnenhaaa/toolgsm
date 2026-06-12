@@ -37,6 +37,14 @@ namespace gsm.Services
             return url;
         }
 
+        private static bool IsSpecificSmsError(string? errorMsg)
+        {
+            if (string.IsNullOrWhiteSpace(errorMsg)) return false;
+            return errorMsg.Contains("Chọn sai đầu số")
+                || errorMsg.Contains("SĐT đang không yêu cầu mã")
+                || errorMsg.Contains("Hết tiền");
+        }
+
         public FirebaseService(MainViewModel vm)
         {
             _vm = vm;
@@ -213,6 +221,15 @@ namespace gsm.Services
             if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return;
             try
             {
+                if (status == "failed" && !IsSpecificSmsError(error))
+                {
+                    var specificError = await TryGetSpecificWebErrorAsync(portId);
+                    if (!string.IsNullOrWhiteSpace(specificError))
+                    {
+                        error = specificError;
+                    }
+                }
+
                 var payload = new
                 {
                     id = cmdId,
@@ -235,11 +252,31 @@ namespace gsm.Services
             catch { }
         }
 
+        private async Task<string?> TryGetSpecificWebErrorAsync(string portId)
+        {
+            if (string.IsNullOrWhiteSpace(portId) || portId == "ALL") return null;
+            try
+            {
+                var currentErrorJson = await _restClient.GetStringAsync($"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
+                var currentError = JsonSerializer.Deserialize<string>(currentErrorJson);
+                return IsSpecificSmsError(currentError) ? currentError : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private async Task UpdateWebCommandStateAsync(string portId, string cmdId, string status, string? error = null)
         {
             if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(portId) || portId == "ALL") return;
             try
             {
+                if (status == "failed" && !IsSpecificSmsError(error))
+                {
+                    error = await TryGetSpecificWebErrorAsync(portId) ?? error;
+                }
+
                 var payload = new Dictionary<string, object?>
                 {
                     ["commandId"] = cmdId,

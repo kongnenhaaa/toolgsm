@@ -69,4 +69,20 @@ public partial class SimPort : ObservableObject
 
     [ObservableProperty]
     private string _forwardedTo = string.Empty; // SĐT đang được chuyển hướng cuộc gọi đến
+
+    // #8: true nếu hết hạn trong vòng 7 ngày
+    public bool IsExpiringSoon
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(ExpiryDate)) return false;
+            foreach (var fmt in new[] { "dd/MM/yy", "dd/MM/yyyy", "dd-MM-yyyy", "MM/dd/yyyy" })
+            {
+                if (DateTime.TryParseExact(ExpiryDate, fmt, null,
+                    System.Globalization.DateTimeStyles.None, out var expiry))
+                    return (expiry - DateTime.Today).TotalDays <= 7;
+            }
+            return false;
+        }
+    }
 }

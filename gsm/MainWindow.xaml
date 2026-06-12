@@ -514,6 +514,7 @@
                             <Button Content="Soạn tin nhắn" Background="#AB47BC" Command="{Binding OpenComposeSmsDialogCommand}" CommandParameter="Selected" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Đăng ký EZ Tự Động" Background="#2196F3" Command="{Binding OpenRegisterEzDialogCommand}" CommandParameter="Selected" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tự động đọc tin nhắn cuối và gửi mã EZ"/>
                             <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="Xóa chuyển hướng" Background="#E53935" Command="{Binding ClearForwardingAllCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa AT+CCFC cho tất cả SIM ngay lập tức"/>
                             <Button Content="Test OTP (Máy ảo)" Background="#FF5722" Command="{Binding SimulateSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tạo một tin nhắn chứa OTP ảo để test hệ thống"/>
                         </WrapPanel>
                     </Border>
@@ -586,9 +587,32 @@
                             <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
                             <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
-                            <DataGridTextColumn Header="HSD" Binding="{Binding ExpiryDate}" Width="120"/>
-                            <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
                             
+                            <!-- #8: Tô đỏ HSD nếu sắp hết hạn (dưới 7 ngày) -->
+                            <DataGridTemplateColumn Header="HSD" Width="120">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding ExpiryDate}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="White"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsExpiringSoon}" Value="True">
+                                                            <Setter Property="Foreground" Value="#FF5252"/>
+                                                            <Setter Property="FontWeight" Value="Bold"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            
+                            <!-- #4: Cột số điện thoại nhận chuyển hướng -->
+                            <DataGridTextColumn Header="Fwd→" Binding="{Binding ForwardedTo}" Width="130" Foreground="#03A9F4"/>
+                            
+                            <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
@@ -689,30 +713,45 @@
 
         </TabControl>
 
-        <!-- Terminal Log Expander -->
+        <!-- #6: Terminal Log với bộ lọc theo cổng -->
         <Expander Grid.Row="2" Background="#0C0C14" Foreground="#4CAF50" ExpandDirection="Up" Padding="0" Header="Lịch sử AT Commands (Terminal)" FontFamily="Consolas">
-            <Border BorderBrush="#333" BorderThickness="0,1,0,0" Height="150">
-                <ListBox ItemsSource="{Binding SystemLogs}" SelectedItem="{Binding SelectedLog}" Background="Transparent" BorderThickness="0" Margin="10">
-                    <ListBox.ContextMenu>
-                        <ContextMenu Background="#1E1E2F" Foreground="White">
-                            <MenuItem Header="Sao chép" Command="{Binding Path=DataContext.CopySelectedLogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
-                                <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
-                            </MenuItem>
-                            <MenuItem Header="Sao chép tất cả" Command="{Binding Path=DataContext.CopyAllLogsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
-                                <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
-                            </MenuItem>
-                        </ContextMenu>
-                    </ListBox.ContextMenu>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="{Binding Time}" Foreground="Gray" Margin="0,0,10,0"/>
-                                <TextBlock Text="{Binding Level}" Foreground="Cyan" Margin="0,0,10,0" Width="50"/>
-                                <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+            <Border BorderBrush="#333" BorderThickness="0,1,0,0" Height="170">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <!-- Filter bar -->
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Background="#0C0C14" Margin="10,4">
+                        <materialDesign:PackIcon Kind="FilterOutline" VerticalAlignment="Center" Foreground="Gray" Margin="0,0,6,0"/>
+                        <TextBox Width="120" Text="{Binding LogFilter, UpdateSourceTrigger=PropertyChanged}" 
+                                 materialDesign:HintAssist.Hint="Lọc cổng (VD: COM41)"
+                                 Style="{StaticResource SearchTextBoxStyle}" FontFamily="Consolas" Foreground="#4CAF50"/>
+                        <TextBlock Text="|" Foreground="#444" Margin="10,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding FilteredLogCount, StringFormat='Hiển thị: {0} dòng'}" Foreground="Gray" VerticalAlignment="Center" FontSize="11"/>
+                    </StackPanel>
+                    <ListBox Grid.Row="1" ItemsSource="{Binding FilteredLogs}" SelectedItem="{Binding SelectedLog}" Background="Transparent" BorderThickness="0" Margin="10,0,10,6">
+                        <ListBox.ContextMenu>
+                            <ContextMenu Background="#1E1E2F" Foreground="White">
+                                <MenuItem Header="Sao chép" Command="{Binding Path=DataContext.CopySelectedLogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Sao chép tất cả" Command="{Binding Path=DataContext.CopyAllLogsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                                </MenuItem>
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Time}" Foreground="Gray" Margin="0,0,10,0"/>
+                                    <TextBlock Text="{Binding Level}" Foreground="Cyan" Margin="0,0,10,0" Width="50"/>
+                                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
             </Border>
         </Expander>
 

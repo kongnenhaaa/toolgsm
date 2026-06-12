@@ -174,6 +174,30 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _atCommandSelectedPort = string.Empty;
 
+    // #6: Bộ lọc log theo cổng
+    private string _logFilter = string.Empty;
+    public string LogFilter
+    {
+        get => _logFilter;
+        set
+        {
+            _logFilter = value;
+            OnPropertyChanged(nameof(LogFilter));
+            OnPropertyChanged(nameof(FilteredLogs));
+            OnPropertyChanged(nameof(FilteredLogCount));
+        }
+    }
+
+    public System.Collections.IEnumerable FilteredLogs =>
+        string.IsNullOrWhiteSpace(_logFilter)
+            ? (System.Collections.IEnumerable)SystemLogs
+            : SystemLogs.Where(l => l.Message.Contains(_logFilter, StringComparison.OrdinalIgnoreCase));
+
+    public int FilteredLogCount =>
+        string.IsNullOrWhiteSpace(_logFilter)
+            ? SystemLogs.Count
+            : SystemLogs.Count(l => l.Message.Contains(_logFilter, StringComparison.OrdinalIgnoreCase));
+
     public ISeries[] ConnectionSeries { get; set; }
     public ISeries[] SmsSeries { get; set; }
 
@@ -277,6 +301,9 @@ public partial class MainViewModel : ObservableObject
             {
                 SystemLogs.RemoveAt(SystemLogs.Count - 1);
             }
+            // Cập nhật bộ lọc log sau mỗi lần thêm dòng mới
+            OnPropertyChanged(nameof(FilteredLogs));
+            OnPropertyChanged(nameof(FilteredLogCount));
         });
     }
 

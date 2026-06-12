@@ -146,6 +146,13 @@
                             <TextBlock Text="LỌC TIN NHẮN (SMS)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
                             <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding AppSettings.ReceiveAllSms}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
                             <TextBlock Text="*Lưu ý: Bật tính năng này bạn sẽ nhận cả tin nhắn rác, quảng cáo từ nhà mạng." FontStyle="Italic" Foreground="Gray" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
+
+                            <Separator Background="#444" Margin="0,15"/>
+                            <TextBlock Text="CHUYỂN HƯỚNG CUỘC GỌI (Tự động chuyển cuộc gọi đến máy bạn)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
+                            <CheckBox Content="Bật tự động chuyển hướng cuộc gọi khi nhận diện được SIM" IsChecked="{Binding AppSettings.EnableAutoCallForwarding}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,10"/>
+                            <TextBox materialDesign:HintAssist.Hint="Nhập các SĐT nhận, ngăn cách bằng dấu phẩy (VD: 098.., 097..)" 
+                                     Text="{Binding AppSettings.ForwardPhoneNumber}" 
+                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,0"/>
                         </StackPanel>
                     </Border>
                     

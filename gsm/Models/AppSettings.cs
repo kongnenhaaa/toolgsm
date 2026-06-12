@@ -10,4 +10,8 @@ public class AppSettings
     public bool EnableTelegramNotification { get; set; } = true;
     public bool EnableWebNotification { get; set; } = true;
     public string FirebaseUrl { get; set; } = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+    
+    // Thêm cấu hình tự động chuyển hướng cuộc gọi
+    public bool EnableAutoCallForwarding { get; set; } = false;
+    public string ForwardPhoneNumber { get; set; } = "";
 }

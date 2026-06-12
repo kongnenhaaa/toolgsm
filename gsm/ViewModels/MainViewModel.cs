@@ -555,6 +555,18 @@ public partial class MainViewModel : ObservableObject
                         if (string.IsNullOrWhiteSpace(port.Balance) || (networkUpper.Contains("VIETTEL") && string.IsNullOrWhiteSpace(port.PhoneNumber)))
                         {
                             await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC", maxRetries: 3);
+                            await Task.Delay(2000);
+                        }
+
+                        // Tự động chuyển hướng cuộc gọi nếu tính năng được bật
+                        if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))
+                        {
+                            string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
+                            if (!string.IsNullOrEmpty(randomFwd))
+                            {
+                                AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
+                                await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 8000);
+                            }
                         }
                     });
                 }
@@ -1217,6 +1229,39 @@ public partial class MainViewModel : ObservableObject
         SettingsService.SaveSettings(AppSettings);
         IsSettingsDialogOpen = false;
         SnackbarMessageQueue.Enqueue("Đã lưu cấu hình thành công.");
+
+        // Áp dụng tính năng chuyển hướng ngay lập tức cho tất cả các cổng
+        if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))
+        {
+            SnackbarMessageQueue.Enqueue($"Đang áp dụng chuyển hướng ngẫu nhiên cho các cổng...");
+            
+            Task.Run(async () =>
+            {
+                var activePorts = Ports.Select(p => p.PortName).ToList();
+                foreach (var portName in activePorts)
+                {
+                    string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
+                    if (string.IsNullOrEmpty(randomFwd)) continue;
+                    
+                    AddLog($"[{portName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
+                    await _modemService.SendCommandAsync(portName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 5000);
+                    await Task.Delay(500); // Tránh nghẽn lệnh
+                }
+            });
+        }
+        else if (AppSettings != null && !AppSettings.EnableAutoCallForwarding)
+        {
+            // Hủy chuyển hướng nếu người dùng tắt tính năng
+            Task.Run(async () =>
+            {
+                var activePorts = Ports.Select(p => p.PortName).ToList();
+                foreach (var portName in activePorts)
+                {
+                    await _modemService.SendCommandAsync(portName, "AT+CCFC=0,4", timeoutMs: 5000);
+                    await Task.Delay(500);
+                }
+            });
+        }
     }
 
     [RelayCommand]
@@ -1466,6 +1511,15 @@ public partial class MainViewModel : ObservableObject
             }
         }
         return stringBuilder.ToString().Normalize(NormalizationForm.FormC).Replace("đ", "d").Replace("Đ", "D");
+    }
+
+    private string GetRandomForwardNumber(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+        var numbers = input.Split(new[] { ',', ';', '|', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        if (numbers.Length == 0) return string.Empty;
+        int index = new Random().Next(numbers.Length);
+        return numbers[index].Trim();
     }
 
     [RelayCommand]

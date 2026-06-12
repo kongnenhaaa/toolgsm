@@ -24,13 +24,18 @@ namespace gsm.Services
         {
             get 
             {
-                var url = SettingsService.Current.FirebaseUrl;
-                if (string.IsNullOrEmpty(url)) url = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
-                if (!url.EndsWith("/")) url += "/";
-                return url;
+                return GetDatabaseUrl();
             }
         }
         private static readonly string _machineId = Environment.MachineName.Replace(".", "_").Replace("$", "").Replace("#", "").Replace("[", "").Replace("]", "");
+
+        private static string GetDatabaseUrl()
+        {
+            var url = SettingsService.Current.FirebaseUrl;
+            if (string.IsNullOrEmpty(url)) url = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+            if (!url.EndsWith("/")) url += "/";
+            return url;
+        }
 
         public FirebaseService(MainViewModel vm)
         {
@@ -183,6 +188,82 @@ namespace gsm.Services
             catch { }
         }
 
+        private async Task UpdateCommandStatusAsync(string cmdId, string status, string? error = null)
+        {
+            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return;
+            try
+            {
+                var payload = new Dictionary<string, object?>
+                {
+                    ["status"] = status,
+                    ["handledBy"] = _machineId,
+                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                };
+                if (!string.IsNullOrWhiteSpace(error)) payload["error"] = error;
+
+                var json = JsonSerializer.Serialize(payload);
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                await _restClient.PatchAsync($"{_databaseUrl}commands/{cmdId}.json", content);
+            }
+            catch { }
+        }
+
+        private async Task WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null)
+        {
+            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return;
+            try
+            {
+                var payload = new
+                {
+                    id = cmdId,
+                    machineId = _machineId,
+                    portId,
+                    recipient,
+                    content,
+                    type,
+                    status,
+                    result,
+                    error,
+                    handledBy = _machineId,
+                    updatedAt = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                };
+
+                var json = JsonSerializer.Serialize(payload);
+                using var contentData = new StringContent(json, Encoding.UTF8, "application/json");
+                await _restClient.PutAsync($"{_databaseUrl}command_results/{cmdId}.json", contentData);
+            }
+            catch { }
+        }
+
+        private async Task UpdateWebCommandStateAsync(string portId, string cmdId, string status, string? error = null)
+        {
+            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(portId) || portId == "ALL") return;
+            try
+            {
+                var payload = new Dictionary<string, object?>
+                {
+                    ["commandId"] = cmdId,
+                    ["commandStatus"] = status,
+                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                };
+
+                if (status == "failed")
+                {
+                    payload["smsSent"] = false;
+                    payload["errorMsg"] = error ?? "Lệnh thất bại";
+                }
+                else if (!string.IsNullOrWhiteSpace(error))
+                {
+                    payload["errorMsg"] = error;
+                }
+
+                var json = JsonSerializer.Serialize(payload);
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
+                await _restClient.PatchAsync($"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json", content);
+            }
+            catch { }
+        }
+
         private void ExecuteAndRemoveCommand(string cmdId, JsonElement cmdData)
         {
             try
@@ -202,9 +283,21 @@ namespace gsm.Services
                     cmdData.TryGetProperty("recipient", out var recipientEl) &&
                     cmdData.TryGetProperty("content", out var contentEl))
                 {
+                    if (cmdData.TryGetProperty("status", out var statusEl))
+                    {
+                        var currentStatus = statusEl.GetString();
+                        if (!string.IsNullOrWhiteSpace(currentStatus) && currentStatus != "queued")
+                        {
+                            return;
+                        }
+                    }
+
                     string portId = portIdEl.GetString() ?? "";
                     string recipient = recipientEl.GetString() ?? "";
                     string content = contentEl.GetString() ?? "";
+                    string type = cmdData.TryGetProperty("type", out var typeEl)
+                        ? typeEl.GetString() ?? (recipient == "USSD" ? "balance" : "sms")
+                        : (recipient == "USSD" ? "balance" : recipient == "SYSTEM" ? "system" : "sms");
 
                     Application.Current.Dispatcher.Invoke(() => 
                     {
@@ -214,25 +307,35 @@ namespace gsm.Services
                     // Xử lý gửi SMS ngầm, đợi kết quả rồi mới xóa khỏi Firebase
                     _ = Task.Run(async () =>
                     {
+                        string finalStatus = "done";
+                        string? finalResult = null;
+                        string? finalError = null;
+
                         try
                         {
+                            await UpdateCommandStatusAsync(cmdId, "running");
+                            await UpdateWebCommandStateAsync(portId, cmdId, "running");
+
                             if (recipient == "USSD" && content == "BALANCE")
                             {
                                 string ussdResult = await _vm.CheckBalanceForPortAsync(portId);
+                                finalResult = ussdResult;
                                 if (ussdResult.Contains("ERROR"))
                                 {
                                     string err = GetHumanReadableError(ussdResult);
+                                    finalStatus = "failed";
+                                    finalError = err;
                                     await SendErrorToWebAsync(portId, err);
                                 }
                                 else 
                                 {
+                                    finalStatus = "done";
                                     // Remove any existing error message but DO NOT set smsSent=true
                                     if (SettingsService.Current.EnableWebNotification)
                                     {
                                         try
                                         {
-                                            using var client = new HttpClient();
-                                            await client.DeleteAsync($"https://toolweb-c7702-default-rtdb.firebaseio.com/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
+                                            await _restClient.DeleteAsync($"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
                                         }
                                         catch { }
                                     }
@@ -241,19 +344,40 @@ namespace gsm.Services
                             else if (recipient == "SYSTEM" && content == "REFRESH_PORT")
                             {
                                 await _vm.RefreshPortAsync(portId);
+                                finalResult = "REFRESH_PORT completed";
+                                finalStatus = "done";
                             }
                             else if (recipient == "SYSTEM" && content == "REFRESH_ALL")
                             {
                                 _vm.RefreshAllPorts();
+                                finalResult = "REFRESH_ALL completed";
+                                finalStatus = "done";
                             }
                             else
                             {
-                                await ExecuteSmsAsync(portId, recipient, content);
+                                finalResult = await ExecuteSmsAsync(portId, recipient, content);
+                                if (finalResult.Contains("ERROR"))
+                                {
+                                    finalStatus = "failed";
+                                    finalError = GetHumanReadableError(finalResult);
+                                }
+                                else
+                                {
+                                    finalStatus = "sent";
+                                }
                             }
                         }
-                        catch { }
+                        catch (Exception ex)
+                        {
+                            finalStatus = "failed";
+                            finalError = ex.Message;
+                            await SendErrorToWebAsync(portId, finalError);
+                        }
                         finally
                         {
+                            await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
+                            await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
+                            await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
                             // Chỉ xóa khi đã xử lý xong (hoặc lỗi), tránh bị dính lệnh vĩnh viễn trên Firebase
                             await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
                         }
@@ -265,7 +389,7 @@ namespace gsm.Services
 
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSemaphores = new();
 
-        private async Task ExecuteSmsAsync(string portId, string recipient, string content)
+        private async Task<string> ExecuteSmsAsync(string portId, string recipient, string content)
         {
             var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
             await sem.WaitAsync();
@@ -297,6 +421,8 @@ namespace gsm.Services
                 {
                     await SendSuccessToWebAsync(portId);
                 }
+
+                return result;
             }
             finally
             {
@@ -340,16 +466,18 @@ namespace gsm.Services
             try
             {
                 using var client = new HttpClient();
-                client.BaseAddress = new Uri("https://toolweb-c7702-default-rtdb.firebaseio.com/");
+                client.BaseAddress = new Uri(GetDatabaseUrl());
                 var json = JsonSerializer.Serialize(new
                 {
                     smsSent = true,
-                    errorMsg = (string?)null
+                    commandStatus = "sent",
+                    errorMsg = (string?)null,
+                    updatedAt = new Dictionary<string, string> { [".sv"] = "timestamp" }
                 });
                 var contentData = new StringContent(json, Encoding.UTF8, "application/json");
 
                 // Cập nhật lên Firebase ở node web_states của máy tính hiện tại
-                await client.PutAsync($"/web_states/machines/{_machineId}/ports/{portId}.json", contentData);
+                await client.PatchAsync($"/web_states/machines/{_machineId}/ports/{portId}.json", contentData);
             }
             catch { }
         }
@@ -360,11 +488,17 @@ namespace gsm.Services
             try
             {
                 using var client = new HttpClient();
-                client.BaseAddress = new Uri("https://toolweb-c7702-default-rtdb.firebaseio.com/");
-                var json = JsonSerializer.Serialize(errorMsg);
+                client.BaseAddress = new Uri(GetDatabaseUrl());
+                var json = JsonSerializer.Serialize(new
+                {
+                    smsSent = false,
+                    commandStatus = "failed",
+                    errorMsg,
+                    updatedAt = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                });
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 // Cập nhật thuộc tính errorMsg vào nhánh web_states của cổng bị lỗi (máy hiện tại)
-                await client.PutAsync($"https://toolweb-c7702-default-rtdb.firebaseio.com/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json", content);
+                await client.PatchAsync($"/web_states/machines/{_machineId}/ports/{portId}.json", content);
             }
             catch { }
         }
@@ -375,11 +509,12 @@ namespace gsm.Services
             try
             {
                 using var client = new HttpClient();
-                client.BaseAddress = new Uri("https://toolweb-c7702-default-rtdb.firebaseio.com/");
+                client.BaseAddress = new Uri(GetDatabaseUrl());
                 // Chỉ xoá trạng thái smsSent và lỗi, GIỮ LẠI trạng thái ẩn (hiddenOtp) và SĐT
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSent.json");
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSentTime.json");
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/commandStatus.json");
             }
             catch { }
         }

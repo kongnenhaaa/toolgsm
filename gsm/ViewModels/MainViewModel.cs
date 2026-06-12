@@ -1485,6 +1485,26 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
+    private void CopyPhoneFromPort(SimPort? port)
+    {
+        if (port != null && !string.IsNullOrEmpty(port.PhoneNumber))
+        {
+            Clipboard.SetText(port.PhoneNumber);
+            SnackbarMessageQueue.Enqueue("Đã sao chép SĐT vào Clipboard.");
+        }
+    }
+
+    [RelayCommand]
+    private void CopyPhone(SmsMessage? sms)
+    {
+        if (sms != null && !string.IsNullOrEmpty(sms.ReceiverPhone))
+        {
+            Clipboard.SetText(sms.ReceiverPhone);
+            SnackbarMessageQueue.Enqueue("Đã sao chép SĐT vào Clipboard.");
+        }
+    }
+
+    [RelayCommand]
     private void CopyAllPhones()
     {
         var phones = Ports

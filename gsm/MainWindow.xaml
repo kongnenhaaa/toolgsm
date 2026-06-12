@@ -121,14 +121,15 @@
                 <Grid Width="500" Margin="20" Background="{StaticResource PanelBackground}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <TextBlock Text="Cài đặt hệ thống" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
                     
-                    <Border Grid.Row="1" Background="#1E1E2E" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="450" Margin="0,0,0,15">
                         <StackPanel>
+                            <Border Background="#1E1E2E" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                                <StackPanel>
                             <TextBlock Text="CẤU HÌNH TELEGRAM BOT" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
                             <TextBox materialDesign:HintAssist.Hint="Nhập Bot Token (từ @BotFather)" 
                                      Text="{Binding AppSettings.TelegramBotToken}" 
@@ -137,10 +138,10 @@
                                      Text="{Binding AppSettings.TelegramChatIds}" 
                                      Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White"/>
                         </StackPanel>
-                    </Border>
+                            </Border>
 
-                    <Border Grid.Row="2" Background="#1E1E2E" CornerRadius="8" Padding="15" Margin="0,0,0,20">
-                        <StackPanel>
+                            <Border Background="#1E1E2E" CornerRadius="8" Padding="15">
+                                <StackPanel>
                             <TextBlock Text="CẤU HÌNH NHẬN THÔNG BÁO" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
                             <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10"/>
                             <TextBox materialDesign:HintAssist.Hint="Nhập Link Web Firebase (Database URL)" 
@@ -182,9 +183,11 @@
                             <CheckBox Content="Bật tự động Ping SIM định kỳ" IsChecked="{Binding AppSettings.EnableSimPing}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
                             <TextBlock Text="*Nếu SIM không phản hồi sẽ báo Telegram + Toast notification" FontStyle="Italic" Foreground="Gray" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
-                    </Border>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
                     
-                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
                         <Button Content="Lưu Cài Đặt" Command="{Binding SaveSettingsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50"/>
                     </StackPanel>
@@ -551,6 +554,7 @@
                     <!-- GSM DataGrid -->
                     <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                         <DataGrid Margin="10" ItemsSource="{Binding Ports}" SelectedItem="{Binding SelectedPort}" 
+                                  PreviewMouseLeftButtonUp="DataGrid_PreviewMouseLeftButtonUp"
                                   AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
                                   RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
                                   Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
@@ -643,20 +647,7 @@
                             
                             <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
-                            
-                            <!-- #16: Click-to-copy OTP (GSM Tab) -->
-                            <DataGridTemplateColumn Header="OTP" Width="100">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Button Content="{Binding Otp}" 
-                                                Command="{Binding Path=DataContext.CopyOtpFromPortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                                CommandParameter="{Binding}"
-                                                Background="Transparent" BorderThickness="0" Foreground="#FF9800"
-                                                Cursor="Hand" Padding="4,0" ToolTip="Click để copy OTP"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-
+                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
                         </DataGrid.Columns>
@@ -712,6 +703,7 @@
                     
                     <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                         <DataGrid Margin="10" ItemsSource="{Binding SmsMessages}"
+                                  PreviewMouseLeftButtonUp="DataGrid_PreviewMouseLeftButtonUp"
                                   AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
                                   RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
                                   Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
@@ -743,20 +735,7 @@
                             <DataGridTextColumn Header="Số điện thoại" Binding="{Binding ReceiverPhone}" Width="150"/>
                             <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             <DataGridTextColumn Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
-                            
-                            <!-- #16: Click-to-copy OTP (SMS Tab) -->
-                            <DataGridTemplateColumn Header="OTP" Width="100">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Button Content="{Binding Otp}" 
-                                                Command="{Binding Path=DataContext.CopyOtpCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                                CommandParameter="{Binding}"
-                                                Background="Transparent" BorderThickness="0" Foreground="#FF9800"
-                                                Cursor="Hand" Padding="4,0" ToolTip="Click để copy OTP"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-
+                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
                             <DataGridTextColumn Header="Chuyển lời" Binding="{Binding ForwardContent}" Width="100"/>
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="800"/>

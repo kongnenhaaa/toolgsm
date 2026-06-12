@@ -1683,27 +1683,59 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    private static readonly object _cacheLock = new object();
+
     private void LoadSimCache()
     {
-        if (File.Exists(_cacheFilePath))
+        lock (_cacheLock)
         {
-            try
+            if (File.Exists(_cacheFilePath))
             {
-                string json = File.ReadAllText(_cacheFilePath);
-                var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                if (dict != null) _simCache = new ConcurrentDictionary<string, string>(dict);
+                try
+                {
+                    string json = File.ReadAllText(_cacheFilePath);
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                    if (dict != null) _simCache = new ConcurrentDictionary<string, string>(dict);
+                }
+                catch { }
             }
-            catch { }
         }
     }
 
     private void SaveSimCache()
     {
-        try
+        lock (_cacheLock)
         {
-            var json = JsonSerializer.Serialize(_simCache);
-            File.WriteAllText(_cacheFilePath, json);
+            try
+            {
+                var dictToSave = new Dictionary<string, string>();
+                if (File.Exists(_cacheFilePath))
+                {
+                    try
+                    {
+                        string existingJson = File.ReadAllText(_cacheFilePath);
+                        var diskDict = JsonSerializer.Deserialize<Dictionary<string, string>>(existingJson);
+                        if (diskDict != null)
+                        {
+                            foreach (var kvp in diskDict)
+                            {
+                                dictToSave[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                // Add or update with current session's cache
+                foreach (var kvp in _simCache)
+                {
+                    dictToSave[kvp.Key] = kvp.Value;
+                }
+
+                var json = JsonSerializer.Serialize(dictToSave);
+                File.WriteAllText(_cacheFilePath, json);
+            }
+            catch { }
         }
-        catch { }
     }
 }

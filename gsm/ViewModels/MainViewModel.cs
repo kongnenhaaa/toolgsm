@@ -2039,7 +2039,13 @@ public partial class MainViewModel : ObservableObject
                 string hexChar = hexString.Substring(i, 4);
                 sb.Append((char)Convert.ToInt32(hexChar, 16));
             }
-            return sb.ToString();
+
+            string decoded = sb.ToString();
+            if (Regex.IsMatch(hexString, @"^\d+$") && decoded.Any(c => c > 0x2E00))
+            {
+                return hexString;
+            }
+            return decoded;
         }
         catch
         {

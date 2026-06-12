@@ -376,8 +376,10 @@ namespace gsm.Services
             {
                 using var client = new HttpClient();
                 client.BaseAddress = new Uri("https://toolweb-c7702-default-rtdb.firebaseio.com/");
-                // Xoá toàn bộ trạng thái (lỗi, smsSent, v.v.) của cổng này khi khởi động lại
-                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}.json");
+                // Chỉ xoá trạng thái smsSent và lỗi, GIỮ LẠI trạng thái ẩn (hiddenOtp) và SĐT
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSent.json");
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSentTime.json");
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
             }
             catch { }
         }

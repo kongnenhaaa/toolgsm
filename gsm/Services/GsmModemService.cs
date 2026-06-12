@@ -402,7 +402,7 @@ public class GsmModemService : IGsmModemService
     {
         // Kéo dài thời gian chờ cho các lệnh đặc biệt
         if (command.StartsWith("AT+CUSD")) timeoutMs = 15000;
-        else if (command.StartsWith("AT+CMGR")) timeoutMs = 10000;
+        else if (command.StartsWith("AT+CMGR")) timeoutMs = 20000;
 
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen)
         {

@@ -785,6 +785,13 @@ public partial class MainViewModel : ObservableObject
                 string extractedOtp = "N/A";
                 string cleanContent = e.Data;
 
+                // Nếu quá trình đọc tin nhắn gặp lỗi (VD: Lỗi Timeout Semaphore do đang kẹt gửi SMS)
+                if (cleanContent.StartsWith("ERROR:"))
+                {
+                    AddLog($"[{e.PortName}] LỖI đọc tin nhắn: {cleanContent}. Đang bỏ qua và không xóa để tránh mất OTP.", "WARN");
+                    return;
+                }
+
                 // 1. Tìm người gửi (Sender)
                 var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
                 if (senderMatch.Success)

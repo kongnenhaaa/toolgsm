@@ -116,6 +116,35 @@
             </Grid>
         </materialDesign:DialogHost.DialogContent>
 
+        <materialDesign:DialogHost IsOpen="{Binding IsCustomUssdDialogOpen}" CloseOnClickAway="True">
+            <materialDesign:DialogHost.DialogContent>
+                <Grid Width="400" Margin="20" Background="{StaticResource PanelBackground}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Chạy USSD Tùy Chỉnh" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
+                    
+                    <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Nhập lệnh USSD (VD: *098# hoặc *101*1#)" 
+                             Text="{Binding CustomUssdCode, UpdateSourceTrigger=PropertyChanged}" 
+                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,20" FontSize="16"/>
+
+                    <StackPanel Grid.Row="2" Margin="0,0,0,20">
+                        <TextBlock Text="Chạy USSD cho:" Margin="0,0,0,10" Foreground="Gray" FontWeight="SemiBold"/>
+                        <RadioButton Content="Chỉ cổng đang chọn" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,5"/>
+                        <RadioButton Content="Các cổng đã được tick chọn (☑)" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,5"/>
+                        <RadioButton Content="TẤT CẢ cổng đang hoạt động" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,5"/>
+                    </StackPanel>
+                    
+                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
+                        <Button Content="Chạy Hàng Loạt" Command="{Binding ExecuteCustomUssdCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#FF9800" BorderBrush="#FF9800"/>
+                    </StackPanel>
+                </Grid>
+            </materialDesign:DialogHost.DialogContent>
+
         <materialDesign:DialogHost IsOpen="{Binding IsSettingsDialogOpen}" CloseOnClickAway="True">
             <materialDesign:DialogHost.DialogContent>
                 <Grid Width="500" Margin="20" Background="{StaticResource PanelBackground}">
@@ -538,6 +567,7 @@
                             <Button Content="Sắp xếp cổng" Background="#F06292" Command="{Binding SortPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Gia hạn SIM" Background="#FFA726" Command="{Binding RenewSimCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Kiểm tra số dư" Background="#424242" Command="{Binding CheckBalanceCommand}" Style="{StaticResource ModernButtonStyle}"/>
+                            <Button Content="USSD Tùy chỉnh" Background="#424242" Command="{Binding OpenCustomUssdDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Làm mới cổng" Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Đổi IMEI" Background="#424242" Command="{Binding ChangeImeiCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Mạng &amp; SIM" Background="#29B6F6" Command="{Binding OpenNetworkSimDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
@@ -579,6 +609,9 @@
                                 </MenuItem>
                                 <MenuItem Header="Kiểm tra số dư" Command="{Binding CheckBalanceCommand}" Padding="10">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="Magnify"/></MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="USSD Tùy chỉnh" Command="{Binding Path=DataContext.OpenCustomUssdDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Checked" Padding="10">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="CodeBraces"/></MenuItem.Icon>
                                 </MenuItem>
                                 <MenuItem Header="Tự động đăng ký EZ" Command="{Binding Path=DataContext.OpenRegisterEzDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10" Foreground="#2196F3">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="AutoFix"/></MenuItem.Icon>
@@ -808,5 +841,6 @@
             </materialDesign:DialogHost>
         </materialDesign:DialogHost>
     </materialDesign:DialogHost>
+</materialDesign:DialogHost>
 </materialDesign:DialogHost>
 </Window>

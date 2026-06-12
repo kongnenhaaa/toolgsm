@@ -106,6 +106,15 @@ public partial class MainViewModel : ObservableObject
     private string _composeSmsMode = "Selected";
 
     [ObservableProperty]
+    private string _customUssdCode = string.Empty;
+
+    [ObservableProperty]
+    private bool _isCustomUssdDialogOpen;
+
+    [ObservableProperty]
+    private string _customUssdMode = "Selected";
+
+    [ObservableProperty]
     private bool _isRegisterEzDialogOpen;
 
     [ObservableProperty]
@@ -1583,6 +1592,55 @@ public partial class MainViewModel : ObservableObject
         foreach (var port in targetPorts)
         {
             _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Nạp tiền", logResult: true);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenCustomUssdDialog(string mode)
+    {
+        CustomUssdMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
+        CustomUssdCode = string.Empty;
+        IsCustomUssdDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private async Task ExecuteCustomUssdAsync()
+    {
+        IsCustomUssdDialogOpen = false;
+        if (string.IsNullOrWhiteSpace(CustomUssdCode))
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng nhập mã USSD (VD: *098#).");
+            return;
+        }
+
+        string ussdCode = CustomUssdCode.Trim();
+
+        var targetPorts = new System.Collections.Generic.List<SimPort>();
+        if (CustomUssdMode == "Selected")
+        {
+            if (SelectedPort != null) targetPorts.Add(SelectedPort);
+        }
+        else if (CustomUssdMode == "Checked")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        }
+        else if (CustomUssdMode == "All")
+        {
+            targetPorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
+        }
+
+        if (targetPorts.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Không có cổng nào được chọn để chạy USSD.");
+            return;
+        }
+
+        SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh USSD cho {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu gửi USSD {ussdCode} cho {targetPorts.Count} cổng.");
+
+        foreach (var port in targetPorts)
+        {
+            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "USSD Tùy Chỉnh", logResult: true);
         }
     }
 

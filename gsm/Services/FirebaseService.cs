@@ -226,7 +226,16 @@ namespace gsm.Services
                                 }
                                 else 
                                 {
-                                    await SendSuccessToWebAsync(portId);
+                                    // Remove any existing error message but DO NOT set smsSent=true
+                                    if (SettingsService.Current.EnableWebNotification)
+                                    {
+                                        try
+                                        {
+                                            using var client = new HttpClient();
+                                            await client.DeleteAsync($"https://toolweb-c7702-default-rtdb.firebaseio.com/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
+                                        }
+                                        catch { }
+                                    }
                                 }
                             }
                             else if (recipient == "SYSTEM" && content == "REFRESH_PORT")

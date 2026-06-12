@@ -66,4 +66,7 @@ public partial class SimPort : ObservableObject
     // New Pro Features
     [ObservableProperty]
     private int _signalStrength = 0; // 0 to 100
+
+    [ObservableProperty]
+    private string _forwardedTo = string.Empty; // SĐT đang được chuyển hướng cuộc gọi đến
 }

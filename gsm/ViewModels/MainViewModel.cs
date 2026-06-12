@@ -35,6 +35,9 @@ public partial class MainViewModel : ObservableObject
     private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(100, 100);
     private DateTime _lastUssdGlobalUtc = DateTime.MinValue;
 
+    // Fix #3: Dùng static Random để tránh lỗi seed trùng khi gọi liên tiếp nhanh
+    private static readonly Random _rng = new Random();
+
     // Đánh dấu cổng nào đang có SMS được gửi để USSD tự nhường đường (tránh tranh Semaphore)
     public readonly ConcurrentDictionary<string, bool> SmsInProgressPorts = new();
 
@@ -207,6 +210,26 @@ public partial class MainViewModel : ObservableObject
 
         // Khởi động Firebase Service chạy ngầm
         new FirebaseService(this).Start();
+
+        // #7: Tự động làm mới số dư mỗi 30 phút
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(30));
+                var activePorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
+                if (activePorts.Count > 0)
+                {
+                    AddLog("[Hệ THỐNG] Tự động kiểm tra số dư định kỳ (30 phút/lần)...");
+                    foreach (var p in activePorts)
+                    {
+                        string ussdCode = GetUssdCodeForProvider(p.NetworkProvider);
+                        await SendUssdThrottledAsync(p.PortName, ussdCode, "Làm mới số dư tự động", maxRetries: 1);
+                        await Task.Delay(2000);
+                    }
+                }
+            }
+        });
     }
 
     private void UpdateDashboard()
@@ -235,7 +258,15 @@ public partial class MainViewModel : ObservableObject
     {
         try 
         {
-            System.IO.File.AppendAllText("system_log.txt", $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}\n");
+            const string logFile = "system_log.txt";
+            // Fix #2: Giới hạn log file tối đa 5MB, tự động xoay vòng
+            var fi = new System.IO.FileInfo(logFile);
+            if (fi.Exists && fi.Length > 5 * 1024 * 1024) // 5MB
+            {
+                string archive = $"system_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
+                System.IO.File.Move(logFile, archive);
+            }
+            System.IO.File.AppendAllText(logFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}\n");
         }
         catch { }
 
@@ -565,7 +596,16 @@ public partial class MainViewModel : ObservableObject
                             if (!string.IsNullOrEmpty(randomFwd))
                             {
                                 AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                                await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 8000);
+                                string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 8000);
+                                if (ccfcResult.Contains("OK"))
+                                {
+                                    Application.Current.Dispatcher.Invoke(() =>
+                                    {
+                                        port.ForwardCount++;
+                                        port.ForwardedTo = randomFwd; // #4: Lưu số đang chưa hướng để hiển thị lên bảng
+                                    });
+                                    AddLog($"[{port.PortName}] Chuyển hướng thành công → {randomFwd} (Tổng: {port.ForwardCount})", "SUCCESS");
+                                }
                             }
                         }
                     });
@@ -892,8 +932,20 @@ public partial class MainViewModel : ObservableObject
     {
         Application.Current.Dispatcher.InvokeAsync(async () =>
         {
+            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+            string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
+
             AddLog($"[{e.PortName}] Có cuộc gọi đến từ SĐT: {e.Data}. Đang tự động nhấc máy...", "INFO");
             SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có cuộc gọi từ {e.Data}");
+
+            // Fix #4: Gửi thông báo Telegram khi có cuộc gọi đến
+            string callerDisplay = string.IsNullOrWhiteSpace(e.Data) ? "Số ẩn" : e.Data;
+            string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
+            _ = TelegramService.SendMessageAsync(
+                $"📞 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
+                $"📱 SIM nhận: {receiverPhone}\n" +
+                $"☎️ Người gọi: <code>{safeCallerHtml}</code>"
+            );
 
             // Gửi lệnh nhận cuộc gọi
             await _modemService.SendCommandAsync(e.PortName, "ATA");
@@ -1237,14 +1289,22 @@ public partial class MainViewModel : ObservableObject
             
             Task.Run(async () =>
             {
-                var activePorts = Ports.Select(p => p.PortName).ToList();
-                foreach (var portName in activePorts)
+                var activePorts = Ports.ToList();
+                foreach (var port in activePorts)
                 {
                     string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
                     if (string.IsNullOrEmpty(randomFwd)) continue;
                     
-                    AddLog($"[{portName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                    await _modemService.SendCommandAsync(portName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 5000);
+                    AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
+                    string res = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 5000);
+                    if (res.Contains("OK"))
+                    {
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.ForwardedTo = randomFwd; // #4: Cập nhật cột hiển thị
+                            port.ForwardCount++;
+                        });
+                    }
                     await Task.Delay(500); // Tránh nghẽn lệnh
                 }
             });
@@ -1254,14 +1314,34 @@ public partial class MainViewModel : ObservableObject
             // Hủy chuyển hướng nếu người dùng tắt tính năng
             Task.Run(async () =>
             {
-                var activePorts = Ports.Select(p => p.PortName).ToList();
-                foreach (var portName in activePorts)
+                var activePorts = Ports.ToList();
+                foreach (var port in activePorts)
                 {
-                    await _modemService.SendCommandAsync(portName, "AT+CCFC=0,4", timeoutMs: 5000);
+                    await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
+                    Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
                     await Task.Delay(500);
                 }
             });
         }
+    }
+
+    // #5: Xoá chuyển hướng ngay lập tức cho tất cả SIM
+    [RelayCommand]
+    private void ClearForwardingAll()
+    {
+        SnackbarMessageQueue.Enqueue("Đang xóa chuyển hướng cho tất cả cổng...");
+        Task.Run(async () =>
+        {
+            var activePorts = Ports.ToList();
+            foreach (var port in activePorts)
+            {
+                string res = await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
+                if (res.Contains("OK"))
+                    Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
+                await Task.Delay(300);
+            }
+            AddLog("[Đã xóa chuyển hướng] Hoàn thành cho tất cả cổng.", "SUCCESS");
+        });
     }
 
     [RelayCommand]
@@ -1516,10 +1596,14 @@ public partial class MainViewModel : ObservableObject
     private string GetRandomForwardNumber(string input)
     {
         if (string.IsNullOrWhiteSpace(input)) return string.Empty;
-        var numbers = input.Split(new[] { ',', ';', '|', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        var numbers = input.Split(new[] { ',', ';', '|', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                           .Where(n => !string.IsNullOrWhiteSpace(n))
+                           .Select(n => n.Trim())
+                           .ToArray();
         if (numbers.Length == 0) return string.Empty;
-        int index = new Random().Next(numbers.Length);
-        return numbers[index].Trim();
+        // Fix #3: Dùng static _rng thay vì new Random() mỗi lần
+        int index = _rng.Next(numbers.Length);
+        return numbers[index];
     }
 
     [RelayCommand]

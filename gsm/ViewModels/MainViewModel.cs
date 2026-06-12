@@ -235,6 +235,14 @@ public partial class MainViewModel : ObservableObject
         // Khởi động Firebase Service chạy ngầm
         new FirebaseService(this).Start();
 
+        // API Server (port 8080)
+        if (SettingsService.Current.EnableApiServer)
+        {
+            var apiServer = new ApiServerService(this);
+            apiServer.Start(SettingsService.Current.ApiServerPort);
+            AddLog($"[API] REST API server đang chạy tại http://localhost:{SettingsService.Current.ApiServerPort}/api/");
+        }
+
         // #7: Tự động làm mới số dư mỗi 30 phút
         _ = Task.Run(async () =>
         {
@@ -244,13 +252,52 @@ public partial class MainViewModel : ObservableObject
                 var activePorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
                 if (activePorts.Count > 0)
                 {
-                    AddLog("[Hệ THỐNG] Tự động kiểm tra số dư định kỳ (30 phút/lần)...");
+                    AddLog("[HỆ THỐNG] Tự động kiểm tra số dư định kỳ (30 phút/lần)...");
                     foreach (var p in activePorts)
                     {
                         string ussdCode = GetUssdCodeForProvider(p.NetworkProvider);
                         await SendUssdThrottledAsync(p.PortName, ussdCode, "Làm mới số dư tự động", maxRetries: 1);
                         await Task.Delay(2000);
                     }
+                }
+            }
+        });
+
+        // Ping SIM định kỳ để phát hiện SIM mất kết nối
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                int intervalMin = SettingsService.Current.SimPingIntervalMinutes > 0
+                    ? SettingsService.Current.SimPingIntervalMinutes : 5;
+                await Task.Delay(TimeSpan.FromMinutes(intervalMin));
+
+                if (!SettingsService.Current.EnableSimPing) continue;
+
+                var portsCopy = Ports.ToList();
+                foreach (var p in portsCopy)
+                {
+                    try
+                    {
+                        string resp = await _modemService.SendCommandAsync(p.PortName, "AT", timeoutMs: 3000, silent: true);
+                        if (!resp.Contains("OK"))
+                        {
+                            if (p.Status != "Không phản hồi")
+                            {
+                                Application.Current.Dispatcher.Invoke(() => p.Status = "Không phản hồi");
+                                AddLog($"[{p.PortName}] SIM không phản hồi khi ping!", "WARN");
+                                _ = TelegramService.SendMessageAsync($"⚠️ <b>SIM Không Phản Hồi</b>\nCổng: {p.PortName}\nSĐT: {p.PhoneNumber}");
+                                ToastService.ShowSimOffline(p.PortName);
+                            }
+                        }
+                        else if (p.Status == "Không phản hồi")
+                        {
+                            Application.Current.Dispatcher.Invoke(() => p.Status = "Đang hoạt động");
+                            AddLog($"[{p.PortName}] SIM đã khôi phục kết nối.", "SUCCESS");
+                        }
+                    }
+                    catch { }
+                    await Task.Delay(500);
                 }
             }
         });
@@ -850,7 +897,47 @@ public partial class MainViewModel : ObservableObject
                         return;
                     }
 
-                    // CHỈ NHẬN ZALO: Nếu không phải tin nhắn Zalo thì xóa luôn
+                    // --- WHITELIST / BLACKLIST ---
+                var settings = SettingsService.Current;
+
+                if (settings.EnableSenderBlacklist && !string.IsNullOrWhiteSpace(settings.SenderBlacklist))
+                {
+                    var blacklist = settings.SenderBlacklist
+                        .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(s => s.Trim())
+                        .ToArray();
+
+                    bool isBlocked = blacklist.Any(b =>
+                        senderPhone.IndexOf(b, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    if (isBlocked)
+                    {
+                        AddLog($"[{e.PortName}] Đã chặn (Blacklist): {senderPhone}", "WARN");
+                        if (!string.IsNullOrEmpty(e.MsgIndex))
+                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                        return;
+                    }
+                }
+
+                if (settings.EnableSenderWhitelist && !string.IsNullOrWhiteSpace(settings.SenderWhitelist))
+                {
+                    var whitelist = settings.SenderWhitelist
+                        .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(s => s.Trim())
+                        .ToArray();
+
+                    bool isAllowed = whitelist.Any(w =>
+                        senderPhone.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
+
+                    if (!isAllowed)
+                    {
+                        AddLog($"[{e.PortName}] Bỏ qua (không trong Whitelist): {senderPhone}");
+                        if (!string.IsNullOrEmpty(e.MsgIndex))
+                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                        return;
+                    }
+                }
+                // --- END WHITELIST / BLACKLIST ---
                     bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
                                   senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0;
 
@@ -928,7 +1015,13 @@ public partial class MainViewModel : ObservableObject
                 {
                     AddLog($"[{e.PortName}] Đã bắt được OTP: {extractedOtp} từ {senderPhone}", "SUCCESS");
                     SnackbarMessageQueue.Enqueue($"[{e.PortName}] Đã bắt được OTP: {extractedOtp}");
-                    
+
+                    // Lưu lịch sử OTP vào file CSV
+                    OtpHistoryService.Append(e.PortName, receiverPhone, senderPhone, extractedOtp, cleanContent);
+
+                    // Thông báo Toast Windows
+                    ToastService.ShowOtp(e.PortName, receiverPhone, extractedOtp, senderPhone);
+
                     // Chỉ xóa tin nhắn sau khi đã trích xuất OTP thành công
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
@@ -1377,6 +1470,16 @@ public partial class MainViewModel : ObservableObject
         if (sms != null && !string.IsNullOrEmpty(sms.Otp))
         {
             Clipboard.SetText(sms.Otp);
+            SnackbarMessageQueue.Enqueue("Đã sao chép OTP vào Clipboard.");
+        }
+    }
+
+    [RelayCommand]
+    private void CopyOtpFromPort(SimPort? port)
+    {
+        if (port != null && !string.IsNullOrEmpty(port.Otp))
+        {
+            Clipboard.SetText(port.Otp);
             SnackbarMessageQueue.Enqueue("Đã sao chép OTP vào Clipboard.");
         }
     }
@@ -1849,6 +1952,79 @@ public partial class MainViewModel : ObservableObject
     }
 
     private static readonly object _cacheLock = new object();
+
+    // Property hiển thị địa chỉ API ở Status Bar
+    public string ApiServerUrl =>
+        SettingsService.Current.EnableApiServer
+            ? $"API: http://localhost:{SettingsService.Current.ApiServerPort}/api"
+            : string.Empty;
+
+
+    // Import file Excel → gửi SMS hàng loạt
+    [RelayCommand]
+    private async Task ImportAndSendBulkSms()
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title  = "Chọn file Excel chứa danh sách SMS",
+            Filter = "Excel files (*.xlsx)|*.xlsx|Tất cả file|*.*"
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var items = BulkSmsService.ReadFromExcel(dialog.FileName);
+            if (items.Count == 0)
+            {
+                SnackbarMessageQueue.Enqueue("File Excel không có dữ liệu hợp lệ (cần từ dòng 2 trở đi, cột A = SĐT, cột B = Nội dung).");
+                return;
+            }
+
+            // Lấy danh sách cổng đang hoạt động
+            var activePorts = Ports.Where(p => p.Status == "Đang hoạt động").Select(p => p.PortName).ToList();
+            if (activePorts.Count == 0)
+            {
+                SnackbarMessageQueue.Enqueue("Không có cổng SIM nào đang hoạt động.");
+                return;
+            }
+
+            SnackbarMessageQueue.Enqueue($"Đang gửi {items.Count} SMS... (mỗi tin cách nhau 2 giây)");
+            AddLog($"[BULK SMS] Bắt đầu gửi {items.Count} tin nhắn từ file: {System.IO.Path.GetFileName(dialog.FileName)}");
+
+            int portIdx = 0;
+            int sent = 0, failed = 0;
+
+            foreach (var (phone, content) in items)
+            {
+                // Phân phối luân phiên giữa các cổng SIM
+                string sourcePort = activePorts[portIdx % activePorts.Count];
+                portIdx++;
+
+                try
+                {
+                    await _modemService.SendSmsAsync(sourcePort, phone, content, timeoutMs: 30000);
+                    AddLog($"[BULK SMS] [{sourcePort}] → {phone}: OK", "SUCCESS");
+                    sent++;
+                }
+                catch (Exception ex)
+                {
+                    AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {ex.Message}", "ERROR");
+                    failed++;
+                }
+
+                await Task.Delay(2000); // 2 giây giữa các tin
+            }
+
+            AddLog($"[BULK SMS] Hoàn thành: {sent} thành công, {failed} thất bại.", sent > 0 ? "SUCCESS" : "ERROR");
+            SnackbarMessageQueue.Enqueue($"Gửi xong: {sent}/{items.Count} tin nhắn thành công.");
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[BULK SMS] Lỗi đọc file: {ex.Message}", "ERROR");
+            SnackbarMessageQueue.Enqueue($"Lỗi: {ex.Message}");
+        }
+    }
 
     private void LoadSimCache()
     {

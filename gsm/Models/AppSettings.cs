@@ -11,7 +11,22 @@ public class AppSettings
     public bool EnableWebNotification { get; set; } = true;
     public string FirebaseUrl { get; set; } = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
     
-    // Thêm cấu hình tự động chuyển hướng cuộc gọi
+    // Tự động chuyển hướng cuộc gọi
     public bool EnableAutoCallForwarding { get; set; } = false;
     public string ForwardPhoneNumber { get; set; } = "";
+
+    // Whitelist/Blacklist người gửi SMS (phân cách bằng dấu phẩy)
+    public bool EnableSenderBlacklist { get; set; } = false;
+    public string SenderBlacklist { get; set; } = "";  // VD: "QCBMB, spam123, 1900xxxx"
+
+    public bool EnableSenderWhitelist { get; set; } = false;
+    public string SenderWhitelist { get; set; } = "";  // Chỉ nhận từ các số này
+    
+    // HTTP API Server
+    public bool EnableApiServer { get; set; } = true;
+    public int ApiServerPort { get; set; } = 8080;
+
+    // Ping SIM
+    public bool EnableSimPing { get; set; } = true;
+    public int SimPingIntervalMinutes { get; set; } = 5;
 }

@@ -17,6 +17,13 @@
         TextOptions.TextRenderingMode="Auto"
         FontFamily="{DynamicResource MaterialDesignFont}">
 
+    <Window.InputBindings>
+        <!-- #14: Hotkeys (Phím tắt) -->
+        <KeyBinding Key="R" Modifiers="Ctrl" Command="{Binding RefreshPortsCommand}" />
+        <KeyBinding Key="B" Modifiers="Ctrl" Command="{Binding CheckBalanceCommand}" />
+        <KeyBinding Key="F" Modifiers="Ctrl" Command="{Binding FocusLogFilterCommand}" />
+    </Window.InputBindings>
+
     <Window.Resources>
         <converters:StatusToColorConverter x:Key="StatusToColorConverter"/>
         <converters:EqualityToBooleanConverter x:Key="EqualityToBooleanConverter"/>
@@ -153,6 +160,27 @@
                             <TextBox materialDesign:HintAssist.Hint="Nhập các SĐT nhận, ngăn cách bằng dấu phẩy (VD: 098.., 097..)" 
                                      Text="{Binding AppSettings.ForwardPhoneNumber}" 
                                      Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,0"/>
+
+                            <Separator Background="#444" Margin="0,15"/>
+                            <TextBlock Text="LỌC TỪ ĐỘNG (SENDER FILTER)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
+                            <CheckBox Content="Bật Blacklist (Chặn người gửi trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderBlacklist}" Foreground="#E53935" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBox materialDesign:HintAssist.Hint="Blacklist: VD: QCBMB, 1900xxxx, spamsender" 
+                                     Text="{Binding AppSettings.SenderBlacklist}" 
+                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
+                            <CheckBox Content="Bật Whitelist (Chỉ nhận từ số trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderWhitelist}" Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBox materialDesign:HintAssist.Hint="Whitelist: VD: ZALO, FACEBOOK, 0987654321" 
+                                     Text="{Binding AppSettings.SenderWhitelist}" 
+                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
+
+                            <Separator Background="#444" Margin="0,15"/>
+                            <TextBlock Text="HTTP API SERVER (cổng 8080)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,10"/>
+                            <CheckBox Content="Bật HTTP API Server" IsChecked="{Binding AppSettings.EnableApiServer}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBlock Text="Endpoints: GET /api/ports  |  GET /api/otp/{port}  |  POST /api/send-sms  |  GET /api/history" Foreground="Gray" FontSize="10" Margin="25,0,0,5" TextWrapping="Wrap"/>
+
+                            <Separator Background="#444" Margin="0,15"/>
+                            <TextBlock Text="PING SIM (Kiểm tra SIM còn sống)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,10"/>
+                            <CheckBox Content="Bật tự động Ping SIM định kỳ" IsChecked="{Binding AppSettings.EnableSimPing}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
+                            <TextBlock Text="*Nếu SIM không phản hồi sẽ báo Telegram + Toast notification" FontStyle="Italic" Foreground="Gray" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
                     </Border>
                     
@@ -515,6 +543,7 @@
                             <Button Content="Đăng ký EZ Tự Động" Background="#2196F3" Command="{Binding OpenRegisterEzDialogCommand}" CommandParameter="Selected" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tự động đọc tin nhắn cuối và gửi mã EZ"/>
                             <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             <Button Content="Xóa chuyển hướng" Background="#E53935" Command="{Binding ClearForwardingAllCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa AT+CCFC cho tất cả SIM ngay lập tức"/>
+                            <Button Content="Gửi SMS Hàng Loạt (Excel)" Background="#FF9800" Command="{Binding ImportAndSendBulkSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Import .xlsx (cột A: SĐT, cột B: Nội dung) rồi gửi tự động"/>
                             <Button Content="Test OTP (Máy ảo)" Background="#FF5722" Command="{Binding SimulateSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tạo một tin nhắn chứa OTP ảo để test hệ thống"/>
                         </WrapPanel>
                     </Border>
@@ -614,7 +643,20 @@
                             
                             <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
-                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
+                            
+                            <!-- #16: Click-to-copy OTP (GSM Tab) -->
+                            <DataGridTemplateColumn Header="OTP" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="{Binding Otp}" 
+                                                Command="{Binding Path=DataContext.CopyOtpFromPortCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                CommandParameter="{Binding}"
+                                                Background="Transparent" BorderThickness="0" Foreground="#FF9800"
+                                                Cursor="Hand" Padding="4,0" ToolTip="Click để copy OTP"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+
                             <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
                         </DataGrid.Columns>
@@ -701,7 +743,20 @@
                             <DataGridTextColumn Header="Số điện thoại" Binding="{Binding ReceiverPhone}" Width="150"/>
                             <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             <DataGridTextColumn Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
-                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
+                            
+                            <!-- #16: Click-to-copy OTP (SMS Tab) -->
+                            <DataGridTemplateColumn Header="OTP" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="{Binding Otp}" 
+                                                Command="{Binding Path=DataContext.CopyOtpCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                CommandParameter="{Binding}"
+                                                Background="Transparent" BorderThickness="0" Foreground="#FF9800"
+                                                Cursor="Hand" Padding="4,0" ToolTip="Click để copy OTP"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+
                             <DataGridTextColumn Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
                             <DataGridTextColumn Header="Chuyển lời" Binding="{Binding ForwardContent}" Width="100"/>
                             <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="800"/>

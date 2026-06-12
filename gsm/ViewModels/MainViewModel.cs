@@ -821,6 +821,12 @@ public partial class MainViewModel : ObservableObject
                     _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Chọn sai đầu số rồi kìa");
                     isZaloError = true;
                 }
+                else if (cleanContentLower.Contains("khong thuc hien yeu cau") || cleanContentLower.Contains("không thực hiện yêu cầu"))
+                {
+                    AddLog($"[{e.PortName}] LỖI ZALO: SĐT đang không có yêu cầu mã xác thực Zalo.", "ERROR");
+                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ SĐT đang không yêu cầu mã");
+                    isZaloError = true;
+                }
                 else if (cleanContentLower.Contains("khong du tien") || cleanContentLower.Contains("không đủ tiền"))
                 {
                     AddLog($"[{e.PortName}] LỖI SIM: Tài khoản không đủ tiền để gửi SMS đến tổng đài Zalo! Vui lòng nạp thêm tiền.", "ERROR");
@@ -948,7 +954,8 @@ public partial class MainViewModel : ObservableObject
                 }
                 // --- END WHITELIST / BLACKLIST ---
                     bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
-                                  senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0;
+                                  senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                  senderPhone.Contains("8500") || senderPhone.Contains("7539");
 
                     if (!isZalo)
                     {

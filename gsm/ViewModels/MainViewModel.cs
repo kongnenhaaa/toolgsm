@@ -749,6 +749,9 @@ public partial class MainViewModel : ObservableObject
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
                 foreach (var sms in SmsMessages.Where(s => s.PortName == e.PortName)) sms.Status = "Đang hoạt động";
+                
+                // Xoá lỗi cũ trên Firebase (nếu có) khi cổng kết nối thành công
+                _ = gsm.Services.FirebaseService.ClearWebStateAsync(e.PortName);
             }
         });
     }

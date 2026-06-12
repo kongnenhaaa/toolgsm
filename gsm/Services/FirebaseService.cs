@@ -349,5 +349,18 @@ namespace gsm.Services
             }
             catch { }
         }
+
+        public static async Task ClearWebStateAsync(string portId)
+        {
+            if (!SettingsService.Current.EnableWebNotification) return;
+            try
+            {
+                using var client = new HttpClient();
+                client.BaseAddress = new Uri("https://toolweb-c7702-default-rtdb.firebaseio.com/");
+                // Xoá toàn bộ trạng thái (lỗi, smsSent, v.v.) của cổng này khi khởi động lại
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}.json");
+            }
+            catch { }
+        }
     }
 }

@@ -25,7 +25,10 @@ public partial class MainViewModel : ObservableObject
     public IGsmModemService ModemService => _modemService;
 
     private readonly SpeechToTextService _speechToTextService;
+    private readonly FirebaseService _firebaseService;
+    private readonly ApiServerService? _apiServerService;
     private readonly ConcurrentDictionary<string, AudioRecordingService> _activeRecordings = new();
+    private readonly object _logFileLock = new();
 
     public event Action<string, string>? OtpReceivedEvent;
 
@@ -41,7 +44,7 @@ public partial class MainViewModel : ObservableObject
     // Đánh dấu cổng nào đang có SMS được gửi để USSD tự nhường đường (tránh tranh Semaphore)
     public readonly ConcurrentDictionary<string, bool> SmsInProgressPorts = new();
 
-    private readonly string _cacheFilePath = "sim_cache.json";
+    private readonly string _cacheFilePath = AppPaths.ForRuntimeFile("sim_cache.json");
     private ConcurrentDictionary<string, string> _simCache = new();
 
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
@@ -242,13 +245,14 @@ public partial class MainViewModel : ObservableObject
         SmsMessages.CollectionChanged += (s, e) => UpdateDashboard();
 
         // Khởi động Firebase Service chạy ngầm
-        new FirebaseService(this).Start();
+        _firebaseService = new FirebaseService(this);
+        _firebaseService.Start();
 
         // API Server (port 8080)
         if (SettingsService.Current.EnableApiServer)
         {
-            var apiServer = new ApiServerService(this);
-            apiServer.Start(SettingsService.Current.ApiServerPort);
+            _apiServerService = new ApiServerService(this);
+            _apiServerService.Start(SettingsService.Current.ApiServerPort);
             AddLog($"[API] REST API server đang chạy tại http://localhost:{SettingsService.Current.ApiServerPort}/api/");
         }
 
@@ -258,7 +262,7 @@ public partial class MainViewModel : ObservableObject
             while (true)
             {
                 await Task.Delay(TimeSpan.FromMinutes(30));
-                var activePorts = Ports.Where(p => p.Status == "Đang hoạt động").ToList();
+                var activePorts = GetPortsSnapshot().Where(p => p.Status == "Đang hoạt động").ToList();
                 if (activePorts.Count > 0)
                 {
                     AddLog("[HỆ THỐNG] Tự động kiểm tra số dư định kỳ (30 phút/lần)...");
@@ -283,7 +287,7 @@ public partial class MainViewModel : ObservableObject
 
                 if (!SettingsService.Current.EnableSimPing) continue;
 
-                var portsCopy = Ports.ToList();
+                var portsCopy = GetPortsSnapshot();
                 foreach (var p in portsCopy)
                 {
                     try
@@ -334,19 +338,33 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CallManagerPortOptions));
     }
 
+    public List<SimPort> GetPortsSnapshot()
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess())
+        {
+            return Ports.ToList();
+        }
+
+        return dispatcher.Invoke(() => Ports.ToList());
+    }
+
     private void AddLog(string message, string level = "INFO")
     {
         try 
         {
-            const string logFile = "system_log.txt";
+            lock (_logFileLock)
+            {
+            string logFile = AppPaths.ForRuntimeFile("system_log.txt");
             // Fix #2: Giới hạn log file tối đa 5MB, tự động xoay vòng
             var fi = new System.IO.FileInfo(logFile);
             if (fi.Exists && fi.Length > 5 * 1024 * 1024) // 5MB
             {
-                string archive = $"system_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
-                System.IO.File.Move(logFile, archive);
+                string archive = AppPaths.ForRuntimeFile($"system_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                System.IO.File.Move(logFile, archive, overwrite: true);
             }
-            System.IO.File.AppendAllText(logFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}\n");
+            System.IO.File.AppendAllText(logFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}");
+            }
         }
         catch { }
 
@@ -432,7 +450,11 @@ public partial class MainViewModel : ObservableObject
                 });
 
                 // 2. Kiểm tra thiết bị mới cắm vào
-                if (availablePorts.Any(p => !Ports.Any(port => port.PortName == p)))
+                var currentPortNames = GetPortsSnapshot()
+                    .Select(port => port.PortName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                if (availablePorts.Any(p => !currentPortNames.Contains(p)))
                 {
                     hasChanges = true;
                     _modemService.ConnectAll(115200);
@@ -1436,7 +1458,7 @@ public partial class MainViewModel : ObservableObject
             
             Task.Run(async () =>
             {
-                var activePorts = Ports.ToList();
+                var activePorts = GetPortsSnapshot();
                 foreach (var port in activePorts)
                 {
                     string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
@@ -1461,7 +1483,7 @@ public partial class MainViewModel : ObservableObject
             // Hủy chuyển hướng nếu người dùng tắt tính năng
             Task.Run(async () =>
             {
-                var activePorts = Ports.ToList();
+                var activePorts = GetPortsSnapshot();
                 foreach (var port in activePorts)
                 {
                     await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
@@ -1479,7 +1501,7 @@ public partial class MainViewModel : ObservableObject
         SnackbarMessageQueue.Enqueue("Đang xóa chuyển hướng cho tất cả cổng...");
         Task.Run(async () =>
         {
-            var activePorts = Ports.ToList();
+            var activePorts = GetPortsSnapshot();
             foreach (var port in activePorts)
             {
                 string res = await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
@@ -2084,7 +2106,7 @@ public partial class MainViewModel : ObservableObject
             }
 
             // Lấy danh sách cổng đang hoạt động
-            var activePorts = Ports.Where(p => p.Status == "Đang hoạt động").Select(p => p.PortName).ToList();
+            var activePorts = GetPortsSnapshot().Where(p => p.Status == "Đang hoạt động").Select(p => p.PortName).ToList();
             if (activePorts.Count == 0)
             {
                 SnackbarMessageQueue.Enqueue("Không có cổng SIM nào đang hoạt động.");

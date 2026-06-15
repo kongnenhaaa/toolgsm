@@ -27,6 +27,40 @@
     <Window.Resources>
         <converters:StatusToColorConverter x:Key="StatusToColorConverter"/>
         <converters:EqualityToBooleanConverter x:Key="EqualityToBooleanConverter"/>
+
+        <Style x:Key="ProDialogGridStyle" TargetType="Grid">
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Background" Value="#171827"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+        </Style>
+
+        <Style x:Key="ProDialogTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
+        </Style>
+
+        <Style x:Key="ProDialogSectionStyle" TargetType="Border">
+            <Setter Property="Background" Value="#202236"/>
+            <Setter Property="BorderBrush" Value="#343A5A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="16"/>
+            <Setter Property="Margin" Value="0,0,0,15"/>
+        </Style>
+
+        <Style x:Key="ProTerminalTextBoxStyle" TargetType="TextBox">
+            <Setter Property="Background" Value="#080A12"/>
+            <Setter Property="Foreground" Value="#7CFF9E"/>
+            <Setter Property="BorderBrush" Value="#2E3350"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="12"/>
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
+        </Style>
         
         <Style TargetType="DataGridColumnHeader" x:Key="CustomHeaderStyle" BasedOn="{StaticResource MaterialDesignDataGridColumnHeader}">
             <Setter Property="Background" Value="#1A1A2A"/>
@@ -89,7 +123,7 @@
 
     <materialDesign:DialogHost IsOpen="{Binding IsTopUpDialogOpen}" CloseOnClickAway="True">
         <materialDesign:DialogHost.DialogContent>
-            <Grid Width="400" Margin="20" Background="{StaticResource PanelBackground}">
+            <Grid Width="520" Style="{StaticResource ProDialogGridStyle}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -118,7 +152,7 @@
 
         <materialDesign:DialogHost IsOpen="{Binding IsCustomUssdDialogOpen}" CloseOnClickAway="True">
             <materialDesign:DialogHost.DialogContent>
-                <Grid Width="400" Margin="20" Background="{StaticResource PanelBackground}">
+                <Grid Width="520" Style="{StaticResource ProDialogGridStyle}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -147,7 +181,7 @@
 
         <materialDesign:DialogHost IsOpen="{Binding IsSettingsDialogOpen}" CloseOnClickAway="True">
             <materialDesign:DialogHost.DialogContent>
-                <Grid Width="500" Margin="20" Background="{StaticResource PanelBackground}">
+                <Grid Width="680" Style="{StaticResource ProDialogGridStyle}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
@@ -155,9 +189,9 @@
                     </Grid.RowDefinitions>
                     <TextBlock Text="Cài đặt hệ thống" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
                     
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="450" Margin="0,0,0,15">
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="560" Margin="0,0,0,15">
                         <StackPanel>
-                            <Border Background="#1E1E2E" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                            <Border Style="{StaticResource ProDialogSectionStyle}">
                                 <StackPanel>
                             <TextBlock Text="CẤU HÌNH TELEGRAM BOT" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
                             <TextBox materialDesign:HintAssist.Hint="Nhập Bot Token (từ @BotFather)" 
@@ -169,7 +203,7 @@
                         </StackPanel>
                             </Border>
 
-                            <Border Background="#1E1E2E" CornerRadius="8" Padding="15">
+                            <Border Style="{StaticResource ProDialogSectionStyle}">
                                 <StackPanel>
                             <TextBlock Text="CẤU HÌNH NHẬN THÔNG BÁO" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
                             <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10"/>
@@ -225,7 +259,12 @@
 
             <materialDesign:DialogHost IsOpen="{Binding IsAtCommandDialogOpen}" CloseOnClickAway="True">
                 <materialDesign:DialogHost.DialogContent>
-                    <Grid Width="600" Margin="20" Background="{StaticResource PanelBackground}">
+                    <Grid Width="780" Style="{StaticResource ProDialogGridStyle}">
+                        <Grid.Resources>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Margin" Value="30,26,30,18"/>
+                            </Style>
+                        </Grid.Resources>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
@@ -234,7 +273,7 @@
                         </Grid.RowDefinitions>
                         <TextBlock Text="Gửi lệnh AT trực tiếp (AT Commands)" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
                         
-                        <Grid Grid.Row="1" Margin="0,0,0,15">
+                        <Grid Grid.Row="1" Margin="30,0,30,18">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="150"/>
                                 <ColumnDefinition Width="*"/>
@@ -257,11 +296,10 @@
                         </Grid>
 
                         <TextBox Grid.Row="2" Text="{Binding AtCommandOutput}" IsReadOnly="True" 
-                                 VerticalScrollBarVisibility="Auto" Height="250"
-                                 Background="#0C0C14" Foreground="#4CAF50" FontFamily="Consolas" Padding="10"
-                                 Margin="0,0,0,20"/>
+                                 Height="320" Style="{StaticResource ProTerminalTextBoxStyle}"
+                                 Margin="30,0,30,22"/>
                         
-                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="30,0,30,26">
                             <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}"/>
                         </StackPanel>
                     </Grid>
@@ -269,7 +307,7 @@
 
                 <materialDesign:DialogHost IsOpen="{Binding IsComposeSmsDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="450" Margin="20" Background="{StaticResource PanelBackground}">
+                        <Grid Width="560" Style="{StaticResource ProDialogGridStyle}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -303,7 +341,7 @@
 
                 <materialDesign:DialogHost IsOpen="{Binding IsRegisterEzDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="450" Margin="20" Background="{StaticResource PanelBackground}">
+                        <Grid Width="560" Style="{StaticResource ProDialogGridStyle}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -327,7 +365,7 @@
 
                 <materialDesign:DialogHost IsOpen="{Binding IsCallManagerDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="650" Margin="20" Background="{StaticResource PanelBackground}">
+                        <Grid Width="780" Style="{StaticResource ProDialogGridStyle}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -354,7 +392,7 @@
                                 </StackPanel>
                             </Grid>
 
-                            <Border Grid.Row="2" Background="#12121E" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                            <Border Grid.Row="2" Style="{StaticResource ProDialogSectionStyle}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -407,8 +445,7 @@
                             </Border>
 
                             <TextBox Grid.Row="3" Text="{Binding CallManagerOutput}" IsReadOnly="True" 
-                                     VerticalScrollBarVisibility="Auto" Height="150"
-                                     Background="#0C0C14" Foreground="#4CAF50" FontFamily="Consolas" Padding="10"
+                                     Height="220" Style="{StaticResource ProTerminalTextBoxStyle}"
                                      Margin="0,0,0,20"/>
                             
                             <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -419,7 +456,7 @@
 
                 <materialDesign:DialogHost IsOpen="{Binding IsNetworkSimDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="750" Margin="20" Background="{StaticResource PanelBackground}">
+                        <Grid Width="920" Style="{StaticResource ProDialogGridStyle}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -447,7 +484,7 @@
                                 </StackPanel>
                             </Grid>
 
-                            <Border Grid.Row="2" Background="#12121E" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+                            <Border Grid.Row="2" Style="{StaticResource ProDialogSectionStyle}">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -506,8 +543,7 @@
                             </Border>
 
                             <TextBox Grid.Row="3" Text="{Binding NetworkSimOutput}" IsReadOnly="True" 
-                                     VerticalScrollBarVisibility="Auto" Height="150"
-                                     Background="#0C0C14" Foreground="#4CAF50" FontFamily="Consolas" Padding="10"
+                                     Height="240" Style="{StaticResource ProTerminalTextBoxStyle}"
                                      Margin="0,0,0,20"/>
                             
                             <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">

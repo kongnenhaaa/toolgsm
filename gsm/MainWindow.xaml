@@ -533,6 +533,8 @@
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                     <RadioButton Content="SMS" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
+                    <RadioButton Content="QUEUE" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
+                                 Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                 </StackPanel>
             </Border>
             
@@ -557,6 +559,7 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     
@@ -580,9 +583,60 @@
                             <Button Content="Test OTP (Máy ảo)" Background="#FF5722" Command="{Binding SimulateSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tạo một tin nhắn chứa OTP ảo để test hệ thống"/>
                         </WrapPanel>
                     </Border>
+
+                    <UniformGrid Grid.Row="1" Columns="8" Margin="10,10,10,0">
+                        <Border Background="#1E1E2E" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="Tổng COM" Foreground="Gray" FontSize="11"/>
+                                <TextBlock Text="{Binding TotalPortCount}" Foreground="White" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#11281F" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="Online" Foreground="#8BE6B0" FontSize="11"/>
+                                <TextBlock Text="{Binding OnlinePortCount}" Foreground="#4CAF50" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#2A1820" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="Offline" Foreground="#FF9AA8" FontSize="11"/>
+                                <TextBlock Text="{Binding OfflinePortCount}" Foreground="#FF5252" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#1E1E2E" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="SMS nhận" Foreground="Gray" FontSize="11"/>
+                                <TextBlock Text="{Binding SmsReceivedCount}" Foreground="#FF9800" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#2A1820" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="Lỗi SMS" Foreground="#FF9AA8" FontSize="11"/>
+                                <TextBlock Text="{Binding SmsFailedCount}" Foreground="#FF5252" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#2B2414" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="Timeout" Foreground="#FFD27A" FontSize="11"/>
+                                <TextBlock Text="{Binding TimeoutTotalCount}" Foreground="#FFC107" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#2B2414" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Text="Cooldown" Foreground="#FFD27A" FontSize="11"/>
+                                <TextBlock Text="{Binding CooldownPortCount}" Foreground="#FFC107" FontSize="22" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Background="#1E1E2E" CornerRadius="8" Padding="10">
+                            <StackPanel>
+                                <TextBlock Text="Lỗi nhiều nhất" Foreground="Gray" FontSize="11"/>
+                                <TextBlock Text="{Binding TopProblemPort}" Foreground="White" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
                     
                     <!-- GSM DataGrid -->
-                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                         <DataGrid Margin="10" ItemsSource="{Binding Ports}" SelectedItem="{Binding SelectedPort}" 
                                   PreviewMouseLeftButtonUp="DataGrid_PreviewMouseLeftButtonUp"
                                   AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
@@ -634,6 +688,15 @@
                             <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
+                            <DataGridTemplateColumn Header="Health" Width="150">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#263238" CornerRadius="10" Padding="8,3" ToolTip="{Binding LastError}">
+                                            <TextBlock Text="{Binding HealthSummary}" Foreground="#B2EBF2" FontSize="11" FontWeight="Bold"/>
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Timeout" Binding="{Binding TimeoutCount}" Width="75"/>
                             <DataGridTextColumn Header="Lỗi SMS" Binding="{Binding SmsErrorCount}" Width="75"/>
                             <DataGridTextColumn Header="Reconnect" Binding="{Binding ReconnectCount}" Width="85"/>
@@ -777,6 +840,41 @@
                         </DataGrid.Columns>
                     </DataGrid>
                     </ScrollViewer>
+                </Grid>
+            </TabItem>
+
+            <!-- TAB 3: COMMAND QUEUE -->
+            <TabItem>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1" Padding="15,10">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="TimelineClockOutline" Foreground="#5C6BC0" Width="22" Height="22" Margin="0,0,10,0"/>
+                            <TextBlock Text="COMMAND QUEUE REALTIME" Foreground="White" FontWeight="Bold" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding CommandQueue.Count, StringFormat='  ({0} lệnh gần nhất)'}" Foreground="Gray" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <DataGrid Grid.Row="1" Margin="10" ItemsSource="{Binding CommandQueue}"
+                              AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                              Background="{StaticResource PanelBackground}" RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
+                              Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
+                              HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
+                              ColumnHeaderStyle="{StaticResource CustomHeaderStyle}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Lúc" Binding="{Binding UpdatedAt}" Width="90"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100"/>
+                            <DataGridTextColumn Header="CommandId" Binding="{Binding CommandId}" Width="220"/>
+                            <DataGridTextColumn Header="COM" Binding="{Binding PortId}" Width="90"/>
+                            <DataGridTextColumn Header="Loại" Binding="{Binding Type}" Width="90"/>
+                            <DataGridTextColumn Header="Gửi đến" Binding="{Binding Recipient}" Width="130"/>
+                            <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="260"/>
+                            <DataGridTextColumn Header="Kết quả" Binding="{Binding Result}" Width="260"/>
+                            <DataGridTextColumn Header="Lỗi" Binding="{Binding Error}" Width="260"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
                 </Grid>
             </TabItem>
 

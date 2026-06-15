@@ -53,6 +53,12 @@ public partial class SimPort : ObservableObject
 
     [ObservableProperty]
     private string _lastError = string.Empty;
+
+    public string HealthSummary => $"TO:{TimeoutCount}  SMS:{SmsErrorCount}  RC:{ReconnectCount}";
+
+    partial void OnTimeoutCountChanged(int value) => OnPropertyChanged(nameof(HealthSummary));
+    partial void OnSmsErrorCountChanged(int value) => OnPropertyChanged(nameof(HealthSummary));
+    partial void OnReconnectCountChanged(int value) => OnPropertyChanged(nameof(HealthSummary));
     
     [ObservableProperty]
     private int _callCount = 0;

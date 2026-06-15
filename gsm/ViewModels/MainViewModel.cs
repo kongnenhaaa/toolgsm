@@ -74,6 +74,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private ObservableCollection<SimPort> _ports = new();
 
     [ObservableProperty]
+    private ObservableCollection<CommandQueueItem> _commandQueue = new();
+
+    [ObservableProperty]
     private ObservableCollection<SmsMessage> _smsMessages = new();
 
     [ObservableProperty]
@@ -231,6 +234,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             MatchesFilter(s.ReceiverPhone, SmsPhoneFilter) &&
             MatchesFilter(s.PortName, SmsPortFilter) &&
             MatchesFilter(s.Sender, SmsSenderFilter));
+
+    public int TotalPortCount => Ports.Count;
+    public int OnlinePortCount => Ports.Count(IsActive);
+    public int OfflinePortCount => Ports.Count - OnlinePortCount;
+    public int SmsReceivedCount => SmsMessages.Count;
+    public int SmsFailedCount => Ports.Sum(p => p.SmsErrorCount);
+    public int TimeoutTotalCount => Ports.Sum(p => p.TimeoutCount);
+    public int CooldownPortCount => _portCooldownUntilUtc.Count(kv => kv.Value > DateTime.UtcNow);
+    public string TopProblemPort => Ports
+        .OrderByDescending(p => p.TimeoutCount + p.SmsErrorCount + p.ReconnectCount)
+        .Select(p => $"{p.PortName} ({p.TimeoutCount + p.SmsErrorCount + p.ReconnectCount})")
+        .FirstOrDefault() ?? "N/A";
 
     // #6: Bộ lọc log theo cổng
     private string _logFilter = string.Empty;
@@ -415,6 +430,47 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(SmsSeries));
         OnPropertyChanged(nameof(AtCommandPortOptions));
         OnPropertyChanged(nameof(CallManagerPortOptions));
+        OnPropertyChanged(nameof(TotalPortCount));
+        OnPropertyChanged(nameof(OnlinePortCount));
+        OnPropertyChanged(nameof(OfflinePortCount));
+        OnPropertyChanged(nameof(SmsReceivedCount));
+        OnPropertyChanged(nameof(SmsFailedCount));
+        OnPropertyChanged(nameof(TimeoutTotalCount));
+        OnPropertyChanged(nameof(CooldownPortCount));
+        OnPropertyChanged(nameof(TopProblemPort));
+    }
+
+    public void UpsertCommandQueue(string commandId, string portId, string type, string recipient, string content, string status, string? result = null, string? error = null)
+    {
+        if (string.IsNullOrWhiteSpace(commandId)) return;
+
+        void Update()
+        {
+            var item = CommandQueue.FirstOrDefault(x => x.CommandId == commandId);
+            if (item == null)
+            {
+                item = new CommandQueueItem { CommandId = commandId };
+                CommandQueue.Insert(0, item);
+            }
+
+            item.PortId = portId;
+            item.Type = type;
+            item.Recipient = recipient;
+            item.Content = content;
+            item.Status = status;
+            item.Result = result ?? item.Result;
+            item.Error = error ?? string.Empty;
+            item.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+
+            while (CommandQueue.Count > 200)
+            {
+                CommandQueue.RemoveAt(CommandQueue.Count - 1);
+            }
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) Update();
+        else dispatcher.InvokeAsync(Update);
     }
 
     private static bool IsActive(SimPort port) => port.Status == SimStatus.Active;
@@ -444,6 +500,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 port.SmsErrorCount++;
             }
+            UpdateDashboard();
         }
 
         if (dispatcher == null || dispatcher.CheckAccess()) Update();
@@ -461,6 +518,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             port.LastSmsSentAt = DateTime.Now.ToString("HH:mm:ss");
             port.LastError = string.Empty;
+            UpdateDashboard();
         }
 
         if (dispatcher == null || dispatcher.CheckAccess()) Update();

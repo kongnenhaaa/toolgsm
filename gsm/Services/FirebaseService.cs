@@ -48,6 +48,43 @@ namespace gsm.Services
                 || errorMsg.Contains("Hết tiền");
         }
 
+        private static bool IsStaticWebStateInFlight(Dictionary<string, JsonElement>? state)
+        {
+            if (state == null) return false;
+
+            if (state.TryGetValue("commandIds", out var commandIds)
+                && commandIds.ValueKind == JsonValueKind.Array
+                && commandIds.GetArrayLength() > 0)
+            {
+                return true;
+            }
+
+            if (!state.TryGetValue("commandStatus", out var statusElement)
+                || statusElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var status = statusElement.GetString();
+            return status == "queued" || status == "running" || status == "sent";
+        }
+
+        private static async Task<bool> CanPatchStaticWebStateAsync(HttpClient client, string portId)
+        {
+            try
+            {
+                var json = await client.GetStringAsync($"/web_states/machines/{_machineId}/ports/{portId}.json");
+                if (string.IsNullOrWhiteSpace(json) || json == "null") return false;
+
+                var state = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
+                return IsStaticWebStateInFlight(state);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public FirebaseService(MainViewModel vm)
         {
             _vm = vm;
@@ -451,6 +488,7 @@ namespace gsm.Services
                     string type = cmdData.TryGetProperty("type", out var typeEl)
                         ? typeEl.GetString() ?? (recipient == "USSD" ? "balance" : "sms")
                         : (recipient == "USSD" ? "balance" : recipient == "SYSTEM" ? "system" : "sms");
+                    _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "queued");
 
                     Application.Current.Dispatcher.Invoke(() => 
                     {
@@ -472,6 +510,7 @@ namespace gsm.Services
                             }
 
                             await UpdateWebCommandStateAsync(portId, cmdId, "running");
+                            _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "running");
 
                             if (recipient == "USSD" && content == "BALANCE")
                             {
@@ -521,6 +560,7 @@ namespace gsm.Services
                         }
                         finally
                         {
+                            _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError);
                             await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
                             await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
                             await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
@@ -608,6 +648,8 @@ namespace gsm.Services
             {
                 using var client = new HttpClient();
                 client.BaseAddress = new Uri(GetDatabaseUrl());
+                if (!await CanPatchStaticWebStateAsync(client, portId)) return;
+
                 var json = JsonSerializer.Serialize(new
                 {
                     smsSent = true,
@@ -630,6 +672,8 @@ namespace gsm.Services
             {
                 using var client = new HttpClient();
                 client.BaseAddress = new Uri(GetDatabaseUrl());
+                if (!await CanPatchStaticWebStateAsync(client, portId)) return;
+
                 var json = JsonSerializer.Serialize(new
                 {
                     smsSent = false,
@@ -656,6 +700,8 @@ namespace gsm.Services
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSentTime.json");
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/commandStatus.json");
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/commandId.json");
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/commandIds.json");
             }
             catch { }
         }

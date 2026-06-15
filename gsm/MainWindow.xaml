@@ -597,11 +597,8 @@
                         <!-- Context Menu -->
                         <DataGrid.ContextMenu>
                             <ContextMenu Background="#1E1E2F" Foreground="White">
-                                <MenuItem Header="Sao chép SĐT" Command="{Binding Path=DataContext.DummyFeatureCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Sao chép SĐT" Padding="10">
+                                <MenuItem Header="Sao chép SĐT" Command="{Binding Path=DataContext.CopyPhoneFromPortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Đọc tin nhắn (1 mới)" Command="{Binding Path=DataContext.DummyFeatureCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Đọc tin nhắn" Padding="10">
-                                    <MenuItem.Icon><materialDesign:PackIcon Kind="MessageText"/></MenuItem.Icon>
                                 </MenuItem>
                                 <Separator Background="#444"/>
                                 <MenuItem Header="Nạp thẻ nhanh" Command="{Binding Path=DataContext.OpenTopUpDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10" Foreground="#4CAF50">
@@ -637,6 +634,11 @@
                             <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
+                            <DataGridTextColumn Header="Timeout" Binding="{Binding TimeoutCount}" Width="75"/>
+                            <DataGridTextColumn Header="Lỗi SMS" Binding="{Binding SmsErrorCount}" Width="75"/>
+                            <DataGridTextColumn Header="Reconnect" Binding="{Binding ReconnectCount}" Width="85"/>
+                            <DataGridTextColumn Header="SMS cuối" Binding="{Binding LastSmsSentAt}" Width="90"/>
+                            <DataGridTextColumn Header="Lỗi cuối" Binding="{Binding LastError}" Width="180"/>
                             
                             <!-- Tín hiệu Signal Bars -->
                             <DataGridTemplateColumn Header="Tín hiệu" Width="100">
@@ -709,33 +711,33 @@
                                 <materialDesign:PackIcon Kind="FilterOutline" VerticalAlignment="Center" Foreground="#F06292" Width="20" Height="20" Margin="0,0,15,0"/>
                                 <StackPanel Orientation="Vertical" Margin="0,0,15,0">
                                     <TextBlock Text="SỐ ĐIỆN THOẠI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="140" materialDesign:HintAssist.Hint="Nhập SĐT..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                    <TextBox Width="140" Text="{Binding SmsPhoneFilter, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Nhập SĐT..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
                                 <StackPanel Orientation="Vertical" Margin="0,0,15,0">
                                     <TextBlock Text="CỔNG" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="100" materialDesign:HintAssist.Hint="Tìm cổng..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                    <TextBox Width="100" Text="{Binding SmsPortFilter, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Tìm cổng..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
                                 <StackPanel Orientation="Vertical" Margin="0,0,15,0">
                                     <TextBlock Text="NGƯỜI GỬI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="140" materialDesign:HintAssist.Hint="Tìm người gửi..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                    <TextBox Width="140" Text="{Binding SmsSenderFilter, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Tìm người gửi..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
-                                <Button Content="Lọc Dữ Liệu" Command="{Binding DummyFeatureCommand}" CommandParameter="Lọc Dữ Liệu" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
+                                <Button Content="Lọc Dữ Liệu" Command="{Binding ApplySmsFilterCommand}" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
                             </StackPanel>
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
-                                <Button Command="{Binding DummyFeatureCommand}" CommandParameter="Đánh dấu đã đọc" Background="#424242" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
+                                <Button Command="{Binding MarkAllSmsReadCommand}" Background="#424242" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
                                     <materialDesign:PackIcon Kind="CheckAll" Foreground="White"/>
                                 </Button>
-                                <Button Command="{Binding DummyFeatureCommand}" CommandParameter="Xóa tin nhắn" Background="#E53935" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa tin nhắn" Width="34" Padding="0" Margin="0,0,8,0">
+                                <Button Command="{Binding DeleteFilteredSmsCommand}" Background="#E53935" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa tin nhắn" Width="34" Padding="0" Margin="0,0,8,0">
                                     <materialDesign:PackIcon Kind="DeleteOutline" Foreground="White"/>
                                 </Button>
-                                <Button Content="Xuất Excel" Background="#4CAF50" Command="{Binding DummyFeatureCommand}" CommandParameter="Xuất Excel" Style="{StaticResource ModernButtonStyle}" Margin="0"/>
+                                <Button Content="Xuất Excel" Background="#4CAF50" Command="{Binding ExportSmsToExcelCommand}" Style="{StaticResource ModernButtonStyle}" Margin="0"/>
                             </StackPanel>
                         </Grid>
                     </Border>
                     
                     <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                        <DataGrid Margin="10" ItemsSource="{Binding SmsMessages}"
+                        <DataGrid Margin="10" ItemsSource="{Binding FilteredSmsMessages}"
                                   PreviewMouseLeftButtonUp="DataGrid_PreviewMouseLeftButtonUp"
                                   AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
                                   RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"

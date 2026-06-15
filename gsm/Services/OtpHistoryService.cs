@@ -11,7 +11,7 @@ namespace gsm.Services;
 /// </summary>
 public static class OtpHistoryService
 {
-    private static readonly string _csvPath = "otp_history.csv";
+    private static readonly string _csvPath = AppPaths.ForRuntimeFile("otp_history.csv");
     private static readonly object _lock = new object();
 
     static OtpHistoryService()

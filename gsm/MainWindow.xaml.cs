@@ -28,7 +28,7 @@ namespace gsm
 
         protected override void OnClosed(EventArgs e)
         {
-            _viewModel.ModemService.DisconnectAll();
+            _viewModel.Dispose();
             base.OnClosed(e);
         }
 

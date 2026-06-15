@@ -38,6 +38,21 @@ public partial class SimPort : ObservableObject
     
     [ObservableProperty]
     private string _status = "Active"; // Active, Inactive, Error
+
+    [ObservableProperty]
+    private int _timeoutCount;
+
+    [ObservableProperty]
+    private int _smsErrorCount;
+
+    [ObservableProperty]
+    private int _reconnectCount;
+
+    [ObservableProperty]
+    private string _lastSmsSentAt = string.Empty;
+
+    [ObservableProperty]
+    private string _lastError = string.Empty;
     
     [ObservableProperty]
     private int _callCount = 0;

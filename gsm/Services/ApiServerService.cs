@@ -42,7 +42,7 @@ public class ApiServerService
         catch (Exception ex)
         {
             // Ghi log nhưng không crash app nếu port bị chiếm
-            System.IO.File.AppendAllText("system_log.txt",
+            System.IO.File.AppendAllText(AppPaths.ForRuntimeFile("system_log.txt"),
                 $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [WARN] [API] Không thể khởi động API server: {ex.Message}\n");
         }
     }
@@ -187,9 +187,13 @@ public class ApiServerService
         {
             try
             {
-                await _vm.ModemService.SendSmsAsync(dto.Port, dto.To, dto.Message);
+                await _vm.QueueSmsAsync(dto.Port, dto.To, dto.Message);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.IO.File.AppendAllText(AppPaths.ForRuntimeFile("system_log.txt"),
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [ERROR] [API] Gửi SMS lỗi: {ex.Message}\n");
+            }
         });
 
         await WriteJson(resp, new { success = true, message = $"Đã lên lịch gửi SMS đến {dto.To} qua {dto.Port}" });

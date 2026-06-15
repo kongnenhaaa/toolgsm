@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Windows.Data;
 using System.Windows.Media;
+using gsm.Models;
 
 namespace gsm.Converters
 {
@@ -11,7 +12,7 @@ namespace gsm.Converters
         {
             if (value is string status)
             {
-                if (status == "Đang hoạt động")
+                if (status == SimStatus.Active)
                     return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4CAF50"));
                 if (status == "Mất kết nối")
                     return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F44336"));

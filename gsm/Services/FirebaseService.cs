@@ -15,11 +15,14 @@ using gsm.ViewModels;
 
 namespace gsm.Services
 {
-    public class FirebaseService
+    public class FirebaseService : IDisposable
     {
         private readonly MainViewModel _vm;
         private readonly HttpClient _sseClient;
         private readonly HttpClient _restClient;
+        private readonly CancellationTokenSource _cts = new();
+        private Task? _listenTask;
+        private Task? _syncTask;
         private string _databaseUrl 
         {
             get 
@@ -56,23 +59,48 @@ namespace gsm.Services
 
         public void Start()
         {
+            if (_listenTask != null || _syncTask != null) return;
+
             // Bắt đầu lắng nghe lệnh gửi SMS từ web
-            _ = ListenForCommandsAsync();
+            _listenTask = ListenForCommandsAsync(_cts.Token);
 
             // Đồng bộ định kỳ mỗi 2 giây
-            _ = PeriodicSyncAsync();
+            _syncTask = PeriodicSyncAsync(_cts.Token);
         }
 
-        private async Task PeriodicSyncAsync()
+        public void Stop()
         {
-            while (true)
+            if (!_cts.IsCancellationRequested)
             {
-                SyncPorts();
-                await Task.Delay(2000);
+                _cts.Cancel();
             }
         }
 
-        private void SyncPorts()
+        public void Dispose()
+        {
+            Stop();
+            _sseClient.Dispose();
+            _restClient.Dispose();
+            _cts.Dispose();
+        }
+
+        private async Task PeriodicSyncAsync(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await SyncPortsAsync(ct);
+                try
+                {
+                    await Task.Delay(2000, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+        }
+
+        private async Task SyncPortsAsync(CancellationToken ct)
         {
             if (!SettingsService.Current.EnableWebNotification) return;
             try
@@ -81,59 +109,50 @@ namespace gsm.Services
                 var portsData = _vm.Ports.ToDictionary(p => p.PortName, p => new {
                     id = p.PortName,
                     phone = p.PhoneNumber,
-                    status = p.Status == "Đang hoạt động" ? "online" : "offline",
+                    status = p.Status == SimStatus.Active ? "online" : "offline",
                     otp = string.IsNullOrEmpty(p.Otp) || p.Otp == "N/A" ? null : p.Otp,
                     network = p.NetworkProvider,
                     balance = p.Balance,
-                    signal = p.SignalStrength
+                    signal = p.SignalStrength,
+                    timeoutCount = p.TimeoutCount,
+                    smsErrorCount = p.SmsErrorCount,
+                    reconnectCount = p.ReconnectCount,
+                    lastSmsSentAt = p.LastSmsSentAt,
+                    lastError = p.LastError
                 });
 
                 var json = JsonSerializer.Serialize(portsData);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                // Dùng Task.Run để không block UI thread, dùng PUT để đè lại toàn bộ node ports của máy này
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/ports.json", content);
-                    }
-                    catch { /* Mất mạng tạm thời, bỏ qua */ }
-                });
+                await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/ports.json", content, ct);
 
                 // Sử dụng Server Timestamp của Firebase để tránh lệch giờ giữa PC và Web
                 var statusJson = "{\"lastSync\": {\".sv\": \"timestamp\"}}";
                 var statusContent = new StringContent(statusJson, Encoding.UTF8, "application/json");
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/server_status.json", statusContent);
-                    }
-                    catch { /* Mất mạng tạm thời, bỏ qua */ }
-                });
+                await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/server_status.json", statusContent, ct);
             }
+            catch (OperationCanceledException) { }
             catch { }
         }
 
-        private async Task ListenForCommandsAsync()
+        private async Task ListenForCommandsAsync(CancellationToken ct)
         {
-            while (true)
+            while (!ct.IsCancellationRequested)
             {
                 try
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Get, $"{_databaseUrl}commands.json");
                     request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
-                    using var response = await _sseClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
-                    using var stream = await response.Content.ReadAsStreamAsync();
+                    using var response = await _sseClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                    using var stream = await response.Content.ReadAsStreamAsync(ct);
                     using var reader = new StreamReader(stream);
 
-                    while (true)
+                    while (!ct.IsCancellationRequested)
                     {
-                        var readTask = reader.ReadLineAsync();
+                        var readTask = reader.ReadLineAsync(ct).AsTask();
                         // Firebase gửi keep-alive mỗi ~30s. Nếu 45s không có tín hiệu, ngắt để nối lại.
-                        var completedTask = await Task.WhenAny(readTask, Task.Delay(45000));
+                        var completedTask = await Task.WhenAny(readTask, Task.Delay(45000, ct));
                         
                         if (completedTask != readTask)
                         {
@@ -155,10 +174,21 @@ namespace gsm.Services
                         }
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
                 catch (Exception)
                 {
                     // Lỗi mạng hoặc Firebase bị gián đoạn, thử lại gần như ngay lập tức (chờ 1s để tránh vắt kiệt CPU nếu mất mạng hoàn toàn)
-                    await Task.Delay(1000); 
+                    try
+                    {
+                        await Task.Delay(1000, ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -214,6 +244,42 @@ namespace gsm.Services
                 await _restClient.PatchAsync($"{_databaseUrl}commands/{cmdId}.json", content);
             }
             catch { }
+        }
+
+        private async Task<bool> TryClaimCommandAsync(string cmdId)
+        {
+            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return false;
+            try
+            {
+                var json = await _restClient.GetStringAsync($"{_databaseUrl}commands/{cmdId}.json");
+                if (string.IsNullOrWhiteSpace(json) || json == "null") return false;
+
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                var status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() : "queued";
+                if (!string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase)) return false;
+
+                if (root.TryGetProperty("machineId", out var machineEl))
+                {
+                    var targetMachine = machineEl.GetString();
+                    if (!string.IsNullOrWhiteSpace(targetMachine) && targetMachine != _machineId) return false;
+                }
+
+                var payload = new Dictionary<string, object?>
+                {
+                    ["status"] = "running",
+                    ["handledBy"] = _machineId,
+                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                };
+
+                using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                await _restClient.PatchAsync($"{_databaseUrl}commands/{cmdId}.json", content);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private async Task WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null)
@@ -272,6 +338,11 @@ namespace gsm.Services
             if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(portId) || portId == "ALL") return;
             try
             {
+                if (!await IsWebCommandCurrentAsync(portId, cmdId))
+                {
+                    return;
+                }
+
                 if (status == "failed" && !IsSpecificSmsError(error))
                 {
                     error = await TryGetSpecificWebErrorAsync(portId) ?? error;
@@ -293,6 +364,10 @@ namespace gsm.Services
                 {
                     payload["errorMsg"] = error;
                 }
+                else if (status is "sent" or "done" or "success")
+                {
+                    payload["errorMsg"] = null;
+                }
 
                 var json = JsonSerializer.Serialize(payload);
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -301,6 +376,47 @@ namespace gsm.Services
             catch { }
         }
 
+        private async Task<bool> IsWebCommandCurrentAsync(string portId, string cmdId)
+        {
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                try
+                {
+                    var json = await _restClient.GetStringAsync($"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json");
+                    if (!string.IsNullOrWhiteSpace(json) && json != "null")
+                    {
+                        using var doc = JsonDocument.Parse(json);
+                        var root = doc.RootElement;
+
+                        if (root.TryGetProperty("commandId", out var commandIdEl) &&
+                            commandIdEl.GetString() == cmdId)
+                        {
+                            return true;
+                        }
+
+                        if (root.TryGetProperty("commandIds", out var commandIdsEl) &&
+                            commandIdsEl.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var idEl in commandIdsEl.EnumerateArray())
+                            {
+                                if (idEl.GetString() == cmdId) return true;
+                            }
+                        }
+
+                        return false;
+                    }
+
+                    await Task.Delay(200);
+                }
+                catch
+                {
+                    if (attempt == 4) return false;
+                    await Task.Delay(200);
+                }
+            }
+
+            return false;
+        }
         private void ExecuteAndRemoveCommand(string cmdId, JsonElement cmdData)
         {
             try
@@ -350,7 +466,11 @@ namespace gsm.Services
 
                         try
                         {
-                            await UpdateCommandStatusAsync(cmdId, "running");
+                            if (!await TryClaimCommandAsync(cmdId))
+                            {
+                                return;
+                            }
+
                             await UpdateWebCommandStateAsync(portId, cmdId, "running");
 
                             if (recipient == "USSD" && content == "BALANCE")
@@ -362,20 +482,10 @@ namespace gsm.Services
                                     string err = GetHumanReadableError(ussdResult);
                                     finalStatus = "failed";
                                     finalError = err;
-                                    await SendErrorToWebAsync(portId, err);
                                 }
                                 else 
                                 {
                                     finalStatus = "done";
-                                    // Remove any existing error message but DO NOT set smsSent=true
-                                    if (SettingsService.Current.EnableWebNotification)
-                                    {
-                                        try
-                                        {
-                                            await _restClient.DeleteAsync($"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
-                                        }
-                                        catch { }
-                                    }
                                 }
                             }
                             else if (recipient == "SYSTEM" && content == "REFRESH_PORT")
@@ -408,7 +518,6 @@ namespace gsm.Services
                         {
                             finalStatus = "failed";
                             finalError = ex.Message;
-                            await SendErrorToWebAsync(portId, finalError);
                         }
                         finally
                         {
@@ -451,12 +560,7 @@ namespace gsm.Services
                 if (result.Contains("ERROR"))
                 {
                     string errorMsg = GetHumanReadableError(result);
-                    await SendErrorToWebAsync(portId, errorMsg);
                     _ = TelegramService.SendMessageAsync($"⚠️ <b>Lỗi Gửi SMS Từ {portId}</b>\n📱 Tới: {recipient}\n📝 Nội dung: {content}\n❌ Chi tiết: <code>{errorMsg}</code>");
-                }
-                else
-                {
-                    await SendSuccessToWebAsync(portId);
                 }
 
                 return result;

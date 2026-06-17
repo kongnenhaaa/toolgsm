@@ -8,4 +8,5 @@ public class SimBackupEntry
     public string CreatedAt { get; set; } = string.Empty;
     public string LicenseKeySuffix { get; set; } = string.Empty;
     public string KeyMismatch { get; set; } = string.Empty;
+    public string SourceFile { get; set; } = string.Empty;
 }

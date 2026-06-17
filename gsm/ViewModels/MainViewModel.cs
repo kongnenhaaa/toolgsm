@@ -999,7 +999,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             if (hasSaved && cachedEntry != null)
                             {
                                 string cachedImei = NormalizeImei(cachedEntry.Imei);
-                                AddLog($"[{e.PortName}] [IMEI_SOURCE] source=imei_backup.csv CCID={ccid} IMEI={cachedImei}");
+                                string sourceFile = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
+                                AddLog($"[{e.PortName}] [IMEI_SOURCE] source={sourceFile} CCID={ccid} IMEI={cachedImei}");
                                 if (currentImei != cachedImei)
                                 {
                                     AddLog($"[{e.PortName}] [IMEI_RESTORE] Đang khôi phục IMEI cũ: {cachedImei}", "WARNING");
@@ -1041,7 +1042,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     PhoneNumber = port.PhoneNumber,
                                     CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                                     LicenseKeySuffix = string.Empty,
-                                    KeyMismatch = "false"
+                                    KeyMismatch = "false",
+                                    SourceFile = "auto-learn"
                                 };
                                 _imeiCache[ccid] = newEntry;
                                 SaveImeiCache();
@@ -2917,7 +2919,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     PhoneNumber = parts.Length >= 3 ? parts[2].Trim() : string.Empty,
                                     CreatedAt = parts.Length >= 4 ? parts[3].Trim() : string.Empty,
                                     LicenseKeySuffix = parts.Length >= 5 ? parts[4].Trim() : string.Empty,
-                                    KeyMismatch = parts.Length >= 6 ? parts[5].Trim() : string.Empty
+                                    KeyMismatch = parts.Length >= 6 ? parts[5].Trim() : string.Empty,
+                                    SourceFile = "imei_backup.csv"
                                 };
                                 newCache[ccid] = entry;
                                 if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
@@ -3059,6 +3062,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             foreach (var csvPath in csvFiles)
             {
                 int importedRows = 0;
+                string sourceFile = System.IO.Path.GetFileName(csvPath);
                 string[] lines = System.IO.File.ReadAllLines(csvPath);
                 for (int i = 1; i < lines.Length; i++)
                 {
@@ -3089,13 +3093,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 {
                                     if (normExisting != imei)
                                     {
+                                        AddLog($"[IMEI_CONFLICT] Keep imei_backup.csv value for SIM {serial}. Lookup source={sourceFile} is not allowed to overwrite existing backup.", "WARN");
                                         AddLog($"[IMEI_CONFLICT] Xung đột IMEI cho SIM {serial}: Cache={normExisting}, CSV={imei}. Chọn giá trị từ CSV.", "WARN");
                                     }
-                                    existingEntry.Imei = imei;
-                                    existingEntry.PhoneNumber = phone;
-                                    existingEntry.CreatedAt = createdAt;
-                                    existingEntry.LicenseKeySuffix = licenseKeySuffix;
-                                    existingEntry.KeyMismatch = keyMismatch;
+                                    if (normExisting == imei)
+                                    {
+                                        existingEntry.Imei = imei;
+                                    }
+                                    if (string.IsNullOrWhiteSpace(existingEntry.PhoneNumber))
+                                    {
+                                        existingEntry.PhoneNumber = phone;
+                                    }
+                                    if (string.IsNullOrWhiteSpace(existingEntry.CreatedAt))
+                                    {
+                                        existingEntry.CreatedAt = createdAt;
+                                    }
+                                    if (string.IsNullOrWhiteSpace(existingEntry.LicenseKeySuffix))
+                                    {
+                                        existingEntry.LicenseKeySuffix = licenseKeySuffix;
+                                    }
+                                    if (string.IsNullOrWhiteSpace(existingEntry.KeyMismatch))
+                                    {
+                                        existingEntry.KeyMismatch = keyMismatch;
+                                    }
                                     hasNewImei = true;
                                 }
                             }
@@ -3108,7 +3128,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     PhoneNumber = phone,
                                     CreatedAt = createdAt,
                                     LicenseKeySuffix = licenseKeySuffix,
-                                    KeyMismatch = keyMismatch
+                                    KeyMismatch = keyMismatch,
+                                    SourceFile = sourceFile
                                 };
                                 _imeiCache[serial] = entry;
                                 hasNewImei = true;

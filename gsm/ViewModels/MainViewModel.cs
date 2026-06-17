@@ -51,6 +51,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly string _cacheFilePath = AppPaths.ForRuntimeFile("sim_cache.json");
     private ConcurrentDictionary<string, string> _simCache = new();
 
+    private readonly string _imeiCacheFilePath = AppPaths.ForRuntimeFile("imei_cache.json");
+    private ConcurrentDictionary<string, string> _imeiCache = new();
+    private readonly object _imeiCacheLock = new();
+
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -283,6 +287,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public MainViewModel()
     {
         LoadSimCache();
+        LoadImeiCache();
+        ImportCsvToImeiCache();
         _modemService = new GsmModemService();
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
@@ -2564,6 +2570,74 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 File.WriteAllText(_cacheFilePath, json);
             }
             catch { }
+        }
+    }
+
+    private void LoadImeiCache()
+    {
+        lock (_imeiCacheLock)
+        {
+            if (File.Exists(_imeiCacheFilePath))
+            {
+                try
+                {
+                    string json = File.ReadAllText(_imeiCacheFilePath);
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                    if (dict != null) _imeiCache = new ConcurrentDictionary<string, string>(dict);
+                }
+                catch { }
+            }
+        }
+    }
+
+    private void SaveImeiCache()
+    {
+        lock (_imeiCacheLock)
+        {
+            try
+            {
+                string json = JsonSerializer.Serialize(_imeiCache);
+                File.WriteAllText(_imeiCacheFilePath, json);
+            }
+            catch { }
+        }
+    }
+
+    private void ImportCsvToImeiCache()
+    {
+        string csvPath = @"C:\Users\congn\Pictures\tool\imei-lookup-PlQZPF.csv";
+        if (!File.Exists(csvPath)) return;
+
+        bool hasNew = false;
+        try
+        {
+            string[] lines = File.ReadAllLines(csvPath);
+            for (int i = 1; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                string[] parts = line.Split(',');
+                if (parts.Length >= 2)
+                {
+                    string serial = parts[0].Trim();
+                    string imei = parts[1].Trim();
+                    if (!string.IsNullOrEmpty(serial) && !string.IsNullOrEmpty(imei) && !_imeiCache.ContainsKey(serial))
+                    {
+                        _imeiCache[serial] = imei;
+                        hasNew = true;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddLog($"Lỗi nạp CSV: {ex.Message}", "ERROR");
+        }
+
+        if (hasNew)
+        {
+            SaveImeiCache();
+            AddLog("Đã nạp file imei-lookup-PlQZPF.csv vào imei_cache.json thành công.", "SUCCESS");
         }
     }
 

@@ -348,51 +348,55 @@ namespace gsm.Services
             try
             {
                 var commandUrl = $"{_databaseUrl}commands/{cmdId}.json";
-                using var getRequest = new HttpRequestMessage(HttpMethod.Get, commandUrl);
-                getRequest.Headers.TryAddWithoutValidation("X-Firebase-ETag", "true");
-
-                using var getResponse = await _restClient.SendAsync(getRequest);
-                if (!getResponse.IsSuccessStatusCode) return false;
-
-                var json = await getResponse.Content.ReadAsStringAsync();
-                if (string.IsNullOrWhiteSpace(json) || json == "null") return false;
-
-                var etag = getResponse.Headers.ETag?.Tag;
-                if (string.IsNullOrWhiteSpace(etag)
-                    && getResponse.Headers.TryGetValues("ETag", out var etagValues))
+                
+                // 1. Kiểm tra trạng thái hiện tại (GET)
+                var json = await _restClient.GetStringAsync(commandUrl);
+                if (string.IsNullOrWhiteSpace(json) || json == "null")
                 {
-                    etag = etagValues.FirstOrDefault();
+                    return false; // Lệnh không tồn tại hoặc đã bị xóa
                 }
-                if (string.IsNullOrWhiteSpace(etag)) return false;
 
                 var node = JsonNode.Parse(json) as JsonObject;
                 if (node == null) return false;
 
                 var status = node.TryGetPropertyValue("status", out var statusNode) ? statusNode?.GetValue<string>() : "queued";
-                if (!string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase)) return false;
+                if (!string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false; // Lệnh đã được chạy hoặc hoàn thành bởi luồng khác
+                }
 
                 if (node.TryGetPropertyValue("machineId", out var machineNode))
                 {
                     var targetMachine = machineNode?.GetValue<string>();
-                    if (!string.IsNullOrWhiteSpace(targetMachine) && targetMachine != _machineId) return false;
+                    if (!string.IsNullOrWhiteSpace(targetMachine) && targetMachine != _machineId)
+                    {
+                        return false; // Lệnh dành cho máy khác
+                    }
                 }
 
-                node["status"] = "running";
-                node["handledBy"] = _machineId;
-                node["updatedAt"] = new JsonObject { [".sv"] = "timestamp" };
-
-                using var putRequest = new HttpRequestMessage(HttpMethod.Put, commandUrl);
-                putRequest.Headers.IfMatch.Add(EntityTagHeaderValue.Parse(etag));
-                putRequest.Content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
-
-                using var putResponse = await _restClient.SendAsync(putRequest);
-                if (putResponse.StatusCode == HttpStatusCode.PreconditionFailed) return false;
-                if (!putResponse.IsSuccessStatusCode) return false;
+                // 2. Trực tiếp cập nhật trạng thái lên "running" (PATCH)
+                var patchData = new Dictionary<string, object?>
+                {
+                    ["status"] = "running",
+                    ["handledBy"] = _machineId,
+                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                };
+                
+                var patchJson = JsonSerializer.Serialize(patchData);
+                using var content = new StringContent(patchJson, Encoding.UTF8, "application/json");
+                using var response = await _restClient.PatchAsync(commandUrl, content);
+                
+                if (!response.IsSuccessStatusCode)
+                {
+                    _vm.AddLog($"[FIREBASE] Lỗi claim lệnh {cmdId}: Patch status code = {response.StatusCode}", "ERROR");
+                    return false;
+                }
 
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                _vm.AddLog($"[FIREBASE_CLAIM_ERROR] Lỗi nhận lệnh {cmdId}: {ex.Message}", "ERROR");
                 return false;
             }
         }
@@ -576,6 +580,7 @@ namespace gsm.Services
                     // Xử lý gửi SMS ngầm, đợi kết quả rồi mới xóa khỏi Firebase
                     _ = Task.Run(async () =>
                     {
+                        bool isClaimed = false;
                         string finalStatus = "done";
                         string? finalResult = null;
                         string? finalError = null;
@@ -585,6 +590,16 @@ namespace gsm.Services
                             if (!await TryClaimCommandAsync(cmdId))
                             {
                                 return;
+                            }
+                            isClaimed = true;
+
+                            // Reset OTP cũ khi bắt đầu nhận lệnh mới để tránh kịch bản đọc nhầm OTP cũ
+                            var port = _vm.Ports.FirstOrDefault(p => p.PortName == portId);
+                            if (port != null)
+                            {
+                                Application.Current.Dispatcher.Invoke(() => {
+                                    port.Otp = "";
+                                });
                             }
 
                             await UpdateWebCommandStateAsync(portId, cmdId, "running");
@@ -638,12 +653,15 @@ namespace gsm.Services
                         }
                         finally
                         {
-                            _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError);
-                            await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
-                            await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
-                            await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
-                            // Chỉ xóa khi đã xử lý xong (hoặc lỗi), tránh bị dính lệnh vĩnh viễn trên Firebase
-                            await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                            if (isClaimed)
+                            {
+                                _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError);
+                                await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
+                                await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
+                                await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
+                                // Chỉ xóa khi đã xử lý xong (hoặc lỗi), tránh bị dính lệnh vĩnh viễn trên Firebase
+                                await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                            }
                         }
                     });
                 }

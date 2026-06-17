@@ -142,7 +142,23 @@ public class GsmModemService : IGsmModemService
         // Chờ 2 giây để thiết bị khởi động hoàn toàn trước khi gửi lệnh AT, tránh bị treo hoặc timeout
         await Task.Delay(2000);
         
-        await SendCommandAsync(portName, "AT+CFUN=4", 30000); // Ngắt sóng ngay, chặn đăng ký mạng bằng IMEI cũ
+        // Ngắt sóng ngay, chặn đăng ký mạng bằng IMEI cũ
+        bool cfunOffSuccess = false;
+        for (int i = 0; i < 5; i++)
+        {
+            string cfunResp = await SendCommandAsync(portName, "AT+CFUN=4", 30000);
+            if (!cfunResp.Contains("ERROR"))
+            {
+                cfunOffSuccess = true;
+                break;
+            }
+            await Task.Delay(1000);
+        }
+        
+        if (!cfunOffSuccess)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "WARNING: Không thể ngắt sóng (AT+CFUN=4 thất bại)" });
+        }
         await Task.Delay(1000);
 
         await SendCommandAsync(portName, "ATE0", 30000); // Turn off echo
@@ -154,24 +170,41 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+QAUDMOD=2", 30000); 
         await SendCommandAsync(portName, "AT+QDAI=3", 30000); 
         
-        // Xóa toàn bộ SMS cũ trong SIM để tránh bị đầy bộ nhớ khiến không nhận được CMTI mới
-        await SendCommandAsync(portName, "AT+CMGD=1,4", 30000); 
-        
-        // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
-        await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 30000); 
-        
         string imei = await SendCommandAsync(portName, "AT+CGSN", 30000);
-        string ccid = await SendCommandAsync(portName, "AT+CCID", 30000);
-        string cnum = await SendCommandAsync(portName, "AT+CNUM", 30000);
-
-        // Gửi thông tin sang ViewModel qua event log với Prefix đặc biệt
-        if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
-        if (!ccid.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
-        if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
-
-        if (ccid.Contains("ERROR"))
+        
+        // Thử đọc CCID nhiều lần (SIM có thể cần vài giây để khởi tạo)
+        string ccid = "ERROR";
+        for (int i = 0; i < 15; i++)
         {
+            string resp = await SendCommandAsync(portName, "AT+CCID", 30000);
+            if (!resp.Contains("ERROR") && !string.IsNullOrWhiteSpace(resp))
+            {
+                ccid = resp;
+                break;
+            }
+            await Task.Delay(1000);
+        }
+
+        if (!ccid.Contains("ERROR"))
+        {
+            // Xóa toàn bộ SMS cũ trong SIM để tránh bị đầy bộ nhớ khiến không nhận được CMTI mới
+            await SendCommandAsync(portName, "AT+CMGD=1,4", 30000); 
+            
+            // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
+            await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 30000); 
+            
+            string cnum = await SendCommandAsync(portName, "AT+CNUM", 30000);
+
+            // Gửi thông tin sang ViewModel qua event log với Prefix đặc biệt
+            if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
+            if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
+        }
+        else
+        {
+            // Nếu không đọc được CCID sau nhiều lần thử, bật sóng lại và thông báo lỗi
             await SendCommandAsync(portName, "AT+CFUN=1", 30000); // Bật sóng lại nếu không có SIM / lỗi SIM
+            if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
         }
     }

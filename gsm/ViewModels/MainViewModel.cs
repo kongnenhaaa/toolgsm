@@ -571,7 +571,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return dispatcher.Invoke(() => Ports.ToList());
     }
 
-    private void AddLog(string message, string level = "INFO")
+    public void AddLog(string message, string level = "INFO")
     {
         try 
         {

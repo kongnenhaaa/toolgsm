@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using gsm.Models;
@@ -970,6 +971,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             if (hasSaved && cachedEntry != null)
                             {
                                 string cachedImei = NormalizeImei(cachedEntry.Imei);
+                                AddLog($"[{e.PortName}] [IMEI_SOURCE] source=imei_backup.csv CCID={ccid} IMEI={cachedImei}");
                                 if (currentImei != cachedImei)
                                 {
                                     AddLog($"[{e.PortName}] [IMEI_RESTORE] Đang khôi phục IMEI cũ: {cachedImei}", "WARNING");
@@ -991,6 +993,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                                 Application.Current.Dispatcher.Invoke(() =>
                                 {
+                                    if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
+                                    {
+                                        port.PhoneNumber = cachedEntry.PhoneNumber;
+                                        _simCache[ccid] = cachedEntry.PhoneNumber;
+                                    }
                                     port.CreatedAt = cachedEntry.CreatedAt;
                                     port.LicenseKeySuffix = cachedEntry.LicenseKeySuffix;
                                     port.KeyMismatch = cachedEntry.KeyMismatch;
@@ -1003,7 +1010,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 {
                                     Ccid = ccid,
                                     Imei = currentImei,
-                                    PhoneNumber = string.Empty,
+                                    PhoneNumber = port.PhoneNumber,
                                     CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                                     LicenseKeySuffix = string.Empty,
                                     KeyMismatch = "false"
@@ -1035,11 +1042,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Application.Current.Dispatcher.Invoke(() => 
                         {
                             port.Imei = finalImei;
-                            MarkPortActiveAfterInit(e.PortName);
+                            if (matched)
+                            {
+                                MarkPortActiveAfterInit(e.PortName);
+                            }
+                            else
+                            {
+                                port.Status = SimStatus.NoResponse;
+                                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                                UpdateDashboard();
+                            }
                         });
                         
-                        // Khởi chạy tiến trình Polling bám mạng
-                        _modemService.StartPollingNetwork(port.PortName);
+                        // Chỉ polling mạng khi IMEI cuối khớp dữ liệu backup.
+                        if (matched)
+                        {
+                            _modemService.StartPollingNetwork(port.PortName);
+                        }
                     });
                 }
                 else
@@ -2753,7 +2772,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         var line = lines[i];
                         if (string.IsNullOrWhiteSpace(line)) continue;
-                        var parts = line.Split(',');
+                        var parts = ParseCsvLine(line);
                         if (parts.Length >= 2)
                         {
                             string ccid = NormalizeCcid(parts[0]);
@@ -2770,10 +2789,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     KeyMismatch = parts.Length >= 6 ? parts[5].Trim() : string.Empty
                                 };
                                 newCache[ccid] = entry;
+                                if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
+                                {
+                                    _simCache[ccid] = entry.PhoneNumber;
+                                }
                             }
                         }
                     }
                     _imeiCache = newCache;
+                    AddLog($"[IMEI_SOURCE] Đã nạp {newCache.Count} dòng từ imei_backup.csv.", "SUCCESS");
                 }
                 catch (Exception ex)
                 {
@@ -2794,7 +2818,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 foreach (var kvp in _imeiCache)
                 {
                     var entry = kvp.Value;
-                    builder.AppendLine($"{entry.Ccid},{entry.Imei},{entry.PhoneNumber},{entry.CreatedAt},{entry.LicenseKeySuffix},{entry.KeyMismatch}");
+                    builder.AppendLine(string.Join(",", new[]
+                    {
+                        EscapeCsv(entry.Ccid),
+                        EscapeCsv(entry.Imei),
+                        EscapeCsv(entry.PhoneNumber),
+                        EscapeCsv(entry.CreatedAt),
+                        EscapeCsv(entry.LicenseKeySuffix),
+                        EscapeCsv(entry.KeyMismatch)
+                    }));
                 }
 
                 string tempPath = _imeiCacheFilePath + ".tmp";
@@ -2835,6 +2867,53 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return clean;
     }
 
+    private static string[] ParseCsvLine(string line)
+    {
+        var fields = new List<string>();
+        var current = new StringBuilder();
+        bool inQuotes = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            char ch = line[i];
+            if (ch == '"')
+            {
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    current.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
+            }
+            else if (ch == ',' && !inQuotes)
+            {
+                fields.Add(current.ToString());
+                current.Clear();
+            }
+            else
+            {
+                current.Append(ch);
+            }
+        }
+
+        fields.Add(current.ToString());
+        return fields.ToArray();
+    }
+
+    private static string EscapeCsv(string? value)
+    {
+        string text = value ?? string.Empty;
+        if (!text.Contains(',') && !text.Contains('"') && !text.Contains('\r') && !text.Contains('\n'))
+        {
+            return text;
+        }
+
+        return $"\"{text.Replace("\"", "\"\"")}\"";
+    }
+
     private void ImportCsvToImeiCache()
     {
         string directoryPath = AppPaths.RuntimeDirectory;
@@ -2848,12 +2927,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var csvFiles = System.IO.Directory.GetFiles(directoryPath, "imei-lookup-*.csv");
             foreach (var csvPath in csvFiles)
             {
+                int importedRows = 0;
                 string[] lines = System.IO.File.ReadAllLines(csvPath);
                 for (int i = 1; i < lines.Length; i++)
                 {
                     string line = lines[i];
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    string[] parts = line.Split(',');
+                    string[] parts = ParseCsvLine(line);
                     if (parts.Length >= 2)
                     {
                         string serial = NormalizeCcid(parts[0]);
@@ -2902,6 +2982,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 _imeiCache[serial] = entry;
                                 hasNewImei = true;
                             }
+                            importedRows++;
                         }
 
                         if (!string.IsNullOrEmpty(serial) && !string.IsNullOrEmpty(phone))
@@ -2923,7 +3004,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         }
                     }
                 }
-                AddLog($"Đã nạp file {System.IO.Path.GetFileName(csvPath)} thành công.", "SUCCESS");
+                AddLog($"[IMEI_SOURCE] Đã nạp {importedRows} dòng từ {System.IO.Path.GetFileName(csvPath)}.", "SUCCESS");
             }
         }
         catch (Exception ex)

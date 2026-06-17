@@ -170,7 +170,7 @@ public class GsmModemService : IGsmModemService
         if (!ccid.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
         if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
 
-        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_ACTIVE]" });
+        // ViewModel only marks the port active after IMEI cache handling and AT+CFUN=1 complete.
     }
 
     public void StartPollingNetwork(string portName)

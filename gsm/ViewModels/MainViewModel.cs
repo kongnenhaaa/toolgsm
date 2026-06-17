@@ -928,7 +928,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var match = Regex.Match(e.Data, @"\b([A-Za-z0-9]{18,22})\b");
                 if (match.Success)
                 {
-                    string ccid = match.Groups[1].Value;
+                    string ccid = NormalizeCcid(match.Groups[1].Value);
                     port.Serial = ccid;
                     if (_simCache.TryGetValue(ccid, out var cachedPhone))
                     {
@@ -939,14 +939,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // Thực hiện kiểm tra và khôi phục IMEI bất đồng bộ để tránh treo UI thread
                     _ = Task.Run(async () =>
                     {
-                        string currentImei = port.Imei;
+                        string currentImei = NormalizeImei(port.Imei);
                         // Nếu port.Imei chưa có (ví dụ do sự kiện PARSE_IMEI chạy sau hoặc bị chậm), ta thử lấy lại trực tiếp
                         if (string.IsNullOrEmpty(currentImei))
                         {
                             string imeiResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 30000, silent: true);
                             if (!imeiResp.Contains("ERROR"))
                             {
-                                currentImei = imeiResp.Replace("OK", "").Trim();
+                                currentImei = NormalizeImei(imeiResp);
                                 Application.Current.Dispatcher.Invoke(() => port.Imei = currentImei);
                             }
                         }
@@ -960,14 +960,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             bool hasSaved = _imeiCache.TryGetValue(ccid, out var cachedImei);
                             if (hasSaved)
                             {
-                                // Đã từng lưu IMEI cho CCID này
+                                cachedImei = NormalizeImei(cachedImei);
                                 if (currentImei != cachedImei)
                                 {
                                     AddLog($"[{e.PortName}] [IMEI_RESTORE] Đang khôi phục IMEI cũ: {cachedImei}", "WARNING");
                                     string writeResp = await _modemService.SendCommandAsync(port.PortName, $"AT+EGMR=1,7,\"{cachedImei}\"", 30000);
                                     if (writeResp.Contains("OK"))
                                     {
-                                        Application.Current.Dispatcher.Invoke(() => port.Imei = cachedImei ?? "");
+                                        Application.Current.Dispatcher.Invoke(() => port.Imei = cachedImei);
                                         AddLog($"[{e.PortName}] Ghi đè IMEI thành công: {cachedImei}", "SUCCESS");
                                     }
                                     else
@@ -982,19 +982,58 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             }
                             else
                             {
-                                // Chưa từng lưu (cắm lần đầu) -> Lưu IMEI thật của chip gắn với CCID của SIM vào cache
-                                _imeiCache[ccid] = currentImei;
-                                SaveImeiCache();
-                                AddLog($"[{e.PortName}] Cắm lần đầu, lưu IMEI: {currentImei} gắn với CCID: {ccid}", "SUCCESS");
+                                if (SettingsService.Current.AllowAutoLearningImei)
+                                {
+                                    _imeiCache[ccid] = currentImei;
+                                    SaveImeiCache();
+                                    AddLog($"[{e.PortName}] Cắm lần đầu (Auto-Learning), lưu IMEI: {currentImei} gắn với CCID: {ccid}", "SUCCESS");
+                                }
+                                else
+                                {
+                                    AddLog($"[{e.PortName}] [IMEI_WARNING] CCID: {ccid} chưa có trong backup/CSV. Không tự động lưu vì chế độ Auto-Learning đang TẮT. Thiết bị sẽ hoạt động với IMEI hiện tại: {currentImei}.", "WARNING");
+                                }
                             }
                         }
 
                         // Bật sóng lại và cho phép thiết bị đăng ký lên tổng đài
                         AddLog($"[{e.PortName}] Đang bật sóng lại (AT+CFUN=1)...");
                         await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 30000);
+
+                        // Đọc lại IMEI sau khi xử lý để log trạng thái cuối
+                        string finalImeiResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 30000, silent: true);
+                        string finalImei = NormalizeImei(finalImeiResp);
+                        string expectedImei = _imeiCache.TryGetValue(ccid, out var exp) ? NormalizeImei(exp) : currentImei;
+                        bool matched = finalImei == expectedImei;
+                        AddLog($"[{e.PortName}] [IMEI_FINAL] current={finalImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
+
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            port.Imei = finalImei;
+                            MarkPortActiveAfterInit(e.PortName);
+                        });
                         
                         // Khởi chạy tiến trình Polling bám mạng
                         _modemService.StartPollingNetwork(port.PortName);
+                    });
+                }
+                else
+                {
+                    AddLog($"[{e.PortName}] Không đọc được CCID hợp lệ để đối chiếu IMEI cache.", "ERROR");
+                    _ = Task.Run(async () =>
+                    {
+                        AddLog($"[{e.PortName}] Đang bật sóng lại (AT+CFUN=1) sau lỗi đọc CCID...");
+                        await _modemService.SendCommandAsync(e.PortName, "AT+CFUN=1", 30000);
+
+                        // Đọc lại IMEI sau khi xử lý để log trạng thái cuối
+                        string finalImeiResp = await _modemService.SendCommandAsync(e.PortName, "AT+CGSN", 30000, silent: true);
+                        string finalImei = NormalizeImei(finalImeiResp);
+                        AddLog($"[{e.PortName}] [IMEI_FINAL] current={finalImei}, expected=UNKNOWN, matched=false", "WARNING");
+
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            if (!string.IsNullOrEmpty(finalImei)) port.Imei = finalImei;
+                            MarkPortActiveAfterInit(e.PortName);
+                        });
                     });
                 }
             }
@@ -1040,6 +1079,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _ = gsm.Services.FirebaseService.ClearWebStateAsync(e.PortName);
             }
         });
+    }
+
+    private void MarkPortActiveAfterInit(string portName)
+    {
+        var port = Ports.FirstOrDefault(p => p.PortName == portName);
+        if (port == null) return;
+
+        port.Status = SimStatus.Active;
+        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+        UpdateDashboard();
+
+        foreach (var sms in SmsMessages.Where(s => s.PortName == portName))
+        {
+            sms.Status = SimStatus.Active;
+        }
+
+        _ = gsm.Services.FirebaseService.ClearWebStateAsync(portName);
     }
 
     private void ModemService_PortDisconnected(object? sender, GsmDataEventArgs e)
@@ -2659,15 +2715,47 @@ public partial class MainViewModel : ObservableObject, IDisposable
             try
             {
                 string json = JsonSerializer.Serialize(_imeiCache);
-                File.WriteAllText(_imeiCacheFilePath, json);
+                string tempPath = _imeiCacheFilePath + ".tmp";
+                File.WriteAllText(tempPath, json);
+
+                if (File.Exists(_imeiCacheFilePath))
+                {
+                    string backupPath = _imeiCacheFilePath.Replace(".json", ".backup.json");
+                    File.Copy(_imeiCacheFilePath, backupPath, overwrite: true);
+                }
+
+                File.Move(tempPath, _imeiCacheFilePath, overwrite: true);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                AddLog($"Lỗi ghi cache IMEI: {ex.Message}", "ERROR");
+            }
         }
+    }
+
+    private static string NormalizeImei(string? imei)
+    {
+        if (string.IsNullOrWhiteSpace(imei)) return string.Empty;
+        var match = Regex.Match(imei, @"\b(\d{14,17})\b");
+        return match.Success ? match.Groups[1].Value : imei.Replace("OK", "").Replace("ERROR", "").Trim();
+    }
+
+    private static string NormalizeCcid(string? ccid)
+    {
+        if (string.IsNullOrWhiteSpace(ccid)) return string.Empty;
+        string clean = ccid.Replace("+CCID:", "")
+                           .Replace("OK", "")
+                           .Replace("ERROR", "")
+                           .Replace("\r", "")
+                           .Replace("\n", "")
+                           .Trim();
+        clean = Regex.Replace(clean, @"\s+", "");
+        return clean;
     }
 
     private void ImportCsvToImeiCache()
     {
-        string directoryPath = @"C:\Users\congn\Pictures\tool";
+        string directoryPath = AppPaths.RuntimeDirectory;
         if (!System.IO.Directory.Exists(directoryPath)) return;
 
         bool hasNewImei = false;
@@ -2686,13 +2774,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     string[] parts = line.Split(',');
                     if (parts.Length >= 2)
                     {
-                        string serial = parts[0].Trim();
-                        string imei = parts[1].Trim();
+                        string serial = NormalizeCcid(parts[0]);
+                        string imei = NormalizeImei(parts[1]);
                         string phone = parts.Length >= 3 ? parts[2].Trim() : "";
 
                         if (!string.IsNullOrEmpty(serial) && !string.IsNullOrEmpty(imei))
                         {
-                            if (!_imeiCache.TryGetValue(serial, out var existingImei) || existingImei != imei)
+                            if (_imeiCache.TryGetValue(serial, out var existingImei))
+                            {
+                                string normExisting = NormalizeImei(existingImei);
+                                if (normExisting != imei)
+                                {
+                                    AddLog($"[IMEI_CONFLICT] Xung đột IMEI cho SIM {serial}: Cache={normExisting}, CSV={imei}. Chọn giá trị từ CSV.", "WARN");
+                                    _imeiCache[serial] = imei;
+                                    hasNewImei = true;
+                                }
+                            }
+                            else
                             {
                                 _imeiCache[serial] = imei;
                                 hasNewImei = true;

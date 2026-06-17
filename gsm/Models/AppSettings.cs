@@ -29,4 +29,7 @@ public class AppSettings
     // Ping SIM
     public bool EnableSimPing { get; set; } = true;
     public int SimPingIntervalMinutes { get; set; } = 5;
+
+    // Tự học IMEI
+    public bool AllowAutoLearningImei { get; set; } = false;
 }

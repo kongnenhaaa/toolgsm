@@ -723,6 +723,10 @@
                             <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+                            <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
+                            <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
+                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
+                            <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
                             <DataGridTextColumn Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
                             <DataGridTextColumn Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
                             <DataGridTextColumn Header="Lệch Key" Binding="{Binding KeyMismatch}" Width="100"/>
@@ -753,10 +757,7 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            
-                            <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
                             <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
-                            <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
                             
                             <!-- #8: Tô đỏ HSD nếu sắp hết hạn (dưới 7 ngày) -->
                             <DataGridTemplateColumn Header="HSD" Width="120">
@@ -784,9 +785,7 @@
                             
                             <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
                             <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
-                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
-                            <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
                         </DataGrid.Columns>
                     </DataGrid>
                     </ScrollViewer>

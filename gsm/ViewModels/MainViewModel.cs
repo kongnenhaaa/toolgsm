@@ -1432,9 +1432,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
+                extractedOtp = otpMatch.Success && otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : (otpMatch.Success ? otpMatch.Value : "N/A");
+
+                if (extractedOtp == "N/A" && TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port))
+                {
+                    AddLog($"[{e.PortName}] Da ghep doan SMS tiep theo tu {senderPhone} vao tin truoc.", "INFO");
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+                    return;
+                }
+
                 if (receiveAll || otpMatch.Success)
                 {
-                    extractedOtp = otpMatch.Success && otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : (otpMatch.Success ? otpMatch.Value : "N/A");
                     // Escape HTML characters for Telegram parse_mode = HTML
                     string safeContent = System.Net.WebUtility.HtmlEncode(cleanContent);
                     string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
@@ -1509,6 +1520,58 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 AddLog($"[{e.PortName}] Lỗi xử lý SMS: {ex.Message}", "ERROR");
             }
         });
+    }
+
+    private bool TryAppendToRecentMultipartSms(string portName, string senderPhone, string content, SimPort? port)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return false;
+
+        var now = DateTime.Now;
+        var existing = SmsMessages.FirstOrDefault(s =>
+            s.PortName == portName &&
+            s.Sender == senderPhone &&
+            s.Otp == "N/A" &&
+            IsRecentSmsTime(s.ReceivedTime, now));
+
+        if (existing == null)
+            return false;
+
+        string previous = existing.Content?.TrimEnd() ?? string.Empty;
+        string current = content.TrimStart();
+        if (string.IsNullOrWhiteSpace(previous) || string.IsNullOrWhiteSpace(current))
+            return false;
+
+        existing.Content = Regex.Replace($"{previous} {current}", @"\s+", " ").Trim();
+        existing.ReceivedTime = now.ToString("HH:mm:ss");
+
+        SmsMessages.Remove(existing);
+        SmsMessages.Insert(0, existing);
+
+        if (port != null)
+        {
+            port.Sender = senderPhone;
+            port.Otp = "N/A";
+            port.LastMessageContent = existing.Content;
+            port.LastReceivedTime = existing.ReceivedTime;
+        }
+
+        OnPropertyChanged(nameof(FilteredSmsMessages));
+        OnPropertyChanged(nameof(SmsReceivedCount));
+        return true;
+    }
+
+    private static bool IsRecentSmsTime(string receivedTime, DateTime now)
+    {
+        if (!TimeSpan.TryParse(receivedTime, out var timeOfDay))
+            return false;
+
+        var receivedAt = now.Date.Add(timeOfDay);
+        var delta = now - receivedAt;
+        if (delta < TimeSpan.Zero)
+            delta = delta.Duration();
+
+        return delta <= TimeSpan.FromSeconds(5);
     }
 
     private void ModemService_CallIncoming(object? sender, GsmDataEventArgs e)

@@ -140,7 +140,6 @@ public class GsmModemService : IGsmModemService
     private async Task InitializeModemAsync(string portName)
     {
         // Chờ 2 giây để thiết bị khởi động hoàn toàn trước khi gửi lệnh AT, tránh bị treo hoặc timeout
-        await Task.Delay(2000);
         
         // Ngắt sóng ngay, chặn đăng ký mạng bằng IMEI cũ
         bool cfunOffSuccess = false;

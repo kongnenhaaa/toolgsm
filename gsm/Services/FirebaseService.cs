@@ -3,10 +3,12 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -288,29 +290,48 @@ namespace gsm.Services
             if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return false;
             try
             {
-                var json = await _restClient.GetStringAsync($"{_databaseUrl}commands/{cmdId}.json");
+                var commandUrl = $"{_databaseUrl}commands/{cmdId}.json";
+                using var getRequest = new HttpRequestMessage(HttpMethod.Get, commandUrl);
+                getRequest.Headers.TryAddWithoutValidation("X-Firebase-ETag", "true");
+
+                using var getResponse = await _restClient.SendAsync(getRequest);
+                if (!getResponse.IsSuccessStatusCode) return false;
+
+                var json = await getResponse.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(json) || json == "null") return false;
 
-                using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
-                var status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() : "queued";
+                var etag = getResponse.Headers.ETag?.Tag;
+                if (string.IsNullOrWhiteSpace(etag)
+                    && getResponse.Headers.TryGetValues("ETag", out var etagValues))
+                {
+                    etag = etagValues.FirstOrDefault();
+                }
+                if (string.IsNullOrWhiteSpace(etag)) return false;
+
+                var node = JsonNode.Parse(json) as JsonObject;
+                if (node == null) return false;
+
+                var status = node.TryGetPropertyValue("status", out var statusNode) ? statusNode?.GetValue<string>() : "queued";
                 if (!string.Equals(status, "queued", StringComparison.OrdinalIgnoreCase)) return false;
 
-                if (root.TryGetProperty("machineId", out var machineEl))
+                if (node.TryGetPropertyValue("machineId", out var machineNode))
                 {
-                    var targetMachine = machineEl.GetString();
+                    var targetMachine = machineNode?.GetValue<string>();
                     if (!string.IsNullOrWhiteSpace(targetMachine) && targetMachine != _machineId) return false;
                 }
 
-                var payload = new Dictionary<string, object?>
-                {
-                    ["status"] = "running",
-                    ["handledBy"] = _machineId,
-                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
-                };
+                node["status"] = "running";
+                node["handledBy"] = _machineId;
+                node["updatedAt"] = new JsonObject { [".sv"] = "timestamp" };
 
-                using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                await _restClient.PatchAsync($"{_databaseUrl}commands/{cmdId}.json", content);
+                using var putRequest = new HttpRequestMessage(HttpMethod.Put, commandUrl);
+                putRequest.Headers.IfMatch.Add(EntityTagHeaderValue.Parse(etag));
+                putRequest.Content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
+
+                using var putResponse = await _restClient.SendAsync(putRequest);
+                if (putResponse.StatusCode == HttpStatusCode.PreconditionFailed) return false;
+                if (!putResponse.IsSuccessStatusCode) return false;
+
                 return true;
             }
             catch
@@ -695,6 +716,8 @@ namespace gsm.Services
             {
                 using var client = new HttpClient();
                 client.BaseAddress = new Uri(GetDatabaseUrl());
+                if (await CanPatchStaticWebStateAsync(client, portId)) return;
+
                 // Chỉ xoá trạng thái smsSent và lỗi, GIỮ LẠI trạng thái ẩn (hiddenOtp) và SĐT
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSent.json");
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSentTime.json");

@@ -933,8 +933,14 @@
                         <TextBox Width="120" Text="{Binding LogFilter, UpdateSourceTrigger=PropertyChanged}" 
                                  materialDesign:HintAssist.Hint="Lọc cổng (VD: COM41)"
                                  Style="{StaticResource SearchTextBoxStyle}" FontFamily="Consolas" Foreground="#4CAF50"/>
+                        <Button Content="All" Command="{Binding SetLogFilterCommand}" CommandParameter="" Background="#333344" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="8,0,0,0"/>
+                        <Button Content="IMEI" Command="{Binding SetLogFilterCommand}" CommandParameter="[IMEI]" Background="#455A64" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
+                        <Button Content="Firebase" Command="{Binding SetLogFilterCommand}" CommandParameter="[FIREBASE]" Background="#5C6BC0" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
+                        <Button Content="SMS" Command="{Binding SetLogFilterCommand}" CommandParameter="[SMS]" Background="#00897B" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
+                        <Button Content="USSD" Command="{Binding SetLogFilterCommand}" CommandParameter="[USSD]" Background="#7E57C2" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
                         <TextBlock Text="|" Foreground="#444" Margin="10,0" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding FilteredLogCount, StringFormat='Hiển thị: {0} dòng'}" Foreground="Gray" VerticalAlignment="Center" FontSize="11"/>
+                        <Button Content="Reload IMEI CSV" Command="{Binding ReloadImeiBackupCommand}" Background="#607D8B" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="10,0" Margin="12,0,0,0" ToolTip="Nạp lại imei_backup.csv và imei-lookup-*.csv trong thư mục chạy"/>
                     </StackPanel>
                     <ListBox Grid.Row="1" ItemsSource="{Binding FilteredLogs}" SelectedItem="{Binding SelectedLog}" Background="Transparent" BorderThickness="0" Margin="10,0,10,6">
                         <ListBox.ContextMenu>

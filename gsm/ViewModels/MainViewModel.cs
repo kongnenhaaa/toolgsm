@@ -269,17 +269,45 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public System.Collections.IEnumerable FilteredLogs =>
         string.IsNullOrWhiteSpace(_logFilter)
             ? (System.Collections.IEnumerable)SystemLogs
-            : SystemLogs.Where(l => l.Message.Contains(_logFilter, StringComparison.OrdinalIgnoreCase));
+            : SystemLogs.Where(l => MatchesLogFilter(l, _logFilter));
 
     public int FilteredLogCount =>
         string.IsNullOrWhiteSpace(_logFilter)
             ? SystemLogs.Count
-            : SystemLogs.Count(l => l.Message.Contains(_logFilter, StringComparison.OrdinalIgnoreCase));
+            : SystemLogs.Count(l => MatchesLogFilter(l, _logFilter));
 
     private static bool MatchesFilter(string value, string filter)
     {
         return string.IsNullOrWhiteSpace(filter) ||
                (value ?? string.Empty).Contains(filter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesLogFilter(LogMessage log, string filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter)) return true;
+
+        string normalized = filter.Trim().ToUpperInvariant();
+        string message = log.Message ?? string.Empty;
+        string level = log.Level ?? string.Empty;
+
+        return normalized switch
+        {
+            "[IMEI]" => message.Contains("[IMEI", StringComparison.OrdinalIgnoreCase)
+                        || message.Contains("IMEI", StringComparison.OrdinalIgnoreCase),
+            "[FIREBASE]" => level.Contains("FIREBASE", StringComparison.OrdinalIgnoreCase)
+                            || message.Contains("FIREBASE", StringComparison.OrdinalIgnoreCase),
+            "[SMS]" => message.Contains("SMS", StringComparison.OrdinalIgnoreCase)
+                       || message.Contains("tin nhắn", StringComparison.OrdinalIgnoreCase)
+                       || message.Contains("OTP", StringComparison.OrdinalIgnoreCase)
+                       || message.Contains("ZALO", StringComparison.OrdinalIgnoreCase)
+                       || message.Contains("CMGS", StringComparison.OrdinalIgnoreCase),
+            "[USSD]" => message.Contains("USSD", StringComparison.OrdinalIgnoreCase)
+                        || message.Contains("TKC", StringComparison.OrdinalIgnoreCase)
+                        || message.Contains("số dư", StringComparison.OrdinalIgnoreCase)
+                        || message.Contains("CUSD", StringComparison.OrdinalIgnoreCase),
+            _ => message.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                 || level.Contains(filter, StringComparison.OrdinalIgnoreCase)
+        };
     }
 
     public ISeries[] ConnectionSeries { get; set; }
@@ -1559,6 +1587,46 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             SelectedTabIndex = index;
         }
+    }
+
+    [RelayCommand]
+    private void SetLogFilter(string filter)
+    {
+        LogFilter = filter ?? string.Empty;
+    }
+
+    [RelayCommand]
+    private void ReloadImeiBackup()
+    {
+        LoadImeiCache();
+        ImportCsvToImeiCache();
+
+        int applied = 0;
+        foreach (var port in Ports)
+        {
+            if (string.IsNullOrWhiteSpace(port.Serial)) continue;
+            string ccid = NormalizeCcid(port.Serial);
+            if (!_imeiCache.TryGetValue(ccid, out var entry) || entry == null) continue;
+
+            if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
+            {
+                port.PhoneNumber = entry.PhoneNumber;
+                _simCache[ccid] = entry.PhoneNumber;
+            }
+
+            port.CreatedAt = entry.CreatedAt;
+            port.LicenseKeySuffix = entry.LicenseKeySuffix;
+            port.KeyMismatch = entry.KeyMismatch;
+            applied++;
+        }
+
+        if (applied > 0)
+        {
+            SaveSimCache();
+        }
+
+        AddLog($"[IMEI_SOURCE] Đã reload imei_backup.csv và áp dụng metadata cho {applied} cổng đang cắm.", "SUCCESS");
+        SnackbarMessageQueue.Enqueue($"Đã reload imei_backup.csv ({applied} cổng được cập nhật).");
     }
 
     private string GetUssdCodeForProvider(string provider)

@@ -51,8 +51,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly string _cacheFilePath = AppPaths.ForRuntimeFile("sim_cache.json");
     private ConcurrentDictionary<string, string> _simCache = new();
 
-    private readonly string _imeiCacheFilePath = AppPaths.ForRuntimeFile("imei_cache.json");
-    private ConcurrentDictionary<string, string> _imeiCache = new();
+    private readonly string _imeiCacheFilePath = AppPaths.ForRuntimeFile("imei_backup.csv");
+    private ConcurrentDictionary<string, SimBackupEntry> _imeiCache = new();
     private readonly object _imeiCacheLock = new();
 
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
@@ -829,6 +829,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         {
                             _simCache[port.Serial] = foundNumber;
                             SaveSimCache();
+
+                            if (_imeiCache.TryGetValue(port.Serial, out var entry))
+                            {
+                                if (entry.PhoneNumber != foundNumber)
+                                {
+                                    entry.PhoneNumber = foundNumber;
+                                    SaveImeiCache();
+                                }
+                            }
                         }
                     }
                     
@@ -957,10 +966,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         }
                         else
                         {
-                            bool hasSaved = _imeiCache.TryGetValue(ccid, out var cachedImei);
-                            if (hasSaved)
+                            bool hasSaved = _imeiCache.TryGetValue(ccid, out var cachedEntry);
+                            if (hasSaved && cachedEntry != null)
                             {
-                                cachedImei = NormalizeImei(cachedImei);
+                                string cachedImei = NormalizeImei(cachedEntry.Imei);
                                 if (currentImei != cachedImei)
                                 {
                                     AddLog($"[{e.PortName}] [IMEI_RESTORE] Đang khôi phục IMEI cũ: {cachedImei}", "WARNING");
@@ -979,19 +988,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 {
                                     AddLog($"[{e.PortName}] IMEI khớp với cache: {currentImei}", "SUCCESS");
                                 }
+
+                                Application.Current.Dispatcher.Invoke(() =>
+                                {
+                                    port.CreatedAt = cachedEntry.CreatedAt;
+                                    port.LicenseKeySuffix = cachedEntry.LicenseKeySuffix;
+                                    port.KeyMismatch = cachedEntry.KeyMismatch;
+                                });
                             }
                             else
                             {
-                                if (SettingsService.Current.AllowAutoLearningImei)
+                                // Chưa từng lưu (cắm lần đầu) -> Lưu IMEI thật của chip gắn với CCID của SIM vào file backup
+                                var newEntry = new SimBackupEntry
                                 {
-                                    _imeiCache[ccid] = currentImei;
-                                    SaveImeiCache();
-                                    AddLog($"[{e.PortName}] Cắm lần đầu (Auto-Learning), lưu IMEI: {currentImei} gắn với CCID: {ccid}", "SUCCESS");
-                                }
-                                else
+                                    Ccid = ccid,
+                                    Imei = currentImei,
+                                    PhoneNumber = string.Empty,
+                                    CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                                    LicenseKeySuffix = string.Empty,
+                                    KeyMismatch = "false"
+                                };
+                                _imeiCache[ccid] = newEntry;
+                                SaveImeiCache();
+                                AddLog($"[{e.PortName}] Cắm lần đầu, lưu IMEI: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+
+                                Application.Current.Dispatcher.Invoke(() =>
                                 {
-                                    AddLog($"[{e.PortName}] [IMEI_WARNING] CCID: {ccid} chưa có trong backup/CSV. Không tự động lưu vì chế độ Auto-Learning đang TẮT. Thiết bị sẽ hoạt động với IMEI hiện tại: {currentImei}.", "WARNING");
-                                }
+                                    port.CreatedAt = newEntry.CreatedAt;
+                                    port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
+                                    port.KeyMismatch = newEntry.KeyMismatch;
+                                });
                             }
                         }
 
@@ -1002,7 +1028,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         // Đọc lại IMEI sau khi xử lý để log trạng thái cuối
                         string finalImeiResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 30000, silent: true);
                         string finalImei = NormalizeImei(finalImeiResp);
-                        string expectedImei = _imeiCache.TryGetValue(ccid, out var exp) ? NormalizeImei(exp) : currentImei;
+                        string expectedImei = (_imeiCache.TryGetValue(ccid, out var exp) && exp != null) ? NormalizeImei(exp.Imei) : currentImei;
                         bool matched = finalImei == expectedImei;
                         AddLog($"[{e.PortName}] [IMEI_FINAL] current={finalImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
 
@@ -1032,7 +1058,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Application.Current.Dispatcher.Invoke(() => 
                         {
                             if (!string.IsNullOrEmpty(finalImei)) port.Imei = finalImei;
-                            MarkPortActiveAfterInit(e.PortName);
+                            port.Status = SimStatus.NoResponse;
+                            port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                            UpdateDashboard();
                         });
                     });
                 }
@@ -1066,6 +1094,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (!string.IsNullOrWhiteSpace(rawNumber))
                 {
                     port.PhoneNumber = rawNumber;
+                    if (!string.IsNullOrWhiteSpace(port.Serial))
+                    {
+                        _simCache[port.Serial] = rawNumber;
+                        SaveSimCache();
+
+                        if (_imeiCache.TryGetValue(port.Serial, out var entry))
+                        {
+                            if (entry.PhoneNumber != rawNumber)
+                            {
+                                entry.PhoneNumber = rawNumber;
+                                SaveImeiCache();
+                            }
+                        }
+                    }
                 }
             }
             else if (e.Data == "[STATUS_ACTIVE]")
@@ -1077,6 +1119,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 
                 // Xoá lỗi cũ trên Firebase (nếu có) khi cổng kết nối thành công
                 _ = gsm.Services.FirebaseService.ClearWebStateAsync(e.PortName);
+            }
+            else if (e.Data == "[STATUS_NO_RESPONSE]")
+            {
+                port.Status = SimStatus.NoResponse;
+                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                UpdateDashboard();
             }
         });
     }
@@ -2699,11 +2747,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 try
                 {
-                    string json = File.ReadAllText(_imeiCacheFilePath);
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
-                    if (dict != null) _imeiCache = new ConcurrentDictionary<string, string>(dict);
+                    var lines = File.ReadAllLines(_imeiCacheFilePath);
+                    var newCache = new ConcurrentDictionary<string, SimBackupEntry>();
+                    for (int i = 1; i < lines.Length; i++)
+                    {
+                        var line = lines[i];
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+                        var parts = line.Split(',');
+                        if (parts.Length >= 2)
+                        {
+                            string ccid = NormalizeCcid(parts[0]);
+                            string imei = NormalizeImei(parts[1]);
+                            if (!string.IsNullOrEmpty(ccid) && !string.IsNullOrEmpty(imei))
+                            {
+                                var entry = new SimBackupEntry
+                                {
+                                    Ccid = ccid,
+                                    Imei = imei,
+                                    PhoneNumber = parts.Length >= 3 ? parts[2].Trim() : string.Empty,
+                                    CreatedAt = parts.Length >= 4 ? parts[3].Trim() : string.Empty,
+                                    LicenseKeySuffix = parts.Length >= 5 ? parts[4].Trim() : string.Empty,
+                                    KeyMismatch = parts.Length >= 6 ? parts[5].Trim() : string.Empty
+                                };
+                                newCache[ccid] = entry;
+                            }
+                        }
+                    }
+                    _imeiCache = newCache;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    AddLog($"Lỗi đọc imei_backup.csv: {ex.Message}", "ERROR");
+                }
             }
         }
     }
@@ -2714,13 +2789,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             try
             {
-                string json = JsonSerializer.Serialize(_imeiCache);
+                var builder = new StringBuilder();
+                builder.AppendLine("CCID,IMEI,PhoneNumber,CreatedAt,LicenseKeySuffix,KeyMismatch");
+                foreach (var kvp in _imeiCache)
+                {
+                    var entry = kvp.Value;
+                    builder.AppendLine($"{entry.Ccid},{entry.Imei},{entry.PhoneNumber},{entry.CreatedAt},{entry.LicenseKeySuffix},{entry.KeyMismatch}");
+                }
+
                 string tempPath = _imeiCacheFilePath + ".tmp";
-                File.WriteAllText(tempPath, json);
+                File.WriteAllText(tempPath, builder.ToString());
 
                 if (File.Exists(_imeiCacheFilePath))
                 {
-                    string backupPath = _imeiCacheFilePath.Replace(".json", ".backup.json");
+                    string backupPath = _imeiCacheFilePath.Replace(".csv", ".backup.csv");
                     File.Copy(_imeiCacheFilePath, backupPath, overwrite: true);
                 }
 
@@ -2728,7 +2810,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             catch (Exception ex)
             {
-                AddLog($"Lỗi ghi cache IMEI: {ex.Message}", "ERROR");
+                AddLog($"Lỗi ghi file imei_backup.csv: {ex.Message}", "ERROR");
             }
         }
     }
@@ -2777,22 +2859,47 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         string serial = NormalizeCcid(parts[0]);
                         string imei = NormalizeImei(parts[1]);
                         string phone = parts.Length >= 3 ? parts[2].Trim() : "";
+                        string createdAt = parts.Length >= 4 ? parts[3].Trim() : "";
+                        string licenseKeySuffix = parts.Length >= 5 ? parts[4].Trim() : "";
+                        string keyMismatch = parts.Length >= 6 ? parts[5].Trim() : "";
 
                         if (!string.IsNullOrEmpty(serial) && !string.IsNullOrEmpty(imei))
                         {
-                            if (_imeiCache.TryGetValue(serial, out var existingImei))
+                            if (_imeiCache.TryGetValue(serial, out var existingEntry))
                             {
-                                string normExisting = NormalizeImei(existingImei);
-                                if (normExisting != imei)
+                                string normExisting = NormalizeImei(existingEntry.Imei);
+                                bool isChanged = normExisting != imei ||
+                                                 existingEntry.PhoneNumber != phone ||
+                                                 existingEntry.CreatedAt != createdAt ||
+                                                 existingEntry.LicenseKeySuffix != licenseKeySuffix ||
+                                                 existingEntry.KeyMismatch != keyMismatch;
+
+                                if (isChanged)
                                 {
-                                    AddLog($"[IMEI_CONFLICT] Xung đột IMEI cho SIM {serial}: Cache={normExisting}, CSV={imei}. Chọn giá trị từ CSV.", "WARN");
-                                    _imeiCache[serial] = imei;
+                                    if (normExisting != imei)
+                                    {
+                                        AddLog($"[IMEI_CONFLICT] Xung đột IMEI cho SIM {serial}: Cache={normExisting}, CSV={imei}. Chọn giá trị từ CSV.", "WARN");
+                                    }
+                                    existingEntry.Imei = imei;
+                                    existingEntry.PhoneNumber = phone;
+                                    existingEntry.CreatedAt = createdAt;
+                                    existingEntry.LicenseKeySuffix = licenseKeySuffix;
+                                    existingEntry.KeyMismatch = keyMismatch;
                                     hasNewImei = true;
                                 }
                             }
                             else
                             {
-                                _imeiCache[serial] = imei;
+                                var entry = new SimBackupEntry
+                                {
+                                    Ccid = serial,
+                                    Imei = imei,
+                                    PhoneNumber = phone,
+                                    CreatedAt = createdAt,
+                                    LicenseKeySuffix = licenseKeySuffix,
+                                    KeyMismatch = keyMismatch
+                                };
+                                _imeiCache[serial] = entry;
                                 hasNewImei = true;
                             }
                         }

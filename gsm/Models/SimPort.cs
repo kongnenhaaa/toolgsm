@@ -84,6 +84,15 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _updatedAt = string.Empty;
     
+    [ObservableProperty]
+    private string _createdAt = string.Empty;
+
+    [ObservableProperty]
+    private string _licenseKeySuffix = string.Empty;
+
+    [ObservableProperty]
+    private string _keyMismatch = string.Empty;
+    
     // New Pro Features
     [ObservableProperty]
     private int _signalStrength = 0; // 0 to 100

@@ -723,6 +723,9 @@
                             <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
                             <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
+                            <DataGridTextColumn Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
+                            <DataGridTextColumn Header="Lệch Key" Binding="{Binding KeyMismatch}" Width="100"/>
                             <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
                             <DataGridTemplateColumn Header="Health" Width="150">
                                 <DataGridTemplateColumn.CellTemplate>

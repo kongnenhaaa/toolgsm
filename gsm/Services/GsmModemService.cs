@@ -145,7 +145,6 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CFUN=4", 30000); // Ngắt sóng ngay, chặn đăng ký mạng bằng IMEI cũ
         await Task.Delay(1000);
 
-        await SendCommandAsync(portName, "ATZ", 30000); // Reset
         await SendCommandAsync(portName, "ATE0", 30000); // Turn off echo
         await SendCommandAsync(portName, "AT+CMGF=1", 30000); // Set SMS to text mode
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
@@ -170,7 +169,11 @@ public class GsmModemService : IGsmModemService
         if (!ccid.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
         if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
 
-        // ViewModel only marks the port active after IMEI cache handling and AT+CFUN=1 complete.
+        if (ccid.Contains("ERROR"))
+        {
+            await SendCommandAsync(portName, "AT+CFUN=1", 30000); // Bật sóng lại nếu không có SIM / lỗi SIM
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
+        }
     }
 
     public void StartPollingNetwork(string portName)

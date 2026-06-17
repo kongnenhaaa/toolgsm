@@ -25,6 +25,7 @@ namespace gsm.Services
         private readonly CancellationTokenSource _cts = new();
         private Task? _listenTask;
         private Task? _syncTask;
+        private const long StaleRunningCommandMs = 180000;
         private string _databaseUrl 
         {
             get 
@@ -100,6 +101,8 @@ namespace gsm.Services
         {
             if (_listenTask != null || _syncTask != null) return;
 
+            _ = Task.Run(CleanupStaleOwnedCommandsAsync);
+
             // Bắt đầu lắng nghe lệnh gửi SMS từ web
             _listenTask = ListenForCommandsAsync(_cts.Token);
 
@@ -113,6 +116,60 @@ namespace gsm.Services
             {
                 _cts.Cancel();
             }
+        }
+
+        private static long GetUnixMilliseconds(JsonElement element)
+        {
+            return element.ValueKind switch
+            {
+                JsonValueKind.Number when element.TryGetInt64(out var value) => value,
+                JsonValueKind.String when long.TryParse(element.GetString(), out var value) => value,
+                _ => 0
+            };
+        }
+
+        private async Task CleanupStaleOwnedCommandsAsync()
+        {
+            if (!SettingsService.Current.EnableWebNotification) return;
+
+            try
+            {
+                var json = await _restClient.GetStringAsync($"{_databaseUrl}commands.json");
+                if (string.IsNullOrWhiteSpace(json) || json == "null") return;
+
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                foreach (var command in doc.RootElement.EnumerateObject())
+                {
+                    var cmdId = command.Name;
+                    var root = command.Value;
+                    if (root.ValueKind != JsonValueKind.Object) continue;
+
+                    var status = root.TryGetProperty("status", out var statusEl) ? statusEl.GetString() : null;
+                    if (!string.Equals(status, "running", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var handledBy = root.TryGetProperty("handledBy", out var handledByEl) ? handledByEl.GetString() : null;
+                    if (!string.Equals(handledBy, _machineId, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var updatedAt = root.TryGetProperty("updatedAt", out var updatedAtEl) ? GetUnixMilliseconds(updatedAtEl) : 0;
+                    if (updatedAt <= 0 || now - updatedAt < StaleRunningCommandMs) continue;
+
+                    var portId = root.TryGetProperty("portId", out var portEl) ? portEl.GetString() ?? "" : "";
+                    var recipient = root.TryGetProperty("recipient", out var recipientEl) ? recipientEl.GetString() ?? "" : "";
+                    var content = root.TryGetProperty("content", out var contentEl) ? contentEl.GetString() ?? "" : "";
+                    var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "sms" : "sms";
+                    var error = "Command running quá 3 phút do toolgsm tắt ngang, đã tự timeout";
+
+                    await WriteCommandResultAsync(cmdId, portId, recipient, content, type, "failed", null, error);
+                    await UpdateCommandStatusAsync(cmdId, "failed", error);
+                    await UpdateWebCommandStateAsync(portId, cmdId, "failed", error);
+                    await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                    _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "failed", null, error);
+                }
+            }
+            catch { }
         }
 
         public void Dispose()

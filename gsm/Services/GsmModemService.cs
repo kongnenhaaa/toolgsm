@@ -125,7 +125,7 @@ public class GsmModemService : IGsmModemService
                 foreach (var p in newlyOpenedPorts)
                 {
                     _ = InitializeModemAsync(p);
-                    await Task.Delay(50); // Giãn cách nhẹ 50ms giữa các cổng để giảm tải băng thông USB
+                    await Task.Delay(1000); // Giãn cách 1000ms giữa các cổng để giảm tải băng thông và dòng điện USB
                 }
             });
         }

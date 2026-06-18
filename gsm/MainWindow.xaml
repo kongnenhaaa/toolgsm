@@ -840,7 +840,7 @@
                     <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                         <DataGrid Margin="10" ItemsSource="{Binding FilteredSmsMessages}"
                                   PreviewMouseLeftButtonUp="DataGrid_PreviewMouseLeftButtonUp"
-                                  AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" Background="{StaticResource PanelBackground}"
                                   RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
                                   Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
                                   HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"

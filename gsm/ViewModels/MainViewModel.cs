@@ -30,6 +30,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly FirebaseService _firebaseService;
     private readonly ApiServerService? _apiServerService;
     private readonly ConcurrentDictionary<string, AudioRecordingService> _activeRecordings = new();
+    private readonly ConcurrentDictionary<string, string> _activeCallers = new();
     private readonly object _logFileLock = new();
 
     public event Action<string, string>? OtpReceivedEvent;
@@ -1062,6 +1063,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         AddLog($"[{e.PortName}] Đang bật sóng lại (AT+CFUN=1)...");
                         await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 30000);
 
+                        // Đợi 1.5 giây để modem ổn định sóng và nguồn điện trước khi gửi lệnh tiếp theo
+                        await Task.Delay(1500);
+
                         // Đọc lại IMEI sau khi xử lý để log trạng thái cuối
                         string finalImeiResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 30000, silent: true);
                         string finalImei = NormalizeImei(finalImeiResp);
@@ -1098,6 +1102,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         AddLog($"[{e.PortName}] Đang bật sóng lại (AT+CFUN=1) sau lỗi đọc CCID...");
                         await _modemService.SendCommandAsync(e.PortName, "AT+CFUN=1", 30000);
+
+                        // Đợi 1.5 giây để modem ổn định sóng và nguồn điện trước khi gửi lệnh tiếp theo
+                        await Task.Delay(1500);
 
                         // Đọc lại IMEI sau khi xử lý để log trạng thái cuối
                         string finalImeiResp = await _modemService.SendCommandAsync(e.PortName, "AT+CGSN", 30000, silent: true);
@@ -1278,9 +1285,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 else if (cleanContentLower.Contains("khong du tien") || cleanContentLower.Contains("không đủ tiền"))
                 {
-                    AddLog($"[{e.PortName}] LỖI SIM: Tài khoản không đủ tiền để gửi SMS đến tổng đài Zalo! Vui lòng nạp thêm tiền.", "ERROR");
-                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Hết tiền");
-                    isZaloError = true;
+                    // Kiểm tra số dư thực tế trước khi kết luận "Hết tiền" (tránh false positive từ nhà mạng)
+                    var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+                    if (port != null && !string.IsNullOrWhiteSpace(port.Balance))
+                    {
+                        // Tìm số trong chuỗi Balance (VD: "123.456đ" -> 123456)
+                        var balanceNum = System.Text.RegularExpressions.Regex.Replace(port.Balance, @"[^\d]", "");
+                        if (int.TryParse(balanceNum, out var balanceValue) && balanceValue > 500)
+                        {
+                            AddLog($"[{e.PortName}] ⚠️ Nhà mạng báo hết tiền nhưng số dư vẫn còn ({port.Balance}). Đây có thể là lỗi tạm thời.", "WARNING");
+                            // Không gửi lỗi "Hết tiền" lên web, chỉ ghi log
+                            isZaloError = true;
+                        }
+                        else
+                        {
+                            AddLog($"[{e.PortName}] LỖI SIM: Tài khoản không đủ tiền để gửi SMS! Số dư: {port.Balance}", "ERROR");
+                            _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Hết tiền");
+                            isZaloError = true;
+                        }
+                    }
+                    else
+                    {
+                        // Nếu không biết số dư thì thực hiện kiểm tra số dư trước
+                        AddLog($"[{e.PortName}] Nhà mạng báo hết tiền. Đang kiểm tra số dư thực tế...", "WARNING");
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(1000);
+                            await CheckBalanceForPortAsync(e.PortName);
+                        });
+                        isZaloError = true;
+                    }
                 }
 
                 if (isZaloError)
@@ -1405,8 +1439,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
                                   senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                   senderPhone.Contains("8500") || senderPhone.Contains("7539");
+                    bool isWhatsApp = cleanContent.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                      senderPhone.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                      senderPhone.IndexOf("WA", StringComparison.OrdinalIgnoreCase) >= 0;
 
-                    if (!isZalo)
+                    if (!isZalo && !isWhatsApp)
                     {
                         AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không phải Zalo từ {senderPhone}");
                         if (!string.IsNullOrEmpty(e.MsgIndex))
@@ -1422,7 +1459,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 string textForOtp = Regex.Replace(cleanContent, @"\*+\d+", "");
 
                 // Tìm các mẫu OTP có từ khóa đi kèm (Đã thêm mẫu Zalo cụ thể)
-                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|viber|telegram|facebook|google|apple|tiktok|tinder)\s*(?:cho\s+sdt\s*(?:\(\))?)?\s*[:\-]?\s*(\d{4,8})", RegexOptions.IgnoreCase);
+                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|whatsapp|viber|telegram|facebook|google|apple|tiktok|tinder)\s*(?:cho\s+sdt\s*(?:\(\))?)?\s*[:\-]?\s*(\d{3}\s*[- ]\s*\d{3}|\d{4,8})", RegexOptions.IgnoreCase);
                 if (!otpMatch.Success)
                 {
                     // Fallback: Tìm một dãy số đứng riêng lẻ (không liền kề chữ cái)
@@ -1434,7 +1471,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
-                extractedOtp = otpMatch.Success && otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? otpMatch.Groups[1].Value : (otpMatch.Success ? otpMatch.Value : "N/A");
+                extractedOtp = otpMatch.Success && otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? Regex.Replace(otpMatch.Groups[1].Value, @"\D", "") : (otpMatch.Success ? Regex.Replace(otpMatch.Value, @"\D", "") : "N/A");
 
                 if (extractedOtp == "N/A" && TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port))
                 {
@@ -1582,69 +1619,113 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
             string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
-
-            AddLog($"[{e.PortName}] Có cuộc gọi đến từ SĐT: {e.Data}. Đang tự động nhấc máy...", "INFO");
-            SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có cuộc gọi từ {e.Data}");
-
-            // Fix #4: Gửi thông báo Telegram khi có cuộc gọi đến
             string callerDisplay = string.IsNullOrWhiteSpace(e.Data) ? "Số ẩn" : e.Data;
+            _activeCallers[e.PortName] = callerDisplay;
+
+            if (port != null)
+            {
+                port.CallCount++;
+                port.Sender = callerDisplay;
+                port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+                port.LastMessageContent = "Cuộc gọi đến...";
+                UpdateDashboard();
+            }
+
+            AddLog($"[{e.PortName}] Có cuộc gọi đến từ SĐT: {callerDisplay}", "INFO");
+            SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có cuộc gọi từ {callerDisplay}");
+
             string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
             _ = TelegramService.SendMessageAsync(
                 $"📞 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
                 $"📱 SIM nhận: {receiverPhone}\n" +
                 $"☎️ Người gọi: <code>{safeCallerHtml}</code>"
             );
-
-            // Gửi lệnh nhận cuộc gọi
-            await _modemService.SendCommandAsync(e.PortName, "ATA");
-
-            // Bắt đầu ghi âm
-            var recorder = new AudioRecordingService();
-            recorder.LogMessage += (s, msg) => AddLog($"[{e.PortName}] {msg}");
-            
-            if (_activeRecordings.TryAdd(e.PortName, recorder))
-            {
-                recorder.StartRecording(e.PortName);
-            }
         });
     }
-
     private void ModemService_CallEnded(object? sender, GsmDataEventArgs e)
     {
         Application.Current.Dispatcher.InvokeAsync(async () =>
         {
             AddLog($"[{e.PortName}] Cuộc gọi đã kết thúc.");
 
+            string callerDisplay = _activeCallers.TryRemove(e.PortName, out var caller) ? caller : "Số ẩn";
+            string wavFilePath = string.Empty;
+            string transcript = string.Empty;
+            bool hadRecording = false;
+
             if (_activeRecordings.TryRemove(e.PortName, out var recorder))
             {
-                string wavFilePath = recorder.StopRecording();
+                wavFilePath = recorder.StopRecording();
                 recorder.Dispose();
+                hadRecording = File.Exists(wavFilePath) && new FileInfo(wavFilePath).Length > 44;
 
-                if (File.Exists(wavFilePath))
+                if (hadRecording)
                 {
                     AddLog($"[{e.PortName}] Đã ghi âm xong, đang phân tích nội dung cuộc gọi...");
-                    
-                    // Chạy dịch trên luồng riêng để không block UI
-                    string text = await Task.Run(() => _speechToTextService.RecognizeWavFile(wavFilePath));
-                    
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        AddLog($"[{e.PortName}] Nội dung cuộc gọi: {text}", "SUCCESS");
-                        
-                        // Gửi qua Telegram
-                        var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
-                        string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
-                        _ = TelegramService.SendMessageAsync($"🎙 <b>Cuộc gọi trên {e.PortName}</b>\n📱 SIM nhận: {receiverPhone}\n📝 Nội dung: <i>{text}</i>");
-                    }
-                    else
-                    {
-                        AddLog($"[{e.PortName}] Không có giọng nói trong cuộc gọi này (hoặc âm lượng quá nhỏ).", "WARN");
-                    }
+                    transcript = await Task.Run(() => _speechToTextService.RecognizeWavFile(wavFilePath));
                 }
             }
+
+            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+            string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
+            string fileName = string.IsNullOrWhiteSpace(wavFilePath) ? "Không có file" : Path.GetFileName(wavFilePath);
+            bool hasTranscript = !string.IsNullOrWhiteSpace(transcript) && !transcript.StartsWith("Lỗi:", StringComparison.OrdinalIgnoreCase);
+            string content = hasTranscript
+                ? transcript
+                : hadRecording
+                    ? "Không nhận diện được giọng nói trong cuộc gọi này."
+                    : "Không có dữ liệu ghi âm cho cuộc gọi này.";
+
+            SmsMessages.Insert(0, new SmsMessage
+            {
+                PortName = e.PortName,
+                ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
+                Content = content,
+                Sender = callerDisplay,
+                Otp = "CALL",
+                ReceiverPhone = receiverPhone,
+                NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
+                Status = port?.Status ?? SimStatus.Connecting,
+                CallCount = port?.CallCount.ToString() ?? "1",
+                ForwardContent = fileName
+            });
+
+            if (port != null)
+            {
+                port.LastMessageContent = content;
+                port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+                port.Otp = "CALL";
+                port.Sender = callerDisplay;
+            }
+
+            OnPropertyChanged(nameof(FilteredSmsMessages));
+            OnPropertyChanged(nameof(SmsReceivedCount));
+
+            if (hasTranscript)
+            {
+                AddLog($"[{e.PortName}] Nội dung cuộc gọi: {transcript}", "SUCCESS");
+            }
+            else if (!string.IsNullOrWhiteSpace(transcript))
+            {
+                AddLog($"[{e.PortName}] {transcript}", "WARN");
+            }
+            else
+            {
+                AddLog($"[{e.PortName}] {content}", "WARN");
+            }
+
+            string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
+            string safeContent = System.Net.WebUtility.HtmlEncode(content);
+            string safeFileName = System.Net.WebUtility.HtmlEncode(fileName);
+            _ = TelegramService.SendMessageAsync(
+                $"🎙 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
+                $"📱 SIM nhận: {receiverPhone}\n" +
+                $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
+                $"📝 Nội dung: <i>{safeContent}</i>\n" +
+                $"💾 File: <code>{safeFileName}</code>"
+            );
         });
     }
-
     [RelayCommand]
     private void SwitchTab(string tabIndex)
     {
@@ -3185,6 +3266,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _firebaseService.Dispose();
         _apiServerService?.Stop();
         _modemService.DisconnectAll();
+
+        foreach (var recorder in _activeRecordings.Values)
+        {
+            recorder.Dispose();
+        }
+        _activeRecordings.Clear();
+        _activeCallers.Clear();
 
         foreach (var semaphore in _smsSendLocks.Values)
         {

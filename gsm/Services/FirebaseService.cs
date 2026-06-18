@@ -25,7 +25,7 @@ namespace gsm.Services
         private readonly CancellationTokenSource _cts = new();
         private Task? _listenTask;
         private Task? _syncTask;
-        private const long StaleRunningCommandMs = 180000;
+        private const long StaleRunningCommandMs = 10 * 60 * 1000;
         private string _databaseUrl 
         {
             get 
@@ -160,7 +160,7 @@ namespace gsm.Services
                     var recipient = root.TryGetProperty("recipient", out var recipientEl) ? recipientEl.GetString() ?? "" : "";
                     var content = root.TryGetProperty("content", out var contentEl) ? contentEl.GetString() ?? "" : "";
                     var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "sms" : "sms";
-                    var error = "Command running quá 3 phút do toolgsm tắt ngang, đã tự timeout";
+                    var error = "Command running quá 10 phút do toolgsm tắt ngang, đã tự timeout";
 
                     await WriteCommandResultAsync(cmdId, portId, recipient, content, type, "failed", null, error);
                     await UpdateCommandStatusAsync(cmdId, "failed", error);

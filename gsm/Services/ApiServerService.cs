@@ -49,8 +49,21 @@ public class ApiServerService
 
     public void Stop()
     {
-        _cts.Cancel();
-        _listener?.Stop();
+        try
+        {
+            if (!_cts.IsCancellationRequested)
+            {
+                _cts.Cancel();
+            }
+
+            if (_listener?.IsListening == true)
+            {
+                _listener.Stop();
+            }
+        }
+        catch (ObjectDisposedException) { }
+        catch (HttpListenerException) { }
+        catch (InvalidOperationException) { }
     }
 
     private async Task ListenLoop(CancellationToken ct)

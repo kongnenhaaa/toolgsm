@@ -24,16 +24,22 @@ public class AudioRecordingService : IDisposable
     private int GetDeviceNumber()
     {
         int waveInDevices = WaveIn.DeviceCount;
+        if (waveInDevices <= 0)
+        {
+            return -1;
+        }
+
         for (int i = 0; i < waveInDevices; i++)
         {
             var deviceInfo = WaveIn.GetCapabilities(i);
             string name = deviceInfo.ProductName.ToLowerInvariant();
-            if (name.Contains("quectel") || name.Contains("usb audio") || name.Contains("ec20"))
+            if (name.Contains("quectel") || name.Contains("usb audio") || name.Contains("ec20") || name.Contains("modem"))
             {
                 return i;
             }
         }
-        return 0; // Mặc định
+
+        return 0;
     }
 
     public void StartRecording(string portName)
@@ -48,6 +54,12 @@ public class AudioRecordingService : IDisposable
             _currentFilePath = Path.Combine(logsDir, $"call_{portName}_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
             int deviceNumber = GetDeviceNumber();
+            if (deviceNumber < 0)
+            {
+                LogMessage?.Invoke(this, "Không tìm thấy thiết bị ghi âm audio input.");
+                return;
+            }
+
             var deviceInfo = WaveIn.GetCapabilities(deviceNumber);
             LogMessage?.Invoke(this, $"Bắt đầu ghi âm cuộc gọi trên thiết bị: {deviceInfo.ProductName}");
 

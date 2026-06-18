@@ -1286,7 +1286,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 else if (cleanContentLower.Contains("khong du tien") || cleanContentLower.Contains("không đủ tiền"))
                 {
                     // Kiểm tra số dư thực tế trước khi kết luận "Hết tiền" (tránh false positive từ nhà mạng)
-                    var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
                     if (port != null && !string.IsNullOrWhiteSpace(port.Balance))
                     {
                         // Tìm số trong chuỗi Balance (VD: "123.456đ" -> 123456)

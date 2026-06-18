@@ -101,6 +101,19 @@ namespace gsm.Services
         {
             if (_listenTask != null || _syncTask != null) return;
 
+            // Xóa sạch trạng thái web_states của máy này khi bật toolgsm lên để hiển thị đầy đủ hết
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    if (SettingsService.Current.EnableWebNotification)
+                    {
+                        await _restClient.DeleteAsync($"{_databaseUrl}web_states/machines/{_machineId}.json");
+                    }
+                }
+                catch { }
+            });
+
             _ = Task.Run(CleanupStaleOwnedCommandsAsync);
 
             // Bắt đầu lắng nghe lệnh gửi SMS từ web
@@ -773,7 +786,6 @@ namespace gsm.Services
                 var json = JsonSerializer.Serialize(new
                 {
                     smsSent = false,
-                    commandStatus = "failed",
                     errorMsg,
                     updatedAt = new Dictionary<string, string> { [".sv"] = "timestamp" }
                 });
@@ -793,13 +805,8 @@ namespace gsm.Services
                 client.BaseAddress = new Uri(GetDatabaseUrl());
                 if (await CanPatchStaticWebStateAsync(client, portId)) return;
 
-                // Chỉ xoá trạng thái smsSent và lỗi, GIỮ LẠI trạng thái ẩn (hiddenOtp) và SĐT
-                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSent.json");
-                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/smsSentTime.json");
-                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/errorMsg.json");
-                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/commandStatus.json");
-                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/commandId.json");
-                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}/commandIds.json");
+                // Xóa toàn bộ trạng thái web_states của cổng (bao gồm cả hiddenOtp) để cổng mới mở lên hiển thị đầy đủ
+                await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}.json");
             }
             catch { }
         }

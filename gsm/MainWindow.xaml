@@ -435,8 +435,6 @@
                                             <Button Grid.Column="1" Content="Chuyển tiếp" Command="{Binding CallManagerActionCommand}" CommandParameter="SetForwarding" Style="{StaticResource MaterialDesignRaisedButton}" Background="#2196F3" BorderBrush="#2196F3" ToolTip="AT+CCFC"/>
                                         </Grid>
                                         <WrapPanel Margin="0,5,0,0">
-                                            <Button Content="Bật Auto-Answer" Command="{Binding CallManagerActionCommand}" CommandParameter="EnableAutoAnswer" Style="{StaticResource ModernButtonStyle}" Background="#424242" ToolTip="ATS0=1" Margin="0,0,10,10"/>
-                                            <Button Content="Tắt Auto-Answer" Command="{Binding CallManagerActionCommand}" CommandParameter="DisableAutoAnswer" Style="{StaticResource ModernButtonStyle}" Background="#424242" ToolTip="ATS0=0" Margin="0,0,10,10"/>
                                             <Button Content="DS Cuộc Gọi (CLCC)" Command="{Binding CallManagerActionCommand}" CommandParameter="CallStatus" Style="{StaticResource ModernButtonStyle}" Background="#5C6BC0" ToolTip="AT+CLCC" Margin="0,0,10,10"/>
                                             <Button Content="Call Waiting" Command="{Binding CallManagerActionCommand}" CommandParameter="CallWaiting" Style="{StaticResource ModernButtonStyle}" Background="#424242" ToolTip="AT+CCWA=1,1,1" Margin="0,0,10,10"/>
                                         </WrapPanel>

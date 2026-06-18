@@ -1227,6 +1227,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             try
             {
+                var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
                 string senderPhone = "UNKNOWN";
                 string extractedOtp = "N/A";
                 string cleanContent = e.Data;
@@ -1467,7 +1468,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
-                var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
                 extractedOtp = otpMatch.Success && otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) ? Regex.Replace(otpMatch.Groups[1].Value, @"\D", "") : (otpMatch.Success ? Regex.Replace(otpMatch.Value, @"\D", "") : "N/A");
@@ -2654,12 +2654,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 break;
             case "HangUp":
                 cmd = "ATH";
-                break;
-            case "EnableAutoAnswer":
-                cmd = "ATS0=1";
-                break;
-            case "DisableAutoAnswer":
-                cmd = "ATS0=0";
                 break;
             case "EnableClip":
                 cmd = "AT+CLIP=1";

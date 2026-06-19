@@ -88,6 +88,12 @@ namespace gsm.Services
             }
         }
 
+        private static string? GetWebOtpValue(string? otp)
+        {
+            if (string.IsNullOrWhiteSpace(otp) || otp == "N/A") return null;
+            return otp.All(char.IsDigit) ? otp : null;
+        }
+
         public FirebaseService(MainViewModel vm)
         {
             _vm = vm;
@@ -219,7 +225,7 @@ namespace gsm.Services
                     id = p.PortName,
                     phone = p.PhoneNumber,
                     status = p.Status == SimStatus.Active ? "online" : "offline",
-                    otp = string.IsNullOrEmpty(p.Otp) || p.Otp == "N/A" ? null : p.Otp,
+                    otp = GetWebOtpValue(p.Otp),
                     network = p.NetworkProvider,
                     balance = p.Balance,
                     signal = p.SignalStrength,

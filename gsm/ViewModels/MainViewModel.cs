@@ -1835,7 +1835,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
 
 
-    private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxRetries = 1)
+    private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxRetries = 3)
     {
         string result = string.Empty;
 
@@ -1896,13 +1896,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             // 1. Chuyển bảng mã về GSM
-            await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
+            var preflightError = await PrepareUssdPortAsync(portName);
+            if (!string.IsNullOrEmpty(preflightError))
+            {
+                result = preflightError;
+            }
+            else
+            {
+                await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
 
             // 2. Gửi lệnh USSD
-            result = await _modemService.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
+                try
+                {
+                    result = await _modemService.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
+                }
+                finally
+                {
 
             // 3. Chuyển lại UCS2
-            await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
+                    await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
+                }
+            }
 
             bool isFailed = result.Contains("ERROR") || result.Contains("Thao tac khong hop le") || result.Contains("he thong ban") || result.Contains("+CUSD: 2") || result.Contains("+CUSD: 4") || result.Contains("+CUSD: 5");
 
@@ -1936,6 +1950,76 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         string message = $"USSD đang xếp hàng ({scope}) cho {portName} - {reason}. Đợi {remaining.TotalSeconds:0.#}s.";
         AddLog(message, "INFO");
+    }
+
+    private async Task<string?> PrepareUssdPortAsync(string portName)
+    {
+        string at = await _modemService.SendCommandAsync(portName, "AT", 3000, true);
+        if (IsCommandError(at))
+        {
+            return $"ERROR: Modem not ready ({at.Trim()})";
+        }
+
+        string pinStatus = await _modemService.SendCommandAsync(portName, "AT+CPIN?", 5000, true);
+        if (IsCommandError(pinStatus))
+        {
+            return $"ERROR: SIM status check failed ({pinStatus.Trim()})";
+        }
+        if (pinStatus.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase) ||
+            pinStatus.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase) ||
+            pinStatus.Contains("PH-NET PIN", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"ERROR: SIM not ready ({pinStatus.Trim()})";
+        }
+
+        string registration = await _modemService.SendCommandAsync(portName, "AT+CREG?", 5000, true);
+        if (IsCommandError(registration))
+        {
+            return $"ERROR: Network registration check failed ({registration.Trim()})";
+        }
+        if (!IsNetworkRegistered(registration))
+        {
+            return $"ERROR: SIM not registered on network ({registration.Trim()})";
+        }
+
+        string signal = await _modemService.SendCommandAsync(portName, "AT+CSQ", 5000, true);
+        if (IsCommandError(signal))
+        {
+            return $"ERROR: Signal quality check failed ({signal.Trim()})";
+        }
+        if (!HasUsableSignal(signal))
+        {
+            return $"ERROR: Signal too weak for USSD ({signal.Trim()})";
+        }
+
+        await _modemService.SendCommandAsync(portName, "AT+CUSD=2", 5000, true);
+        await Task.Delay(400, _lifetimeCts.Token);
+        return null;
+    }
+
+    private static bool IsCommandError(string response)
+    {
+        return string.IsNullOrWhiteSpace(response) ||
+               response.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNetworkRegistered(string response)
+    {
+        var match = Regex.Match(response, @"\+CREG:\s*\d+\s*,\s*(\d+)");
+        if (!match.Success) return false;
+
+        return match.Groups[1].Value is "1" or "5";
+    }
+
+    private static bool HasUsableSignal(string response)
+    {
+        var match = Regex.Match(response, @"\+CSQ:\s*(\d+)");
+        if (!match.Success) return false;
+
+        if (!int.TryParse(match.Groups[1].Value, out int csq)) return false;
+        if (csq == 99) return false;
+
+        return csq >= 6;
     }
 
     private bool IsPortCoolingDown(string portName, out TimeSpan remaining)

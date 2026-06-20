@@ -1681,7 +1681,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
                 Content = content,
                 Sender = callerDisplay,
-                Otp = "CALL",
+                Otp = "",
                 ReceiverPhone = receiverPhone,
                 NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
                 Status = port?.Status ?? SimStatus.Connecting,
@@ -1693,7 +1693,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 port.LastMessageContent = content;
                 port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
-                port.Otp = "CALL";
+                port.Otp = "";
                 port.Sender = callerDisplay;
             }
 

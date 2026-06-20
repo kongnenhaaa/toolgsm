@@ -389,6 +389,22 @@
                                     </DataGrid>
                                 </StackPanel>
                             </Border>
+
+                            <Border Style="{StaticResource ProDialogSectionStyle}" Background="#252538" BorderBrush="#3D3D5C" CornerRadius="8" Margin="0,0,0,15">
+                                <StackPanel>
+                                    <TextBlock Text="📱 ĐỊNH DANH THIẾT BỊ ẢO (FAKE IMEI)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <TextBlock Text="*Tính năng này yêu cầu mạch GSM hỗ trợ lệnh đổi IMEI (như Quectel, SIMCOM). Mạch sẽ cần khởi động lại (mất sóng vài giây) khi đổi." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                    
+                                    <CheckBox Content="Bật tính năng tự động tạo định danh thiết bị ảo (Fake IMEI) cho cổng COM" 
+                                              IsChecked="{Binding AppSettings.EnableDeviceSpoofing}" 
+                                              Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    
+                                    <Button Content="Reset định danh tất cả thiết bị" 
+                                            Command="{Binding ResetAllIdentitiesCommand}" 
+                                            Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#FFB300" 
+                                            HorizontalAlignment="Left" Padding="15,4"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                     
@@ -1045,6 +1061,7 @@
                             </DataGridTemplateColumn>
 
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thiết bị (Fake)" Binding="{Binding DeviceName}" Width="160" Foreground="#29B6F6"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Serial" Binding="{Binding Serial}" Width="180" HeaderTemplate="{StaticResource SerialHeaderTemplate}"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>

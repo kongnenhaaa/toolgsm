@@ -56,4 +56,11 @@ public class AppSettings
     // ========== WEBHOOK RULES ==========
     /// <summary>Danh sách các quy tắc tự động forward OTP/SMS qua HTTP webhook.</summary>
     public System.Collections.Generic.List<WebhookRule> WebhookRules { get; set; } = new();
+
+    // ========== DEVICE SPOOFING (FAKE IMEI) ==========
+    /// <summary>
+    /// Bật/tắt tính năng tự động Fake IMEI (Spoofing) cho các cổng COM.
+    /// Dữ liệu định danh được lưu riêng trong file device_identities.json (không trong appsettings).
+    /// </summary>
+    public bool EnableDeviceSpoofing { get; set; } = false;
 }

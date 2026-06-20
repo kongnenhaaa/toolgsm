@@ -71,6 +71,9 @@ public partial class SimPort : ObservableObject
     // Tab 2 Info
     [ObservableProperty]
     private string _imei = string.Empty;
+
+    [ObservableProperty]
+    private string _deviceName = string.Empty;
     
     [ObservableProperty]
     private string _serial = string.Empty;

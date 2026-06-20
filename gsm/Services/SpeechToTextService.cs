@@ -85,6 +85,7 @@ public class SpeechToTextService
 
         try
         {
+            // Khởi tạo nhận diện giọng nói (Không dùng grammar vì các từ ngoài từ điển gốc có thể gây lỗi nhận diện trống)
             using var recognizer = new VoskRecognizer(_model, 16000.0f);
             using var stream = new FileStream(wavFilePath, FileMode.Open, FileAccess.Read);
             using var reader = new BinaryReader(stream);
@@ -108,7 +109,6 @@ public class SpeechToTextService
             if (match.Success)
             {
                 string text = match.Groups[1].Value.Trim();
-                // Lọc bỏ các câu "ảo giác" (hallucination) kinh điển của model Vosk VN khi gặp tiếng ồn tĩnh (static noise) hoặc im lặng
                 if (text.Contains("ngọ đã đổ ra cửa bám trên toàn ấn độ dương") || 
                     text == "một con ruồi" || 
                     text == "tôi" || 
@@ -118,7 +118,36 @@ public class SpeechToTextService
                 {
                     return "";
                 }
-                return text;
+
+                // Tối ưu hóa cho mã OTP: Chuyển đổi các chữ số tiếng Việt và các từ bị nhận diện sai phổ biến sang số nguyên
+                var numberWords = new System.Collections.Generic.Dictionary<string, string>
+                {
+                    {"không", "0"}, {"khong", "0"},
+                    {"một", "1"}, {"mốt", "1"}, {"mot", "1"},
+                    {"hai", "2"},
+                    {"ba", "3"},
+                    {"bốn", "4"}, {"bon", "4"},
+                    {"năm", "5"}, {"lăm", "5"}, {"nam", "5"}, {"lam", "5"}, {"ngũ", "5"}, // Bổ sung "ngũ" (thường bị nhận diện sai từ "năm")
+                    {"sáu", "6"}, {"sau", "6"},
+                    {"bảy", "7"}, {"bay", "7"},
+                    {"tám", "8"}, {"tam", "8"}, {"tả", "8"}, // Bổ sung "tả" (thường bị nhận diện sai từ "tám")
+                    {"chín", "9"}, {"chin", "9"}
+                };
+
+                // Split into words, replace known number words
+                string[] words = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                for (int i = 0; i < words.Length; i++)
+                {
+                    if (numberWords.TryGetValue(words[i].ToLower(), out string? digit) && digit != null)
+                    {
+                        words[i] = digit;
+                    }
+                }
+                
+                // Reconstruct the text
+                string final_text = string.Join(" ", words);
+
+                return final_text;
             }
 
             return "";

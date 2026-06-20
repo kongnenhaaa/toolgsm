@@ -1583,13 +1583,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // Xóa các mẫu số điện thoại bị che (VD: ***7628) để tránh việc regex bị nhận nhầm
                 string textForOtp = Regex.Replace(cleanContent, @"\*+\d+", "");
 
-                // Tìm các mẫu OTP có từ khóa đi kèm (Đã thêm mẫu Zalo cụ thể)
-                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|whatsapp|viber|telegram|facebook|google|apple|tiktok|tinder)\s*(?:cho\s+sdt\s*(?:\(\))?)?\s*[:\-]?\s*(\d{3}\s*[- ]\s*\d{3}|\d{4,8})", RegexOptions.IgnoreCase);
+                // Tìm các mẫu OTP có từ khóa đi kèm, cho phép chen ngang một vài chữ (VD: "Mã WhatsApp của bạn: ")
+                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|whatsapp|viber|telegram|facebook|google|apple|tiktok|tinder)[^\d]{0,30}?(\d{3}\s*[- ]\s*\d{3}|\d{4,8})", RegexOptions.IgnoreCase);
                 if (!otpMatch.Success)
                 {
-                    // Fallback: Tìm một dãy số đứng riêng lẻ (không liền kề chữ cái)
+                    // Fallback: Tìm một dãy số đứng riêng lẻ (hỗ trợ cả định dạng 123-456)
                     // Loại trừ luôn các đầu số tổng đài (1900, 1800) để không bắt nhầm thành OTP
-                    otpMatch = Regex.Match(textForOtp, @"(?<![\w:/])(?!1900|1800)\b(\d{4,8})\b(?![\w:/])", RegexOptions.IgnoreCase);
+                    otpMatch = Regex.Match(textForOtp, @"(?<![\w:/])(?!1900|1800)\b(\d{3}\s*[- ]\s*\d{3}|\d{4,8})\b(?![\w:/])", RegexOptions.IgnoreCase);
                 }
 
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
@@ -1764,6 +1764,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 $"📱 SIM nhận: {receiverPhone}\n" +
                 $"☎️ Người gọi: <code>{safeCallerHtml}</code>"
             );
+
+            // Tự động nhận cuộc gọi và ghi âm
+            if (!_activeRecordings.ContainsKey(e.PortName))
+            {
+                AddLog($"[{e.PortName}] Đang tự động bắt máy cuộc gọi đến...", "INFO");
+                await _modemService.SendCommandAsync(e.PortName, "ATA");
+
+                var recorder = new AudioRecordingService();
+                recorder.LogMessage += (s, msg) => AddLog($"[{e.PortName}] {msg}", "INFO");
+                recorder.StartRecording(e.PortName);
+                _activeRecordings[e.PortName] = recorder;
+            }
         });
     }
     private void ModemService_CallEnded(object? sender, GsmDataEventArgs e)

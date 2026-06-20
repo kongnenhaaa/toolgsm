@@ -32,7 +32,7 @@ namespace gsm
             base.OnClosed(e);
         }
 
-        private void DataGrid_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        private void DataGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             // Không xử lý nếu click vào thanh cuộn hoặc tiêu đề cột
             if (e.OriginalSource is System.Windows.Controls.Primitives.ScrollBar ||
@@ -89,6 +89,16 @@ namespace gsm
                     Clipboard.SetText(textToCopy);
                     _viewModel.SnackbarMessageQueue.Enqueue($"Đã sao chép: {textToCopy}");
                 }
+            }
+        }
+
+        private void OpenContextMenu_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.ContextMenu != null)
+            {
+                btn.ContextMenu.PlacementTarget = btn;
+                btn.ContextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                btn.ContextMenu.IsOpen = true;
             }
         }
     }

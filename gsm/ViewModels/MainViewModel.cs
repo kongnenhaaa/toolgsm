@@ -123,6 +123,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private string _customUssdCode = string.Empty;
+    
+    [ObservableProperty]
+    private string _customUssdOutput = string.Empty;
 
     [ObservableProperty]
     private bool _isCustomUssdDialogOpen;
@@ -130,11 +133,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _customUssdMode = "Selected";
 
-    [ObservableProperty]
-    private bool _isRegisterEzDialogOpen;
 
-    [ObservableProperty]
-    private string _registerEzMode = "Selected";
 
     [ObservableProperty]
     private bool _isCallManagerDialogOpen;
@@ -193,6 +192,72 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _atCommandInput = "AT";
 
+    public System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> PredefinedAtCommands { get; } = new()
+    {
+        // 1. CƠ BẢN & THÔNG TIN THIẾT BỊ
+        new("AT", "Kiểm tra kết nối modem"),
+        new("ATI", "Xem thông tin Firmware/Version của Modem"),
+        new("ATZ", "Reset modem về cấu hình mặc định (Reset Profile)"),
+        new("ATE1", "Bật tính năng Echo (hiển thị ký tự gõ)"),
+        new("ATE0", "Tắt tính năng Echo"),
+        new("AT+CMEE=2", "Bật báo lỗi chi tiết (Verbose Error)"),
+        new("AT+CFUN=1", "Khởi động đầy đủ sóng/modem (Full mode)"),
+        new("AT+CFUN=4", "Bật chế độ máy bay (Tắt sóng)"),
+        new("AT+CFUN=0", "Tắt modem (Minimum mode)"),
+        
+        // 2. THÔNG TIN SIM & MẠNG
+        new("AT+CPIN?", "Kiểm tra trạng thái SIM/PIN"),
+        new("AT+CSQ", "Kiểm tra cường độ sóng (Signal Quality)"),
+        new("AT+CREG?", "Kiểm tra trạng thái đăng ký mạng"),
+        new("AT+COPS?", "Kiểm tra nhà mạng hiện tại"),
+        new("AT+COPS=0", "Bật tự động dò sóng nhà mạng"),
+        new("AT+CIMI", "Đọc mã IMSI của SIM"),
+        new("AT+QCCID", "Đọc mã ICCID (Serial SIM - Lệnh Quectel)"),
+        new("AT+CCID", "Đọc mã ICCID (Serial SIM - Lệnh chuẩn)"),
+        new("AT+QSIMSTAT?", "Kiểm tra trạng thái nhận diện SIM"),
+        new("AT+CNUM", "Kiểm tra số điện thoại của SIM (Nếu có lưu)"),
+        new("AT+QNWINFO", "Xem thông tin băng tần mạng (3G/4G)"),
+        new("AT+CUSD=1,\"*101#\",15", "Kiểm tra tài khoản (Lệnh USSD)"),
+        new("AT+CUSD=1,\"*102#\",15", "Kiểm tra tài khoản khuyến mãi (USSD)"),
+        
+        // 3. ĐIỀU KHIỂN CUỘC GỌI
+        new("ATD0987654321;", "Thực hiện cuộc gọi (nhớ đổi SĐT và giữ dấu ;)"),
+        new("ATH", "Ngắt/từ chối cuộc gọi hiện tại"),
+        new("ATA", "Bắt máy cuộc gọi đến"),
+        new("AT+CHUP", "Hủy tất cả các cuộc gọi"),
+        new("AT+CLIP=1", "Bật hiển thị số gọi đến (Caller ID)"),
+        new("AT+CLIR=1", "Ẩn số gọi đi (nếu mạng hỗ trợ)"),
+        new("AT+CLCC", "Danh sách các cuộc gọi đang diễn ra"),
+        new("AT+CCWA=1,1,1", "Bật tính năng chờ cuộc gọi (Call Waiting)"),
+        new("AT+VTS=\"1\"", "Gửi phím DTMF '1' (Trong lúc gọi)"),
+        new("AT+CCFC=0,2", "Kiểm tra trạng thái chuyển tiếp cuộc gọi"),
+        
+        // 4. QUẢN LÝ TIN NHẮN SMS
+        new("AT+CMGF=1", "Chuyển cấu hình SMS sang chế độ Text (Dễ đọc)"),
+        new("AT+CMGL=\"ALL\"", "Đọc tất cả tin nhắn SMS đang có"),
+        new("AT+CMGL=\"REC UNREAD\"", "Đọc các tin nhắn SMS chưa đọc"),
+        new("AT+CMGR=1", "Đọc tin nhắn ở vị trí số 1"),
+        new("AT+CMGD=1,4", "Xóa toàn bộ tin nhắn SMS trên SIM"),
+        new("AT+CPMS=\"SM\",\"SM\",\"SM\"", "Chuyển vùng nhớ tin nhắn sang SIM"),
+        new("AT+CSCA?", "Kiểm tra số trung tâm tin nhắn (SMSC)"),
+        
+        // 5. DANH BẠ
+        new("AT+CPBS=\"SM\"", "Đặt vùng nhớ danh bạ là SIM"),
+        new("AT+CPBR=1,10", "Đọc danh bạ từ vị trí 1 đến 10")
+    };
+
+    public System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> PredefinedUssdCommands { get; } = new()
+    {
+        new("*101#", "Kiểm tra tài khoản chính (Viettel/Mobi/Vina)"),
+        new("*102#", "Kiểm tra tài khoản khuyến mãi"),
+        new("*098#", "Menu Khuyến mãi (Viettel)"),
+        new("*111#", "Tiện ích trả trước (Viettel)"),
+        new("*901*3#", "Menu kiểm tra gói cước (MobiFone)"),
+        new("*0#", "Kiểm tra SĐT (Mobi/Vina)"),
+        new("*110#", "Kiểm tra thông tin thuê bao (VinaPhone)"),
+        new("*101#", "Kiểm tra SĐT (Viettel - Một số dòng SIM)")
+    };
+
     [ObservableProperty]
     private string _atCommandOutput = string.Empty;
 
@@ -234,6 +299,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(FilteredSmsMessages));
         }
     }
+
+    private string _portNameFilter = string.Empty;
+    public string PortNameFilter
+    {
+        get => _portNameFilter;
+        set { SetProperty(ref _portNameFilter, value); FilteredPortsView?.Refresh(); }
+    }
+
+    private string _imeiFilter = string.Empty;
+    public string ImeiFilter
+    {
+        get => _imeiFilter;
+        set { SetProperty(ref _imeiFilter, value); FilteredPortsView?.Refresh(); }
+    }
+
+    private string _serialFilter = string.Empty;
+    public string SerialFilter
+    {
+        get => _serialFilter;
+        set { SetProperty(ref _serialFilter, value); FilteredPortsView?.Refresh(); }
+    }
+
+    private string _phoneNumberFilter = string.Empty;
+    public string PhoneNumberFilter
+    {
+        get => _phoneNumberFilter;
+        set { SetProperty(ref _phoneNumberFilter, value); FilteredPortsView?.Refresh(); }
+    }
+
+    public System.ComponentModel.ICollectionView FilteredPortsView { get; }
 
     public System.Collections.IEnumerable FilteredSmsMessages =>
         SmsMessages.Where(s =>
@@ -316,6 +411,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public MainViewModel()
     {
+        FilteredPortsView = System.Windows.Data.CollectionViewSource.GetDefaultView(Ports);
+        FilteredPortsView.Filter = o => 
+        {
+            if (o is Models.SimPort port)
+            {
+                return MatchesFilter(port.PortName, PortNameFilter) &&
+                       MatchesFilter(port.Imei, ImeiFilter) &&
+                       MatchesFilter(port.Serial, SerialFilter) &&
+                       MatchesFilter(port.PhoneNumber, PhoneNumberFilter);
+            }
+            return false;
+        };
+
         LoadSimCache();
         LoadImeiCache();
         ImportCsvToImeiCache();
@@ -1792,19 +1900,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private async Task CheckBalanceAsync()
+    private async Task CheckBalanceAsync(string mode)
     {
-        // Luôn kiểm tra toàn bộ các cổng đang hoạt động, bỏ qua việc người dùng có chọn hay không
-        var targetPorts = Ports.Where(IsActive).ToList();
+        List<Models.SimPort> targetPorts;
         
-        if (!targetPorts.Any())
+        if (mode == "Selected")
         {
-            SnackbarMessageQueue.Enqueue("Không có cổng nào đang hoạt động để kiểm tra số dư.");
-            return;
+            targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (đánh dấu ☑) đang hoạt động để kiểm tra số dư.");
+                return;
+            }
+            SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho {targetPorts.Count} cổng ĐÃ CHỌN...");
+            AddLog($"Bắt đầu kiểm tra số dư cho {targetPorts.Count} cổng đã chọn...");
         }
-
-        SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho TOÀN BỘ {targetPorts.Count} cổng...");
-        AddLog($"Bắt đầu kiểm tra số dư cho toàn bộ {targetPorts.Count} cổng...");
+        else
+        {
+            targetPorts = Ports.Where(IsActive).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Không có cổng nào đang hoạt động để kiểm tra số dư.");
+                return;
+            }
+            SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh kiểm tra TKC cho TOÀN BỘ {targetPorts.Count} cổng...");
+            AddLog($"Bắt đầu kiểm tra số dư cho toàn bộ {targetPorts.Count} cổng...");
+        }
 
         foreach (var port in targetPorts)
         {
@@ -2091,21 +2212,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public IEnumerable<string> CallManagerPortOptions => Ports.Select(p => p.PortName);
 
     [RelayCommand]
-    private void SortPorts()
+    private void SortPorts(string criteria)
     {
-        var sorted = Ports.OrderBy(p => 
+        if (string.IsNullOrEmpty(criteria)) return;
+
+        var sorted = criteria switch
         {
-            var match = Regex.Match(p.PortName, @"\d+");
-            return match.Success ? int.Parse(match.Value) : 0;
-        }).ToList();
+            "Network" => Ports.OrderBy(p => string.IsNullOrEmpty(p.NetworkProvider) ? "ZZZ" : p.NetworkProvider).ThenBy(p => p.PortNumber).ToList(),
+            "Status" => Ports.OrderByDescending(p => p.Status == "Active").ThenBy(p => p.PortNumber).ToList(),
+            "Signal" => Ports.OrderByDescending(p => p.SignalStrength).ThenBy(p => p.PortNumber).ToList(),
+            "Balance" => Ports.OrderByDescending(p => 
+            {
+                if (string.IsNullOrEmpty(p.Balance)) return 0d;
+                var match = System.Text.RegularExpressions.Regex.Match(p.Balance, @"\d+");
+                return match.Success ? double.Parse(match.Value) : 0d;
+            }).ThenBy(p => p.PortNumber).ToList(),
+            "COM" or _ => Ports.OrderBy(p => p.PortNumber).ToList()
+        };
         
         Ports.Clear();
         foreach (var port in sorted)
         {
             Ports.Add(port);
         }
+        
         UpdateDashboard();
-        SnackbarMessageQueue.Enqueue("Đã sắp xếp các cổng theo thứ tự.");
+        
+        var criteriaName = criteria switch {
+            "Network" => "Nhà mạng",
+            "Status" => "Trạng thái (Online)",
+            "Signal" => "Cường độ sóng",
+            "Balance" => "Số dư",
+            _ => "Thứ tự COM"
+        };
+        SnackbarMessageQueue.Enqueue($"Đã sắp xếp theo: {criteriaName}");
     }
 
     [RelayCommand]
@@ -2230,24 +2370,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    // #5: Xoá chuyển hướng ngay lập tức cho tất cả SIM
-    [RelayCommand]
-    private void ClearForwardingAll()
-    {
-        SnackbarMessageQueue.Enqueue("Đang xóa chuyển hướng cho tất cả cổng...");
-        Task.Run(async () =>
-        {
-            var activePorts = GetPortsSnapshot();
-            foreach (var port in activePorts)
-            {
-                string res = await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
-                if (res.Contains("OK"))
-                    Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
-                await Task.Delay(300);
-            }
-            AddLog("[Đã xóa chuyển hướng] Hoàn thành cho tất cả cổng.", "SUCCESS");
-        });
-    }
+
 
     [RelayCommand]
     private void CopyOtp(SmsMessage? sms)
@@ -2460,13 +2583,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         CustomUssdMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
         CustomUssdCode = string.Empty;
+        CustomUssdOutput = string.Empty;
         IsCustomUssdDialogOpen = true;
     }
 
     [RelayCommand]
     private async Task ExecuteCustomUssdAsync()
     {
-        IsCustomUssdDialogOpen = false;
         if (string.IsNullOrWhiteSpace(CustomUssdCode))
         {
             SnackbarMessageQueue.Enqueue("Vui lòng nhập mã USSD (VD: *098#).");
@@ -2495,13 +2618,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        CustomUssdOutput = $"Bắt đầu chạy USSD {ussdCode} cho {targetPorts.Count} cổng...\n";
         SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh USSD cho {targetPorts.Count} cổng...");
         AddLog($"Bắt đầu gửi USSD {ussdCode} cho {targetPorts.Count} cổng.");
 
-        foreach (var port in targetPorts)
+        var tasks = targetPorts.Select(async port =>
         {
-            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "USSD Tùy Chỉnh", logResult: true);
-        }
+            string result = await SendUssdThrottledAsync(port.PortName, ussdCode, "USSD Tùy Chỉnh", logResult: true);
+            App.Current.Dispatcher.Invoke(() =>
+            {
+                CustomUssdOutput += $"[{port.PortName}] {result}\n";
+            });
+        });
+
+        await Task.WhenAll(tasks);
+        CustomUssdOutput += "\nHoàn tất chạy USSD!";
     }
 
     [RelayCommand]
@@ -2552,57 +2683,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
-    private void OpenRegisterEzDialog(string mode)
-    {
-        RegisterEzMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
-        IsRegisterEzDialogOpen = true;
-    }
 
-    [RelayCommand]
-    private void ExecuteRegisterEz()
-    {
-        IsRegisterEzDialogOpen = false;
-        
-        List<SimPort> targetPorts = new();
-        if (RegisterEzMode == "Selected")
-        {
-            if (SelectedPort != null) targetPorts.Add(SelectedPort);
-        }
-        else if (RegisterEzMode == "Checked")
-        {
-            targetPorts = Ports.Where(p => p.IsSelected).ToList();
-        }
-        else if (RegisterEzMode == "All")
-        {
-            targetPorts = Ports.Where(IsActive).ToList();
-        }
-
-        if (targetPorts.Count == 0)
-        {
-            SnackbarMessageQueue.Enqueue("Không có cổng nào được chọn để đăng ký EZ.");
-            return;
-        }
-
-        SnackbarMessageQueue.Enqueue($"Đang tiến hành đăng ký EZ cho {targetPorts.Count} cổng...");
-        
-        foreach (var port in targetPorts)
-        {
-            string content = port.LastMessageContent ?? string.Empty;
-            var match = Regex.Match(content, @"EZ\s+(\d+)", RegexOptions.IgnoreCase);
-            if (match.Success)
-            {
-                string code = match.Groups[1].Value;
-                string smsBody = $"EZ {code}";
-                AddLog($"Bắt đầu tự đăng ký EZ ({smsBody}) cho cổng {port.PortName}...");
-                _ = SendSmsThrottledAsync(port.PortName, "888", smsBody);
-            }
-            else
-            {
-                AddLog($"Bỏ qua {port.PortName}: Không tìm thấy mã EZ trong tin nhắn cuối.", "WARNING");
-            }
-        }
-    }
 
     public Task QueueSmsAsync(string portName, string phoneNumber, string content)
     {
@@ -2861,34 +2942,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
-    private void SimulateSms()
-    {
-        // Tin nhắn ảo giống hệt định dạng trả về từ phần cứng
-        string rawSms = "+CMGR: \"REC UNREAD\",\"+84123456789\",,\"26/05/01,10:00:00+28\"\r\nMa xac nhan Facebook cua ban la 889933. Vui long khong chia se cho bat ky ai.\r\n\r\nOK";
-        
-        // Tạo một cổng ảo để test nếu chưa có
-        if (!Ports.Any(p => p.PortName == "COM_VIRTUAL"))
-        {
-            Ports.Insert(0, new SimPort 
-            { 
-                PortName = "COM_VIRTUAL", 
-                Status = SimStatus.Active, 
-                SignalStrength = 100, 
-                PhoneNumber = "0987654321",
-                NetworkProvider = "VINAPHONE",
-                Imei = "359837042531092",
-                Serial = "8984040001234567890",
-                Balance = "50,000 đ",
-                ExpiryDate = "31/12/2026",
-                UpdatedAt = DateTime.Now.ToString("HH:mm:ss")
-            });
-        }
 
-        // Bắn trực tiếp dữ liệu vào event như cách GsmModemService làm
-        ModemService_SmsReceived(this, new GsmDataEventArgs { PortName = "COM_VIRTUAL", Data = rawSms });
-        AddLog("Đã giả lập 1 tin nhắn nhận được trên cổng COM_VIRTUAL.");
-    }
 
     private string DecodeUcs2(string hexString)
     {

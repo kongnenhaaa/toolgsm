@@ -20,7 +20,7 @@
     <Window.InputBindings>
         <!-- #14: Hotkeys (Phím tắt) -->
         <KeyBinding Key="R" Modifiers="Ctrl" Command="{Binding RefreshPortsCommand}" />
-        <KeyBinding Key="B" Modifiers="Ctrl" Command="{Binding CheckBalanceCommand}" />
+        <KeyBinding Key="B" Modifiers="Ctrl" Command="{Binding CheckBalanceCommand}" CommandParameter="All" />
         <KeyBinding Key="F" Modifiers="Ctrl" Command="{Binding FocusLogFilterCommand}" />
     </Window.InputBindings>
 
@@ -72,7 +72,7 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         </Style>
 
-        <DataTemplate x:Key="SearchHeaderTemplate">
+        <DataTemplate x:Key="PortNameHeaderTemplate">
             <StackPanel Margin="0,5">
                 <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
                 <Grid>
@@ -81,7 +81,35 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
-                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}"/>
+                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.PortNameFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
+                </Grid>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ImeiHeaderTemplate">
+            <StackPanel Margin="0,5">
+                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
+                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.ImeiFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
+                </Grid>
+            </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SerialHeaderTemplate">
+            <StackPanel Margin="0,5">
+                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
+                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.SerialFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
                 </Grid>
             </StackPanel>
         </DataTemplate>
@@ -99,7 +127,7 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
-                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}"/>
+                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.PhoneNumberFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
                 </Grid>
             </StackPanel>
         </DataTemplate>
@@ -123,249 +151,281 @@
 
     <materialDesign:DialogHost IsOpen="{Binding IsTopUpDialogOpen}" CloseOnClickAway="True">
         <materialDesign:DialogHost.DialogContent>
-            <Grid Width="520" Style="{StaticResource ProDialogGridStyle}">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <TextBlock Text="Nạp thẻ / Top-up" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
-                
-                <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Nhập mã thẻ cào (tự động thêm *100*...#) hoặc tự nhập USSD" 
-                         Text="{Binding TopUpInput, UpdateSourceTrigger=PropertyChanged}" 
-                         Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,20" FontSize="16"/>
-
-                <StackPanel Grid.Row="2" Margin="0,0,0,20">
-                    <TextBlock Text="Đối tượng nạp thẻ:" Margin="0,0,0,10" Foreground="Gray" FontWeight="SemiBold"/>
-                    <RadioButton Content="Chỉ nạp cổng đang chọn" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,5"/>
-                    <RadioButton Content="Nạp các cổng đã được tick chọn (☑)" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,5"/>
-                    <RadioButton Content="Nạp cho TẤT CẢ cổng đang hoạt động" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,5"/>
-                </StackPanel>
-                
-                <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
-                    <Button Content="Nạp Tiền" Command="{Binding ExecuteTopUpCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50"/>
-                </StackPanel>
-            </Grid>
-        </materialDesign:DialogHost.DialogContent>
-
-        <materialDesign:DialogHost IsOpen="{Binding IsCustomUssdDialogOpen}" CloseOnClickAway="True">
-            <materialDesign:DialogHost.DialogContent>
-                <Grid Width="520" Style="{StaticResource ProDialogGridStyle}">
+            <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                <Grid Width="480">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Chạy USSD Tùy Chỉnh" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
                     
-                    <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Nhập lệnh USSD (VD: *098# hoặc *101*1#)" 
-                             Text="{Binding CustomUssdCode, UpdateSourceTrigger=PropertyChanged}" 
-                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,20" FontSize="16"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                        <materialDesign:PackIcon Kind="CashPlus" Width="28" Height="28" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="Nạp thẻ / Top-up" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    
+                    <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Nhập mã thẻ cào (tự động thêm *100*...#) hoặc tự nhập USSD" 
+                             Text="{Binding TopUpInput, UpdateSourceTrigger=PropertyChanged}" 
+                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,24" FontSize="16"/>
 
-                    <StackPanel Grid.Row="2" Margin="0,0,0,20">
-                        <TextBlock Text="Chạy USSD cho:" Margin="0,0,0,10" Foreground="Gray" FontWeight="SemiBold"/>
-                        <RadioButton Content="Chỉ cổng đang chọn" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,5"/>
-                        <RadioButton Content="Các cổng đã được tick chọn (☑)" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,5"/>
-                        <RadioButton Content="TẤT CẢ cổng đang hoạt động" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,5"/>
+                    <StackPanel Grid.Row="2" Margin="0,0,0,32">
+                        <TextBlock Text="Đối tượng nạp thẻ:" Margin="0,0,0,12" Foreground="#B0BEC5" FontWeight="SemiBold"/>
+                        <RadioButton Content="Chỉ nạp cổng đang chọn" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,6"/>
+                        <RadioButton Content="Nạp các cổng đã được tick chọn (☑)" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,6"/>
+                        <RadioButton Content="Nạp cho TẤT CẢ cổng đang hoạt động" IsChecked="{Binding TopUpMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,6"/>
                     </StackPanel>
                     
                     <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
-                        <Button Content="Chạy Hàng Loạt" Command="{Binding ExecuteCustomUssdCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#FF9800" BorderBrush="#FF9800"/>
+                        <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                        <Button Content="Nạp Tiền" Command="{Binding ExecuteTopUpCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
                     </StackPanel>
                 </Grid>
+            </Border>
+        </materialDesign:DialogHost.DialogContent>
+
+        <materialDesign:DialogHost IsOpen="{Binding IsCustomUssdDialogOpen}" CloseOnClickAway="True">
+            <materialDesign:DialogHost.DialogContent>
+            <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                <Grid Width="480">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                        <materialDesign:PackIcon Kind="ConsoleLine" Width="28" Height="28" Foreground="#FF9800" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="Chạy USSD Tùy Chỉnh" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    
+                    <ComboBox Grid.Row="1" materialDesign:HintAssist.Hint="Nhập lệnh USSD hoặc chọn từ danh sách" 
+                              IsEditable="True"
+                              ItemsSource="{Binding PredefinedUssdCommands}"
+                              SelectedValuePath="Key"
+                              Text="{Binding CustomUssdCode, UpdateSourceTrigger=PropertyChanged}" 
+                              Style="{StaticResource MaterialDesignFloatingHintComboBox}" Foreground="White" Margin="0,0,0,24" FontSize="16">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Key}" FontWeight="Bold" Width="80"/>
+                                    <TextBlock Text=" - " Foreground="Gray"/>
+                                    <TextBlock Text="{Binding Value}" Foreground="#B2EBF2" FontStyle="Italic"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+
+                    <StackPanel Grid.Row="2" Margin="0,0,0,24">
+                        <TextBlock Text="Chạy USSD cho:" Margin="0,0,0,12" Foreground="#B0BEC5" FontWeight="SemiBold"/>
+                        <RadioButton Content="Chỉ cổng đang chọn" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,6"/>
+                        <RadioButton Content="Các cổng đã được tick chọn (☑)" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,6"/>
+                        <RadioButton Content="TẤT CẢ cổng đang hoạt động" IsChecked="{Binding CustomUssdMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,6"/>
+                    </StackPanel>
+                    
+                    <TextBox Grid.Row="3" Text="{Binding CustomUssdOutput}" IsReadOnly="True" 
+                             Height="180" Style="{StaticResource ProTerminalTextBoxStyle}"
+                             Margin="0,0,0,24" />
+                    
+                    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                        <Button Content="Chạy Hàng Loạt" Command="{Binding ExecuteCustomUssdCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#FF9800" BorderBrush="#FF9800" materialDesign:ButtonAssist.CornerRadius="6"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
             </materialDesign:DialogHost.DialogContent>
 
         <materialDesign:DialogHost IsOpen="{Binding IsSettingsDialogOpen}" CloseOnClickAway="True">
             <materialDesign:DialogHost.DialogContent>
-                <Grid Width="680" Style="{StaticResource ProDialogGridStyle}">
+            <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                <Grid Width="680">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Cài đặt hệ thống" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
                     
-                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="560" Margin="0,0,0,15">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                        <materialDesign:PackIcon Kind="Cog" Width="28" Height="28" Foreground="#29B6F6" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                        <TextBlock Text="Cài đặt hệ thống" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="560" Margin="0,0,0,24">
                         <StackPanel>
-                            <Border Style="{StaticResource ProDialogSectionStyle}">
+                            <Border Style="{StaticResource ProDialogSectionStyle}" Background="#252538" BorderBrush="#3D3D5C" CornerRadius="8">
                                 <StackPanel>
-                            <TextBlock Text="CẤU HÌNH TELEGRAM BOT" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
-                            <TextBox materialDesign:HintAssist.Hint="Nhập Bot Token (từ @BotFather)" 
-                                     Text="{Binding AppSettings.TelegramBotToken}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                            <TextBox materialDesign:HintAssist.Hint="Nhập Chat ID (Ngăn cách dấu phẩy nếu nhiều ID)" 
-                                     Text="{Binding AppSettings.TelegramChatIds}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White"/>
-                        </StackPanel>
+                                    <TextBlock Text="CẤU HÌNH TELEGRAM BOT" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <TextBox materialDesign:HintAssist.Hint="Nhập Bot Token (từ @BotFather)" 
+                                             Text="{Binding AppSettings.TelegramBotToken}" 
+                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                                    <TextBox materialDesign:HintAssist.Hint="Nhập Chat ID (Ngăn cách dấu phẩy nếu nhiều ID)" 
+                                             Text="{Binding AppSettings.TelegramChatIds}" 
+                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White"/>
+                                </StackPanel>
                             </Border>
 
-                            <Border Style="{StaticResource ProDialogSectionStyle}">
+                            <Border Style="{StaticResource ProDialogSectionStyle}" Background="#252538" BorderBrush="#3D3D5C" CornerRadius="8">
                                 <StackPanel>
-                            <TextBlock Text="CẤU HÌNH NHẬN THÔNG BÁO" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
-                            <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10"/>
-                            <TextBox materialDesign:HintAssist.Hint="Nhập Link Web Firebase (Database URL)" 
-                                     Text="{Binding AppSettings.FirebaseUrl}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,10"/>
-                            
-                            <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10"/>
-                            
-                            <Separator Background="#444" Margin="0,15"/>
-                            <TextBlock Text="LỌC TIN NHẮN (SMS)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
-                            <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding AppSettings.ReceiveAllSms}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
-                            <TextBlock Text="*Lưu ý: Bật tính năng này bạn sẽ nhận cả tin nhắn rác, quảng cáo từ nhà mạng." FontStyle="Italic" Foreground="Gray" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Text="CẤU HÌNH NHẬN THÔNG BÁO" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10"/>
+                                    <TextBox materialDesign:HintAssist.Hint="Nhập Link Web Firebase (Database URL)" 
+                                             Text="{Binding AppSettings.FirebaseUrl}" 
+                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,10"/>
+                                    
+                                    <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10"/>
+                                    
+                                    <Separator Background="#3D3D5C" Margin="0,20"/>
+                                    <TextBlock Text="LỌC TIN NHẮN (SMS)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding AppSettings.ReceiveAllSms}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    <TextBlock Text="*Lưu ý: Bật tính năng này bạn sẽ nhận cả tin nhắn rác, quảng cáo từ nhà mạng." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
 
-                            <Separator Background="#444" Margin="0,15"/>
-                            <TextBlock Text="CHUYỂN HƯỚNG CUỘC GỌI (Tự động chuyển cuộc gọi đến máy bạn)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
-                            <CheckBox Content="Bật tự động chuyển hướng cuộc gọi khi nhận diện được SIM" IsChecked="{Binding AppSettings.EnableAutoCallForwarding}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,10"/>
-                            <TextBox materialDesign:HintAssist.Hint="Nhập các SĐT nhận, ngăn cách bằng dấu phẩy (VD: 098.., 097..)" 
-                                     Text="{Binding AppSettings.ForwardPhoneNumber}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,0"/>
+                                    <Separator Background="#3D3D5C" Margin="0,20"/>
+                                    <TextBlock Text="CHUYỂN HƯỚNG CUỘC GỌI (Tự động chuyển cuộc gọi đến máy bạn)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <CheckBox Content="Bật tự động chuyển hướng cuộc gọi khi nhận diện được SIM" IsChecked="{Binding AppSettings.EnableAutoCallForwarding}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,10"/>
+                                    <TextBox materialDesign:HintAssist.Hint="Nhập các SĐT nhận, ngăn cách bằng dấu phẩy (VD: 098.., 097..)" 
+                                             Text="{Binding AppSettings.ForwardPhoneNumber}" 
+                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,0"/>
 
-                            <Separator Background="#444" Margin="0,15"/>
-                            <TextBlock Text="LỌC TỪ ĐỘNG (SENDER FILTER)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,15"/>
-                            <CheckBox Content="Bật Blacklist (Chặn người gửi trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderBlacklist}" Foreground="#E53935" FontWeight="Bold" Margin="0,0,0,5"/>
-                            <TextBox materialDesign:HintAssist.Hint="Blacklist: VD: QCBMB, 1900xxxx, spamsender" 
-                                     Text="{Binding AppSettings.SenderBlacklist}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
-                            <CheckBox Content="Bật Whitelist (Chỉ nhận từ số trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderWhitelist}" Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,5"/>
-                            <TextBox materialDesign:HintAssist.Hint="Whitelist: VD: ZALO, FACEBOOK, 0987654321" 
-                                     Text="{Binding AppSettings.SenderWhitelist}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
+                                    <Separator Background="#3D3D5C" Margin="0,20"/>
+                                    <TextBlock Text="LỌC TỪ ĐỘNG (SENDER FILTER)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <CheckBox Content="Bật Blacklist (Chặn người gửi trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderBlacklist}" Foreground="#E53935" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    <TextBox materialDesign:HintAssist.Hint="Blacklist: VD: QCBMB, 1900xxxx, spamsender" 
+                                             Text="{Binding AppSettings.SenderBlacklist}" 
+                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
+                                    <CheckBox Content="Bật Whitelist (Chỉ nhận từ số trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderWhitelist}" Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    <TextBox materialDesign:HintAssist.Hint="Whitelist: VD: ZALO, FACEBOOK, 0987654321" 
+                                             Text="{Binding AppSettings.SenderWhitelist}" 
+                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
 
-                            <Separator Background="#444" Margin="0,15"/>
-                            <TextBlock Text="HTTP API SERVER (cổng 8080)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,10"/>
-                            <CheckBox Content="Bật HTTP API Server" IsChecked="{Binding AppSettings.EnableApiServer}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,5"/>
-                            <TextBlock Text="Endpoints: GET /api/ports  |  GET /api/otp/{port}  |  POST /api/send-sms  |  GET /api/history" Foreground="Gray" FontSize="10" Margin="25,0,0,5" TextWrapping="Wrap"/>
+                                    <Separator Background="#3D3D5C" Margin="0,20"/>
+                                    <TextBlock Text="HTTP API SERVER (cổng 8080)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
+                                    <CheckBox Content="Bật HTTP API Server" IsChecked="{Binding AppSettings.EnableApiServer}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    <TextBlock Text="Endpoints: GET /api/ports  |  GET /api/otp/{port}  |  POST /api/send-sms  |  GET /api/history" Foreground="#9E9E9E" FontSize="10" Margin="25,0,0,5" TextWrapping="Wrap"/>
 
-                            <Separator Background="#444" Margin="0,15"/>
-                            <TextBlock Text="PING SIM (Kiểm tra SIM còn sống)" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,10"/>
-                            <CheckBox Content="Bật tự động Ping SIM định kỳ" IsChecked="{Binding AppSettings.EnableSimPing}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
-                            <TextBlock Text="*Nếu SIM không phản hồi sẽ báo Telegram + Toast notification" FontStyle="Italic" Foreground="Gray" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
-                        </StackPanel>
+                                    <Separator Background="#3D3D5C" Margin="0,20"/>
+                                    <TextBlock Text="PING SIM (Kiểm tra SIM còn sống)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
+                                    <CheckBox Content="Bật tự động Ping SIM định kỳ" IsChecked="{Binding AppSettings.EnableSimPing}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    <TextBlock Text="*Nếu SIM không phản hồi sẽ báo Telegram + Toast notification" FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
+                                </StackPanel>
                             </Border>
                         </StackPanel>
                     </ScrollViewer>
                     
                     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
-                        <Button Content="Lưu Cài Đặt" Command="{Binding SaveSettingsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50"/>
+                        <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                        <Button Content="Lưu Cài Đặt" Command="{Binding SaveSettingsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
                     </StackPanel>
                 </Grid>
+            </Border>
             </materialDesign:DialogHost.DialogContent>
 
             <materialDesign:DialogHost IsOpen="{Binding IsAtCommandDialogOpen}" CloseOnClickAway="True">
                 <materialDesign:DialogHost.DialogContent>
-                    <Grid Width="780" Style="{StaticResource ProDialogGridStyle}">
-                        <Grid.Resources>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Margin" Value="30,26,30,18"/>
-                            </Style>
-                        </Grid.Resources>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <TextBlock Text="Gửi lệnh AT trực tiếp (AT Commands)" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
-                        
-                        <Grid Grid.Row="1" Margin="30,0,30,18">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="150"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <ComboBox ItemsSource="{Binding AtCommandPortOptions}" SelectedValue="{Binding AtCommandSelectedPort}" 
-                                      materialDesign:HintAssist.Hint="Chọn cổng COM" Style="{StaticResource MaterialDesignFloatingHintComboBox}" 
-                                      Foreground="White" Margin="0,0,10,0">
-                            </ComboBox>
+                    <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                        <Grid Width="740">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
                             
-                            <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Nhập lệnh (VD: AT+CUSD=1,&#34;*101#&#34;,15)" 
-                                     Text="{Binding AtCommandInput, UpdateSourceTrigger=PropertyChanged}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,10,0" FontFamily="Consolas">
-                                <TextBox.InputBindings>
-                                    <KeyBinding Key="Enter" Command="{Binding SendAtCommandCommand}"/>
-                                </TextBox.InputBindings>
-                            </TextBox>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+                                <materialDesign:PackIcon Kind="Terminal" Width="28" Height="28" Foreground="#2196F3" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Gửi lệnh AT trực tiếp (AT Commands)" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                            </StackPanel>
                             
-                            <Button Grid.Column="2" Content="Gửi Lệnh" Command="{Binding SendAtCommandCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#2196F3" BorderBrush="#2196F3"/>
-                        </Grid>
+                            <Grid Grid.Row="1" Margin="0,0,0,24">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox ItemsSource="{Binding AtCommandPortOptions}" SelectedValue="{Binding AtCommandSelectedPort}" 
+                                          materialDesign:HintAssist.Hint="Chọn cổng COM" Style="{StaticResource MaterialDesignFloatingHintComboBox}" 
+                                          Foreground="White" Margin="0,0,16,0">
+                                </ComboBox>
+                                
+                                <ComboBox Grid.Column="1" materialDesign:HintAssist.Hint="Nhập lệnh (VD: AT+CUSD=1,&#34;*101#&#34;,15)" 
+                                         Text="{Binding AtCommandInput, UpdateSourceTrigger=PropertyChanged}" 
+                                         ItemsSource="{Binding PredefinedAtCommands}"
+                                         IsEditable="True"
+                                         TextSearch.TextPath="Key"
+                                         Style="{StaticResource MaterialDesignFloatingHintComboBox}" Foreground="White" Margin="0,0,16,0" FontFamily="Consolas">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Key}" FontWeight="Bold" Width="180"/>
+                                                <TextBlock Text=" - " Foreground="Gray"/>
+                                                <TextBlock Text="{Binding Value}" Foreground="#B2EBF2" FontStyle="Italic"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                    <ComboBox.InputBindings>
+                                        <KeyBinding Key="Enter" Command="{Binding SendAtCommandCommand}"/>
+                                    </ComboBox.InputBindings>
+                                </ComboBox>
+                                
+                                <Button Grid.Column="2" Content="Gửi Lệnh" Command="{Binding SendAtCommandCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#2196F3" BorderBrush="#2196F3" materialDesign:ButtonAssist.CornerRadius="6"/>
+                            </Grid>
 
-                        <TextBox Grid.Row="2" Text="{Binding AtCommandOutput}" IsReadOnly="True" 
-                                 Height="320" Style="{StaticResource ProTerminalTextBoxStyle}"
-                                 Margin="30,0,30,22"/>
-                        
-                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="30,0,30,26">
-                            <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}"/>
-                        </StackPanel>
-                    </Grid>
+                            <TextBox Grid.Row="2" Text="{Binding AtCommandOutput}" IsReadOnly="True" 
+                                     Height="320" Style="{StaticResource ProTerminalTextBoxStyle}"
+                                     Margin="0,0,0,24"/>
+                            
+                            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
                 </materialDesign:DialogHost.DialogContent>
 
                 <materialDesign:DialogHost IsOpen="{Binding IsComposeSmsDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="560" Style="{StaticResource ProDialogGridStyle}">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Text="Soạn tin nhắn SMS" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
-                            
-                            <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Số điện thoại nhận (VD: 0987654321)" 
-                                     Text="{Binding ComposeSmsPhone, UpdateSourceTrigger=PropertyChanged}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15" FontSize="16"/>
+                        <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                            <Grid Width="520">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                                    <materialDesign:PackIcon Kind="MessageTextOutline" Width="28" Height="28" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="Soạn tin nhắn SMS" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                
+                                <TextBox Grid.Row="1" materialDesign:HintAssist.Hint="Số điện thoại nhận (VD: 0987654321)" 
+                                         Text="{Binding ComposeSmsPhone, UpdateSourceTrigger=PropertyChanged}" 
+                                         Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,24" FontSize="16"/>
 
-                            <TextBox Grid.Row="2" materialDesign:HintAssist.Hint="Nội dung tin nhắn" 
-                                     Text="{Binding ComposeSmsContent, UpdateSourceTrigger=PropertyChanged}" 
-                                     Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,20" FontSize="16" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto"/>
+                                <TextBox Grid.Row="2" materialDesign:HintAssist.Hint="Nội dung tin nhắn" 
+                                         Text="{Binding ComposeSmsContent, UpdateSourceTrigger=PropertyChanged}" 
+                                         Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,32" FontSize="16" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="120" VerticalScrollBarVisibility="Auto"/>
 
-                            <StackPanel Grid.Row="3" Margin="0,0,0,20">
-                                <TextBlock Text="Gửi từ cổng:" Margin="0,0,0,10" Foreground="Gray" FontWeight="SemiBold"/>
-                                <RadioButton Content="Chỉ gửi từ cổng đang chọn" IsChecked="{Binding ComposeSmsMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,5"/>
-                                <RadioButton Content="Gửi từ các cổng đã được tick chọn (☑)" IsChecked="{Binding ComposeSmsMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,5"/>
-                                <RadioButton Content="Gửi đồng loạt từ TẤT CẢ cổng đang hoạt động" IsChecked="{Binding ComposeSmsMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,5"/>
-                            </StackPanel>
-                            
-                            <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
-                                <Button Content="Gửi Tin Nhắn" Command="{Binding ExecuteComposeSmsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50"/>
-                            </StackPanel>
-                        </Grid>
-                    </materialDesign:DialogHost.DialogContent>
-
-                <materialDesign:DialogHost IsOpen="{Binding IsRegisterEzDialogOpen}" CloseOnClickAway="True">
-                    <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="560" Style="{StaticResource ProDialogGridStyle}">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Text="Đăng ký EZ Tự Động" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
-                            
-                            <StackPanel Grid.Row="1" Margin="0,0,0,20">
-                                <TextBlock Text="Đăng ký cho cổng nào?" Margin="0,0,0,10" Foreground="Gray" FontWeight="SemiBold"/>
-                                <RadioButton Content="Chỉ cổng đang chọn" IsChecked="{Binding RegisterEzMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,5"/>
-                                <RadioButton Content="Các cổng đã được tick chọn (☑)" IsChecked="{Binding RegisterEzMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,5"/>
-                                <RadioButton Content="TẤT CẢ cổng đang hoạt động" IsChecked="{Binding RegisterEzMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,5"/>
-                            </StackPanel>
-                            
-                            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,10,0"/>
-                                <Button Content="Bắt Đầu" Command="{Binding ExecuteRegisterEzCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#2196F3" BorderBrush="#2196F3"/>
-                            </StackPanel>
-                        </Grid>
+                                <StackPanel Grid.Row="3" Margin="0,0,0,32">
+                                    <TextBlock Text="Gửi từ cổng:" Margin="0,0,0,12" Foreground="#B0BEC5" FontWeight="SemiBold"/>
+                                    <RadioButton Content="Chỉ gửi từ cổng đang chọn" IsChecked="{Binding ComposeSmsMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Selected}" Foreground="White" Margin="0,6"/>
+                                    <RadioButton Content="Gửi từ các cổng đã được tick chọn (☑)" IsChecked="{Binding ComposeSmsMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=Checked}" Foreground="White" Margin="0,6"/>
+                                    <RadioButton Content="Gửi đồng loạt từ TẤT CẢ cổng đang hoạt động" IsChecked="{Binding ComposeSmsMode, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=All}" Foreground="White" Margin="0,6"/>
+                                </StackPanel>
+                                
+                                <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                                    <Button Content="Gửi Tin Nhắn" Command="{Binding ExecuteComposeSmsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
                     </materialDesign:DialogHost.DialogContent>
 
                 <materialDesign:DialogHost IsOpen="{Binding IsCallManagerDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="780" Style="{StaticResource ProDialogGridStyle}">
+                    <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                        <Grid Width="780">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -374,7 +434,10 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             
-                            <TextBlock Text="Quản lý cuộc gọi (Voice Call Hub)" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+                                <materialDesign:PackIcon Kind="PhoneForward" Width="28" Height="28" Foreground="#8BC34A" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Quản lý cuộc gọi (Voice Call Hub)" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                            </StackPanel>
                             
                             <Grid Grid.Row="1" Margin="0,0,0,15">
                                 <Grid.ColumnDefinitions>
@@ -444,17 +507,19 @@
 
                             <TextBox Grid.Row="3" Text="{Binding CallManagerOutput}" IsReadOnly="True" 
                                      Height="220" Style="{StaticResource ProTerminalTextBoxStyle}"
-                                     Margin="0,0,0,20"/>
+                                     Margin="0,0,0,24"/>
                             
                             <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}"/>
+                                <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A"/>
                             </StackPanel>
                         </Grid>
+                    </Border>
                     </materialDesign:DialogHost.DialogContent>
 
                 <materialDesign:DialogHost IsOpen="{Binding IsNetworkSimDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Grid Width="920" Style="{StaticResource ProDialogGridStyle}">
+                    <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                        <Grid Width="920">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
@@ -463,7 +528,10 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             
-                            <TextBlock Text="Cấu hình Mạng &amp; SIM (Network &amp; SIM Hub)" FontSize="20" FontWeight="Bold" Margin="0,0,0,15" Foreground="White"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+                                <materialDesign:PackIcon Kind="AccessPointNetwork" Width="28" Height="28" Foreground="#FF5722" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Cấu hình Mạng &amp; SIM (Network &amp; SIM Hub)" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                            </StackPanel>
                             
                             <Grid Grid.Row="1" Margin="0,0,0,15">
                                 <Grid.ColumnDefinitions>
@@ -533,7 +601,22 @@
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBox materialDesign:HintAssist.Hint="Gửi USSD tuỳ chỉnh" Text="{Binding UssdCommand}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,10,0"/>
+                                            <ComboBox materialDesign:HintAssist.Hint="Gửi USSD tuỳ chỉnh hoặc chọn lệnh" 
+                                                      IsEditable="True"
+                                                      ItemsSource="{Binding Path=DataContext.PredefinedUssdCommands, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                      SelectedValuePath="Key"
+                                                      Text="{Binding UssdCommand}" 
+                                                      Style="{StaticResource MaterialDesignFloatingHintComboBox}" Foreground="White" Margin="0,0,10,0">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Key}" FontWeight="Bold" Width="70"/>
+                                                            <TextBlock Text=" - " Foreground="Gray"/>
+                                                            <TextBlock Text="{Binding Value}" Foreground="#B2EBF2" FontStyle="Italic"/>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
                                             <Button Grid.Column="1" Content="Gửi" Command="{Binding NetworkSimActionCommand}" CommandParameter="SendUssd" Style="{StaticResource MaterialDesignRaisedButton}" Background="#8BC34A" BorderBrush="#8BC34A" ToolTip="AT+CUSD"/>
                                         </Grid>
                                     </StackPanel>
@@ -542,12 +625,13 @@
 
                             <TextBox Grid.Row="3" Text="{Binding NetworkSimOutput}" IsReadOnly="True" 
                                      Height="240" Style="{StaticResource ProTerminalTextBoxStyle}"
-                                     Margin="0,0,0,20"/>
+                                     Margin="0,0,0,24"/>
                             
                             <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}"/>
+                                <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A"/>
                             </StackPanel>
                         </Grid>
+                    </Border>
                     </materialDesign:DialogHost.DialogContent>
 
     <Grid>
@@ -600,21 +684,91 @@
                     <!-- ToolBar GSM -->
                     <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1">
                         <WrapPanel Margin="10,5">
-                            <Button Content="Bảng lệnh" Background="#5C6BC0" Command="{Binding OpenAtCommandDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Sắp xếp cổng" Background="#F06292" Command="{Binding SortPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Gia hạn SIM" Background="#FFA726" Command="{Binding RenewSimCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Kiểm tra số dư" Background="#424242" Command="{Binding CheckBalanceCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="USSD Tùy chỉnh" Background="#424242" Command="{Binding OpenCustomUssdDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Làm mới cổng" Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Đổi IMEI" Background="#424242" Command="{Binding ChangeImeiCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Mạng &amp; SIM" Background="#29B6F6" Command="{Binding OpenNetworkSimDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Nạp thẻ" Background="#26C6DA" Command="{Binding OpenTopUpDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Soạn tin nhắn" Background="#AB47BC" Command="{Binding OpenComposeSmsDialogCommand}" CommandParameter="Selected" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Đăng ký EZ Tự Động" Background="#2196F3" Command="{Binding OpenRegisterEzDialogCommand}" CommandParameter="Selected" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tự động đọc tin nhắn cuối và gửi mã EZ"/>
-                            <Button Content="Quản lý cuộc gọi" Background="#66BB6A" Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
-                            <Button Content="Xóa chuyển hướng" Background="#E53935" Command="{Binding ClearForwardingAllCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa AT+CCFC cho tất cả SIM ngay lập tức"/>
-                            <Button Content="Gửi SMS Hàng Loạt (Excel)" Background="#FF9800" Command="{Binding ImportAndSendBulkSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Import .xlsx (cột A: SĐT, cột B: Nội dung) rồi gửi tự động"/>
-                            <Button Content="Test OTP (Máy ảo)" Background="#FF5722" Command="{Binding SimulateSmsCommand}" Style="{StaticResource ModernButtonStyle}" FontWeight="Bold" ToolTip="Tạo một tin nhắn chứa OTP ảo để test hệ thống"/>
+                            <Button Background="#5C6BC0" Command="{Binding OpenAtCommandDialogCommand}" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="Terminal" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Bảng lệnh" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Background="#F06292" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Sắp xếp cổng">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="SortAscending" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Sắp xếp cổng" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Sắp xếp theo thứ tự COM" Command="{Binding SortPortsCommand}" CommandParameter="COM">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="SortNumericAscending"/></MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Sắp xếp theo Nhà mạng" Command="{Binding SortPortsCommand}" CommandParameter="Network">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="Sim"/></MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Sắp xếp theo Trạng thái (Online)" Command="{Binding SortPortsCommand}" CommandParameter="Status">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="CheckCircle"/></MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Sắp xếp theo Cường độ sóng" Command="{Binding SortPortsCommand}" CommandParameter="Signal">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="Signal"/></MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Sắp xếp theo Số dư (Cao - Thấp)" Command="{Binding SortPortsCommand}" CommandParameter="Balance">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="Wallet"/></MenuItem.Icon>
+                                        </MenuItem>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
+
+                            <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Kiểm tra số dư">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="Wallet" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Kiểm tra số dư" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Kiểm tra số dư TẤT CẢ các cổng" Command="{Binding CheckBalanceCommand}" CommandParameter="All">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="WalletPlus"/></MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Kiểm tra số dư CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding CheckBalanceCommand}" CommandParameter="Selected">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="WalletOutline"/></MenuItem.Icon>
+                                        </MenuItem>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
+                            <Button Background="#424242" Command="{Binding OpenCustomUssdDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="Dialpad" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="USSD Tùy chỉnh" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="Refresh" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Làm mới cổng" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+
+                            <Button Background="#29B6F6" Command="{Binding OpenNetworkSimDialogCommand}" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="Sim" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Mạng &amp; SIM" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Background="#26C6DA" Command="{Binding OpenTopUpDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="CreditCardPlus" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Nạp thẻ" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Background="#AB47BC" Command="{Binding OpenComposeSmsDialogCommand}" CommandParameter="Selected" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="MessageText" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Soạn tin nhắn" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Background="#66BB6A" Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="Phone" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <TextBlock Text="Quản lý cuộc gọi" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
                         </WrapPanel>
                     </Border>
 
@@ -671,8 +825,8 @@
                     
                     <!-- GSM DataGrid -->
                     <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                        <DataGrid Margin="10" ItemsSource="{Binding Ports}" SelectedItem="{Binding SelectedPort}" 
-                                  PreviewMouseLeftButtonUp="DataGrid_PreviewMouseLeftButtonUp"
+                        <DataGrid Margin="10" ItemsSource="{Binding FilteredPortsView}" SelectedItem="{Binding SelectedPort}" 
+                                  MouseDoubleClick="DataGrid_MouseDoubleClick"
                                   AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
                                   RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
                                   Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
@@ -692,14 +846,11 @@
                                 <MenuItem Header="Nạp thẻ nhanh" Command="{Binding Path=DataContext.OpenTopUpDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10" Foreground="#4CAF50">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="CashPlus"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Kiểm tra số dư" Command="{Binding CheckBalanceCommand}" Padding="10">
+                                <MenuItem Header="Kiểm tra số dư (Các cổng đã chọn)" Command="{Binding Path=DataContext.CheckBalanceCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="Magnify"/></MenuItem.Icon>
                                 </MenuItem>
                                 <MenuItem Header="USSD Tùy chỉnh" Command="{Binding Path=DataContext.OpenCustomUssdDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Checked" Padding="10">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="CodeBraces"/></MenuItem.Icon>
-                                </MenuItem>
-                                <MenuItem Header="Tự động đăng ký EZ" Command="{Binding Path=DataContext.OpenRegisterEzDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10" Foreground="#2196F3">
-                                    <MenuItem.Icon><materialDesign:PackIcon Kind="AutoFix"/></MenuItem.Icon>
                                 </MenuItem>
                             </ContextMenu>
                         </DataGrid.ContextMenu>
@@ -718,9 +869,9 @@
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
 
-                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
-                            <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
-                            <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SearchHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
+                            <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
+                            <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SerialHeaderTemplate}"/>
                             <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
                             <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
                             <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
@@ -837,7 +988,7 @@
                     
                     <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                         <DataGrid Margin="10" ItemsSource="{Binding FilteredSmsMessages}"
-                                  PreviewMouseLeftButtonUp="DataGrid_PreviewMouseLeftButtonUp"
+                                  MouseDoubleClick="DataGrid_MouseDoubleClick"
                                   AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" Background="{StaticResource PanelBackground}"
                                   RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
                                   Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
@@ -983,6 +1134,5 @@
             </materialDesign:DialogHost>
         </materialDesign:DialogHost>
     </materialDesign:DialogHost>
-</materialDesign:DialogHost>
 </materialDesign:DialogHost>
 </Window>

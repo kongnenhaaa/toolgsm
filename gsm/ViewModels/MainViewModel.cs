@@ -612,7 +612,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 foreach (var p in portsCopy)
                 {
                     if (lifetimeToken.IsCancellationRequested) break;
-                    if (p.Status == SimStatus.NoResponse || p.Status == SimStatus.Error || p.Status == SimStatus.Offline)
+                    if (p.Status == SimStatus.NoResponse || p.Status == "Offline" || p.Status == "Error")
                     {
                         AddLog($"[WATCHDOG] Cổng {p.PortName} mất kết nối. Tự động gửi lệnh phục hồi (AT+CFUN=1,1)...", "WARN");
                         _ = _modemService.SendCommandAsync(p.PortName, "AT+CFUN=1,1", silent: true);

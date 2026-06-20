@@ -409,6 +409,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ISeries[] ConnectionSeries { get; set; }
     public ISeries[] SmsSeries { get; set; }
 
+    [ObservableProperty]
+    private bool _isExportExcelDialogOpen;
+
+    public ObservableCollection<ExportColumnItem> ExportColumns { get; } = new();
+
     public MainViewModel()
     {
         FilteredPortsView = System.Windows.Data.CollectionViewSource.GetDefaultView(Ports);
@@ -427,6 +432,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LoadSimCache();
         LoadImeiCache();
         ImportCsvToImeiCache();
+        ExportColumns.Add(new ExportColumnItem("Cổng", "PortName"));
+        ExportColumns.Add(new ExportColumnItem("IMEI", "Imei"));
+        ExportColumns.Add(new ExportColumnItem("Serial", "Serial"));
+        ExportColumns.Add(new ExportColumnItem("SĐT", "PhoneNumber"));
+        ExportColumns.Add(new ExportColumnItem("Tài khoản (TKC)", "Balance"));
+        ExportColumns.Add(new ExportColumnItem("OTP", "Otp"));
+        ExportColumns.Add(new ExportColumnItem("Nội dung tin cuối", "LastMessageContent"));
+        ExportColumns.Add(new ExportColumnItem("Ngày tạo", "CreatedAt", false));
+        ExportColumns.Add(new ExportColumnItem("Kết nối", "Status"));
+        ExportColumns.Add(new ExportColumnItem("Nhà mạng", "NetworkProvider"));
+        ExportColumns.Add(new ExportColumnItem("Hạn sử dụng", "ExpiryDate"));
+
         _modemService = new GsmModemService();
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
@@ -2685,6 +2702,75 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
 
 
+    [RelayCommand]
+    private void OpenExportExcelDialog()
+    {
+        IsExportExcelDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private void ExecuteExportExcel()
+    {
+        IsExportExcelDialogOpen = false;
+        var selectedColumns = ExportColumns.Where(c => c.IsSelected).ToList();
+        if (selectedColumns.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cột để xuất.");
+            return;
+        }
+
+        var saveFileDialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Filter = "Excel Files (*.xlsx)|*.xlsx",
+            FileName = $"DanhSachSIM_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+            Title = "Lưu file Excel"
+        };
+
+        if (saveFileDialog.ShowDialog() == true)
+        {
+            try
+            {
+                OfficeOpenXml.ExcelPackage.LicenseContext = OfficeOpenXml.LicenseContext.NonCommercial;
+                using var package = new OfficeOpenXml.ExcelPackage();
+                var worksheet = package.Workbook.Worksheets.Add("Danh Sach SIM");
+
+                // Headers
+                for (int i = 0; i < selectedColumns.Count; i++)
+                {
+                    worksheet.Cells[1, i + 1].Value = selectedColumns[i].ColumnName;
+                    worksheet.Cells[1, i + 1].Style.Font.Bold = true;
+                }
+
+                // Data
+                var items = Ports.ToList(); // Export all currently held ports or FilteredPortsView? FilteredPortsView might be better, but we need to access items.
+                // It's better to use FilteredPortsView.Cast<SimPort>().ToList() to match the UI!
+                var viewItems = FilteredPortsView.Cast<SimPort>().ToList();
+                for (int row = 0; row < viewItems.Count; row++)
+                {
+                    var item = viewItems[row];
+                    for (int col = 0; col < selectedColumns.Count; col++)
+                    {
+                        var propInfo = typeof(SimPort).GetProperty(selectedColumns[col].BindingPath);
+                        if (propInfo != null)
+                        {
+                            var value = propInfo.GetValue(item);
+                            worksheet.Cells[row + 2, col + 1].Value = value?.ToString();
+                        }
+                    }
+                }
+
+                worksheet.Cells[worksheet.Dimension.Address].AutoFitColumns();
+                File.WriteAllBytes(saveFileDialog.FileName, package.GetAsByteArray());
+                SnackbarMessageQueue.Enqueue($"Đã xuất file thành công: {Path.GetFileName(saveFileDialog.FileName)}");
+            }
+            catch (Exception ex)
+            {
+                AddLog($"Lỗi xuất Excel: {ex.Message}", "ERROR");
+                SnackbarMessageQueue.Enqueue("Có lỗi xảy ra khi xuất Excel. Vui lòng xem log.");
+            }
+        }
+    }
+
     public Task QueueSmsAsync(string portName, string phoneNumber, string content)
     {
         return SendSmsThrottledAsync(portName, phoneNumber, content);
@@ -3412,5 +3498,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _ussdSendLock.Dispose();
         _lifetimeCts.Dispose();
+    }
+}
+
+public partial class ExportColumnItem : ObservableObject
+{
+    [ObservableProperty]
+    private string _columnName;
+
+    [ObservableProperty]
+    private string _bindingPath;
+
+    [ObservableProperty]
+    private bool _isSelected;
+
+    public ExportColumnItem(string columnName, string bindingPath, bool isSelected = true)
+    {
+        ColumnName = columnName;
+        BindingPath = bindingPath;
+        IsSelected = isSelected;
     }
 }

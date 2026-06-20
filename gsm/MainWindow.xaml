@@ -422,7 +422,41 @@
                         </Border>
                     </materialDesign:DialogHost.DialogContent>
 
-                <materialDesign:DialogHost IsOpen="{Binding IsCallManagerDialogOpen}" CloseOnClickAway="True">
+                <materialDesign:DialogHost IsOpen="{Binding IsExportExcelDialogOpen}" CloseOnClickAway="True">
+                    <materialDesign:DialogHost.DialogContent>
+                        <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                            <Grid Width="450">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
+                                    <materialDesign:PackIcon Kind="MicrosoftExcel" Width="28" Height="28" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="Cấu hình Xuất Excel" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                
+                                <StackPanel Grid.Row="1" Margin="0,0,0,24">
+                                    <TextBlock Text="Chọn các cột cần xuất:" Margin="0,0,0,12" Foreground="#B0BEC5" FontWeight="SemiBold"/>
+                                    <ItemsControl ItemsSource="{Binding ExportColumns}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding ColumnName}" IsChecked="{Binding IsSelected}" Foreground="White" Margin="0,4"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                                
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                                    <Button Content="Xuất File" Command="{Binding ExecuteExportExcelCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </materialDesign:DialogHost.DialogContent>
+                    
+                    <materialDesign:DialogHost IsOpen="{Binding IsCallManagerDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
                     <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
                         <Grid Width="780">
@@ -736,6 +770,12 @@
                                 <StackPanel Orientation="Horizontal">
                                     <materialDesign:PackIcon Kind="Dialpad" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                     <TextBlock Text="USSD Tùy chỉnh" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                            <Button Background="#424242" Command="{Binding OpenExportExcelDialogCommand}" Style="{StaticResource ModernButtonStyle}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="MicrosoftExcel" VerticalAlignment="Center" Margin="0,0,5,0" Foreground="#4CAF50"/>
+                                    <TextBlock Text="Xuất Excel" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
                             <Button Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}">
@@ -1192,6 +1232,7 @@
                 </materialDesign:DialogHost>
             </materialDesign:DialogHost>
         </materialDesign:DialogHost>
+    </materialDesign:DialogHost>
     </materialDesign:DialogHost>
 </materialDesign:DialogHost>
 </Window>

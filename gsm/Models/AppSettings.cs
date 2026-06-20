@@ -35,4 +35,25 @@ public class AppSettings
 
     // Tự động Watchdog (Khởi động lại modem khi lỗi)
     public bool EnableAutoWatchdog { get; set; } = true;
+
+    // ========== SOUND ALERT ==========
+    /// <summary>Bật/tắt toàn bộ âm thanh cảnh báo.</summary>
+    public bool EnableSoundAlert { get; set; } = true;
+
+    /// <summary>Bật/tắt âm thanh mặc định của Windows Toast Notification.</summary>
+    public bool EnableToastSound { get; set; } = true;
+
+
+    /// <summary>Đường dẫn file .wav khi nhận OTP. Để trống = dùng âm hệ thống.</summary>
+    public string SoundOtpPath { get; set; } = "";
+
+    /// <summary>Đường dẫn file .wav khi nhận SMS thường. Để trống = dùng âm hệ thống.</summary>
+    public string SoundSmsPath { get; set; } = "";
+
+    /// <summary>Đường dẫn file .wav khi có cuộc gọi đến. Để trống = dùng âm hệ thống.</summary>
+    public string SoundCallPath { get; set; } = "";
+
+    // ========== WEBHOOK RULES ==========
+    /// <summary>Danh sách các quy tắc tự động forward OTP/SMS qua HTTP webhook.</summary>
+    public System.Collections.Generic.List<WebhookRule> WebhookRules { get; set; } = new();
 }

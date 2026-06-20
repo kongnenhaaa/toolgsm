@@ -27,6 +27,7 @@
     <Window.Resources>
         <converters:StatusToColorConverter x:Key="StatusToColorConverter"/>
         <converters:EqualityToBooleanConverter x:Key="EqualityToBooleanConverter"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
 
         <Style x:Key="ProDialogGridStyle" TargetType="Grid">
             <Setter Property="Margin" Value="0"/>
@@ -308,6 +309,84 @@
                                     <TextBlock Text="PING SIM (Kiểm tra SIM còn sống)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
                                     <CheckBox Content="Bật tự động Ping SIM định kỳ" IsChecked="{Binding AppSettings.EnableSimPing}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
                                     <TextBlock Text="*Nếu SIM không phản hồi sẽ báo Telegram + Toast notification" FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
+
+                                    <Separator Background="#3D3D5C" Margin="0,20"/>
+                                    <TextBlock Text="🔔 ÂM THANH CẢNH BÁO" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
+                                    <CheckBox Content="Bật âm thanh cảnh báo tùy chỉnh (OTP / SMS / Cuộc gọi)" IsChecked="{Binding AppSettings.EnableSoundAlert}" Foreground="#4DD0E1" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    <CheckBox Content="Phát âm thanh Toast của Windows (Góc màn hình)" IsChecked="{Binding AppSettings.EnableToastSound}" Foreground="#FFB300" FontWeight="Bold" Margin="0,0,0,10"/>
+
+                                    <!-- Sound OTP -->
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="🔑 OTP:" VerticalAlignment="Center" Foreground="#FF9800" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Đường dẫn .wav (rổng = âm hệ thống)" Text="{Binding AppSettings.SoundOtpPath}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,8,0"/>
+                                        <Button Grid.Column="2" Content="Chọn" Command="{Binding BrowseSoundFileCommand}" CommandParameter="OTP" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="8,4" Margin="0,0,5,0" FontSize="11"/>
+                                        <Button Grid.Column="3" Content="Test" Command="{Binding TestSoundAlertCommand}" CommandParameter="OTP" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#4CAF50" Padding="8,4" FontSize="11"/>
+                                    </Grid>
+
+                                    <!-- Sound SMS -->
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="📩 SMS:" VerticalAlignment="Center" Foreground="#4CAF50" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Đường dẫn .wav (rổng = âm hệ thống)" Text="{Binding AppSettings.SoundSmsPath}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,8,0"/>
+                                        <Button Grid.Column="2" Content="Chọn" Command="{Binding BrowseSoundFileCommand}" CommandParameter="SMS" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="8,4" Margin="0,0,5,0" FontSize="11"/>
+                                        <Button Grid.Column="3" Content="Test" Command="{Binding TestSoundAlertCommand}" CommandParameter="SMS" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#4CAF50" Padding="8,4" FontSize="11"/>
+                                    </Grid>
+
+                                    <!-- Sound Call -->
+                                    <Grid Margin="0,0,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="📞 Gọi:" VerticalAlignment="Center" Foreground="#2196F3" FontWeight="SemiBold"/>
+                                        <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Đường dẫn .wav (rổng = âm hệ thống)" Text="{Binding AppSettings.SoundCallPath}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,8,0"/>
+                                        <Button Grid.Column="2" Content="Chọn" Command="{Binding BrowseSoundFileCommand}" CommandParameter="CALL" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="8,4" Margin="0,0,5,0" FontSize="11"/>
+                                        <Button Grid.Column="3" Content="Test" Command="{Binding TestSoundAlertCommand}" CommandParameter="CALL" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#4CAF50" Padding="8,4" FontSize="11"/>
+                                    </Grid>
+
+                                    <Separator Background="#3D3D5C" Margin="0,20"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                        <TextBlock Text="🔗 WEBHOOK TỰ ĐỘNG (Forward OTP)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" VerticalAlignment="Center"/>
+                                        <Button Content="+ Thêm Rule" Command="{Binding OpenAddWebhookRuleCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#5C6BC0" BorderBrush="#5C6BC0" Padding="8,4" Margin="15,0,0,0" FontSize="11" materialDesign:ButtonAssist.CornerRadius="4"/>
+                                    </StackPanel>
+                                    <TextBlock Text="Khi nhận OTP/SMS, tự động POST JSON đến URL webhook. JSON payload: { port, phone, sender, otp, content, timestamp }" Foreground="#9E9E9E" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <DataGrid ItemsSource="{Binding AppSettings.WebhookRules}"
+                                              AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                                              Background="#1A1A2A" RowBackground="#1A1A2A" AlternatingRowBackground="#202040"
+                                              Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
+                                              HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
+                                              MaxHeight="160" MinHeight="60">
+                                        <DataGrid.Columns>
+                                            <DataGridCheckBoxColumn Header="Bật" Binding="{Binding Enabled}" Width="40"/>
+                                            <DataGridTextColumn Header="Tên" Binding="{Binding Name}" Width="120" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
+                                            <DataGridTextColumn Header="Lọc Sender" Binding="{Binding SenderFilter}" Width="100" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
+                                            <DataGridCheckBoxColumn Header="OTP Only" Binding="{Binding OtpOnly}" Width="70"/>
+                                            <DataGridTextColumn Header="URL Webhook" Binding="{Binding WebhookUrl}" Width="*" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
+                                            <DataGridTemplateColumn Width="140">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <Button Content="Sửa" Command="{Binding Path=DataContext.OpenEditWebhookRuleCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="6,2" FontSize="10" Margin="0,0,4,0"/>
+                                                            <Button Content="Xóa" Command="{Binding Path=DataContext.DeleteWebhookRuleCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#E53935" Padding="6,2" FontSize="10"/>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
                                 </StackPanel>
                             </Border>
                         </StackPanel>
@@ -855,6 +934,20 @@
                                 </StackPanel>
                             </Border>
 
+                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="🔔 Âm thanh" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                    <ToggleButton IsChecked="{Binding IsSoundAlertEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh cảnh báo khi nhận OTP/SMS/Cuộc gọi"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="🔔 Âm Toast" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                    <ToggleButton IsChecked="{Binding IsToastSoundEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh mặc định của thông báo góc màn hình Windows"/>
+                                </StackPanel>
+                            </Border>
+
                         </WrapPanel>
                     </Border>
 
@@ -1210,7 +1303,145 @@
                 </Grid>
             </TabItem>
 
+            <!-- TAB 4: LỊCH SỬ OTP -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <materialDesign:PackIcon Kind="ClockTimeEightOutline" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                        <TextBlock Text="Lịch Sử OTP" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </TabItem.Header>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Filter bar -->
+                    <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1" Padding="15,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="History" VerticalAlignment="Center" Foreground="#FF9800" Width="22" Height="22" Margin="0,0,12,0"/>
+                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
+                                    <TextBlock Text="SĐT SIM" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="120" Text="{Binding OtpHistoryFilterPhone, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="SĐT..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
+                                    <TextBlock Text="SENDER" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="110" Text="{Binding OtpHistoryFilterSender, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Sender..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
+                                    <TextBlock Text="CỔNG" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="80" Text="{Binding OtpHistoryFilterPort, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="COM..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
+                                    <TextBlock Text="NGÀY" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="100" Text="{Binding OtpHistoryFilterDate, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="VD: 2026-06" Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
+                                    <TextBlock Text="NỘI DUNG" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
+                                    <TextBox Width="140" Text="{Binding OtpHistoryFilterContent, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Tìm nội dung..." Style="{StaticResource SearchTextBoxStyle}"/>
+                                </StackPanel>
+                                <Button Content="Xóa lọc" Command="{Binding ClearOtpHistoryFilterCommand}" Background="#607D8B" Style="{StaticResource ModernButtonStyle}" Width="70" Height="34" VerticalAlignment="Bottom" Margin="0,0,8,0" FontSize="11"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                                <TextBlock Text="{Binding FilteredOtpHistoryCount, StringFormat='Kết quả: {0} bản ghi'}" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="12"/>
+                                <Button Content="Tải lại" Command="{Binding LoadOtpHistoryCommand}" Background="#455A64" Style="{StaticResource ModernButtonStyle}" Margin="0,0,8,0"/>
+                                <Button Content="Xuất Excel" Command="{Binding ExportOtpHistoryToExcelCommand}" Background="#4CAF50" Style="{StaticResource ModernButtonStyle}" Margin="0"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- OTP History DataGrid -->
+                    <Border Grid.Row="1" Background="#1E1E2F" CornerRadius="12" Margin="10" BorderThickness="1" BorderBrush="#2A2A40">
+                        <DataGrid ItemsSource="{Binding FilteredOtpHistory}"
+                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
+                                  Background="{StaticResource PanelBackground}" RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
+                                  Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
+                                  HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
+                                  ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <DataGrid.ContextMenu>
+                                <ContextMenu Background="#1E1E2F" Foreground="White">
+                                    <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpFromHistoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </DataGrid.ContextMenu>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thời gian" Binding="{Binding Timestamp}" Width="155"/>
+                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding Port}" Width="100"/>
+                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT SIM" Binding="{Binding SimPhone}" Width="130"/>
+                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Sender" Binding="{Binding Sender}" Width="120"/>
+                                <DataGridTemplateColumn Header="OTP" Width="110">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border CornerRadius="6" Padding="6,2" Background="#33FF9800" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Otp}" Foreground="#FF9800" FontWeight="Bold"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding Content}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
         </TabControl>
+
+        <!-- WEBHOOK RULE DIALOG (nằm ngoài TabControl nhưng trong Grid chính) -->
+        <Border Grid.RowSpan="4" Visibility="{Binding IsWebhookDialogOpen, Converter={StaticResource BoolToVisibility}}" HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="12" Background="#1E1E2E" Padding="28" Width="540" Panel.ZIndex="100">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="#000000" Opacity="0.7"/>
+            </Border.Effect>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                    <materialDesign:PackIcon Kind="WebhookOutline" Width="28" Height="28" Foreground="#5C6BC0" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <TextBlock FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="Thêm Webhook Rule"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsEditingExistingWebhookRule}" Value="True">
+                                        <Setter Property="Text" Value="Sửa Webhook Rule"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+
+                <StackPanel Grid.Row="1" Margin="0,0,0,20">
+                    <TextBox materialDesign:HintAssist.Hint="Tên rule (VD: Forward OTP Zalo)" Text="{Binding EditingWebhookRule.Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                    <TextBox materialDesign:HintAssist.Hint="URL Webhook (VD: https://webhook.site/abc)" Text="{Binding EditingWebhookRule.WebhookUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                    <TextBox materialDesign:HintAssist.Hint="Lọc Sender (rổng=tất cả, VD: Zalo,8500,ZALO)" Text="{Binding EditingWebhookRule.SenderFilter, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                    <TextBox materialDesign:HintAssist.Hint="Header bí mật (VD: X-Secret: token123)" Text="{Binding EditingWebhookRule.SecretHeader, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <CheckBox Content="Chỉ gửi khi có OTP (OTP Only)" IsChecked="{Binding EditingWebhookRule.OtpOnly}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,30,0"/>
+                        <CheckBox Content="Bật rule này" IsChecked="{Binding EditingWebhookRule.Enabled}" Foreground="#4CAF50" FontWeight="Bold"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Hủy" Command="{Binding CloseWebhookDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                    <Button Content="Lưu Rule" Command="{Binding SaveWebhookRuleCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#5C6BC0" BorderBrush="#5C6BC0" materialDesign:ButtonAssist.CornerRadius="6"/>
+                </StackPanel>
+            </Grid>
+        </Border>
 
         <!-- #6: Terminal Log với bộ lọc theo cổng -->
         <Expander Grid.Row="2" Background="#0C0C14" Foreground="#4CAF50" ExpandDirection="Up" Padding="0" Header="Lịch sử AT Commands (Terminal)" FontFamily="Consolas">

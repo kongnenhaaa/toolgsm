@@ -470,6 +470,98 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<ExportColumnItem> ExportColumns { get; } = new();
 
+    // ========== OTP HISTORY ==========
+    [ObservableProperty]
+    private ObservableCollection<Services.OtpRecord> _otpHistoryList = new();
+
+    private string _otpHistoryFilterPhone = string.Empty;
+    public string OtpHistoryFilterPhone
+    {
+        get => _otpHistoryFilterPhone;
+        set { _otpHistoryFilterPhone = value; OnPropertyChanged(); OnPropertyChanged(nameof(FilteredOtpHistory)); OnPropertyChanged(nameof(FilteredOtpHistoryCount)); }
+    }
+
+    private string _otpHistoryFilterSender = string.Empty;
+    public string OtpHistoryFilterSender
+    {
+        get => _otpHistoryFilterSender;
+        set { _otpHistoryFilterSender = value; OnPropertyChanged(); OnPropertyChanged(nameof(FilteredOtpHistory)); OnPropertyChanged(nameof(FilteredOtpHistoryCount)); }
+    }
+
+    private string _otpHistoryFilterPort = string.Empty;
+    public string OtpHistoryFilterPort
+    {
+        get => _otpHistoryFilterPort;
+        set { _otpHistoryFilterPort = value; OnPropertyChanged(); OnPropertyChanged(nameof(FilteredOtpHistory)); OnPropertyChanged(nameof(FilteredOtpHistoryCount)); }
+    }
+
+    private string _otpHistoryFilterDate = string.Empty;
+    public string OtpHistoryFilterDate
+    {
+        get => _otpHistoryFilterDate;
+        set { _otpHistoryFilterDate = value; OnPropertyChanged(); OnPropertyChanged(nameof(FilteredOtpHistory)); OnPropertyChanged(nameof(FilteredOtpHistoryCount)); }
+    }
+
+    private string _otpHistoryFilterContent = string.Empty;
+    public string OtpHistoryFilterContent
+    {
+        get => _otpHistoryFilterContent;
+        set { _otpHistoryFilterContent = value; OnPropertyChanged(); OnPropertyChanged(nameof(FilteredOtpHistory)); OnPropertyChanged(nameof(FilteredOtpHistoryCount)); }
+    }
+
+    public System.Collections.IEnumerable FilteredOtpHistory => OtpHistoryList.Where(r =>
+        MatchesFilter(r.SimPhone,  OtpHistoryFilterPhone) &&
+        MatchesFilter(r.Sender,    OtpHistoryFilterSender) &&
+        MatchesFilter(r.Port,      OtpHistoryFilterPort) &&
+        MatchesFilter(r.Timestamp, OtpHistoryFilterDate) &&
+        MatchesFilter(r.Content,   OtpHistoryFilterContent));
+
+    public int FilteredOtpHistoryCount => OtpHistoryList.Count(r =>
+        MatchesFilter(r.SimPhone,  OtpHistoryFilterPhone) &&
+        MatchesFilter(r.Sender,    OtpHistoryFilterSender) &&
+        MatchesFilter(r.Port,      OtpHistoryFilterPort) &&
+        MatchesFilter(r.Timestamp, OtpHistoryFilterDate) &&
+        MatchesFilter(r.Content,   OtpHistoryFilterContent));
+
+    // ========== WEBHOOK RULE DIALOG ==========
+    [ObservableProperty]
+    private bool _isWebhookDialogOpen;
+
+    [ObservableProperty]
+    private Models.WebhookRule _editingWebhookRule = new();
+
+    [ObservableProperty]
+    private bool _isEditingExistingWebhookRule;
+
+    // ========== SOUND ALERT TOGGLE ==========
+    public bool IsSoundAlertEnabled
+    {
+        get => SettingsService.Current.EnableSoundAlert;
+        set
+        {
+            if (SettingsService.Current.EnableSoundAlert != value)
+            {
+                SettingsService.Current.EnableSoundAlert = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool IsToastSoundEnabled
+    {
+        get => SettingsService.Current.EnableToastSound;
+        set
+        {
+            if (SettingsService.Current.EnableToastSound != value)
+            {
+                SettingsService.Current.EnableToastSound = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public MainViewModel()
     {
         FilteredPortsView = System.Windows.Data.CollectionViewSource.GetDefaultView(Ports);
@@ -836,6 +928,221 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private static string FormatLogLine(LogMessage log)
     {
         return $"{log.Time} {log.Level} {log.Message}";
+    }
+
+    // ========== OTP HISTORY COMMANDS ==========
+
+    [RelayCommand]
+    private void LoadOtpHistory()
+    {
+        var records = Services.OtpHistoryService.GetRecent(2000); // Lấy tối đa 2000 bản ghi
+        OtpHistoryList.Clear();
+        foreach (var r in records)
+            OtpHistoryList.Add(r);
+
+        OnPropertyChanged(nameof(FilteredOtpHistory));
+        OnPropertyChanged(nameof(FilteredOtpHistoryCount));
+        SnackbarMessageQueue.Enqueue($"Đã tải {OtpHistoryList.Count} bản ghi lịch sử OTP.");
+    }
+
+    [RelayCommand]
+    private void ClearOtpHistoryFilter()
+    {
+        OtpHistoryFilterPhone   = string.Empty;
+        OtpHistoryFilterSender  = string.Empty;
+        OtpHistoryFilterPort    = string.Empty;
+        OtpHistoryFilterDate    = string.Empty;
+        OtpHistoryFilterContent = string.Empty;
+    }
+
+    [RelayCommand]
+    private void ExportOtpHistoryToExcel()
+    {
+        try
+        {
+            var filtered = FilteredOtpHistory.Cast<Services.OtpRecord>().ToList();
+            if (filtered.Count == 0)
+            {
+                SnackbarMessageQueue.Enqueue("Không có dữ liệu để xuất.");
+                return;
+            }
+
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter   = "Excel Files (*.xlsx)|*.xlsx",
+                FileName = $"otp_history_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx"
+            };
+
+            if (dlg.ShowDialog() != true) return;
+
+            OfficeOpenXml.ExcelPackage.LicenseContext = OfficeOpenXml.LicenseContext.NonCommercial;
+            using var pkg  = new OfficeOpenXml.ExcelPackage();
+            var ws = pkg.Workbook.Worksheets.Add("Lịch sử OTP");
+
+            // Header
+            ws.Cells[1, 1].Value = "Thời gian";
+            ws.Cells[1, 2].Value = "Cổng";
+            ws.Cells[1, 3].Value = "SĐT SIM";
+            ws.Cells[1, 4].Value = "Sender";
+            ws.Cells[1, 5].Value = "OTP";
+            ws.Cells[1, 6].Value = "Nội dung";
+
+            using (var range = ws.Cells[1, 1, 1, 6])
+            {
+                range.Style.Font.Bold = true;
+                range.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                range.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.FromArgb(30, 30, 60));
+                range.Style.Font.Color.SetColor(System.Drawing.Color.White);
+            }
+
+            // Data
+            for (int i = 0; i < filtered.Count; i++)
+            {
+                var r = filtered[i];
+                ws.Cells[i + 2, 1].Value = r.Timestamp;
+                ws.Cells[i + 2, 2].Value = r.Port;
+                ws.Cells[i + 2, 3].Value = r.SimPhone;
+                ws.Cells[i + 2, 4].Value = r.Sender;
+                ws.Cells[i + 2, 5].Value = r.Otp;
+                ws.Cells[i + 2, 6].Value = r.Content;
+            }
+
+            ws.Cells.AutoFitColumns();
+            pkg.SaveAs(new System.IO.FileInfo(dlg.FileName));
+            SnackbarMessageQueue.Enqueue($"Đã xuất {filtered.Count} bản ghi OTP ra Excel.");
+            AddLog($"Xuất lịch sử OTP: {filtered.Count} bản ghi → {dlg.FileName}", "SUCCESS");
+        }
+        catch (Exception ex)
+        {
+            AddLog($"Lỗi xuất Excel lịch sử OTP: {ex.Message}", "ERROR");
+            SnackbarMessageQueue.Enqueue("Lỗi khi xuất Excel.");
+        }
+    }
+
+    [RelayCommand]
+    private void CopyOtpFromHistory(Services.OtpRecord? record)
+    {
+        if (record == null || string.IsNullOrWhiteSpace(record.Otp)) return;
+        Clipboard.SetText(record.Otp);
+        SnackbarMessageQueue.Enqueue($"Đã sao chép OTP: {record.Otp}");
+    }
+
+    // ========== WEBHOOK RULE COMMANDS ==========
+
+    [RelayCommand]
+    private void OpenAddWebhookRule()
+    {
+        EditingWebhookRule = new Models.WebhookRule();
+        IsEditingExistingWebhookRule = false;
+        IsWebhookDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private void OpenEditWebhookRule(Models.WebhookRule? rule)
+    {
+        if (rule == null) return;
+        // Clone để chỉnh sửa (tránh thay đổi trực tiếp list)
+        EditingWebhookRule = new Models.WebhookRule
+        {
+            Id           = rule.Id,
+            Name         = rule.Name,
+            Enabled      = rule.Enabled,
+            SenderFilter = rule.SenderFilter,
+            WebhookUrl   = rule.WebhookUrl,
+            SecretHeader = rule.SecretHeader,
+            OtpOnly      = rule.OtpOnly
+        };
+        IsEditingExistingWebhookRule = true;
+        IsWebhookDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private void SaveWebhookRule()
+    {
+        if (string.IsNullOrWhiteSpace(EditingWebhookRule.Name) || string.IsNullOrWhiteSpace(EditingWebhookRule.WebhookUrl))
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng điền Tên và URL webhook.");
+            return;
+        }
+
+        var settings = AppSettings;
+        if (IsEditingExistingWebhookRule)
+        {
+            var existing = settings.WebhookRules.FirstOrDefault(r => r.Id == EditingWebhookRule.Id);
+            if (existing != null)
+            {
+                existing.Name         = EditingWebhookRule.Name;
+                existing.Enabled      = EditingWebhookRule.Enabled;
+                existing.SenderFilter = EditingWebhookRule.SenderFilter;
+                existing.WebhookUrl   = EditingWebhookRule.WebhookUrl;
+                existing.SecretHeader = EditingWebhookRule.SecretHeader;
+                existing.OtpOnly      = EditingWebhookRule.OtpOnly;
+            }
+        }
+        else
+        {
+            settings.WebhookRules.Add(new Models.WebhookRule
+            {
+                Id           = EditingWebhookRule.Id,
+                Name         = EditingWebhookRule.Name,
+                Enabled      = EditingWebhookRule.Enabled,
+                SenderFilter = EditingWebhookRule.SenderFilter,
+                WebhookUrl   = EditingWebhookRule.WebhookUrl,
+                SecretHeader = EditingWebhookRule.SecretHeader,
+                OtpOnly      = EditingWebhookRule.OtpOnly
+            });
+        }
+
+        SettingsService.SaveSettings(settings);
+        OnPropertyChanged(nameof(AppSettings));
+        IsWebhookDialogOpen = false;
+        SnackbarMessageQueue.Enqueue("Đã lưu webhook rule.");
+    }
+
+    [RelayCommand]
+    private void DeleteWebhookRule(Models.WebhookRule? rule)
+    {
+        if (rule == null) return;
+        AppSettings.WebhookRules.Remove(rule);
+        SettingsService.SaveSettings(AppSettings);
+        OnPropertyChanged(nameof(AppSettings));
+        SnackbarMessageQueue.Enqueue($"Đã xóa rule '{rule.Name}'.");
+    }
+
+    [RelayCommand]
+    private void CloseWebhookDialog()
+    {
+        IsWebhookDialogOpen = false;
+    }
+
+    [RelayCommand]
+    private void BrowseSoundFile(string parameter)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "WAV Files (*.wav)|*.wav|All Files (*.*)|*.*",
+            Title  = "Chọn file âm thanh .wav"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        switch (parameter)
+        {
+            case "OTP":  AppSettings.SoundOtpPath  = dlg.FileName; break;
+            case "SMS":  AppSettings.SoundSmsPath  = dlg.FileName; break;
+            case "CALL": AppSettings.SoundCallPath = dlg.FileName; break;
+        }
+        OnPropertyChanged(nameof(AppSettings));
+    }
+
+    [RelayCommand]
+    private void TestSoundAlert(string parameter)
+    {
+        switch (parameter)
+        {
+            case "OTP":  Services.SoundAlertService.PlayOtp();  break;
+            case "SMS":  Services.SoundAlertService.PlaySms();  break;
+            case "CALL": Services.SoundAlertService.PlayCall(); break;
+        }
     }
 
     private void InitializeHardware()
@@ -1734,9 +2041,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     // Lưu lịch sử OTP vào file CSV
                     OtpHistoryService.Append(e.PortName, receiverPhone, senderPhone, extractedOtp, cleanContent);
+                    // Cập nhật live vào OtpHistoryList (nếu tab đang mở)
+                    OtpHistoryList.Insert(0, new Services.OtpRecord
+                    {
+                        Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        Port      = e.PortName,
+                        SimPhone  = receiverPhone,
+                        Sender    = senderPhone,
+                        Otp       = extractedOtp,
+                        Content   = cleanContent
+                    });
+                    OnPropertyChanged(nameof(FilteredOtpHistory));
+                    OnPropertyChanged(nameof(FilteredOtpHistoryCount));
+
+                    // Phát âm thanh cảnh báo OTP
+                    Services.SoundAlertService.PlayOtp();
 
                     // Thông báo Toast Windows
                     ToastService.ShowOtp(e.PortName, receiverPhone, extractedOtp, senderPhone);
+
+                    // Tự động forward OTP qua Webhook (nếu có rule được cấu hình)
+                    var webhookRules = AppSettings?.WebhookRules ?? new System.Collections.Generic.List<Models.WebhookRule>();
+                    foreach (var rule in webhookRules)
+                    {
+                        _ = Services.WebhookService.TriggerAsync(rule, e.PortName, receiverPhone, senderPhone, extractedOtp, cleanContent);
+                    }
 
                     // Chỉ xóa tin nhắn sau khi đã trích xuất OTP thành công
                     if (!string.IsNullOrEmpty(e.MsgIndex))
@@ -1748,7 +2077,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     AddLog($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
                     SnackbarMessageQueue.Enqueue($"[{e.PortName}] Tin nhắn mới từ {senderPhone}");
-                    
+
+                    // Phát âm thanh SMS thường
+                    Services.SoundAlertService.PlaySms();
+
+                    // Forward SMS (không có OTP) qua webhook nếu rule không yêu cầu OtpOnly
+                    var webhookRules = AppSettings?.WebhookRules ?? new System.Collections.Generic.List<Models.WebhookRule>();
+                    foreach (var rule in webhookRules)
+                    {
+                        _ = Services.WebhookService.TriggerAsync(rule, e.PortName, receiverPhone, senderPhone, "N/A", cleanContent);
+                    }
+
                     // PHẢI XÓA SMS NGAY CẢ KHI KHÔNG CÓ OTP ĐỂ TRÁNH TRÀN BỘ NHỚ SIM (SIM FULL SẼ KHÔNG NHẬN ĐƯỢC SMS NỮA)
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
@@ -1836,6 +2175,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             AddLog($"[{e.PortName}] Có cuộc gọi đến từ SĐT: {callerDisplay}", "INFO");
             SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có cuộc gọi từ {callerDisplay}");
+
+            // Phát âm thanh cảnh báo cuộc gọi đến
+            Services.SoundAlertService.PlayCall();
 
             string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
             _ = TelegramService.SendMessageAsync(

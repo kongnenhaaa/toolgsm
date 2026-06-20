@@ -19,6 +19,11 @@ public static class ToastService
     {
         try
         {
+            bool enableSound = SettingsService.Current.EnableToastSound;
+            string audioTag = enableSound 
+                ? "<audio src=\"ms-winsoundevent:Notification.SMS\"/>" 
+                : "<audio silent=\"true\"/>";
+
             string xml = $"""
                 <toast duration="short">
                     <visual>
@@ -27,7 +32,7 @@ public static class ToastService
                             <text>{EscapeXml(body)}</text>
                         </binding>
                     </visual>
-                    <audio src="ms-winsoundevent:Notification.SMS"/>
+                    {audioTag}
                 </toast>
                 """;
 

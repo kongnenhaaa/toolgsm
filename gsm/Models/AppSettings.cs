@@ -29,4 +29,10 @@ public class AppSettings
     // Ping SIM
     public bool EnableSimPing { get; set; } = true;
     public int SimPingIntervalMinutes { get; set; } = 5;
+
+    // Tự động bắt máy
+    public bool EnableAutoAnswer { get; set; } = true;
+
+    // Tự động Watchdog (Khởi động lại modem khi lỗi)
+    public bool EnableAutoWatchdog { get; set; } = true;
 }

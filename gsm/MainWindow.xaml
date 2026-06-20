@@ -778,11 +778,27 @@
                                     <TextBlock Text="Xuất Excel" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
-                            <Button Background="#424242" Command="{Binding RefreshPortsCommand}" Style="{StaticResource ModernButtonStyle}">
+                            <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Làm mới hoặc Khởi động lại cổng">
                                 <StackPanel Orientation="Horizontal">
                                     <materialDesign:PackIcon Kind="Refresh" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                                    <TextBlock Text="Làm mới cổng" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Làm mới / Reset" VerticalAlignment="Center"/>
                                 </StackPanel>
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="🔄 Làm mới danh sách cổng (Refresh)" Command="{Binding RefreshPortsCommand}">
+                                        </MenuItem>
+                                        <Separator Background="#444"/>
+                                        <MenuItem Header="⚡ Khởi động lại Modem CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding RebootModemCommand}" CommandParameter="Selected">
+                                        </MenuItem>
+                                        <MenuItem Header="⚡ Khởi động lại TẤT CẢ Modem" Command="{Binding RebootModemCommand}" CommandParameter="All">
+                                        </MenuItem>
+                                        <Separator Background="#444"/>
+                                        <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding ClearSmsCommand}" CommandParameter="Selected">
+                                        </MenuItem>
+                                        <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên TẤT CẢ CỔNG" Command="{Binding ClearSmsCommand}" CommandParameter="All">
+                                        </MenuItem>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
                             </Button>
 
                             <Button Background="#29B6F6" Command="{Binding OpenNetworkSimDialogCommand}" Style="{StaticResource ModernButtonStyle}">
@@ -809,6 +825,22 @@
                                     <TextBlock Text="Quản lý cuộc gọi" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
+                            
+                            <!-- Toggles for Watchdog and Auto-Answer -->
+                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Tự phục hồi (Watchdog)" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                    <ToggleButton IsChecked="{Binding IsWatchdogEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động khởi động lại Modem (AT+CFUN=1,1) khi bị lỗi/mất sóng"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Tự nhấc máy" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                    <ToggleButton IsChecked="{Binding IsAutoAnswerEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động bắt máy (ATA) khi có cuộc gọi đến"/>
+                                </StackPanel>
+                            </Border>
+
                         </WrapPanel>
                     </Border>
 
@@ -912,7 +944,7 @@
                             <DataGridTemplateColumn Header="TKC" Width="110">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Balance}" Foreground="#4CAF50" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Balance}" TextWrapping="Wrap" Foreground="#4CAF50" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -934,7 +966,7 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                            <TextBlock Text="{Binding Otp}" Foreground="#FF9800" FontWeight="Bold"/>
+                                            <TextBlock Text="{Binding Otp}" TextWrapping="Wrap" Foreground="#FF9800" FontWeight="Bold"/>
                                         </Border>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
@@ -960,7 +992,7 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                            <TextBlock Text="{Binding Status}" FontWeight="Bold">
+                                            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontWeight="Bold">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="#F44336"/>
@@ -983,7 +1015,7 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border Background="#263238" CornerRadius="10" Padding="8,3" ToolTip="{Binding LastError}">
-                                            <TextBlock Text="{Binding HealthSummary}" Foreground="#B2EBF2" FontSize="11" FontWeight="Bold"/>
+                                            <TextBlock Text="{Binding HealthSummary}" TextWrapping="Wrap" Foreground="#B2EBF2" FontSize="11" FontWeight="Bold"/>
                                         </Border>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>

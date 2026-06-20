@@ -96,11 +96,11 @@
                 </Style.Triggers>
             </Style>
 
-            <!-- Text Element Style to disable Fade-out (OpacityMask) -->
+            <!-- Text Element Style to disable Fade-out (OpacityMask) and enable Wrap -->
             <Style TargetType="TextBlock" x:Key="ProDataGridTextElementStyle">
                 <Setter Property="Margin" Value="0"/>
                 <Setter Property="VerticalAlignment" Value="Center"/>
-                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                <Setter Property="TextWrapping" Value="Wrap"/>
                 <Setter Property="OpacityMask" Value="{x:Null}"/>
             </Style>
 

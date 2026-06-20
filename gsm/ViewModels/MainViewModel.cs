@@ -138,6 +138,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isCallManagerDialogOpen;
 
+    public bool IsAutoAnswerEnabled
+    {
+        get => SettingsService.Current.EnableAutoAnswer;
+        set
+        {
+            if (SettingsService.Current.EnableAutoAnswer != value)
+            {
+                SettingsService.Current.EnableAutoAnswer = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool IsWatchdogEnabled
+    {
+        get => SettingsService.Current.EnableAutoWatchdog;
+        set
+        {
+            if (SettingsService.Current.EnableAutoWatchdog != value)
+            {
+                SettingsService.Current.EnableAutoWatchdog = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
     [ObservableProperty]
     private string _callManagerSelectedPort = string.Empty;
 
@@ -566,6 +594,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         RecordPortError(p.PortName, ex.Message);
                     }
                     await Task.Delay(500, lifetimeToken);
+                }
+            }
+        }, lifetimeToken);
+
+        // Tự động phục hồi (Watchdog)
+        _ = Task.Run(async () =>
+        {
+            while (!lifetimeToken.IsCancellationRequested)
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(60), lifetimeToken); }
+                catch (OperationCanceledException) { break; }
+
+                if (!IsWatchdogEnabled) continue;
+
+                var portsCopy = GetPortsSnapshot();
+                foreach (var p in portsCopy)
+                {
+                    if (lifetimeToken.IsCancellationRequested) break;
+                    if (p.Status == SimStatus.NoResponse || p.Status == SimStatus.Error || p.Status == SimStatus.Offline)
+                    {
+                        AddLog($"[WATCHDOG] Cổng {p.PortName} mất kết nối. Tự động gửi lệnh phục hồi (AT+CFUN=1,1)...", "WARN");
+                        _ = _modemService.SendCommandAsync(p.PortName, "AT+CFUN=1,1", silent: true);
+                    }
                 }
             }
         }, lifetimeToken);
@@ -1766,15 +1817,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
             );
 
             // Tự động nhận cuộc gọi và ghi âm
-            if (!_activeRecordings.ContainsKey(e.PortName))
+            if (IsAutoAnswerEnabled)
             {
-                AddLog($"[{e.PortName}] Đang tự động bắt máy cuộc gọi đến...", "INFO");
-                await _modemService.SendCommandAsync(e.PortName, "ATA");
+                if (!_activeRecordings.ContainsKey(e.PortName))
+                {
+                    AddLog($"[{e.PortName}] Đang tự động bắt máy cuộc gọi đến...", "INFO");
+                    await _modemService.SendCommandAsync(e.PortName, "ATA");
 
-                var recorder = new AudioRecordingService();
-                recorder.LogMessage += (s, msg) => AddLog($"[{e.PortName}] {msg}", "INFO");
-                recorder.StartRecording(e.PortName);
-                _activeRecordings[e.PortName] = recorder;
+                    var recorder = new AudioRecordingService();
+                    recorder.LogMessage += (s, msg) => AddLog($"[{e.PortName}] {msg}", "INFO");
+                    recorder.StartRecording(e.PortName);
+                    _activeRecordings[e.PortName] = recorder;
+                }
+            }
+            else
+            {
+                AddLog($"[{e.PortName}] Có cuộc gọi đến nhưng tính năng Tự động bắt máy đang TẮT.", "INFO");
             }
         });
     }
@@ -1968,6 +2026,78 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             // Gọi bất đồng bộ không chờ (để throttler bên trong hàm tự động xếp hàng)
             _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra số dư", maxRetries: 3, logResult: true);
+        }
+    }
+
+    [RelayCommand]
+    private async Task RebootModemAsync(string mode)
+    {
+        List<Models.SimPort> targetPorts;
+        
+        if (mode == "Selected")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (đánh dấu ☑) đang hoạt động để khởi động lại.");
+                return;
+            }
+        }
+        else
+        {
+            targetPorts = Ports.Where(IsActive).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Không có cổng nào đang hoạt động để khởi động lại.");
+                return;
+            }
+        }
+
+        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn khởi động lại {targetPorts.Count} modem?\nThao tác này sẽ làm mất kết nối trong vài giây.", "Khởi động lại", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
+            return;
+
+        SnackbarMessageQueue.Enqueue($"Đang gửi lệnh khởi động lại cho {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu khởi động lại {targetPorts.Count} cổng...");
+
+        foreach (var port in targetPorts)
+        {
+            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1,1");
+        }
+    }
+
+    [RelayCommand]
+    private async Task ClearSmsAsync(string mode)
+    {
+        List<Models.SimPort> targetPorts;
+        
+        if (mode == "Selected")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (đánh dấu ☑) đang hoạt động để xóa tin nhắn.");
+                return;
+            }
+        }
+        else
+        {
+            targetPorts = Ports.Where(IsActive).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Không có cổng nào đang hoạt động để xóa tin nhắn.");
+                return;
+            }
+        }
+
+        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn xóa TOÀN BỘ tin nhắn trên {targetPorts.Count} SIM?\nThao tác này KHÔNG THỂ HOÀN TÁC.", "Xóa tin nhắn", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
+            return;
+
+        SnackbarMessageQueue.Enqueue($"Đang gửi lệnh xóa SMS rác cho {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu xóa SMS rác cho {targetPorts.Count} cổng...");
+
+        foreach (var port in targetPorts)
+        {
+            await _modemService.SendCommandAsync(port.PortName, "AT+CMGD=1,4");
         }
     }
 

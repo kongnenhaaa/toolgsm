@@ -823,18 +823,14 @@
                         </Border>
                     </UniformGrid>
                     
-                    <!-- GSM DataGrid -->
-                    <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                        <DataGrid Margin="10" ItemsSource="{Binding FilteredPortsView}" SelectedItem="{Binding SelectedPort}" 
+                    <!-- GSM DataGrid Wrapper -->
+                    <Border Grid.Row="2" Background="#1E1E2F" CornerRadius="12" Margin="10" BorderThickness="1" BorderBrush="#2A2A40">
+                        <DataGrid ItemsSource="{Binding FilteredPortsView}" SelectedItem="{Binding SelectedPort}" 
                                   MouseDoubleClick="DataGrid_MouseDoubleClick"
-                                  AutoGenerateColumns="False" CanUserAddRows="False" Background="{StaticResource PanelBackground}"
-                                  RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
-                                  Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
-                                  HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
-                                  ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
-                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                  ScrollViewer.CanContentScroll="True">
+                                  Style="{StaticResource ProDataGridStyle}"
+                                  Margin="1"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                         
                         <!-- Context Menu -->
                         <DataGrid.ContextMenu>
@@ -869,17 +865,80 @@
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
 
-                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
-                            <DataGridTextColumn Header="IMEI" Binding="{Binding Imei}" Width="150" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
-                            <DataGridTextColumn Header="Serial" Binding="{Binding Serial}" Width="150" HeaderTemplate="{StaticResource SerialHeaderTemplate}"/>
-                            <DataGridTextColumn Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
-                            <DataGridTextColumn Header="TKC" Binding="{Binding Balance}" Width="100"/>
-                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
-                            <DataGridTextColumn Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
-                            <DataGridTextColumn Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
-                            <DataGridTextColumn Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
-                            <DataGridTextColumn Header="Lệch Key" Binding="{Binding KeyMismatch}" Width="100"/>
-                            <DataGridTextColumn Header="Kết nối" Binding="{Binding Status}" Width="100"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Serial" Binding="{Binding Serial}" Width="180" HeaderTemplate="{StaticResource SerialHeaderTemplate}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
+                            <DataGridTemplateColumn Header="TKC" Width="110">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Balance}" Foreground="#4CAF50" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            
+                            <DataGridTemplateColumn Header="OTP" Width="110">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border CornerRadius="6" Padding="6,2" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="#33FF9800"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Otp}" Value="{x:Null}">
+                                                            <Setter Property="Background" Value="Transparent"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Otp}" Value="">
+                                                            <Setter Property="Background" Value="Transparent"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock Text="{Binding Otp}" Foreground="#FF9800" FontWeight="Bold"/>
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lệch Key" Binding="{Binding KeyMismatch}" Width="100"/>
+                            <DataGridTemplateColumn Header="Kết nối" Width="110">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Border CornerRadius="6" Padding="8,4" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="#33F44336"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Active">
+                                                            <Setter Property="Background" Value="#334CAF50"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Offline">
+                                                            <Setter Property="Background" Value="#339E9E9E"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock Text="{Binding Status}" FontWeight="Bold">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="#F44336"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Active">
+                                                                <Setter Property="Foreground" Value="#4CAF50"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Offline">
+                                                                <Setter Property="Foreground" Value="#9E9E9E"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Border>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTemplateColumn Header="Health" Width="150">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -889,11 +948,11 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Timeout" Binding="{Binding TimeoutCount}" Width="75"/>
-                            <DataGridTextColumn Header="Lỗi SMS" Binding="{Binding SmsErrorCount}" Width="75"/>
-                            <DataGridTextColumn Header="Reconnect" Binding="{Binding ReconnectCount}" Width="85"/>
-                            <DataGridTextColumn Header="SMS cuối" Binding="{Binding LastSmsSentAt}" Width="90"/>
-                            <DataGridTextColumn Header="Lỗi cuối" Binding="{Binding LastError}" Width="180"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Timeout" Binding="{Binding TimeoutCount}" Width="75"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi SMS" Binding="{Binding SmsErrorCount}" Width="75"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Reconnect" Binding="{Binding ReconnectCount}" Width="85"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SMS cuối" Binding="{Binding LastSmsSentAt}" Width="90"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi cuối" Binding="{Binding LastError}" Width="180"/>
                             
                             <!-- Tín hiệu Signal Bars -->
                             <DataGridTemplateColumn Header="Tín hiệu" Width="100">
@@ -906,7 +965,7 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             
                             <!-- #8: Tô đỏ HSD nếu sắp hết hạn (dưới 7 ngày) -->
                             <DataGridTemplateColumn Header="HSD" Width="120">
@@ -930,14 +989,14 @@
                             </DataGridTemplateColumn>
                             
                             <!-- #4: Cột số điện thoại nhận chuyển hướng -->
-                            <DataGridTextColumn Header="Fwd→" Binding="{Binding ForwardedTo}" Width="130" Foreground="#03A9F4"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Fwd→" Binding="{Binding ForwardedTo}" Width="130" Foreground="#03A9F4"/>
                             
-                            <DataGridTextColumn Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
-                            <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
-                            <DataGridTextColumn Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
                         </DataGrid.Columns>
                     </DataGrid>
-                    </ScrollViewer>
+                    </Border>
                 </Grid>
             </TabItem>
 
@@ -1015,15 +1074,15 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Cổng" Binding="{Binding PortName}" Width="120"/>
-                            <DataGridTextColumn Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
-                            <DataGridTextColumn Header="Số điện thoại" Binding="{Binding ReceiverPhone}" Width="150"/>
-                            <DataGridTextColumn Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
-                            <DataGridTextColumn Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
-                            <DataGridTextColumn Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
-                            <DataGridTextColumn Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
-                            <DataGridTextColumn Header="Chuyển lời" Binding="{Binding ForwardContent}" Width="100"/>
-                            <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="800"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" Width="120"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Số điện thoại" Binding="{Binding ReceiverPhone}" Width="150"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Chuyển lời" Binding="{Binding ForwardContent}" Width="100"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding Content}" Width="800"/>
                         </DataGrid.Columns>
                     </DataGrid>
                     </ScrollViewer>
@@ -1051,15 +1110,15 @@
                               HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
                               ColumnHeaderStyle="{StaticResource CustomHeaderStyle}">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Lúc" Binding="{Binding UpdatedAt}" Width="90"/>
-                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100"/>
-                            <DataGridTextColumn Header="CommandId" Binding="{Binding CommandId}" Width="220"/>
-                            <DataGridTextColumn Header="COM" Binding="{Binding PortId}" Width="90"/>
-                            <DataGridTextColumn Header="Loại" Binding="{Binding Type}" Width="90"/>
-                            <DataGridTextColumn Header="Gửi đến" Binding="{Binding Recipient}" Width="130"/>
-                            <DataGridTextColumn Header="Nội dung" Binding="{Binding Content}" Width="260"/>
-                            <DataGridTextColumn Header="Kết quả" Binding="{Binding Result}" Width="260"/>
-                            <DataGridTextColumn Header="Lỗi" Binding="{Binding Error}" Width="260"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lúc" Binding="{Binding UpdatedAt}" Width="90"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Status" Binding="{Binding Status}" Width="100"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="CommandId" Binding="{Binding CommandId}" Width="220"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="COM" Binding="{Binding PortId}" Width="90"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Loại" Binding="{Binding Type}" Width="90"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Gửi đến" Binding="{Binding Recipient}" Width="130"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding Content}" Width="260"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Kết quả" Binding="{Binding Result}" Width="260"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi" Binding="{Binding Error}" Width="260"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>

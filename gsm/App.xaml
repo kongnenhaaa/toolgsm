@@ -27,20 +27,100 @@
             </Style>
 
             <!-- Modern DataGrid Row Style -->
-            <Style TargetType="DataGridRow" BasedOn="{StaticResource MaterialDesignDataGridRow}">
-                <Setter Property="Background" Value="Transparent"/>
-                <Setter Property="Margin" Value="0,1"/>
-                <Setter Property="BorderThickness" Value="0"/>
+            <Style TargetType="DataGridRow" x:Key="ProDataGridRowStyle">
+                <Setter Property="Background" Value="#1E1E2F"/>
+                <Setter Property="BorderBrush" Value="#2A2A40"/>
+                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Margin" Value="0"/>
                 <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="MinHeight" Value="45"/>
+                <Setter Property="Foreground" Value="White"/>
                 <Style.Triggers>
+                    <!-- Alternating Row Color -->
+                    <Trigger Property="AlternationIndex" Value="1">
+                        <Setter Property="Background" Value="#181825"/>
+                    </Trigger>
                     <Trigger Property="IsMouseOver" Value="True">
-                        <Setter Property="Background" Value="#2A2A40"/>
+                        <Setter Property="Background" Value="#2D2D44"/>
                     </Trigger>
                     <Trigger Property="IsSelected" Value="True">
                         <Setter Property="Background" Value="#3F51B5"/>
                         <Setter Property="Foreground" Value="White"/>
                     </Trigger>
                 </Style.Triggers>
+            </Style>
+
+            <!-- Professional DataGrid Column Header Style -->
+            <Style TargetType="DataGridColumnHeader" x:Key="ProDataGridColumnHeaderStyle">
+                <Setter Property="Background" Value="#232338"/>
+                <Setter Property="Foreground" Value="#E0E0E0"/>
+                <Setter Property="Padding" Value="14,14,14,14"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="BorderThickness" Value="0,0,0,2"/>
+                <Setter Property="BorderBrush" Value="#3F51B5"/>
+                <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="DataGridColumnHeader">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Professional DataGrid Cell Style -->
+            <Style TargetType="DataGridCell" x:Key="ProDataGridCellStyle">
+                <Setter Property="Padding" Value="14,8"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="DataGridCell">
+                            <Border Background="Transparent" BorderThickness="0" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Text Element Style to disable Fade-out (OpacityMask) -->
+            <Style TargetType="TextBlock" x:Key="ProDataGridTextElementStyle">
+                <Setter Property="Margin" Value="0"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+                <Setter Property="OpacityMask" Value="{x:Null}"/>
+            </Style>
+
+            <!-- Professional DataGrid Style -->
+            <Style TargetType="DataGrid" x:Key="ProDataGridStyle">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="RowHeaderWidth" Value="0"/>
+                <Setter Property="GridLinesVisibility" Value="None"/>
+                <Setter Property="HorizontalGridLinesBrush" Value="Transparent"/>
+                <Setter Property="VerticalGridLinesBrush" Value="Transparent"/>
+                <Setter Property="AutoGenerateColumns" Value="False"/>
+                <Setter Property="CanUserAddRows" Value="False"/>
+                <Setter Property="CanUserDeleteRows" Value="False"/>
+                <Setter Property="CanUserResizeRows" Value="False"/>
+                <Setter Property="ColumnHeaderStyle" Value="{StaticResource ProDataGridColumnHeaderStyle}"/>
+                <Setter Property="RowStyle" Value="{StaticResource ProDataGridRowStyle}"/>
+                <Setter Property="CellStyle" Value="{StaticResource ProDataGridCellStyle}"/>
+                <Setter Property="AlternationCount" Value="2"/>
             </Style>
 
             <!-- Search TextBox Style -->

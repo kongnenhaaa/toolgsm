@@ -829,6 +829,20 @@
                             <!-- Toggles for Watchdog and Auto-Answer -->
                             <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Đẩy OTT Web" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                    <ToggleButton IsChecked="{Binding IsWebNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Đẩy OTP/SMS lên máy chủ Web"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Đẩy Telegram" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                    <ToggleButton IsChecked="{Binding IsTelegramNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bắn thông báo OTP/SMS qua Telegram"/>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                     <TextBlock Text="Tự phục hồi (Watchdog)" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
                                     <ToggleButton IsChecked="{Binding IsWatchdogEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động khởi động lại Modem (AT+CFUN=1,1) khi bị lỗi/mất sóng"/>
                                 </StackPanel>

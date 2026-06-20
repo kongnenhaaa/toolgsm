@@ -138,6 +138,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isCallManagerDialogOpen;
 
+    public bool IsTelegramNotificationEnabled
+    {
+        get => SettingsService.Current.EnableTelegramNotification;
+        set
+        {
+            if (SettingsService.Current.EnableTelegramNotification != value)
+            {
+                SettingsService.Current.EnableTelegramNotification = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool IsWebNotificationEnabled
+    {
+        get => SettingsService.Current.EnableWebNotification;
+        set
+        {
+            if (SettingsService.Current.EnableWebNotification != value)
+            {
+                SettingsService.Current.EnableWebNotification = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public bool IsAutoAnswerEnabled
     {
         get => SettingsService.Current.EnableAutoAnswer;

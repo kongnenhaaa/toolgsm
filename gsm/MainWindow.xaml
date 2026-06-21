@@ -277,6 +277,11 @@
                                     
                                     <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10"/>
                                     
+                                    <Separator Background="#3D3D5C" Margin="0,15,0,15"/>
+                                    <TextBlock Text="CẤU HÌNH ÂM THANH &amp; TOAST" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <CheckBox Content="Bật âm thanh cảnh báo (khi có tin nhắn/cuộc gọi)" IsChecked="{Binding IsSoundAlertEnabled}" Foreground="White" Margin="0,0,0,10"/>
+                                    <CheckBox Content="Bật âm thanh Toast (thông báo góc màn hình Windows)" IsChecked="{Binding IsToastSoundEnabled}" Foreground="White" Margin="0,0,0,10"/>
+                                    
                                     <Separator Background="#3D3D5C" Margin="0,20"/>
                                     <TextBlock Text="LỌC TIN NHẮN (SMS)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
                                     <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding AppSettings.ReceiveAllSms}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
@@ -438,6 +443,7 @@ GET  /api/history
                     </ScrollViewer>
                     
                     <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <TextBlock Text="⚠️ LƯU Ý: HÃY BẤM NÚT LƯU SAU KHI SỬA ĐỂ ÁP DỤNG!" Foreground="#FF5252" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,20,0"/>
                         <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
                         <Button Content="Lưu Cài Đặt" Command="{Binding SaveSettingsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
                     </StackPanel>
@@ -852,15 +858,18 @@ GET  /api/history
                 <StackPanel Orientation="Horizontal">
                     <RadioButton Content="GSM" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=0}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
-                    <RadioButton Content="SMS" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
+                    <RadioButton Content="TIN NHẮN" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                     <RadioButton Content="QUEUE" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
+                    <materialDesign:Badged Badge="{Binding UnreadOtpBadge}" BadgeBackground="#E91E63" BadgeForeground="White" Margin="2">
+                        <RadioButton Content="OTP ĐÃ LƯU" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=3}" 
+                                     Style="{StaticResource MaterialDesignTabRadioButton}" Width="110" FontWeight="Bold"/>
+                    </materialDesign:Badged>
                 </StackPanel>
             </Border>
             
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="15,0">
-                <Button Style="{StaticResource MaterialDesignOutlinedButton}" Content="Thông báo 0" Foreground="#E91E63" BorderBrush="#E91E63" Height="28" Padding="10,0" materialDesign:ButtonAssist.CornerRadius="14"/>
                 <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Settings" Height="36" Width="36" Margin="10,0,0,0" Command="{Binding OpenSettingsDialogCommand}">
                     <materialDesign:PackIcon Kind="Cog" Foreground="White" Width="20" Height="20"/>
                 </Button>
@@ -947,6 +956,22 @@ GET  /api/history
                                     <TextBlock Text="Xuất Excel" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
+                            <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Quét tin nhắn kẹt">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="Broom" VerticalAlignment="Center" Margin="0,0,5,0" Foreground="#00E676"/>
+                                    <TextBlock Text="Quét tin kẹt" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Quét TẤT CẢ các cổng" Command="{Binding SweepSmsCommand}" CommandParameter="All">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="Broom"/></MenuItem.Icon>
+                                        </MenuItem>
+                                        <MenuItem Header="Quét CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding SweepSmsCommand}" CommandParameter="Selected">
+                                            <MenuItem.Icon><materialDesign:PackIcon Kind="CursorDefaultClick"/></MenuItem.Icon>
+                                        </MenuItem>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
                             <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Làm mới hoặc Khởi động lại cổng">
                                 <StackPanel Orientation="Horizontal">
                                     <materialDesign:PackIcon Kind="Refresh" VerticalAlignment="Center" Margin="0,0,5,0"/>
@@ -1025,19 +1050,6 @@ GET  /api/history
                                     </StackPanel>
                                 </Border>
     
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="🔔 Âm thanh" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsSoundAlertEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh cảnh báo khi nhận OTP/SMS/Cuộc gọi"/>
-                                    </StackPanel>
-                                </Border>
-    
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="🔔 Âm Toast" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsToastSoundEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh mặc định của thông báo góc màn hình Windows"/>
-                                    </StackPanel>
-                                </Border>
                             </StackPanel>
 
                         </WrapPanel>
@@ -1175,6 +1187,7 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Quét vét" Binding="{Binding LastSweepTime}" Width="90" Foreground="#00E676"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
@@ -1335,10 +1348,10 @@ GET  /api/history
                                   ScrollViewer.CanContentScroll="True">
                         <DataGrid.ContextMenu>
                             <ContextMenu >
-                                <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}" >
+                                <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Xóa tin nhắn này" Command="{Binding Path=DataContext.DeleteSmsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}"  Foreground="#E53935">
+                                <MenuItem Header="Xóa tin nhắn này" Command="{Binding Path=DataContext.DeleteSmsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"  Foreground="#E53935">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="Delete"/></MenuItem.Icon>
                                 </MenuItem>
                             </ContextMenu>

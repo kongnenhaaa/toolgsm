@@ -89,8 +89,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private SimPort? _selectedPort;
 
-    [ObservableProperty]
-    private int _selectedTabIndex = 0; 
 
     [ObservableProperty]
     private ISnackbarMessageQueue _snackbarMessageQueue = new SnackbarMessageQueue(TimeSpan.FromSeconds(3));
@@ -138,6 +136,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _isCallManagerDialogOpen;
+
+    private int _unreadOtpCount = 0;
+    public string? UnreadOtpBadge => _unreadOtpCount > 0 ? _unreadOtpCount.ToString() : null;
+
+    public void IncrementUnreadOtp()
+    {
+        _unreadOtpCount++;
+        OnPropertyChanged(nameof(UnreadOtpBadge));
+    }
+
+    public void ResetUnreadOtp()
+    {
+        if (_unreadOtpCount > 0)
+        {
+            _unreadOtpCount = 0;
+            OnPropertyChanged(nameof(UnreadOtpBadge));
+        }
+    }
 
     public bool IsTelegramNotificationEnabled
     {
@@ -354,6 +370,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _smsSenderFilter = value;
             OnPropertyChanged(nameof(SmsSenderFilter));
             OnPropertyChanged(nameof(FilteredSmsMessages));
+        }
+    }
+
+    private int _selectedTabIndex;
+    public int SelectedTabIndex
+    {
+        get => _selectedTabIndex;
+        set
+        {
+            SetProperty(ref _selectedTabIndex, value);
+            if (_selectedTabIndex == 3)
+            {
+                ResetUnreadOtp(); // Reset khi vào tab OTP
+            }
         }
     }
 
@@ -741,6 +771,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         try
                         {
                             await _modemService.SweepUnreadSmsAsync(p.PortName);
+                            Application.Current.Dispatcher.Invoke(() => p.LastSweepTime = DateTime.Now.ToString("HH:mm:ss"));
                             await Task.Delay(1000, lifetimeToken); // Tránh spam quá nhanh trên nhiều cổng
                         }
                         catch { }
@@ -2050,6 +2081,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Otp       = extractedOtp,
                         Content   = cleanContent
                     });
+                    if (SelectedTabIndex != 3) IncrementUnreadOtp();
                     OnPropertyChanged(nameof(FilteredOtpHistory));
                     OnPropertyChanged(nameof(FilteredOtpHistoryCount));
 
@@ -2148,6 +2180,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     Content = existing.Content
                 };
                 OtpHistoryList.Insert(0, newRecord);
+                if (SelectedTabIndex != 3) IncrementUnreadOtp();
                 if (OtpHistoryList.Count > 100) OtpHistoryList.RemoveAt(OtpHistoryList.Count - 1);
             });
             
@@ -2412,6 +2445,45 @@ public partial class MainViewModel : ObservableObject, IDisposable
         
         // Mặc định chuẩn mạng VN là *101#
         return "*101#";
+    }
+
+    [RelayCommand]
+    private async Task SweepSmsAsync(string mode)
+    {
+        List<Models.SimPort> targetPorts;
+        
+        if (mode == "Selected")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (đánh dấu ☑) đang hoạt động để quét tin kẹt.");
+                return;
+            }
+        }
+        else
+        {
+            targetPorts = Ports.Where(IsActive).ToList();
+        }
+
+        SnackbarMessageQueue.Enqueue($"Đang tiến hành vét tin nhắn kẹt trên {targetPorts.Count} cổng...");
+        
+        foreach (var port in targetPorts)
+        {
+            if (SmsInProgressPorts.ContainsKey(port.PortName))
+                continue;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _modemService.SweepUnreadSmsAsync(port.PortName);
+                    Application.Current.Dispatcher.Invoke(() => port.LastSweepTime = DateTime.Now.ToString("HH:mm:ss"));
+                }
+                catch { }
+            });
+            await Task.Delay(200);
+        }
     }
 
     [RelayCommand]
@@ -2767,8 +2839,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private static bool ShouldRetrySms(string result)
     {
-        return result.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
-            || result.Contains("Another command", StringComparison.OrdinalIgnoreCase)
+        return result.Contains("Another command", StringComparison.OrdinalIgnoreCase)
             || result.Contains("waiting for lock", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -3385,7 +3456,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (attempt >= 3 || !ShouldRetrySms(result))
                 {
-                    AddLog($"[{portName}] Gửi tin nhắn thất bại sau {attempt} lần: {result}", "ERROR");
+                    if (result.Contains("Timeout"))
+                    {
+                        AddLog($"[{portName}] Lỗi Timeout SMS: Không retry để tránh gửi trùng. Vui lòng kiểm tra điện thoại người nhận xem đã có tin nhắn chưa!", "WARN");
+                        Application.Current.Dispatcher.Invoke(() => SnackbarMessageQueue.Enqueue($"[{portName}] Timeout SMS: Không retry để tránh gửi trùng."));
+                    }
+                    else
+                    {
+                        AddLog($"[{portName}] Gửi tin nhắn thất bại sau {attempt} lần: {result}", "ERROR");
+                    }
                     return;
                 }
 

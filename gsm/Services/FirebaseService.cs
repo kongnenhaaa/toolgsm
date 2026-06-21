@@ -654,9 +654,16 @@ namespace gsm.Services
                             else
                             {
                                 finalResult = await ExecuteSmsAsync(portId, recipient, content);
-                                if (finalResult.Contains("ERROR"))
+                                if (finalResult.Contains("ERROR") || finalResult.Contains("Timeout"))
                                 {
-                                    finalStatus = "failed";
+                                    if (finalResult.Contains("Timeout"))
+                                    {
+                                        finalStatus = "maybe_sent";
+                                    }
+                                    else
+                                    {
+                                        finalStatus = "failed";
+                                    }
                                     finalError = GetHumanReadableError(finalResult);
                                 }
                                 else
@@ -689,9 +696,32 @@ namespace gsm.Services
         }
 
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSemaphores = new();
+        private readonly ConcurrentDictionary<string, DateTime> _recentSmsPayloads = new();
+
+        private void CleanOldSmsPayloads()
+        {
+            var now = DateTime.Now;
+            var keysToRemove = _recentSmsPayloads.Where(kv => (now - kv.Value).TotalMinutes > 3).Select(kv => kv.Key).ToList();
+            foreach (var key in keysToRemove)
+            {
+                _recentSmsPayloads.TryRemove(key, out _);
+            }
+        }
 
         private async Task<string> ExecuteSmsAsync(string portId, string recipient, string content)
         {
+            CleanOldSmsPayloads();
+            string payloadKey = $"{portId}_{recipient}_{content}";
+            if (_recentSmsPayloads.TryGetValue(payloadKey, out var lastSentTime))
+            {
+                if ((DateTime.Now - lastSentTime).TotalMinutes <= 3)
+                {
+                    return "ERROR: Khóa chống gửi trùng (Idempotency). Tin nhắn giống hệt đã được gửi cách đây ít phút.";
+                }
+            }
+            // Cập nhật thời gian gửi
+            _recentSmsPayloads[payloadKey] = DateTime.Now;
+
             var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
             await sem.WaitAsync();
             
@@ -764,9 +794,9 @@ namespace gsm.Services
             if (result.Contains("+CME ERROR: 32")) return "Mạng chỉ cho phép gọi khẩn cấp (32)";
             if (result.Contains("+CME ERROR: 58")) return "Mạng giới hạn truy cập (58)";
             if (result.Contains("+CME ERROR: 100")) return "Lỗi thiết bị không xác định (100)";
-            if (result.Contains("Timeout sending SMS payload")) return "Không nhận được phản hồi";
-            if (result.Contains("Timeout waiting for > prompt")) return "Không gửi đi được";
-            if (result.Contains("Timeout")) return "Không gửi đi được";
+            if (result.Contains("Timeout sending SMS payload")) return "Timeout (Không nhận được phản hồi) - Có thể đã gửi thành công. Không retry để tránh gửi trùng.";
+            if (result.Contains("Timeout waiting for > prompt")) return "Timeout (Không gửi đi được) - Không thể nạp nội dung SMS.";
+            if (result.Contains("Timeout")) return "Timeout (Không rõ trạng thái) - Có thể đã gửi. Không retry để tránh gửi trùng.";
             
             return result.Replace("ERROR: ", "").Replace("+CMS ERROR:", "Lỗi SMS:").Replace("+CME ERROR:", "Lỗi Modem:");
         }

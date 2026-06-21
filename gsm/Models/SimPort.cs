@@ -28,6 +28,9 @@ public partial class SimPort : ObservableObject
     private string _lastReceivedTime = string.Empty;
     
     [ObservableProperty]
+    private string _lastSweepTime = string.Empty;
+    
+    [ObservableProperty]
     private string _otp = string.Empty;
     
     [ObservableProperty]

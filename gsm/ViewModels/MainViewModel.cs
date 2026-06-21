@@ -2029,10 +2029,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     bool isWhatsApp = cleanContent.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                       senderPhone.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                       senderPhone.IndexOf("WA", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool isTelegram = cleanContent.IndexOf("Telegram", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                      senderPhone.IndexOf("Telegram", StringComparison.OrdinalIgnoreCase) >= 0;
 
-                    if (!isZalo && !isWhatsApp)
+                    if (!isZalo && !isWhatsApp && !isTelegram)
                     {
-                        AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không phải Zalo từ {senderPhone}");
+                        AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không hợp lệ từ {senderPhone}");
                         if (!string.IsNullOrEmpty(e.MsgIndex))
                         {
                             await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");

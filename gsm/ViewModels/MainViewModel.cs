@@ -913,16 +913,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void CopyAllLogs()
     {
-        if (SystemLogs.Count == 0) return;
+        var logsToCopy = string.IsNullOrWhiteSpace(_logFilter)
+            ? SystemLogs.ToList()
+            : SystemLogs.Where(l => MatchesLogFilter(l, _logFilter)).ToList();
+
+        if (logsToCopy.Count == 0) return;
 
         var builder = new StringBuilder();
-        for (int i = SystemLogs.Count - 1; i >= 0; i--)
+        for (int i = logsToCopy.Count - 1; i >= 0; i--)
         {
-            builder.AppendLine(FormatLogLine(SystemLogs[i]));
+            builder.AppendLine(FormatLogLine(logsToCopy[i]));
         }
 
         Clipboard.SetText(builder.ToString().TrimEnd());
-        SnackbarMessageQueue.Enqueue("Đã sao chép toàn bộ log.");
+        SnackbarMessageQueue.Enqueue(string.IsNullOrWhiteSpace(_logFilter) 
+            ? "Đã sao chép toàn bộ log." 
+            : $"Đã sao chép {logsToCopy.Count} log đã lọc.");
     }
 
     private static string FormatLogLine(LogMessage log)

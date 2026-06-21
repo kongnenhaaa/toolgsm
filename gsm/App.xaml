@@ -117,6 +117,8 @@
                 <Setter Property="CanUserAddRows" Value="False"/>
                 <Setter Property="CanUserDeleteRows" Value="False"/>
                 <Setter Property="CanUserResizeRows" Value="False"/>
+                <Setter Property="SelectionUnit" Value="CellOrRowHeader"/>
+                <Setter Property="ClipboardCopyMode" Value="ExcludeHeader"/>
                 <Setter Property="ColumnHeaderStyle" Value="{StaticResource ProDataGridColumnHeaderStyle}"/>
                 <Setter Property="RowStyle" Value="{StaticResource ProDataGridRowStyle}"/>
                 <Setter Property="CellStyle" Value="{StaticResource ProDataGridCellStyle}"/>
@@ -134,6 +136,51 @@
                 <Style.Triggers>
                     <Trigger Property="IsFocused" Value="True">
                         <Setter Property="Background" Value="#222235"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <!-- Professional ContextMenu Style -->
+            <Style TargetType="ContextMenu" BasedOn="{StaticResource MaterialDesignContextMenu}">
+                <Setter Property="Background" Value="#1A1B29"/>
+                <Setter Property="Foreground" Value="#E0E0E0"/>
+                <Setter Property="BorderBrush" Value="#2D2D44"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Padding" Value="0,8"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ContextMenu">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="10"
+                                    Margin="8,8,16,16">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="20" ShadowDepth="6" Opacity="0.4" Color="Black" />
+                                </Border.Effect>
+                                <ItemsPresenter Margin="{TemplateBinding Padding}" />
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Professional MenuItem Style -->
+            <Style TargetType="MenuItem" BasedOn="{StaticResource MaterialDesignMenuItem}">
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="Padding" Value="20,12"/>
+                <Setter Property="MinHeight" Value="42"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <!-- Remove OpacityMask if it was causing clipping -->
+                <Setter Property="OpacityMask" Value="{x:Null}"/>
+                <Style.Triggers>
+                    <Trigger Property="IsHighlighted" Value="True">
+                        <Setter Property="Background" Value="#2A2A40"/>
+                        <Setter Property="Foreground" Value="#4CAF50"/>
+                    </Trigger>
+                    <Trigger Property="IsEnabled" Value="False">
+                        <Setter Property="Foreground" Value="#666666"/>
                     </Trigger>
                 </Style.Triggers>
             </Style>

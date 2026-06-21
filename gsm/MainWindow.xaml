@@ -1036,49 +1036,49 @@ GET  /api/history
                     </Border>
 
                     <UniformGrid Grid.Row="1" Columns="8" Margin="10,10,10,0">
-                        <Border Background="#1E1E2E" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                        <Border Background="#1E1E2E" CornerRadius="8"  Margin="0,0,8,0">
                             <StackPanel>
                                 <TextBlock Text="Tổng COM" Foreground="Gray" FontSize="11"/>
                                 <TextBlock Text="{Binding TotalPortCount}" Foreground="White" FontSize="22" FontWeight="Bold"/>
                             </StackPanel>
                         </Border>
-                        <Border Background="#11281F" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                        <Border Background="#11281F" CornerRadius="8"  Margin="0,0,8,0">
                             <StackPanel>
                                 <TextBlock Text="Online" Foreground="#8BE6B0" FontSize="11"/>
                                 <TextBlock Text="{Binding OnlinePortCount}" Foreground="#4CAF50" FontSize="22" FontWeight="Bold"/>
                             </StackPanel>
                         </Border>
-                        <Border Background="#2A1820" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                        <Border Background="#2A1820" CornerRadius="8"  Margin="0,0,8,0">
                             <StackPanel>
                                 <TextBlock Text="Offline" Foreground="#FF9AA8" FontSize="11"/>
                                 <TextBlock Text="{Binding OfflinePortCount}" Foreground="#FF5252" FontSize="22" FontWeight="Bold"/>
                             </StackPanel>
                         </Border>
-                        <Border Background="#1E1E2E" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                        <Border Background="#1E1E2E" CornerRadius="8"  Margin="0,0,8,0">
                             <StackPanel>
                                 <TextBlock Text="SMS nhận" Foreground="Gray" FontSize="11"/>
                                 <TextBlock Text="{Binding SmsReceivedCount}" Foreground="#FF9800" FontSize="22" FontWeight="Bold"/>
                             </StackPanel>
                         </Border>
-                        <Border Background="#2A1820" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                        <Border Background="#2A1820" CornerRadius="8"  Margin="0,0,8,0">
                             <StackPanel>
                                 <TextBlock Text="Lỗi SMS" Foreground="#FF9AA8" FontSize="11"/>
                                 <TextBlock Text="{Binding SmsFailedCount}" Foreground="#FF5252" FontSize="22" FontWeight="Bold"/>
                             </StackPanel>
                         </Border>
-                        <Border Background="#2B2414" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                        <Border Background="#2B2414" CornerRadius="8"  Margin="0,0,8,0">
                             <StackPanel>
                                 <TextBlock Text="Timeout" Foreground="#FFD27A" FontSize="11"/>
                                 <TextBlock Text="{Binding TimeoutTotalCount}" Foreground="#FFC107" FontSize="22" FontWeight="Bold"/>
                             </StackPanel>
                         </Border>
-                        <Border Background="#2B2414" CornerRadius="8" Padding="10" Margin="0,0,8,0">
+                        <Border Background="#2B2414" CornerRadius="8"  Margin="0,0,8,0">
                             <StackPanel>
                                 <TextBlock Text="Cooldown" Foreground="#FFD27A" FontSize="11"/>
                                 <TextBlock Text="{Binding CooldownPortCount}" Foreground="#FFC107" FontSize="22" FontWeight="Bold"/>
                             </StackPanel>
                         </Border>
-                        <Border Background="#1E1E2E" CornerRadius="8" Padding="10">
+                        <Border Background="#1E1E2E" CornerRadius="8" >
                             <StackPanel>
                                 <TextBlock Text="Lỗi nhiều nhất" Foreground="Gray" FontSize="11"/>
                                 <TextBlock Text="{Binding TopProblemPort}" Foreground="White" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
@@ -1088,27 +1088,31 @@ GET  /api/history
                     
                     <!-- GSM DataGrid Wrapper -->
                     <Border Grid.Row="2" Background="#1E1E2F" CornerRadius="12" Margin="10" BorderThickness="1" BorderBrush="#2A2A40">
-                        <DataGrid ItemsSource="{Binding FilteredPortsView}" SelectedItem="{Binding SelectedPort}" 
-                                  MouseDoubleClick="DataGrid_MouseDoubleClick"
-                                  Style="{StaticResource ProDataGridStyle}"
-                                  Margin="1"
-                                  ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <DataGrid ItemsSource="{Binding FilteredPortsView}" SelectedItem="{Binding SelectedPort}" 
+                                      MouseDoubleClick="DataGrid_MouseDoubleClick"
+                                      Style="{StaticResource ProDataGridStyle}"
+                                      Margin="1"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto">
                         
                         <!-- Context Menu -->
                         <DataGrid.ContextMenu>
-                            <ContextMenu Background="#1E1E2F" Foreground="White">
-                                <MenuItem Header="Sao chép SĐT" Command="{Binding Path=DataContext.CopyPhoneFromPortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                            <ContextMenu >
+                                <MenuItem Command="Copy" Header="Sao chép (Ctrl+C)" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                 </MenuItem>
                                 <Separator Background="#444"/>
-                                <MenuItem Header="Nạp thẻ nhanh" Command="{Binding Path=DataContext.OpenTopUpDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10" Foreground="#4CAF50">
+                                <MenuItem Header="Sao chép SĐT" Command="{Binding Path=DataContext.CopyPhoneFromPortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" >
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="Phone"/></MenuItem.Icon>
+                                </MenuItem>
+                                <MenuItem Header="Nạp thẻ nhanh" Command="{Binding Path=DataContext.OpenTopUpDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected"  Foreground="#4CAF50">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="CashPlus"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Kiểm tra số dư (Các cổng đã chọn)" Command="{Binding Path=DataContext.CheckBalanceCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" Padding="10">
+                                <MenuItem Header="Kiểm tra số dư (Các cổng đã chọn)" Command="{Binding Path=DataContext.CheckBalanceCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Selected" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="Magnify"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="USSD Tùy chỉnh" Command="{Binding Path=DataContext.OpenCustomUssdDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Checked" Padding="10">
+                                <MenuItem Header="USSD Tùy chỉnh" Command="{Binding Path=DataContext.OpenCustomUssdDialogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="Checked" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="CodeBraces"/></MenuItem.Icon>
                                 </MenuItem>
                             </ContextMenu>
@@ -1260,6 +1264,7 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
                         </DataGrid.Columns>
                     </DataGrid>
+                        </ScrollViewer>
                     </Border>
                 </Grid>
             </TabItem>
@@ -1321,11 +1326,11 @@ GET  /api/history
                                   ScrollViewer.VerticalScrollBarVisibility="Auto"
                                   ScrollViewer.CanContentScroll="True">
                         <DataGrid.ContextMenu>
-                            <ContextMenu Background="#1E1E2F" Foreground="White">
-                                <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}" Padding="10">
+                            <ContextMenu >
+                                <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Xóa tin nhắn này" Command="{Binding Path=DataContext.DeleteSmsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}" Padding="10" Foreground="#E53935">
+                                <MenuItem Header="Xóa tin nhắn này" Command="{Binding Path=DataContext.DeleteSmsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding}"  Foreground="#E53935">
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="Delete"/></MenuItem.Icon>
                                 </MenuItem>
                             </ContextMenu>
@@ -1454,8 +1459,8 @@ GET  /api/history
                                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                   ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <DataGrid.ContextMenu>
-                                <ContextMenu Background="#1E1E2F" Foreground="White">
-                                    <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpFromHistoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                                <ContextMenu >
+                                    <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpFromHistoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" >
                                         <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                     </MenuItem>
                                 </ContextMenu>
@@ -1510,11 +1515,11 @@ GET  /api/history
                     </StackPanel>
                     <ListBox Grid.Row="1" ItemsSource="{Binding FilteredLogs}" SelectedItem="{Binding SelectedLog}" Background="Transparent" BorderThickness="0" Margin="10,0,10,6">
                         <ListBox.ContextMenu>
-                            <ContextMenu Background="#1E1E2F" Foreground="White">
-                                <MenuItem Header="Sao chép" Command="{Binding Path=DataContext.CopySelectedLogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                            <ContextMenu >
+                                <MenuItem Header="Sao chép" Command="{Binding Path=DataContext.CopySelectedLogCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                 </MenuItem>
-                                <MenuItem Header="Sao chép tất cả" Command="{Binding Path=DataContext.CopyAllLogsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Padding="10">
+                                <MenuItem Header="Sao chép tất cả" Command="{Binding Path=DataContext.CopyAllLogsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
                                 </MenuItem>
                             </ContextMenu>

@@ -2048,13 +2048,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 string textForOtp = Regex.Replace(cleanContent, @"\*+\d+", "");
 
                 // Tìm các mẫu OTP có từ khóa đi kèm, cho phép chen ngang một vài chữ (VD: "Mã WhatsApp của bạn: ")
-                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|whatsapp|viber|telegram|facebook|google|apple|tiktok|tinder)[^\d]{0,30}?(\d{3}\s*[- ]\s*\d{3}|\d{4,8})", RegexOptions.IgnoreCase);
+                // Đã mở rộng danh sách từ khóa để hỗ trợ nhiều nền tảng hơn.
+                var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|whatsapp|viber|telegram|facebook|google|apple|tiktok|tinder|xac nhan|verification|verify|pin|mat khau)[^\d]{0,30}?(\d{3}\s*[- ]\s*\d{3}|\d{4,8})", RegexOptions.IgnoreCase);
+                
+                // ĐÃ TẮT BỘ LỌC DỰ PHÒNG (Fallback) ĐỂ TRÁNH BẮT NHẦM MÃ RÁC
+                // Nếu cần bắt MỌI dãy số (kể cả rác), hãy mở comment đoạn code bên dưới:
+                /*
                 if (!otpMatch.Success)
                 {
                     // Fallback: Tìm một dãy số đứng riêng lẻ (hỗ trợ cả định dạng 123-456)
                     // Loại trừ luôn các đầu số tổng đài (1900, 1800) để không bắt nhầm thành OTP
                     otpMatch = Regex.Match(textForOtp, @"(?<![\w:/])(?!1900|1800)\b(\d{3}\s*[- ]\s*\d{3}|\d{4,8})\b(?![\w:/])", RegexOptions.IgnoreCase);
                 }
+                */
 
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";

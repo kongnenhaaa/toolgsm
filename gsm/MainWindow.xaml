@@ -433,6 +433,51 @@ GET  /api/history
                         <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
                         <Button Content="Lưu Cài Đặt" Command="{Binding SaveSettingsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
                     </StackPanel>
+
+                    <!-- WEBHOOK RULE DIALOG (Overlay Settings Dialog) -->
+                    <Border Grid.RowSpan="3" Visibility="{Binding IsWebhookDialogOpen, Converter={StaticResource BoolToVisibility}}" HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="12" Background="#1E1E2E" Padding="28" Width="540" Panel.ZIndex="100">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="#000000" Opacity="0.7"/>
+                        </Border.Effect>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                                <materialDesign:PackIcon Kind="Web" Width="28" Height="28" Foreground="#5C6BC0" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Thêm Webhook Rule"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsEditingExistingWebhookRule}" Value="True">
+                                                    <Setter Property="Text" Value="Sửa Webhook Rule"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1" Margin="0,0,0,20">
+                                <TextBox materialDesign:HintAssist.Hint="Tên rule (VD: Forward OTP Zalo)" Text="{Binding EditingWebhookRule.Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                                <TextBox materialDesign:HintAssist.Hint="URL Webhook (VD: https://webhook.site/abc)" Text="{Binding EditingWebhookRule.WebhookUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                                <TextBox materialDesign:HintAssist.Hint="Lọc Sender (rổng=tất cả, VD: Zalo,8500,ZALO)" Text="{Binding EditingWebhookRule.SenderFilter, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                                <TextBox materialDesign:HintAssist.Hint="Header bí mật (VD: X-Secret: token123)" Text="{Binding EditingWebhookRule.SecretHeader, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                    <CheckBox Content="Chỉ gửi khi có OTP (OTP Only)" IsChecked="{Binding EditingWebhookRule.OtpOnly}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,30,0"/>
+                                    <CheckBox Content="Bật rule này" IsChecked="{Binding EditingWebhookRule.Enabled}" Foreground="#4CAF50" FontWeight="Bold"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="Hủy" Command="{Binding CloseWebhookDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                                <Button Content="Lưu Rule" Command="{Binding SaveWebhookRuleCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#5C6BC0" BorderBrush="#5C6BC0" materialDesign:ButtonAssist.CornerRadius="6"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
                 </Grid>
             </Border>
             </materialDesign:DialogHost.DialogContent>
@@ -1438,50 +1483,7 @@ GET  /api/history
 
         </TabControl>
 
-        <!-- WEBHOOK RULE DIALOG (nằm ngoài TabControl nhưng trong Grid chính) -->
-        <Border Grid.RowSpan="4" Visibility="{Binding IsWebhookDialogOpen, Converter={StaticResource BoolToVisibility}}" HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="12" Background="#1E1E2E" Padding="28" Width="540" Panel.ZIndex="100">
-            <Border.Effect>
-                <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="#000000" Opacity="0.7"/>
-            </Border.Effect>
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
-                    <materialDesign:PackIcon Kind="Web" Width="28" Height="28" Foreground="#5C6BC0" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <TextBlock FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Text" Value="Thêm Webhook Rule"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsEditingExistingWebhookRule}" Value="True">
-                                        <Setter Property="Text" Value="Sửa Webhook Rule"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                </StackPanel>
 
-                <StackPanel Grid.Row="1" Margin="0,0,0,20">
-                    <TextBox materialDesign:HintAssist.Hint="Tên rule (VD: Forward OTP Zalo)" Text="{Binding EditingWebhookRule.Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                    <TextBox materialDesign:HintAssist.Hint="URL Webhook (VD: https://webhook.site/abc)" Text="{Binding EditingWebhookRule.WebhookUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                    <TextBox materialDesign:HintAssist.Hint="Lọc Sender (rổng=tất cả, VD: Zalo,8500,ZALO)" Text="{Binding EditingWebhookRule.SenderFilter, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                    <TextBox materialDesign:HintAssist.Hint="Header bí mật (VD: X-Secret: token123)" Text="{Binding EditingWebhookRule.SecretHeader, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                        <CheckBox Content="Chỉ gửi khi có OTP (OTP Only)" IsChecked="{Binding EditingWebhookRule.OtpOnly}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,30,0"/>
-                        <CheckBox Content="Bật rule này" IsChecked="{Binding EditingWebhookRule.Enabled}" Foreground="#4CAF50" FontWeight="Bold"/>
-                    </StackPanel>
-                </StackPanel>
-
-                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="Hủy" Command="{Binding CloseWebhookDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
-                    <Button Content="Lưu Rule" Command="{Binding SaveWebhookRuleCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#5C6BC0" BorderBrush="#5C6BC0" materialDesign:ButtonAssist.CornerRadius="6"/>
-                </StackPanel>
-            </Grid>
-        </Border>
 
         <!-- #6: Terminal Log với bộ lọc theo cổng -->
         <Expander Grid.Row="2" Background="#0C0C14" Foreground="#4CAF50" ExpandDirection="Up" Padding="0" Header="Lịch sử AT Commands (Terminal)" FontFamily="Consolas">

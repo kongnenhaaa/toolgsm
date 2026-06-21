@@ -91,17 +91,7 @@ public static class DeviceSpoofingService
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy A54",         TacCode = "35636651" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy A34",         TacCode = "35636284" },
 
-        // ===== XIAOMI / OPPO / VIVO =====
-        new DeviceProfile { Brand = "Xiaomi",  Model = "14 Pro",             TacCode = "86123406" },
-        new DeviceProfile { Brand = "Xiaomi",  Model = "14",                 TacCode = "86123006" },
-        new DeviceProfile { Brand = "Xiaomi",  Model = "13 Pro",             TacCode = "86877406" },
-        new DeviceProfile { Brand = "Xiaomi",  Model = "13",                 TacCode = "86877006" },
-        new DeviceProfile { Brand = "Xiaomi",  Model = "Redmi Note 13 Pro",  TacCode = "86543206" },
-        new DeviceProfile { Brand = "Xiaomi",  Model = "Redmi Note 12",      TacCode = "86053706" },
-        new DeviceProfile { Brand = "Oppo",    Model = "Find X6 Pro",        TacCode = "86234506" },
-        new DeviceProfile { Brand = "Oppo",    Model = "Reno 10 Pro",        TacCode = "86121506" },
-        new DeviceProfile { Brand = "Vivo",    Model = "X90 Pro",            TacCode = "86345606" },
-        new DeviceProfile { Brand = "Vivo",    Model = "V27",                TacCode = "86134806" },
+        // Loại bỏ các TAC code giả mạo / placeholder để đảm bảo 100% check ra thiết bị thật
 
         // ===== GOOGLE Pixel =====
         new DeviceProfile { Brand = "Google",  Model = "Pixel 8 Pro",        TacCode = "35956710" },

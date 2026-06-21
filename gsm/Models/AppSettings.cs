@@ -63,4 +63,17 @@ public class AppSettings
     /// Dữ liệu định danh được lưu riêng trong file device_identities.json (không trong appsettings).
     /// </summary>
     public bool EnableDeviceSpoofing { get; set; } = false;
+    
+    // ========== IMEI BACKUP & RESTORE ==========
+    /// <summary>
+    /// Bật/tắt tự động ghi nhớ (Backup) IMEI nguyên bản của thẻ SIM mới vào cơ sở dữ liệu.
+    /// Tính năng này sẽ tự động bị bỏ qua nếu EnableDeviceSpoofing = true.
+    /// </summary>
+    public bool EnableImeiBackup { get; set; } = true;
+
+    /// <summary>
+    /// Bật/tắt tự động phục hồi (Restore) IMEI đã sao lưu nếu thẻ SIM bị cắm sang module/cổng khác.
+    /// Tính năng này sẽ tự động bị bỏ qua nếu EnableDeviceSpoofing = true.
+    /// </summary>
+    public bool EnableImeiRestore { get; set; } = true;
 }

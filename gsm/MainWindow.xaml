@@ -413,12 +413,20 @@ GET  /api/history
 
                             <Border Style="{StaticResource ProDialogSectionStyle}" Background="#252538" BorderBrush="#3D3D5C" CornerRadius="8" Margin="0,0,0,15">
                                 <StackPanel>
-                                    <TextBlock Text="📱 ĐỊNH DANH THIẾT BỊ ẢO (FAKE IMEI)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                                    <TextBlock Text="*Tính năng này yêu cầu mạch GSM hỗ trợ lệnh đổi IMEI (như Quectel, SIMCOM). Mạch sẽ cần khởi động lại (mất sóng vài giây) khi đổi." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
+                                    <TextBlock Text="📱 QUẢN LÝ IMEI &amp; ĐỊNH DANH THIẾT BỊ" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <TextBlock Text="*Tính năng Fake IMEI hoặc Phục hồi IMEI có thể khiến mạch tự động mất sóng vài giây (Reset radio) để áp dụng cấu hình mới." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
                                     
-                                    <CheckBox Content="Bật tính năng tự động tạo định danh thiết bị ảo (Fake IMEI) cho cổng COM" 
+                                    <CheckBox Content="[ƯU TIÊN 1] Bật tính năng giả lập (Fake IMEI) và tạo Profile thiết bị ngẫu nhiên" 
                                               IsChecked="{Binding AppSettings.EnableDeviceSpoofing}" 
-                                              Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,10"/>
+                                              Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    
+                                    <CheckBox Content="[ƯU TIÊN 2] Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác" 
+                                              IsChecked="{Binding AppSettings.EnableImeiRestore}" 
+                                              Foreground="#FFB300" FontWeight="Medium" Margin="0,0,0,5"/>
+                                              
+                                    <CheckBox Content="[ƯU TIÊN 3] Bật tự động ghi nhớ (Backup) IMEI nguyên bản của thẻ SIM mới (Chỉ lưu vào CSDL)" 
+                                              IsChecked="{Binding AppSettings.EnableImeiBackup}" 
+                                              Foreground="#90CAF9" FontWeight="Medium" Margin="0,0,0,15"/>
                                     
                                     <Button Content="Reset định danh tất cả thiết bị" 
                                             Command="{Binding ResetAllIdentitiesCommand}" 

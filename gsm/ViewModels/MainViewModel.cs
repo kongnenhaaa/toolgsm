@@ -734,6 +734,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (lifetimeToken.IsCancellationRequested) break;
                     if (p.Status == SimStatus.NoResponse || p.Status == "Offline" || p.Status == "Error")
                     {
+                        // Bỏ qua watchdog reset đối với các lỗi bảo mật nghiêm trọng
+                        if (p.LastError == "Sai IMEI" || p.LastError == "Lỗi đọc SIM CCID" || p.LastError == "Không tắt được sóng trước khi ghi IMEI")
+                        {
+                            continue;
+                        }
+
                         AddLog($"[WATCHDOG] Cổng {p.PortName} mất kết nối. Tự động gửi lệnh phục hồi (AT+CFUN=1,1)...", "WARN");
                         _ = _modemService.SendCommandAsync(p.PortName, "AT+CFUN=1,1", silent: true);
                     }
@@ -1522,6 +1528,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _ = Task.Run(async () =>
                     {
                         string currentImei = NormalizeImei(port.Imei);
+                        string expectedImei = currentImei;
                         // Nếu port.Imei chưa có (ví dụ do sự kiện PARSE_IMEI chạy sau hoặc bị chậm), ta thử lấy lại trực tiếp
                         if (string.IsNullOrEmpty(currentImei))
                         {
@@ -1529,6 +1536,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             if (!imeiResp.Contains("ERROR"))
                             {
                                 currentImei = NormalizeImei(imeiResp);
+                                expectedImei = currentImei;
                                 Application.Current.Dispatcher.Invoke(() => port.Imei = currentImei);
                             }
                         }
@@ -1544,8 +1552,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                             if (AppSettings.EnableDeviceSpoofing)
                             {
-                                // ✅ Kóa theo CCID (SIM card) không theo cổng COM
-                                // -> cùng 1 SIM cắm vào cổng khác vẫn giữ nguyên IMEI cũ
+                                // ✅ ƯU TIÊN 1: Fake IMEI và tạo thiết bị ngẫu nhiên
                                 var identity = Services.DeviceSpoofingService.GetOrCreateByCcid(
                                     ccid, port.PortName, port.PhoneNumber);
                                 targetImei = NormalizeImei(identity.AssignedImei);
@@ -1561,114 +1568,159 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 bool hasSaved = _imeiCache.TryGetValue(ccid, out var cachedEntry);
                                 if (hasSaved && cachedEntry != null)
                                 {
-                                    targetImei = NormalizeImei(cachedEntry.Imei);
-                                    targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
-                                    
-                                    Application.Current.Dispatcher.Invoke(() =>
+                                    // Đã có dữ liệu sao lưu
+                                    if (AppSettings.EnableImeiRestore)
                                     {
-                                        if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
+                                        // ✅ ƯU TIÊN 2: Khôi phục IMEI gốc
+                                        targetImei = NormalizeImei(cachedEntry.Imei);
+                                        targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
+                                        
+                                        Application.Current.Dispatcher.Invoke(() =>
                                         {
-                                            port.PhoneNumber = cachedEntry.PhoneNumber;
-                                            _simCache[ccid] = cachedEntry.PhoneNumber;
-                                        }
-                                        port.CreatedAt = cachedEntry.CreatedAt;
-                                        port.LicenseKeySuffix = cachedEntry.LicenseKeySuffix;
-                                        port.KeyMismatch = cachedEntry.KeyMismatch;
-                                    });
-                                }
-                                else
-                                {
-                                    // Chưa từng lưu (cắm lần đầu) -> Lưu IMEI thật của chip gắn với CCID của SIM vào file backup
-                                    var newEntry = new SimBackupEntry
-                                    {
-                                        Ccid = ccid,
-                                        Imei = currentImei,
-                                        PhoneNumber = port.PhoneNumber,
-                                        CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                                        LicenseKeySuffix = string.Empty,
-                                        KeyMismatch = "false",
-                                        SourceFile = "auto-learn"
-                                    };
-                                    _imeiCache[ccid] = newEntry;
-                                    SaveImeiCache();
-                                    AddLog($"[{e.PortName}] Cắm lần đầu, lưu IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
-
-                                    Application.Current.Dispatcher.Invoke(() =>
-                                    {
-                                        port.CreatedAt = newEntry.CreatedAt;
-                                        port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
-                                        port.KeyMismatch = newEntry.KeyMismatch;
-                                    });
-                                }
-                            }
-
-                            if (!string.IsNullOrEmpty(targetImei))
-                            {
-                                AddLog($"[{e.PortName}] [IMEI_TARGET] source={targetSource} CCID={ccid} target_imei={targetImei}");
-                                if (currentImei != targetImei)
-                                {
-                                    AddLog($"[{e.PortName}] [IMEI_CHANGE] IMEI hiện tại ({currentImei}) khác mục tiêu ({targetImei}). Bắt đầu ghi đè...", "WARNING");
-
-                                    // ✅ Bước 1: Tắt sóng radio TRƯỚC khi ghi IMEI (bắt buộc với Quectel EC20)
-                                    await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=0", 5000, silent: true);
-                                    await Task.Delay(1000); // Đợi modem tắt sóng ổn định
-
-                                    // ✅ Bước 2: Ghi IMEI (thử Quectel trước, fallback sang SIMCOM)
-                                    string writeResp = await _modemService.SendCommandAsync(port.PortName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000);
-                                    if (!writeResp.Contains("OK"))
-                                    {
-                                        AddLog($"[{e.PortName}] Thử lệnh AT+EGMR thất bại ({writeResp.Trim()}), chuyển sang AT+SIMEI...", "INFO");
-                                        writeResp = await _modemService.SendCommandAsync(port.PortName, $"AT+SIMEI=\"{targetImei}\"", 30000);
-                                    }
-
-                                    if (writeResp.Contains("OK"))
-                                    {
-                                        Application.Current.Dispatcher.Invoke(() => port.Imei = targetImei);
-                                        AddLog($"[{e.PortName}] Ghi đè IMEI thành công: {targetImei}", "SUCCESS");
-                                        // ✅ Đánh dấu đã apply thành công (backup timestamp)
-                                        Services.DeviceSpoofingService.MarkApplied(ccid);
+                                            if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
+                                            {
+                                                port.PhoneNumber = cachedEntry.PhoneNumber;
+                                                _simCache[ccid] = cachedEntry.PhoneNumber;
+                                            }
+                                            port.CreatedAt = cachedEntry.CreatedAt;
+                                            port.LicenseKeySuffix = cachedEntry.LicenseKeySuffix;
+                                            port.KeyMismatch = cachedEntry.KeyMismatch;
+                                        });
                                     }
                                     else
                                     {
-                                        AddLog($"[{e.PortName}] Ghi đè IMEI thất bại: {writeResp}. Chip GSM có thể không hỗ trợ lệnh này.", "ERROR");
+                                        AddLog($"[{e.PortName}] Đã có bản Backup IMEI nhưng tính năng Khôi phục (Restore) đang tắt. Giữ nguyên IMEI gốc trên mạch.");
                                     }
                                 }
                                 else
                                 {
-                                    AddLog($"[{e.PortName}] IMEI khớp với mục tiêu: {currentImei}", "SUCCESS");
+                                    // Chưa từng lưu (cắm lần đầu)
+                                    if (AppSettings.EnableImeiBackup)
+                                    {
+                                        // ✅ ƯU TIÊN 3: Ghi nhớ IMEI nguyên bản vào cơ sở dữ liệu
+                                        var newEntry = new SimBackupEntry
+                                        {
+                                            Ccid = ccid,
+                                            Imei = currentImei,
+                                            PhoneNumber = port.PhoneNumber,
+                                            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                                            LicenseKeySuffix = string.Empty,
+                                            KeyMismatch = "false",
+                                            SourceFile = "auto-learn"
+                                        };
+                                        _imeiCache[ccid] = newEntry;
+                                        SaveImeiCache();
+                                        AddLog($"[{e.PortName}] Cắm lần đầu, lưu IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+
+                                        Application.Current.Dispatcher.Invoke(() =>
+                                        {
+                                            port.CreatedAt = newEntry.CreatedAt;
+                                            port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
+                                            port.KeyMismatch = newEntry.KeyMismatch;
+                                        });
+                                    }
+                                    else
+                                    {
+                                        AddLog($"[{e.PortName}] Tính năng Fake IMEI và Backup đều tắt. Giữ nguyên IMEI gốc trên mạch.");
+                                    }
                                 }
                             }
+
+                        if (!string.IsNullOrEmpty(targetImei))
+                        {
+                            expectedImei = targetImei;
+                            AddLog($"[{e.PortName}] [IMEI_TARGET] source={targetSource} CCID={ccid} target_imei={targetImei}");
+
+                            if (currentImei != targetImei)
+                            {
+                                AddLog($"[{e.PortName}] [IMEI_CHANGE] IMEI hiện tại ({currentImei}) khác mục tiêu ({targetImei}). Bắt đầu ghi đè...", "WARNING");
+                                bool success = false;
+                                
+                                for (int attempt = 1; attempt <= 3; attempt++)
+                                {
+                                    AddLog($"[{e.PortName}] Thử ghi IMEI lần {attempt}/3...");
+
+                                    // ✅ Bước 1: Tắt sóng
+                                    string cfun0 = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=0", 10000, silent: true);
+                                    if (!cfun0.Contains("OK"))
+                                    {
+                                        AddLog($"[{e.PortName}] Tắt sóng (AT+CFUN=0) thất bại. Ngừng quá trình ghi IMEI để đảm bảo an toàn.", "ERROR");
+                                        Application.Current.Dispatcher.Invoke(() => 
+                                        {
+                                            port.Status = SimStatus.NoResponse;
+                                            port.LastError = "Không tắt được sóng trước khi ghi IMEI";
+                                            port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                                            UpdateDashboard();
+                                        });
+                                        return; // Dừng lập tức, không cho phép tiếp tục ghi hay bật sóng
+                                    }
+                                    await Task.Delay(1000);
+
+                                    // ✅ Bước 2: Ghi IMEI
+                                    string writeResp = await _modemService.SendCommandAsync(port.PortName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000);
+                                    if (!writeResp.Contains("OK"))
+                                    {
+                                        AddLog($"[{e.PortName}] Thử lệnh AT+EGMR thất bại, chuyển sang AT+SIMEI...", "INFO");
+                                        writeResp = await _modemService.SendCommandAsync(port.PortName, $"AT+SIMEI=\"{targetImei}\"", 30000);
+                                    }
+
+                                    // ✅ Bước 3: Kiểm tra lại IMEI (ngay khi sóng đang tắt)
+                                    string finalImeiResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 10000, silent: true);
+                                    string finalImei = NormalizeImei(finalImeiResp);
+
+                                    if (finalImei == targetImei)
+                                    {
+                                        success = true;
+                                        Application.Current.Dispatcher.Invoke(() => port.Imei = targetImei);
+                                        AddLog($"[{e.PortName}] Ghi đè IMEI thành công ở lần thử {attempt}: {targetImei}", "SUCCESS");
+
+                                        // ✅ Bước 4: Chỉ bật sóng (reset module) NẾU ĐÃ GHI ĐÚNG
+                                        string cfun1 = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 30000);
+                                        if (!cfun1.Contains("OK"))
+                                        {
+                                            AddLog($"[{e.PortName}] Bật sóng (AT+CFUN=1) thất bại.", "WARNING");
+                                        }
+                                        await Task.Delay(2000);
+                                        break;
+                                    }
+                                    else
+                                    {
+                                        AddLog($"[{e.PortName}] Ghi đè IMEI thất bại ở lần thử {attempt} (Đọc lại: {finalImei}). Giữ sóng tắt an toàn.", "ERROR");
+                                    }
+                                }
+
+                                if (!success)
+                                {
+                                    AddLog($"[{e.PortName}] Đã thử ghi IMEI 3 lần nhưng không thành công.", "ERROR");
+                                }
+                            }
+                            else
+                            {
+                                AddLog($"[{e.PortName}] IMEI khớp với mục tiêu: {currentImei}", "SUCCESS");
+                                AddLog($"[{e.PortName}] Đang bật sóng (AT+CFUN=1)...");
+                                await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 30000);
+                                await Task.Delay(1500);
+                            }
                         }
+                        else
+                        {
+                            // Không có mục tiêu cụ thể, chỉ giữ IMEI gốc và bật sóng
+                            AddLog($"[{e.PortName}] Đang bật sóng (AT+CFUN=1)...");
+                            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 30000);
+                            await Task.Delay(1500);
+                        } // Đóng ngoặc của else (string.IsNullOrEmpty(targetImei))
+                        } // Đóng ngoặc của else (string.IsNullOrEmpty(currentImei))
 
-                        // Bật sóng lại và cho phép thiết bị đăng ký lên tổng đài
-                        AddLog($"[{e.PortName}] Đang bật sóng lại (AT+CFUN=1)...");
-                        await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 30000);
-
-                        // Đợi 1.5 giây để modem ổn định sóng và nguồn điện trước khi gửi lệnh tiếp theo
-                        await Task.Delay(1500);
-
-                        // Đọc lại IMEI sau khi xử lý để log trạng thái cuối
-                        string finalImeiResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 30000, silent: true);
-                        string finalImei = NormalizeImei(finalImeiResp);
+                        // Kiểm tra trạng thái cuối cùng
+                        string checkFinalResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 10000, silent: true);
+                        string checkFinalImei = NormalizeImei(checkFinalResp);
                         
-                        string expectedImei = currentImei;
-                        if (AppSettings.EnableDeviceSpoofing)
-                        {
-                            // ✅ Lookup theo CCID để lấy đúng IMEI kỳ vọng
-                            var identity = Services.DeviceSpoofingService.GetOrCreateByCcid(ccid, port.PortName, port.PhoneNumber);
-                            expectedImei = NormalizeImei(identity.AssignedImei);
-                        }
-                        else if (_imeiCache.TryGetValue(ccid, out var exp) && exp != null)
-                        {
-                            expectedImei = NormalizeImei(exp.Imei);
-                        }
-
-                        bool matched = finalImei == expectedImei;
-                        AddLog($"[{e.PortName}] [IMEI_FINAL] current={finalImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
+                        bool matched = (checkFinalImei == expectedImei) && !string.IsNullOrEmpty(checkFinalImei);
+                        AddLog($"[{e.PortName}] [IMEI_FINAL] current={checkFinalImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
 
                         Application.Current.Dispatcher.Invoke(() => 
                         {
-                            port.Imei = finalImei;
+                            port.Imei = checkFinalImei;
                             if (matched)
                             {
                                 MarkPortActiveAfterInit(e.PortName);
@@ -1676,38 +1728,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             else
                             {
                                 port.Status = SimStatus.NoResponse;
+                                port.LastError = "Sai IMEI";
                                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                                 UpdateDashboard();
                             }
                         });
                         
-                        // Chỉ polling mạng khi IMEI cuối khớp dữ liệu backup.
+                        // Chỉ lưu MarkApplied và cho phép polling mạng nếu mọi thứ đã khớp
                         if (matched)
                         {
+                            if (AppSettings.EnableDeviceSpoofing)
+                            {
+                                Services.DeviceSpoofingService.MarkApplied(ccid);
+                            }
                             _modemService.StartPollingNetwork(port.PortName);
                         }
                     });
                 }
                 else
                 {
-                    AddLog($"[{e.PortName}] Không đọc được CCID hợp lệ để đối chiếu IMEI cache.", "ERROR");
-                    _ = Task.Run(async () =>
+                    AddLog($"[{e.PortName}] Không đọc được CCID hợp lệ để đối chiếu. Hủy kết nối để tránh lộ IMEI.", "ERROR");
+                    _ = Task.Run(() =>
                     {
-                        AddLog($"[{e.PortName}] Đang bật sóng lại (AT+CFUN=1) sau lỗi đọc CCID...");
-                        await _modemService.SendCommandAsync(e.PortName, "AT+CFUN=1", 30000);
-
-                        // Đợi 1.5 giây để modem ổn định sóng và nguồn điện trước khi gửi lệnh tiếp theo
-                        await Task.Delay(1500);
-
-                        // Đọc lại IMEI sau khi xử lý để log trạng thái cuối
-                        string finalImeiResp = await _modemService.SendCommandAsync(e.PortName, "AT+CGSN", 30000, silent: true);
-                        string finalImei = NormalizeImei(finalImeiResp);
-                        AddLog($"[{e.PortName}] [IMEI_FINAL] current={finalImei}, expected=UNKNOWN, matched=false", "WARNING");
-
                         Application.Current.Dispatcher.Invoke(() => 
                         {
-                            if (!string.IsNullOrEmpty(finalImei)) port.Imei = finalImei;
                             port.Status = SimStatus.NoResponse;
+                            port.LastError = "Lỗi đọc SIM CCID";
                             port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                             UpdateDashboard();
                         });

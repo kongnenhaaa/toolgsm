@@ -303,7 +303,16 @@
                                     <Separator Background="#3D3D5C" Margin="0,20"/>
                                     <TextBlock Text="HTTP API SERVER (cổng 8080)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
                                     <CheckBox Content="Bật HTTP API Server" IsChecked="{Binding AppSettings.EnableApiServer}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,5"/>
-                                    <TextBlock Text="Endpoints: GET /api/ports  |  GET /api/otp/{port}  |  POST /api/send-sms  |  GET /api/history" Foreground="#9E9E9E" FontSize="10" Margin="25,0,0,5" TextWrapping="Wrap"/>
+                                    <TextBlock Text="Danh sách Endpoints (có thể Copy/Paste cho Dev API):" Foreground="#9E9E9E" FontSize="11" Margin="25,0,0,5" TextWrapping="Wrap"/>
+                                    <TextBox IsReadOnly="True" FontFamily="Consolas" FontSize="11" Foreground="#90CAF9" Background="#111" AcceptsReturn="True" BorderBrush="#444" BorderThickness="1" Padding="8" Margin="25,0,0,5" Height="90" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                        <TextBox.Text>
+GET  /api/ports
+GET  /api/otp/latest
+GET  /api/otp/{port}
+POST /api/send-sms
+GET  /api/history
+                                        </TextBox.Text>
+                                    </TextBox>
 
                                     <Separator Background="#3D3D5C" Margin="0,20"/>
                                     <TextBlock Text="PING SIM (Kiểm tra SIM còn sống)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
@@ -362,7 +371,19 @@
                                         <TextBlock Text="🔗 WEBHOOK TỰ ĐỘNG (Forward OTP)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" VerticalAlignment="Center"/>
                                         <Button Content="+ Thêm Rule" Command="{Binding OpenAddWebhookRuleCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#5C6BC0" BorderBrush="#5C6BC0" Padding="8,4" Margin="15,0,0,0" FontSize="11" materialDesign:ButtonAssist.CornerRadius="4"/>
                                     </StackPanel>
-                                    <TextBlock Text="Khi nhận OTP/SMS, tự động POST JSON đến URL webhook. JSON payload: { port, phone, sender, otp, content, timestamp }" Foreground="#9E9E9E" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                                    <TextBlock Text="Khi nhận OTP/SMS, tự động POST JSON đến URL webhook. Dữ liệu mẫu (JSON Payload) dễ dàng Copy/Paste cho Dev API:" Foreground="#9E9E9E" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,5"/>
+                                    <TextBox IsReadOnly="True" FontFamily="Consolas" FontSize="11" Foreground="#A5D6A7" Background="#111" AcceptsReturn="True" BorderBrush="#444" BorderThickness="1" Padding="8" Margin="0,0,0,10" Height="120" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                        <TextBox.Text>
+{
+  "port": "COM3",
+  "phone": "0912345678",
+  "sender": "Telegram",
+  "otp": "12345",
+  "content": "Telegram code 12345. Do not give this code to anyone.",
+  "timestamp": "2026-06-21 09:28:00"
+}
+                                        </TextBox.Text>
+                                    </TextBox>
                                     <DataGrid ItemsSource="{Binding AppSettings.WebhookRules}"
                                               AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
                                               Background="#1A1A2A" RowBackground="#1A1A2A" AlternatingRowBackground="#202040"

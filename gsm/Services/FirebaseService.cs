@@ -368,12 +368,18 @@ namespace gsm.Services
             {
                 var commandUrl = $"{_databaseUrl}commands/{cmdId}.json";
                 
-                // 1. Kiểm tra trạng thái hiện tại (GET)
-                var json = await _restClient.GetStringAsync(commandUrl);
+                // 1. Kiểm tra trạng thái hiện tại (GET kèm ETag)
+                var request = new HttpRequestMessage(HttpMethod.Get, commandUrl);
+                request.Headers.Add("X-Firebase-ETag", "true");
+                using var getResponse = await _restClient.SendAsync(request);
+                
+                var json = await getResponse.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(json) || json == "null")
                 {
                     return false; // Lệnh không tồn tại hoặc đã bị xóa
                 }
+
+                var etag = getResponse.Headers.ETag?.Tag;
 
                 var node = JsonNode.Parse(json) as JsonObject;
                 if (node == null) return false;
@@ -393,21 +399,35 @@ namespace gsm.Services
                     }
                 }
 
-                // 2. Trực tiếp cập nhật trạng thái lên "running" (PATCH)
-                var patchData = new Dictionary<string, object?>
+                // 2. Cập nhật object hiện tại (Chuẩn bị PUT)
+                node["status"] = "running";
+                node["handledBy"] = _machineId;
+                
+                // Lưu ý: không dùng ServerValue timestamp được trong PUT gốc như PATCH unless mixed types.
+                // Nhưng vì lấy node từ Firebase về nên ta cứ giữ nguyên, chỉ sửa trạng thái.
+                var putJson = node.ToJsonString();
+                using var putContent = new StringContent(putJson, Encoding.UTF8, "application/json");
+
+                var putRequest = new HttpRequestMessage(HttpMethod.Put, commandUrl)
                 {
-                    ["status"] = "running",
-                    ["handledBy"] = _machineId,
-                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                    Content = putContent
                 };
-                
-                var patchJson = JsonSerializer.Serialize(patchData);
-                using var content = new StringContent(patchJson, Encoding.UTF8, "application/json");
-                using var response = await _restClient.PatchAsync(commandUrl, content);
-                
-                if (!response.IsSuccessStatusCode)
+                if (!string.IsNullOrEmpty(etag))
                 {
-                    _vm.AddLog($"[FIREBASE] Lỗi claim lệnh {cmdId}: Patch status code = {response.StatusCode}", "ERROR");
+                    putRequest.Headers.TryAddWithoutValidation("if-match", etag);
+                }
+                
+                using var putResponse = await _restClient.SendAsync(putRequest);
+                
+                // 3. Nếu 412 Precondition Failed -> Firebase từ chối do có người đã sửa đổi (ETag không khớp)
+                if (putResponse.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+                {
+                    _vm.AddLog($"[FIREBASE] Đã nhường lệnh {cmdId} cho worker khác (Conflict ETag).", "INFO");
+                    return false;
+                }
+                else if (!putResponse.IsSuccessStatusCode)
+                {
+                    _vm.AddLog($"[FIREBASE] Lỗi claim lệnh {cmdId}: PUT status code = {putResponse.StatusCode}", "ERROR");
                     return false;
                 }
 
@@ -719,7 +739,7 @@ namespace gsm.Services
                     return "ERROR: Khóa chống gửi trùng (Idempotency). Tin nhắn giống hệt đã được gửi cách đây ít phút.";
                 }
             }
-            // Cập nhật thời gian gửi
+            // Cập nhật thời gian gửi trước, sẽ gỡ bỏ nếu gặp lỗi không thực sự gửi đi
             _recentSmsPayloads[payloadKey] = DateTime.Now;
 
             var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
@@ -759,6 +779,15 @@ namespace gsm.Services
 
                 if (result.Contains("ERROR"))
                 {
+                    // Nếu lỗi chỉ ra rằng SMS chắc chắn chưa được Modem gửi ra ngoài không trung
+                    if (result.Contains("Port not open") || 
+                        result.Contains("Timeout waiting for > prompt") || 
+                        result.Contains("Another command") || 
+                        result.Contains("waiting for lock"))
+                    {
+                        _recentSmsPayloads.TryRemove(payloadKey, out _);
+                    }
+
                     string errorMsg = GetHumanReadableError(result);
                     _ = TelegramService.SendMessageAsync($"⚠️ <b>Lỗi Gửi SMS Từ {portId}</b>\n📱 Tới: {recipient}\n📝 Nội dung: {content}\n❌ Chi tiết: <code>{errorMsg}</code>");
                 }

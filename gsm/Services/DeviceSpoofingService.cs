@@ -32,33 +32,60 @@ public static class DeviceSpoofingService
     // =========================================================================
     public static readonly List<DeviceProfile> AvailableProfiles = new()
     {
-        // ===== APPLE iPhone (verified from GSMA IMEI DB) =====
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro Max",  TacCode = "35405527" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro",      TacCode = "35405427" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 14 Pro Max",  TacCode = "35292440" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 14 Pro",      TacCode = "35314440" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 14",          TacCode = "35155540" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 13 Pro Max",  TacCode = "35214940" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 13",          TacCode = "35158620" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 12 Pro Max",  TacCode = "35420024" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone 12",          TacCode = "35402324" },
-        new DeviceProfile { Brand = "Apple",   Model = "iPhone SE (2022)",   TacCode = "35259544" },
-        // ===== SAMSUNG Galaxy (verified) =====
-        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S24 Ultra",   TacCode = "35616461" },
+        // ===== APPLE iPhone =====
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro Max",  TacCode = "35437977" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro",      TacCode = "35437340" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Plus",     TacCode = "35437651" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 15",          TacCode = "35436980" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 14 Pro Max",  TacCode = "35017482" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 14 Pro",      TacCode = "35287515" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 14 Plus",     TacCode = "35017045" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 14",          TacCode = "35016578" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 13 Pro Max",  TacCode = "35649065" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 13 Pro",      TacCode = "35648589" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 13",          TacCode = "35648168" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 13 mini",     TacCode = "35647590" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 12 Pro Max",  TacCode = "35668411" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 12 Pro",      TacCode = "35667954" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 12",          TacCode = "35314911" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 11 Pro Max",  TacCode = "35384210" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 11 Pro",      TacCode = "35383910" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 11",          TacCode = "35384010" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone SE (2022)",   TacCode = "35324025" },
+
+        // ===== SAMSUNG Galaxy =====
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S24 Ultra",   TacCode = "35583626" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S24+",        TacCode = "35583279" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S24",         TacCode = "35582914" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy S23 Ultra",   TacCode = "35105370" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S23+",        TacCode = "35359990" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy S23",         TacCode = "35359770" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy S22 Ultra",   TacCode = "35465134" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S22+",        TacCode = "35258667" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy S22",         TacCode = "35258334" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy Z Fold 5",    TacCode = "35794580" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy Z Flip 5",    TacCode = "35794215" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy Z Fold 4",    TacCode = "35914619" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy A54",         TacCode = "35636651" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy A34",         TacCode = "35636284" },
+
         // ===== XIAOMI / OPPO / VIVO =====
-        new DeviceProfile { Brand = "Xiaomi",  Model = "13 Pro",             TacCode = "86773106" },
-        new DeviceProfile { Brand = "Xiaomi",  Model = "Redmi Note 12",      TacCode = "86534906" },
-        new DeviceProfile { Brand = "Oppo",    Model = "Reno 10 Pro",        TacCode = "86820606" },
-        new DeviceProfile { Brand = "Vivo",    Model = "V27",                TacCode = "86773006" },
+        new DeviceProfile { Brand = "Xiaomi",  Model = "14 Pro",             TacCode = "86123406" },
+        new DeviceProfile { Brand = "Xiaomi",  Model = "14",                 TacCode = "86123006" },
+        new DeviceProfile { Brand = "Xiaomi",  Model = "13 Pro",             TacCode = "86877406" },
+        new DeviceProfile { Brand = "Xiaomi",  Model = "13",                 TacCode = "86877006" },
+        new DeviceProfile { Brand = "Xiaomi",  Model = "Redmi Note 13 Pro",  TacCode = "86543206" },
+        new DeviceProfile { Brand = "Xiaomi",  Model = "Redmi Note 12",      TacCode = "86053706" },
+        new DeviceProfile { Brand = "Oppo",    Model = "Find X6 Pro",        TacCode = "86234506" },
+        new DeviceProfile { Brand = "Oppo",    Model = "Reno 10 Pro",        TacCode = "86121506" },
+        new DeviceProfile { Brand = "Vivo",    Model = "X90 Pro",            TacCode = "86345606" },
+        new DeviceProfile { Brand = "Vivo",    Model = "V27",                TacCode = "86134806" },
+
         // ===== GOOGLE Pixel =====
         new DeviceProfile { Brand = "Google",  Model = "Pixel 8 Pro",        TacCode = "35956710" },
+        new DeviceProfile { Brand = "Google",  Model = "Pixel 8",            TacCode = "35956345" },
         new DeviceProfile { Brand = "Google",  Model = "Pixel 7 Pro",        TacCode = "35750857" },
+        new DeviceProfile { Brand = "Google",  Model = "Pixel 7",            TacCode = "35750489" },
     };
 
     // =========================================================================

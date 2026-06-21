@@ -922,47 +922,49 @@
                             </Button>
                             
                             <!-- Toggles for Watchdog and Auto-Answer -->
-                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="Đẩy OTT Web" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                    <ToggleButton IsChecked="{Binding IsWebNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Đẩy OTP/SMS lên máy chủ Web"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="Đẩy Telegram" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                    <ToggleButton IsChecked="{Binding IsTelegramNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bắn thông báo OTP/SMS qua Telegram"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="Tự phục hồi (Watchdog)" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                    <ToggleButton IsChecked="{Binding IsWatchdogEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động khởi động lại Modem (AT+CFUN=1,1) khi bị lỗi/mất sóng"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="Tự nhấc máy" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                    <ToggleButton IsChecked="{Binding IsAutoAnswerEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động bắt máy (ATA) khi có cuộc gọi đến"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="🔔 Âm thanh" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                    <ToggleButton IsChecked="{Binding IsSoundAlertEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh cảnh báo khi nhận OTP/SMS/Cuộc gọi"/>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="🔔 Âm Toast" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                    <ToggleButton IsChecked="{Binding IsToastSoundEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh mặc định của thông báo góc màn hình Windows"/>
-                                </StackPanel>
-                            </Border>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="Đẩy OTT Web" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                        <ToggleButton IsChecked="{Binding IsWebNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Đẩy OTP/SMS lên máy chủ Web"/>
+                                    </StackPanel>
+                                </Border>
+    
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="Đẩy Telegram" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                        <ToggleButton IsChecked="{Binding IsTelegramNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bắn thông báo OTP/SMS qua Telegram"/>
+                                    </StackPanel>
+                                </Border>
+    
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="Tự phục hồi (Watchdog)" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                        <ToggleButton IsChecked="{Binding IsWatchdogEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động khởi động lại Modem (AT+CFUN=1,1) khi bị lỗi/mất sóng"/>
+                                    </StackPanel>
+                                </Border>
+    
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="Tự nhấc máy" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                        <ToggleButton IsChecked="{Binding IsAutoAnswerEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động bắt máy (ATA) khi có cuộc gọi đến"/>
+                                    </StackPanel>
+                                </Border>
+    
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="🔔 Âm thanh" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                        <ToggleButton IsChecked="{Binding IsSoundAlertEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh cảnh báo khi nhận OTP/SMS/Cuộc gọi"/>
+                                    </StackPanel>
+                                </Border>
+    
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="🔔 Âm Toast" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
+                                        <ToggleButton IsChecked="{Binding IsToastSoundEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật/tắt âm thanh mặc định của thông báo góc màn hình Windows"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
 
                         </WrapPanel>
                     </Border>
@@ -1427,7 +1429,7 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
-                    <materialDesign:PackIcon Kind="WebhookOutline" Width="28" Height="28" Foreground="#5C6BC0" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <materialDesign:PackIcon Kind="Web" Width="28" Height="28" Foreground="#5C6BC0" VerticalAlignment="Center" Margin="0,0,10,0"/>
                     <TextBlock FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">

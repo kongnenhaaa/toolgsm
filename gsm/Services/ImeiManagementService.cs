@@ -110,7 +110,17 @@ public class ImeiManagementService
                 }
                 else
                 {
-                    if (settings.EnableImeiBackup)
+                    if (settings.BlockUnknownSims)
+                    {
+                        Log($"[{portName}] SIM mới chưa có trong kho IMEI. Đã chặn, chờ chấp thuận thủ công.", "WARNING");
+
+                        return new ImeiProcessResult
+                        {
+                            Status = ImeiProcessStatus.SecurityBlocked,
+                            ErrorMessage = "SIM mới chưa được chấp thuận"
+                        };
+                    }
+                    else
                     {
                         if (!DeviceSpoofingService.IsValidImei(NormalizeImei(currentImei)))
                         {
@@ -119,29 +129,25 @@ public class ImeiManagementService
                         else
                         {
                             var newEntry = new SimBackupEntry
-                        {
-                            Ccid = ccid,
-                            Imei = currentImei,
-                            PhoneNumber = port.PhoneNumber,
-                            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                            LicenseKeySuffix = string.Empty,
-                            KeyMismatch = "false",
-                            SourceFile = "auto-learn"
-                        };
-                        saveBackupEntry(newEntry);
-                        Log($"[{portName}] Cắm lần đầu, lưu IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+                            {
+                                Ccid = ccid,
+                                Imei = currentImei,
+                                PhoneNumber = port.PhoneNumber,
+                                CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                                LicenseKeySuffix = string.Empty,
+                                KeyMismatch = "false",
+                                SourceFile = "auto-learn"
+                            };
+                            saveBackupEntry(newEntry);
+                            Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
 
-                        dispatcherInvoke(() =>
-                        {
-                            port.CreatedAt = newEntry.CreatedAt;
-                            port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
-                            port.KeyMismatch = newEntry.KeyMismatch;
-                        });
+                            dispatcherInvoke(() =>
+                            {
+                                port.CreatedAt = newEntry.CreatedAt;
+                                port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
+                                port.KeyMismatch = newEntry.KeyMismatch;
+                            });
                         }
-                    }
-                    else
-                    {
-                        Log($"[{portName}] Tính năng Fake IMEI và Backup đều tắt. Giữ nguyên IMEI gốc trên mạch.");
                     }
                 }
             }

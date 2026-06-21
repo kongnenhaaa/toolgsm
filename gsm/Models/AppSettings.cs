@@ -66,10 +66,10 @@ public class AppSettings
     
     // ========== IMEI BACKUP & RESTORE ==========
     /// <summary>
-    /// Bật/tắt tự động ghi nhớ (Backup) IMEI nguyên bản của thẻ SIM mới vào cơ sở dữ liệu.
-    /// Tính năng này sẽ tự động bị bỏ qua nếu EnableDeviceSpoofing = true.
+    /// Bật/tắt chặn SIM lạ. Nếu bật, SIM mới (chưa có trong kho) sẽ bị chặn và chờ chấp thuận thủ công.
+    /// Nếu tắt, ứng dụng sẽ tự động ghi nhớ (Backup) IMEI nguyên bản của thẻ SIM mới vào cơ sở dữ liệu.
     /// </summary>
-    public bool EnableImeiBackup { get; set; } = true;
+    public bool BlockUnknownSims { get; set; } = true;
 
     /// <summary>
     /// Bật/tắt tự động phục hồi (Restore) IMEI đã sao lưu nếu thẻ SIM bị cắm sang module/cổng khác.

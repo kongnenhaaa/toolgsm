@@ -211,6 +211,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    public bool IsDeviceSpoofingEnabled
+    {
+        get => SettingsService.Current.EnableDeviceSpoofing;
+        set
+        {
+            if (SettingsService.Current.EnableDeviceSpoofing != value)
+            {
+                SettingsService.Current.EnableDeviceSpoofing = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool IsImeiRestoreEnabled
+    {
+        get => SettingsService.Current.EnableImeiRestore;
+        set
+        {
+            if (SettingsService.Current.EnableImeiRestore != value)
+            {
+                SettingsService.Current.EnableImeiRestore = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    public bool IsBlockUnknownSimsEnabled
+    {
+        get => SettingsService.Current.BlockUnknownSims;
+        set
+        {
+            if (SettingsService.Current.BlockUnknownSims != value)
+            {
+                SettingsService.Current.BlockUnknownSims = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
     [ObservableProperty]
     private string _callManagerSelectedPort = string.Empty;
 
@@ -1311,6 +1353,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task ApproveUnknownSim(SimPort port)
+    {
+        if (port == null) return;
+        
+        if (port.Status != SimStatus.SecurityBlocked)
+        {
+            SnackbarMessageQueue.Enqueue($"Cổng {port.PortName} không bị chặn.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(port.Serial) || string.IsNullOrEmpty(port.Imei))
+        {
+            SnackbarMessageQueue.Enqueue($"Lỗi: Không tìm thấy CCID hoặc IMEI của {port.PortName}.");
+            return;
+        }
+
+        var newEntry = new gsm.Models.SimBackupEntry
+        {
+            Ccid = port.Serial,
+            Imei = port.Imei,
+            PhoneNumber = port.PhoneNumber ?? "",
+            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+            LicenseKeySuffix = string.Empty,
+            KeyMismatch = "false",
+            SourceFile = "manual-approve"
+        };
+        
+        AddNewImeiCacheEntry(newEntry);
+        
+        AddLog($"[{port.PortName}] Đã chấp thuận thủ công SIM lạ (CCID: {port.Serial}, IMEI: {port.Imei}).", "SUCCESS");
+        SnackbarMessageQueue.Enqueue($"Đã lưu SIM {port.PortName} vào kho. Đang khởi động lại cổng...");
+
+        await RefreshPortAsync(port.PortName);
+    }
+
+    [RelayCommand]
     private void RefreshPorts()
     {
         var targetPorts = Ports.Where(p => p.IsSelected).ToList();
@@ -1586,7 +1664,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         AddLog($"[{e.PortName}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
                     }
 
-                    AddLog($"[{e.PortName}] [IMEI_MODE] Fake={AppSettings.EnableDeviceSpoofing} Restore={AppSettings.EnableImeiRestore} Backup={AppSettings.EnableImeiBackup}");
+                    AddLog($"[{e.PortName}] [IMEI_MODE] Fake={AppSettings.EnableDeviceSpoofing} Restore={AppSettings.EnableImeiRestore} BlockNew={AppSettings.BlockUnknownSims}");
 
                     // Thực hiện kiểm tra và khôi phục IMEI bất đồng bộ để tránh treo UI thread
                     _ = Task.Run(async () =>
@@ -2984,6 +3062,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SettingsService.SaveSettings(AppSettings);
         IsSettingsDialogOpen = false;
         SnackbarMessageQueue.Enqueue("Đã lưu cấu hình thành công.");
+
+        OnPropertyChanged(nameof(IsTelegramNotificationEnabled));
+        OnPropertyChanged(nameof(IsWebNotificationEnabled));
+        OnPropertyChanged(nameof(IsWatchdogEnabled));
+        OnPropertyChanged(nameof(IsAutoAnswerEnabled));
+        OnPropertyChanged(nameof(IsDeviceSpoofingEnabled));
+        OnPropertyChanged(nameof(IsImeiRestoreEnabled));
+        OnPropertyChanged(nameof(IsBlockUnknownSimsEnabled));
 
         // Áp dụng tính năng chuyển hướng ngay lập tức cho tất cả các cổng
         if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))

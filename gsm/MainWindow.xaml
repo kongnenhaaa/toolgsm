@@ -429,8 +429,8 @@ GET  /api/history
                                               IsChecked="{Binding AppSettings.EnableImeiRestore}" 
                                               Foreground="#FFB300" FontWeight="Medium" Margin="0,0,0,5"/>
                                               
-                                    <CheckBox Content="[ƯU TIÊN 3] Tự động tạo bản sao lưu (Backup) IMEI cho các thẻ SIM mới" 
-                                              IsChecked="{Binding AppSettings.EnableImeiBackup}" 
+                                    <CheckBox Content="[ƯU TIÊN 3] Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)" 
+                                              IsChecked="{Binding AppSettings.BlockUnknownSims}" 
                                               Foreground="#90CAF9" FontWeight="Medium" Margin="0,0,0,15"/>
                                     
                                     <Button Content="Reset định danh tất cả thiết bị" 
@@ -1052,6 +1052,29 @@ GET  /api/history
     
                             </StackPanel>
 
+                            <!-- 3 Ưu tiên IMEI -->
+                            <StackPanel Orientation="Horizontal">
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="[1] Fake IMEI" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
+                                        <ToggleButton IsChecked="{Binding IsDeviceSpoofingEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật tính năng giả lập (Fake IMEI) và tạo Profile thiết bị ngẫu nhiên"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="[2] Phục hồi IMEI" Foreground="#FFB300" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
+                                        <ToggleButton IsChecked="{Binding IsImeiRestoreEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="[3] Chặn SIM lạ" Foreground="#90CAF9" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
+                                        <ToggleButton IsChecked="{Binding IsBlockUnknownSimsEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
                         </WrapPanel>
                     </Border>
 
@@ -1121,6 +1144,10 @@ GET  /api/history
                             <ContextMenu >
                                 <MenuItem Command="Copy" Header="Sao chép (Ctrl+C)" >
                                     <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
+                                </MenuItem>
+                                <Separator Background="#444"/>
+                                <MenuItem Header="Chấp thuận SIM lạ (Lưu vào kho)" Command="{Binding Path=DataContext.ApproveUnknownSimCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" Foreground="#90CAF9">
+                                    <MenuItem.Icon><materialDesign:PackIcon Kind="CheckDecagram"/></MenuItem.Icon>
                                 </MenuItem>
                                 <Separator Background="#444"/>
                                 <MenuItem Header="Sao chép SĐT" Command="{Binding Path=DataContext.CopyPhoneFromPortCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" >

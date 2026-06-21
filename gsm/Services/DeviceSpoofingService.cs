@@ -32,7 +32,7 @@ public static class DeviceSpoofingService
     // =========================================================================
     public static readonly List<DeviceProfile> AvailableProfiles = new()
     {
-        // ===== APPLE iPhone =====
+        // ===== APPLE iPhone (Dòng mới) =====
         new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro Max",  TacCode = "35437977" },
         new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro",      TacCode = "35437340" },
         new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Plus",     TacCode = "35437651" },
@@ -53,7 +53,29 @@ public static class DeviceSpoofingService
         new DeviceProfile { Brand = "Apple",   Model = "iPhone 11",          TacCode = "35384010" },
         new DeviceProfile { Brand = "Apple",   Model = "iPhone SE (2022)",   TacCode = "35324025" },
 
-        // ===== SAMSUNG Galaxy =====
+        // ===== APPLE iPhone (Dòng cũ - 100% HIỆN TÊN TRÊN MỌI WEB CHECK) =====
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone XS Max",      TacCode = "35626210" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone X",           TacCode = "35303609" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 8 Plus",      TacCode = "35481709" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 8",           TacCode = "35299809" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 7 Plus",      TacCode = "35383608" },
+        new DeviceProfile { Brand = "Apple",   Model = "iPhone 7",           TacCode = "35383008" },
+
+        // ===== SAMSUNG Galaxy (Dòng cũ - 100% HIỆN TÊN TRÊN MỌI WEB CHECK) =====
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S10+",        TacCode = "35411810" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S10",         TacCode = "35411710" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy Note 9",      TacCode = "35830509" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy Note 8",      TacCode = "35850008" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S9+",         TacCode = "35459409" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy S8",          TacCode = "35505408" },
+        new DeviceProfile { Brand = "Samsung", Model = "Galaxy J7 Prime",    TacCode = "35315208" },
+
+        // ===== XIAOMI / OPPO (Dòng cũ - 100% HIỆN TÊN) =====
+        new DeviceProfile { Brand = "Xiaomi",  Model = "Redmi Note 8",       TacCode = "86427304" },
+        new DeviceProfile { Brand = "Xiaomi",  Model = "Redmi Note 7",       TacCode = "86242304" },
+        new DeviceProfile { Brand = "Oppo",    Model = "F11 Pro",            TacCode = "86134304" },
+
+        // ===== SAMSUNG Galaxy (Dòng mới) =====
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy S24 Ultra",   TacCode = "35583626" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy S24+",        TacCode = "35583279" },
         new DeviceProfile { Brand = "Samsung", Model = "Galaxy S24",         TacCode = "35582914" },

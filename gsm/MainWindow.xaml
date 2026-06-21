@@ -424,7 +424,7 @@ GET  /api/history
                                               IsChecked="{Binding AppSettings.EnableImeiRestore}" 
                                               Foreground="#FFB300" FontWeight="Medium" Margin="0,0,0,5"/>
                                               
-                                    <CheckBox Content="[ƯU TIÊN 3] Bật tự động ghi nhớ (Backup) IMEI nguyên bản của thẻ SIM mới (Chỉ lưu vào CSDL)" 
+                                    <CheckBox Content="[ƯU TIÊN 3] Tự động tạo bản sao lưu (Backup) IMEI cho các thẻ SIM mới" 
                                               IsChecked="{Binding AppSettings.EnableImeiBackup}" 
                                               Foreground="#90CAF9" FontWeight="Medium" Margin="0,0,0,15"/>
                                     

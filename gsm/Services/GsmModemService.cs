@@ -14,6 +14,7 @@ public interface IGsmModemService
 {
     Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000, bool silent = false);
     Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 15000);
+    Task SweepUnreadSmsAsync(string portName);
     void StartPollingNetwork(string portName);
     List<string> GetAvailablePorts();
     void ConnectAll(int baudRate = 115200);
@@ -253,24 +254,106 @@ public class GsmModemService : IGsmModemService
             // ---------------------------------------------------------
             if (currentData.Contains("+CMTI:"))
             {
-                var match = Regex.Match(currentData, @"\+CMTI:\s*""[^""]+"",\s*(\d+)");
-                if (match.Success)
+                var matches = Regex.Matches(currentData, @"\+CMTI:\s*""[^""]+"",\s*(\d+)");
+                if (matches.Count > 0)
                 {
-                    string msgIndex = match.Groups[1].Value;
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Phát hiện tin nhắn ở vị trí {msgIndex}, đang đọc..." });
-                    
-                    // Cắt bỏ phần thông báo này khỏi bộ đệm để không xử lý lại
-                    // (Giữ nguyên các dữ liệu khác đang chờ nếu có)
-                    buffer.Replace(match.Value, ""); 
+                    foreach (Match match in matches)
+                    {
+                        string msgIndex = match.Groups[1].Value;
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Phát hiện tin nhắn ở vị trí {msgIndex}, đang đọc..." });
+                        
+                        // Cắt bỏ phần thông báo này khỏi bộ đệm để không xử lý lại
+                        buffer.Replace(match.Value, ""); 
+                    }
                     currentData = buffer.ToString();
                     
-                    // Đẩy việc đọc tin nhắn vào Task chạy ngầm.
-                    // Nó sẽ tự động xếp hàng đợi Semaphore mà không làm kẹt luồng đọc hiện tại!
+                    // Đẩy việc đọc tất cả các tin nhắn vào Task chạy ngầm.
                     _ = Task.Run(async () => 
                     {
-                        string smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
-                        SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent, MsgIndex = msgIndex });
-                        // Không tự động xóa tin nhắn ở đây nữa, đẩy việc quyết định xóa lên ViewModel
+                        foreach (Match match in matches)
+                        {
+                            string msgIndex = match.Groups[1].Value;
+                            string smsContent = "";
+                            bool success = false;
+                            
+                            for (int attempt = 1; attempt <= 3; attempt++)
+                            {
+                                smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
+                                // Đảm bảo không bị OK rỗng (Modem trả OK nhưng chưa kịp xuất nội dung)
+                                if (!smsContent.Contains("ERROR") && smsContent.Contains("+CMGR:"))
+                                {
+                                    success = true;
+                                    break;
+                                }
+                                await Task.Delay(1000);
+                            }
+                            
+                            if (success)
+                            {
+                                SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent, MsgIndex = msgIndex });
+                            }
+                            else
+                            {
+                                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi đọc tin nhắn ở vị trí {msgIndex} sau 3 lần thử. Đang kích hoạt quét vét ngay lập tức..." });
+                                
+                                // Kích hoạt quét vét ngay lập tức (sau 2s) thay vì chờ chu kỳ 3 phút
+                                _ = Task.Run(async () => 
+                                {
+                                    await Task.Delay(2000);
+                                    await SweepUnreadSmsAsync(portName);
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+
+            // Xử lý kết quả quét AT+CMGL="REC UNREAD"
+            // Định dạng: +CMGL: <index>,"REC UNREAD",...
+            if (currentData.Contains("+CMGL:"))
+            {
+                var matches = Regex.Matches(currentData, @"\+CMGL:\s*(\d+)");
+                if (matches.Count > 0)
+                {
+                    foreach (Match match in matches)
+                    {
+                        string msgIndex = match.Groups[1].Value;
+                        // Chỉ log nếu không trùng với các index đang đọc từ +CMTI
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[Sweep] Đã vét được tin nhắn kẹt ở vị trí {msgIndex}, đang đọc..." });
+                        
+                        // Cắt bỏ phần thông báo này khỏi bộ đệm
+                        buffer.Replace(match.Value, ""); 
+                    }
+                    currentData = buffer.ToString();
+                    
+                    _ = Task.Run(async () => 
+                    {
+                        foreach (Match match in matches)
+                        {
+                            string msgIndex = match.Groups[1].Value;
+                            string smsContent = "";
+                            bool success = false;
+                            
+                            for (int attempt = 1; attempt <= 3; attempt++)
+                            {
+                                smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
+                                if (!smsContent.Contains("ERROR") && smsContent.Contains("+CMGR:"))
+                                {
+                                    success = true;
+                                    break;
+                                }
+                                await Task.Delay(1000);
+                            }
+                            
+                            if (success)
+                            {
+                                SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent, MsgIndex = msgIndex });
+                            }
+                            else
+                            {
+                                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[Sweep] Lỗi đọc tin nhắn kẹt ở vị trí {msgIndex} sau 3 lần thử." });
+                            }
+                        }
                     });
                 }
             }
@@ -578,5 +661,13 @@ public class GsmModemService : IGsmModemService
                 _commandTcs.TryRemove(portName, out _);
             semaphore.Release();
         }
+    }
+
+    public async Task SweepUnreadSmsAsync(string portName)
+    {
+        if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return;
+        
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đang quét tin nhắn tồn đọng (Sweep)..." });
+        await SendCommandAsync(portName, "AT+CMGL=\"REC UNREAD\"");
     }
 }

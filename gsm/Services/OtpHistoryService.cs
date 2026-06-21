@@ -121,16 +121,34 @@ public static class OtpHistoryService
 
     private static string[] SplitCsvLine(string line)
     {
-        // Tách CSV đơn giản hỗ trợ field có dấu ngoặc kép
         var result = new List<string>();
         bool inQuotes = false;
         var current  = new StringBuilder();
 
-        foreach (char c in line)
+        for (int i = 0; i < line.Length; i++)
         {
-            if (c == '"') { inQuotes = !inQuotes; }
-            else if (c == ',' && !inQuotes) { result.Add(current.ToString()); current.Clear(); }
-            else { current.Append(c); }
+            char c = line[i];
+            if (c == '"')
+            {
+                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    current.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = !inQuotes;
+                }
+            }
+            else if (c == ',' && !inQuotes)
+            {
+                result.Add(current.ToString());
+                current.Clear();
+            }
+            else
+            {
+                current.Append(c);
+            }
         }
         result.Add(current.ToString());
         return result.ToArray();

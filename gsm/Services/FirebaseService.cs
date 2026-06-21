@@ -704,13 +704,28 @@ namespace gsm.Services
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 10000, true);
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,0", 10000, true); // Sửa lỗi 305 Invalid text mode parameter
 
-                // Cho phép chờ lâu hơn (45s) nếu modem đang bận chạy lệnh USSD hoặc kiểm tra TKC
-                string result = await _vm.ModemService.SendSmsAsync(
-                    portId,
-                    recipient,
-                    content,
-                    timeoutMs: 45000
-                );
+                string result = "";
+                for (int attempt = 1; attempt <= 3; attempt++)
+                {
+                    result = await _vm.ModemService.SendSmsAsync(
+                        portId,
+                        recipient,
+                        content,
+                        timeoutMs: 45000
+                    );
+
+                    // KHÔNG RETRY nếu lỗi Timeout để tránh gửi trùng SMS (anti-duplicate SMS)
+                    // Chỉ retry khi chắc chắn lỗi là do cổng bận (Lock / Another command)
+                    if (!result.Contains("ERROR") || (!result.Contains("Another command") && !result.Contains("waiting for lock")))
+                    {
+                        break;
+                    }
+
+                    if (attempt < 3)
+                    {
+                        await Task.Delay(2000); // Đợi 2s trước khi retry
+                    }
+                }
 
                 if (result.Contains("ERROR"))
                 {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Security.Cryptography;
 using gsm.Models;
 
 namespace gsm.Services;
@@ -15,8 +16,7 @@ namespace gsm.Services;
 /// </summary>
 public static class DeviceSpoofingService
 {
-    private static readonly Random _random = new Random();
-
+    public static event Action<string>? OnError;
     // 🔒 Thread-safe lock
     private static readonly object _identityLock = new object();
 
@@ -24,14 +24,65 @@ public static class DeviceSpoofingService
     private static readonly string _backupFilePath = Path.Combine(
         AppDomain.CurrentDomain.BaseDirectory, "device_identities.json");
 
+    // 📁 File cấu hình TAC
+    private static readonly string _tacFilePath = Path.Combine(
+        AppDomain.CurrentDomain.BaseDirectory, "device_profiles.json");
+
     // 📋 Cache in-memory để tránh đọc file mỗi lần
     private static List<DeviceIdentity>? _cache = null;
 
     // =========================================================================
     // 📱 DATABASE TAC — Mã nhận dạng dòng máy (8 số đầu IMEI) chuẩn GSMA
     // =========================================================================
-    public static readonly List<DeviceProfile> AvailableProfiles = new()
+    private static List<DeviceProfile>? _availableProfiles = null;
+
+    public static List<DeviceProfile> AvailableProfiles
     {
+        get
+        {
+            if (_availableProfiles != null) return _availableProfiles;
+            lock (_identityLock)
+            {
+                if (_availableProfiles != null) return _availableProfiles;
+                try
+                {
+                    if (File.Exists(_tacFilePath))
+                    {
+                        var json = File.ReadAllText(_tacFilePath);
+                        var parsed = JsonSerializer.Deserialize<List<DeviceProfile>>(json);
+                        if (parsed != null)
+                        {
+                            _availableProfiles = parsed.Where(p => !string.IsNullOrWhiteSpace(p.TacCode) && p.TacCode.Length == 8 && p.TacCode.All(char.IsDigit)).ToList();
+                            if (_availableProfiles.Any()) return _availableProfiles;
+                        }
+                    }
+                }
+                catch (Exception ex) 
+                { 
+                    OnError?.Invoke($"Lỗi đọc file cấu hình TAC ({_tacFilePath}): {ex.Message}");
+                }
+
+                _availableProfiles = GetDefaultProfiles();
+                // Save default profiles to JSON
+                try
+                {
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    File.WriteAllText(_tacFilePath, JsonSerializer.Serialize(_availableProfiles, options));
+                }
+                catch (Exception ex) 
+                { 
+                    OnError?.Invoke($"Lỗi ghi file cấu hình TAC ({_tacFilePath}): {ex.Message}");
+                }
+
+                return _availableProfiles;
+            }
+        }
+    }
+
+    private static List<DeviceProfile> GetDefaultProfiles()
+    {
+        return new List<DeviceProfile>
+        {
         // ===== APPLE iPhone (Dòng mới) =====
         new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro Max",  TacCode = "35437977" },
         new DeviceProfile { Brand = "Apple",   Model = "iPhone 15 Pro",      TacCode = "35437340" },
@@ -98,14 +149,18 @@ public static class DeviceSpoofingService
         new DeviceProfile { Brand = "Google",  Model = "Pixel 8",            TacCode = "35956345" },
         new DeviceProfile { Brand = "Google",  Model = "Pixel 7 Pro",        TacCode = "35750857" },
         new DeviceProfile { Brand = "Google",  Model = "Pixel 7",            TacCode = "35750489" },
-    };
+        };
+    }
 
     // =========================================================================
     // 🔑 Sinh IMEI hợp lệ
     // =========================================================================
 
     public static DeviceProfile GetRandomProfile()
-        => AvailableProfiles[_random.Next(AvailableProfiles.Count)];
+    {
+        var profiles = AvailableProfiles;
+        return profiles[RandomNumberGenerator.GetInt32(profiles.Count)];
+    }
 
     /// <summary>
     /// Sinh IMEI 15 số hợp lệ: 8 TAC + 6 Serial ngẫu nhiên + 1 Luhn checksum.
@@ -117,8 +172,22 @@ public static class DeviceSpoofingService
             throw new ArgumentException("TAC phải gồm chính xác 8 chữ số.");
 
         // Tạo serial ngẫu nhiên 6 chữ số (100000..999998)
-        string partialImei = tac + _random.Next(100000, 999999).ToString();
+        string partialImei = tac + RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
         return partialImei + CalculateLuhnDigit(partialImei).ToString();
+    }
+
+    /// <summary>
+    /// Kiểm tra tính hợp lệ của IMEI (đúng 15 số và đúng Luhn Checksum).
+    /// </summary>
+    public static bool IsValidImei(string imei)
+    {
+        if (string.IsNullOrWhiteSpace(imei) || imei.Length != 15 || !System.Linq.Enumerable.All(imei, char.IsDigit))
+            return false;
+
+        string imei14 = imei.Substring(0, 14);
+        int expectedLuhn = CalculateLuhnDigit(imei14);
+        int actualLuhn = imei[14] - '0';
+        return expectedLuhn == actualLuhn;
     }
 
     /// <summary>
@@ -161,7 +230,10 @@ public static class DeviceSpoofingService
                     return _cache;
                 }
             }
-            catch { /* file lỗi → tạo mới */ }
+            catch (Exception ex) 
+            { 
+                OnError?.Invoke($"Lỗi đọc file ({_backupFilePath}): {ex.Message}");
+            }
             _cache = new List<DeviceIdentity>();
             return _cache;
         }
@@ -172,9 +244,20 @@ public static class DeviceSpoofingService
         try
         {
             var options = new JsonSerializerOptions { WriteIndented = true };
-            File.WriteAllText(_backupFilePath, JsonSerializer.Serialize(list, options));
+            string tempPath = _backupFilePath + ".tmp";
+            File.WriteAllText(tempPath, JsonSerializer.Serialize(list, options));
+            
+            if (File.Exists(_backupFilePath))
+            {
+                string backupPath = _backupFilePath.Replace(".json", ".backup.json");
+                File.Copy(_backupFilePath, backupPath, overwrite: true);
+            }
+            File.Move(tempPath, _backupFilePath, overwrite: true);
         }
-        catch { /* ghi file lỗi → bỏ qua, tránh crash app */ }
+        catch (Exception ex) 
+        { 
+            OnError?.Invoke($"Lỗi ghi file ({_backupFilePath}): {ex.Message}");
+        }
     }
 
     // =========================================================================

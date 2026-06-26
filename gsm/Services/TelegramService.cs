@@ -56,20 +56,20 @@ public static class TelegramService
                     continue;
                 }
 
-                int retryCount = 0;
-                bool success = false;
-                
-                while (retryCount < 3 && !success)
+                foreach (var id in chatIds)
                 {
-                    try
-                    {
-                        string url = $"https://api.telegram.org/bot{token.Trim()}/sendMessage";
-                        
-                        foreach (var id in chatIds)
-                        {
-                            var chatIdStr = id.Trim();
-                            if (string.IsNullOrEmpty(chatIdStr)) continue;
+                    var chatIdStr = id.Trim();
+                    if (string.IsNullOrEmpty(chatIdStr)) continue;
 
+                    int retryCount = 0;
+                    bool success = false;
+                    
+                    while (retryCount < 3 && !success)
+                    {
+                        try
+                        {
+                            string url = $"https://api.telegram.org/bot{token.Trim()}/sendMessage";
+                            
                             var payload = new System.Collections.Generic.Dictionary<string, string>
                             {
                                 { "chat_id", chatIdStr },
@@ -89,20 +89,19 @@ public static class TelegramService
                             }
                             
                             response.EnsureSuccessStatusCode();
+                            success = true;
                         }
-                        
-                        success = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        retryCount++;
-                        if (retryCount >= 3)
+                        catch (Exception ex)
                         {
-                            System.IO.File.AppendAllText("tele_error.txt", $"{DateTime.Now}: {ex.Message} (After 3 retries)\n{message}\n");
-                        }
-                        else
-                        {
-                            await Task.Delay(2000); // Chờ 2s rồi thử lại
+                            retryCount++;
+                            if (retryCount >= 3)
+                            {
+                                System.IO.File.AppendAllText("tele_error.txt", $"{DateTime.Now}: {ex.Message} (After 3 retries)\n{message}\n");
+                            }
+                            else
+                            {
+                                await Task.Delay(2000); // Chờ 2s rồi thử lại
+                            }
                         }
                     }
                 }

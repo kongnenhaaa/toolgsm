@@ -69,6 +69,25 @@ public class ImeiManagementService
                 targetImei = NormalizeImei(identity.AssignedImei);
                 targetSource = $"SPOOF ({identity.DeviceName})";
 
+                var cachedEntry = getBackupEntry(ccid);
+                if (cachedEntry == null && DeviceSpoofingService.IsValidImei(targetImei))
+                {
+                    saveBackupEntry(new SimBackupEntry
+                    {
+                        Ccid = ccid,
+                        Imei = targetImei,
+                        PhoneNumber = port.PhoneNumber,
+                        CreatedAt = identity.CreatedAt,
+                        LicenseKeySuffix = string.Empty,
+                        KeyMismatch = "false",
+                        SourceFile = "device-spoof"
+                    });
+
+                    Log($"[{portName}] [SPOOF_BACKUP] Đã lưu Fake IMEI {targetImei} cho CCID {ccid} vào imei_backup.csv.", "SUCCESS");
+
+                    AppendSpoofImeiExcel(portName, ccid, targetImei, port.PhoneNumber, identity.DeviceName, identity.CreatedAt);
+                }
+
                 dispatcherInvoke(() => port.DeviceName = identity.DeviceName);
                 Log($"[{portName}] [DEVICE_SPOOF] SIM CCID={ccid} định danh: {identity.DeviceName} | IMEI mục tiêu: {targetImei}");
             }
@@ -295,5 +314,40 @@ public class ImeiManagementService
         string respLower = response.ToLowerInvariant();
         return respLower.Contains("port not open") ||
                respLower.Contains("rút cáp");
+    }
+
+    private void AppendSpoofImeiExcel(string portName, string ccid, string imei, string phoneNumber, string deviceName, string createdAt)
+    {
+        try
+        {
+            string filePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "spoof_imei_backup.xlsx");
+            OfficeOpenXml.ExcelPackage.LicenseContext = OfficeOpenXml.LicenseContext.NonCommercial;
+            
+            using var package = new OfficeOpenXml.ExcelPackage(new System.IO.FileInfo(filePath));
+            var worksheet = package.Workbook.Worksheets.Count > 0 ? package.Workbook.Worksheets[0] : package.Workbook.Worksheets.Add("Spoof IMEI");
+            
+            if (worksheet.Dimension == null)
+            {
+                worksheet.Cells[1, 1].Value = "CCID";
+                worksheet.Cells[1, 2].Value = "IMEI";
+                worksheet.Cells[1, 3].Value = "Phone Number";
+                worksheet.Cells[1, 4].Value = "Device Name";
+                worksheet.Cells[1, 5].Value = "Created At";
+            }
+            
+            int row = worksheet.Dimension?.End.Row + 1 ?? 2;
+            worksheet.Cells[row, 1].Value = ccid;
+            worksheet.Cells[row, 2].Value = imei;
+            worksheet.Cells[row, 3].Value = phoneNumber;
+            worksheet.Cells[row, 4].Value = deviceName;
+            worksheet.Cells[row, 5].Value = createdAt;
+            
+            package.Save();
+            Log($"[{portName}] Đã ghi bổ sung Fake IMEI {imei} vào file spoof_imei_backup.xlsx.", "SUCCESS");
+        }
+        catch (Exception ex)
+        {
+            Log($"[{portName}] Lỗi khi lưu spoof IMEI ra Excel: {ex.Message}", "ERROR");
+        }
     }
 }

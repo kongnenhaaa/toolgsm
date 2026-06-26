@@ -17,13 +17,27 @@
             
             <!-- Professional Button Style -->
             <Style TargetType="Button" x:Key="ModernButtonStyle" BasedOn="{StaticResource MaterialDesignRaisedButton}">
-                <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="8"/>
+                <Setter Property="Height" Value="28"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="Padding" Value="10,0"/>
+                <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="5"/>
                 <Setter Property="Margin" Value="0,0,8,8"/>
-                <Setter Property="Height" Value="34"/>
                 <Setter Property="FontWeight" Value="SemiBold"/>
                 <Setter Property="Cursor" Value="Hand"/>
                 <!-- Remove border by default -->
                 <Setter Property="BorderThickness" Value="0"/>
+            </Style>
+
+            <Style TargetType="Button" x:Key="MiniCommandButtonStyle" BasedOn="{StaticResource MaterialDesignRaisedButton}">
+                <Setter Property="Height" Value="26"/>
+                <Setter Property="MinWidth" Value="48"/>
+                <Setter Property="Margin" Value="0,0,5,5"/>
+                <Setter Property="Padding" Value="8,0"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="5"/>
             </Style>
 
             <!-- Modern DataGrid Row Style -->

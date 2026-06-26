@@ -132,62 +132,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _customUssdMode = "Selected";
 
-    [ObservableProperty] private string _commandPanelMmsRecipients = string.Empty;
-    [ObservableProperty] private string _commandPanelMmsTitle = string.Empty;
-    [ObservableProperty] private string _commandPanelMmsAttachmentPath = string.Empty;
-    [ObservableProperty] private bool _commandPanelMmsAdvancedOpen;
-    [ObservableProperty] private bool _isCommandPanelOpen;
-    public string AddButtonText => CommandPanelTab switch { "Call" => "+ Thêm Cuộc gọi", "Delay" => "+ Thêm Trễ", _ => $"+ Thêm {CommandPanelTab}" };
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(AddButtonText))] private string _commandPanelTab = "USSD";
-    [ObservableProperty] private string _commandPanelCallNumber = string.Empty;
-    [ObservableProperty] private string _commandPanelCallDuration = string.Empty;
-    [ObservableProperty] private string _commandPanelCallDtmf = string.Empty;
-    [ObservableProperty] private int _commandPanelDataAmount = 500;
-    [ObservableProperty] private int _commandPanelModeIndex = 0;
-    [ObservableProperty] private int _commandPanelRetryCount = 0;
-    [ObservableProperty] private string _commandPanelImeiValue = string.Empty;
-    [ObservableProperty] private int _commandPanelDelaySeconds = 1;
-    [ObservableProperty] private string _commandPanelUssdText = string.Empty;
-    [ObservableProperty] private string _commandPanelSmsRecipient = string.Empty;
-    [ObservableProperty] private string _commandPanelSmsContent = string.Empty;
 
-    [ObservableProperty] private int _queuePendingCount;
-    [ObservableProperty] private int _queueSuccessCount;
-    [ObservableProperty] private int _queueErrorCount;
-
-    [ObservableProperty] private bool _hasUssdError;
-    [ObservableProperty] private bool _hasSmsRecipientError;
-    [ObservableProperty] private bool _hasSmsContentError;
-    [ObservableProperty] private bool _hasCallNumberError;
-    [ObservableProperty] private bool _hasDataAmountError;
-    [ObservableProperty] private bool _hasDelaySecondsError;
-
-    private string CurrentCommandPanelMode => CommandPanelModeIndex == 0 ? "Đồng thời" : "Tuần tự";
-
-    private void ClearCommandPanelErrors() {
-        HasUssdError = false;
-        HasSmsRecipientError = false;
-        HasSmsContentError = false;
-        HasCallNumberError = false;
-        HasDataAmountError = false;
-        HasDelaySecondsError = false;
-    }
-
-    private void UpdateCommandCounts() {
-        QueuePendingCount = CommandQueue.Count(x => x.Status == "Chờ");
-        QueueSuccessCount = CommandQueue.Count(x => x.Status == "Xong");
-        QueueErrorCount = CommandQueue.Count(x => x.Status == "Lỗi");
-    }
-
-    [RelayCommand]
-    private void ClearCommandForm() {
-        CommandPanelSmsRecipient = string.Empty;
-        CommandPanelSmsContent = string.Empty;
-        CommandPanelCallNumber = string.Empty;
-        CommandPanelUssdText = string.Empty;
-        CommandPanelDelaySeconds = 1;
-        ClearCommandPanelErrors();
-    }
 
     [ObservableProperty]
     private bool _isCallManagerDialogOpen;
@@ -963,7 +908,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 CommandQueue.RemoveAt(CommandQueue.Count - 1);
             }
-            UpdateCommandCounts();
         }
 
         var dispatcher = Application.Current?.Dispatcher;
@@ -2123,7 +2067,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // --- END WHITELIST / BLACKLIST ---
                     bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
                                   senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                  senderPhone.Contains("8500") || senderPhone.Contains("7539");
+                                  senderPhone.Contains("8500") || senderPhone.Contains("7539") ||
+                                  senderPhone.Contains("8020") || senderPhone.Contains("6020") ||
+                                  (senderPhone.Length == 4 && senderPhone.StartsWith("78"));
                     bool isWhatsApp = cleanContent.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                       senderPhone.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                       senderPhone.IndexOf("WA", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -4315,201 +4261,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _ussdSendLock.Dispose();
         _lifetimeCts.Dispose();
-    }
-
-    [RelayCommand]
-    private void ToggleCommandPanel()
-    {
-        IsCommandPanelOpen = !IsCommandPanelOpen;
-    }
-
-    [RelayCommand]
-    private void CloseCommandPanel()
-    {
-        IsCommandPanelOpen = false;
-    }
-
-    [RelayCommand]
-    private void SelectCommandPanelTab(string type)
-    {
-        if (!string.IsNullOrWhiteSpace(type))
-        {
-            CommandPanelTab = type;
-            ClearCommandPanelErrors();
-        }
-    }
-
-    [RelayCommand]
-    private void AddCommandQueue()
-    {
-        ClearCommandPanelErrors();
-        bool isValid = true;
-
-        if (CommandPanelTab == "USSD" && string.IsNullOrWhiteSpace(CommandPanelUssdText))
-        {
-            HasUssdError = true; isValid = false;
-        }
-        else if (CommandPanelTab == "SMS")
-        {
-            if (string.IsNullOrWhiteSpace(CommandPanelSmsRecipient)) { HasSmsRecipientError = true; isValid = false; }
-            if (string.IsNullOrWhiteSpace(CommandPanelSmsContent)) { HasSmsContentError = true; isValid = false; }
-        }
-        else if (CommandPanelTab == "Call" && string.IsNullOrWhiteSpace(CommandPanelCallNumber))
-        {
-            HasCallNumberError = true; isValid = false;
-        }
-        else if (CommandPanelTab == "Data" && CommandPanelDataAmount <= 0)
-        {
-            HasDataAmountError = true; isValid = false;
-        }
-        else if (CommandPanelTab == "Delay" && CommandPanelDelaySeconds <= 0)
-        {
-            HasDelaySecondsError = true; isValid = false;
-        }
-
-        if (!isValid) return;
-
-        UpsertCommandQueue(
-            Guid.NewGuid().ToString("N")[..8],
-            "",
-            CommandPanelTab,
-            GetCommandPanelRecipient(),
-            GetCommandPanelContent(),
-            CurrentCommandPanelMode);
-    }
-
-    private string GetCommandPanelRecipient() => CommandPanelTab switch
-    {
-        "SMS" => CommandPanelSmsRecipient,
-        "MMS" => CommandPanelMmsRecipients,
-        "Call" => CommandPanelCallNumber,
-        _ => ""
-    };
-
-    private string GetCommandPanelContent() => CommandPanelTab switch
-    {
-        "USSD" => CommandPanelUssdText,
-        "SMS" => CommandPanelSmsContent,
-        "MMS" => CommandPanelMmsTitle,
-        "Call" => CommandPanelCallDtmf,
-        "Data" => $"{CommandPanelDataAmount} KB",
-        "IMEI" => CommandPanelImeiValue,
-        "Delay" => $"{CommandPanelDelaySeconds}s",
-        _ => ""
-    };
-
-
-
-    [RelayCommand]
-    private void ClearCommandQueue()
-    {
-        CommandQueue.Clear();
-        UpdateCommandCounts();
-    }
-
-    [RelayCommand]
-    private async Task RunCommandQueueAsync()
-    {
-        var items = CommandQueue.Reverse().ToList();
-        if (!items.Any())
-        {
-            SnackbarMessageQueue.Enqueue("Chưa có lệnh trong kịch bản.");
-            return;
-        }
-
-        var targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
-        if (!targetPorts.Any() && SelectedPort != null && IsActive(SelectedPort))
-            targetPorts.Add(SelectedPort);
-
-        if (!targetPorts.Any())
-        {
-            SnackbarMessageQueue.Enqueue("Vui lòng chọn cổng để thực thi.");
-            return;
-        }
-
-        foreach (var p in targetPorts)
-        {
-            if (SmsInProgressPorts.ContainsKey(p.PortName))
-            {
-                SnackbarMessageQueue.Enqueue("Đang có tác vụ chạy trên cổng " + p.PortName + ". Vui lòng đợi.");
-                return;
-            }
-        }
-
-        foreach (var p in targetPorts)
-            SmsInProgressPorts[p.PortName] = true;
-
-        SnackbarMessageQueue.Enqueue("Bắt đầu chạy kịch bản...");
-
-        try
-        {
-            var tasks = new List<Task>();
-            foreach (var p in targetPorts)
-            {
-                tasks.Add(Task.Run(async () =>
-                {
-                    foreach (var item in items)
-                    {
-                        if (_lifetimeCts.Token.IsCancellationRequested) break;
-                        await ExecuteCommandQueueItemAsync(p.PortName, item);
-                    }
-                }));
-            }
-            await Task.WhenAll(tasks);
-            SnackbarMessageQueue.Enqueue("Đã chạy xong kịch bản.");
-        }
-        finally
-        {
-            foreach (var p in targetPorts)
-                SmsInProgressPorts.TryRemove(p.PortName, out _);
-        }
-    }
-
-    private async Task ExecuteCommandQueueItemAsync(string portName, CommandQueueItem item)
-    {
-        Application.Current.Dispatcher.Invoke(() => item.Status = "Đang chạy");
-        UpdateCommandCounts();
-
-        try
-        {
-            string cmdType = item.Type ?? "";
-            if (cmdType == "USSD")
-            {
-                await SendUssdThrottledAsync(portName, item.Content, "Kịch bản", maxRetries: CommandPanelRetryCount);
-            }
-            else if (cmdType == "SMS")
-            {
-                await _modemService.SendSmsAsync(portName, item.Recipient, item.Content, timeoutMs: 30000);
-            }
-            else if (cmdType == "Call")
-            {
-                await _modemService.SendCommandAsync(portName, "ATD" + item.Recipient + ";", timeoutMs: 15000);
-            }
-            else if (cmdType == "Delay")
-            {
-                if (int.TryParse(item.Content.Replace("s", ""), out int d))
-                    await Task.Delay(d * 1000);
-            }
-            else
-            {
-                Application.Current.Dispatcher.Invoke(() => { item.Result = "Bỏ qua"; item.Error = "Chưa hỗ trợ"; });
-            }
-
-            Application.Current.Dispatcher.Invoke(() => item.Status = "Xong");
-        }
-        catch (Exception ex)
-        {
-            Application.Current.Dispatcher.Invoke(() => { item.Status = "Lỗi"; item.Error = ex.Message; });
-        }
-        
-        UpdateCommandCounts();
-    }
-
-    [RelayCommand]
-    private async Task RunWithErrorCommandQueueAsync()
-    {
-        SnackbarMessageQueue.Enqueue("Tính năng chưa được hỗ trợ.");
-        await Task.CompletedTask;
     }
 }
 

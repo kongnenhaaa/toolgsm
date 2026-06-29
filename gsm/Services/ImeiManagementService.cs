@@ -63,13 +63,42 @@ public class ImeiManagementService
         
         try
         {
-            if (settings.EnableDeviceSpoofing)
+            var cachedEntry = getBackupEntry(ccid);
+
+            // Ưu tiên 2: Phục hồi từ backup nếu có (và nếu tính năng Restore được bật)
+            if (settings.EnableImeiRestore && cachedEntry != null)
+            {
+                dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
+                
+                string candidateImei = NormalizeImei(cachedEntry.Imei);
+                if (DeviceSpoofingService.IsValidImei(candidateImei))
+                {
+                    targetImei = candidateImei;
+                    targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
+                    
+                    dispatcherInvoke(() =>
+                    {
+                        if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
+                        {
+                            port.PhoneNumber = cachedEntry.PhoneNumber;
+                        }
+                        port.CreatedAt = cachedEntry.CreatedAt;
+                        port.LicenseKeySuffix = cachedEntry.LicenseKeySuffix;
+                        port.KeyMismatch = cachedEntry.KeyMismatch;
+                    });
+                }
+                else
+                {
+                    Log($"[{portName}] Bản Backup IMEI không hợp lệ ({candidateImei}). Bỏ qua Restore để bảo vệ thiết bị.", "ERROR");
+                }
+            }
+            // Ưu tiên 1: Tạo/Sử dụng fake IMEI cho SIM mới hoặc khi Restore tắt
+            else if (settings.EnableDeviceSpoofing)
             {
                 var identity = DeviceSpoofingService.GetOrCreateByCcid(ccid, portName, port.PhoneNumber);
                 targetImei = NormalizeImei(identity.AssignedImei);
                 targetSource = $"SPOOF ({identity.DeviceName})";
 
-                var cachedEntry = getBackupEntry(ccid);
                 if (cachedEntry == null && DeviceSpoofingService.IsValidImei(targetImei))
                 {
                     saveBackupEntry(new SimBackupEntry
@@ -91,43 +120,16 @@ public class ImeiManagementService
                 dispatcherInvoke(() => port.DeviceName = identity.DeviceName);
                 Log($"[{portName}] [DEVICE_SPOOF] SIM CCID={ccid} định danh: {identity.DeviceName} | IMEI mục tiêu: {targetImei}");
             }
+            // Mặc định (GSM Modem) khi cả Fake IMEI và Restore IMEI đều không áp dụng
             else
             {
                 dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
 
-                var cachedEntry = getBackupEntry(ccid);
-                if (cachedEntry != null)
+                if (cachedEntry != null && !settings.EnableImeiRestore)
                 {
-                    if (settings.EnableImeiRestore)
-                    {
-                        string candidateImei = NormalizeImei(cachedEntry.Imei);
-                        if (DeviceSpoofingService.IsValidImei(candidateImei))
-                        {
-                            targetImei = candidateImei;
-                            targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
-                            
-                            dispatcherInvoke(() =>
-                            {
-                                if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
-                                {
-                                    port.PhoneNumber = cachedEntry.PhoneNumber;
-                                }
-                                port.CreatedAt = cachedEntry.CreatedAt;
-                                port.LicenseKeySuffix = cachedEntry.LicenseKeySuffix;
-                                port.KeyMismatch = cachedEntry.KeyMismatch;
-                            });
-                        }
-                        else
-                        {
-                            Log($"[{portName}] Bản Backup IMEI không hợp lệ ({candidateImei}). Bỏ qua Restore để bảo vệ thiết bị.", "ERROR");
-                        }
-                    }
-                    else
-                    {
-                        Log($"[{portName}] Đã có bản Backup IMEI nhưng tính năng Khôi phục (Restore) đang tắt. Giữ nguyên IMEI gốc trên mạch.");
-                    }
+                    Log($"[{portName}] Đã có bản Backup IMEI nhưng tính năng Khôi phục (Restore) đang tắt. Giữ nguyên IMEI gốc trên mạch.");
                 }
-                else
+                else if (cachedEntry == null)
                 {
                     if (settings.BlockUnknownSims)
                     {

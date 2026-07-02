@@ -1094,56 +1094,68 @@ GET  /api/history
                         </WrapPanel>
                     </Border>
 
-                    <UniformGrid Grid.Row="1" Columns="8" Margin="10,10,10,0">
-                        <Border Background="#1E1E2E" CornerRadius="8"  Margin="0,0,8,0">
-                            <StackPanel>
-                                <TextBlock Text="Tổng COM" Foreground="Gray" FontSize="11"/>
-                                <TextBlock Text="{Binding TotalPortCount}" Foreground="White" FontSize="22" FontWeight="Bold"/>
-                            </StackPanel>
+                    <UniformGrid Grid.Row="1" Columns="4" Margin="10,15,10,5">
+                        <!-- Tổng COM -->
+                        <Border Background="#1E1E2E" CornerRadius="12" Margin="0,0,12,0" Padding="20,15">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Tổng COM" Foreground="#A0A0B0" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBlock Text="{Binding TotalPortCount}" Foreground="White" FontSize="28" FontWeight="Bold"/>
+                                </StackPanel>
+                                <materialDesign:PackIcon Grid.Column="1" Kind="UsbPort" Width="40" Height="40" Foreground="#3A3A4A" VerticalAlignment="Center"/>
+                            </Grid>
                         </Border>
-                        <Border Background="#11281F" CornerRadius="8"  Margin="0,0,8,0">
-                            <StackPanel>
-                                <TextBlock Text="Online" Foreground="#8BE6B0" FontSize="11"/>
-                                <TextBlock Text="{Binding OnlinePortCount}" Foreground="#4CAF50" FontSize="22" FontWeight="Bold"/>
-                            </StackPanel>
+                        
+                        <!-- Online -->
+                        <Border Background="#11281F" CornerRadius="12" Margin="0,0,12,0" Padding="20,15">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Online" Foreground="#8BE6B0" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBlock Text="{Binding OnlinePortCount}" Foreground="#4CAF50" FontSize="28" FontWeight="Bold"/>
+                                </StackPanel>
+                                <materialDesign:PackIcon Grid.Column="1" Kind="CheckCircleOutline" Width="40" Height="40" Foreground="#1B5E20" VerticalAlignment="Center"/>
+                            </Grid>
                         </Border>
-                        <Border Background="#2A1820" CornerRadius="8"  Margin="0,0,8,0">
-                            <StackPanel>
-                                <TextBlock Text="Offline" Foreground="#FF9AA8" FontSize="11"/>
-                                <TextBlock Text="{Binding OfflinePortCount}" Foreground="#FF5252" FontSize="22" FontWeight="Bold"/>
-                            </StackPanel>
+                        
+                        <!-- Offline -->
+                        <Border Background="#2A1820" CornerRadius="12" Margin="0,0,12,0" Padding="20,15">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Offline" Foreground="#FF9AA8" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBlock Text="{Binding OfflinePortCount}" Foreground="#FF5252" FontSize="28" FontWeight="Bold"/>
+                                </StackPanel>
+                                <materialDesign:PackIcon Grid.Column="1" Kind="CloseCircleOutline" Width="40" Height="40" Foreground="#8E1D2A" VerticalAlignment="Center"/>
+                            </Grid>
                         </Border>
-                        <Border Background="#1E1E2E" CornerRadius="8"  Margin="0,0,8,0">
-                            <StackPanel>
-                                <TextBlock Text="SMS nhận" Foreground="Gray" FontSize="11"/>
-                                <TextBlock Text="{Binding SmsReceivedCount}" Foreground="#FF9800" FontSize="22" FontWeight="Bold"/>
-                            </StackPanel>
-                        </Border>
-                        <Border Background="#2A1820" CornerRadius="8"  Margin="0,0,8,0">
-                            <StackPanel>
-                                <TextBlock Text="Lỗi SMS" Foreground="#FF9AA8" FontSize="11"/>
-                                <TextBlock Text="{Binding SmsFailedCount}" Foreground="#FF5252" FontSize="22" FontWeight="Bold"/>
-                            </StackPanel>
-                        </Border>
-                        <Border Background="#2B2414" CornerRadius="8"  Margin="0,0,8,0">
-                            <StackPanel>
-                                <TextBlock Text="Timeout" Foreground="#FFD27A" FontSize="11"/>
-                                <TextBlock Text="{Binding TimeoutTotalCount}" Foreground="#FFC107" FontSize="22" FontWeight="Bold"/>
-                            </StackPanel>
-                        </Border>
-                        <Border Background="#2B2414" CornerRadius="8"  Margin="0,0,8,0">
-                            <StackPanel>
-                                <TextBlock Text="Cooldown" Foreground="#FFD27A" FontSize="11"/>
-                                <TextBlock Text="{Binding CooldownPortCount}" Foreground="#FFC107" FontSize="22" FontWeight="Bold"/>
-                            </StackPanel>
-                        </Border>
-                        <Border Background="#1E1E2E" CornerRadius="8" >
-                            <StackPanel>
-                                <TextBlock Text="Lỗi nhiều nhất" Foreground="Gray" FontSize="11"/>
-                                <TextBlock Text="{Binding TopProblemPort}" Foreground="White" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
-                            </StackPanel>
+                        
+                        <!-- SMS Nhận -->
+                        <Border Background="#2E2211" CornerRadius="12" Margin="0,0,0,0" Padding="20,15">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="SMS Nhận" Foreground="#FFD27A" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                    <TextBlock Text="{Binding SmsReceivedCount}" Foreground="#FF9800" FontSize="28" FontWeight="Bold"/>
+                                </StackPanel>
+                                <materialDesign:PackIcon Grid.Column="1" Kind="MessageTextOutline" Width="40" Height="40" Foreground="#7A5212" VerticalAlignment="Center"/>
+                            </Grid>
                         </Border>
                     </UniformGrid>
+
                     
                     <!-- GSM DataGrid Wrapper -->
                     <Border Grid.Row="2" Background="#1E1E2F" CornerRadius="12" Margin="10" BorderThickness="1" BorderBrush="#2A2A40">

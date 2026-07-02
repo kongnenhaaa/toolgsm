@@ -443,8 +443,8 @@ public class GsmModemService : IGsmModemService
             // ---------------------------------------------------------
             if (_commandTcs.TryGetValue(portName, out var tcs))
             {
-                // Kiểm tra dấu hiệu kết thúc của lệnh AT (OK, ERROR, hoặc CMS/CME ERROR, hoặc dấu nhắc >)
-                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:|>\s*$");
+                // Kiểm tra dấu hiệu kết thúc của lệnh AT (OK, ERROR, hoặc CMS/CME ERROR, hoặc dấu nhắc >, hoặc CONNECT)
+                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:|>\s*$|\r?\nCONNECT\r?\n?$");
                 if (isCompleted)
                 {
                     if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
@@ -588,6 +588,69 @@ public class GsmModemService : IGsmModemService
             {
                 tcs.TrySetCanceled();
                 return "ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)";
+            }
+            
+            string finalResp = await tcs.Task;
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"< {finalResp.Trim()}" });
+            return finalResp.Trim();
+        }
+        catch (IOException ex)
+        {
+            PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Cáp bị rút khi đang gửi lệnh!" });
+            return $"ERROR: Rút cáp đột ngột - {ex.Message}";
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+    }
+
+    /// <summary>
+    /// Gửi dữ liệu thô (raw data) không kèm \r\n, dùng để gửi URL hoặc Data binary sau khi nhận CONNECT/>
+    /// </summary>
+    public async Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false)
+    {
+        if (!_ports.TryGetValue(portName, out var sp) || !sp.IsOpen)
+        {
+            return "ERROR: Port not open";
+        }
+        
+        if (!_semaphores.TryGetValue(portName, out var semaphore))
+        {
+            return "ERROR: Semaphore missing";
+        }
+
+        bool lockAcquired = await semaphore.WaitAsync(timeoutMs);
+        if (!lockAcquired)
+        {
+            return "ERROR: Timeout waiting for lock";
+        }
+
+        var tcs = new TaskCompletionSource<string>("RAW_DATA", TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_commandTcs.TryAdd(portName, tcs))
+        {
+            semaphore.Release();
+            return "ERROR: Another command is already in progress";
+        }
+
+        try
+        {
+            if (!silent) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> [RAW] {data}" });
+            
+            if (_portBuffers.TryGetValue(portName, out var buffer)) buffer.Clear();
+            
+            sp.DiscardInBuffer();
+            sp.DiscardOutBuffer();
+            
+            sp.Write(data);
+            
+            var timeoutTask = Task.Delay(timeoutMs);
+            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
+            
+            if (completedTask == timeoutTask)
+            {
+                tcs.TrySetCanceled();
+                return "ERROR: Timeout waiting for response after raw data";
             }
             
             string finalResp = await tcs.Task;

@@ -860,10 +860,8 @@ GET  /api/history
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
                     <RadioButton Content="TIN NHẮN" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
                                  Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="100" FontWeight="Bold"/>
-                    <materialDesign:Badged Badge="{Binding UnreadOtpBadge}" BadgeBackground="#E91E63" BadgeForeground="White" Margin="2">
-                        <RadioButton Content="OTP ĐÃ LƯU" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
-                                     Style="{StaticResource MaterialDesignTabRadioButton}" Width="110" FontWeight="Bold"/>
-                    </materialDesign:Badged>
+                    <RadioButton Content="HƯỚNG DẪN" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
+                                 Style="{StaticResource MaterialDesignTabRadioButton}" Margin="2" Width="120" FontWeight="Bold"/>
                 </StackPanel>
             </Border>
             
@@ -1421,97 +1419,142 @@ GET  /api/history
                 </Grid>
             </TabItem>
 
-            <!-- TAB 4: LỊCH SỬ OTP -->
+
+            <!-- TAB 5: HƯỚNG DẪN SỬ DỤNG -->
             <TabItem>
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
-                        <materialDesign:PackIcon Kind="ClockTimeEightOutline" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                        <TextBlock Text="Lịch Sử OTP" VerticalAlignment="Center"/>
+                        <materialDesign:PackIcon Kind="BookOpenPageVariant" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                        <TextBlock Text="Hướng Dẫn" VerticalAlignment="Center"/>
                     </StackPanel>
                 </TabItem.Header>
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
+                <ScrollViewer Margin="20" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
+                        <TextBlock Text="📖 HƯỚNG DẪN QUY TRÌNH KẾT NỐI MODEM &amp; CẮM SIM AN TOÀN 100%" FontSize="24" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,20"/>
 
-                    <!-- Filter bar -->
-                    <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1" Padding="15,10">
-                        <Grid>
+                        <Border Background="#1E1E2F" CornerRadius="10" Padding="20" BorderThickness="1" BorderBrush="#3D3D5C" Margin="0,0,0,20">
+                            <StackPanel>
+                                <TextBlock Text="CẢNH BÁO QUAN TRỌNG VỀ LỘ IMEI" FontSize="18" FontWeight="Bold" Foreground="#FF5252" Margin="0,0,0,15"/>
+                                <TextBlock Text="Mạch GSM/Modem sẽ luôn tự động khởi động và BẬT SÓNG ngay khi được cấp nguồn từ cổng USB. Nếu bạn cắm SIM vào modem trước khi cắm USB vào máy tính, nhà mạng sẽ ngay lập tức nhận được IMEI gốc của phần cứng mạch. Phần mềm KHÔNG THỂ can thiệp chặn quá trình này nếu nó diễn ra trước khi Tool kết nối được với mạch."
+                                           FontSize="14" Foreground="White" TextWrapping="Wrap" LineHeight="24" Margin="0,0,0,10"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="✅ QUY TRÌNH CHUẨN 3 BƯỚC (BẢO MẬT IMEI TUYỆT ĐỐI)" FontSize="18" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+
+                        <Grid Margin="0,0,0,15">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="60"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-
-                            <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="History" VerticalAlignment="Center" Foreground="#FF9800" Width="22" Height="22" Margin="0,0,12,0"/>
-                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
-                                    <TextBlock Text="SĐT SIM" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="120" Text="{Binding OtpHistoryFilterPhone, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="SĐT..." Style="{StaticResource SearchTextBoxStyle}"/>
-                                </StackPanel>
-                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
-                                    <TextBlock Text="SENDER" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="110" Text="{Binding OtpHistoryFilterSender, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Sender..." Style="{StaticResource SearchTextBoxStyle}"/>
-                                </StackPanel>
-                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
-                                    <TextBlock Text="CỔNG" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="80" Text="{Binding OtpHistoryFilterPort, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="COM..." Style="{StaticResource SearchTextBoxStyle}"/>
-                                </StackPanel>
-                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
-                                    <TextBlock Text="NGÀY" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="100" Text="{Binding OtpHistoryFilterDate, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="VD: 2026-06" Style="{StaticResource SearchTextBoxStyle}"/>
-                                </StackPanel>
-                                <StackPanel Orientation="Vertical" Margin="0,0,12,0">
-                                    <TextBlock Text="NỘI DUNG" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
-                                    <TextBox Width="140" Text="{Binding OtpHistoryFilterContent, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Tìm nội dung..." Style="{StaticResource SearchTextBoxStyle}"/>
-                                </StackPanel>
-                                <Button Content="Xóa lọc" Command="{Binding ClearOtpHistoryFilterCommand}" Background="#607D8B" Style="{StaticResource ModernButtonStyle}" Width="70" Height="34" VerticalAlignment="Bottom" Margin="0,0,8,0" FontSize="11"/>
-                            </StackPanel>
-
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
-                                <TextBlock Text="{Binding FilteredOtpHistoryCount, StringFormat='Kết quả: {0} bản ghi'}" Foreground="Gray" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="12"/>
-                                <Button Content="Tải lại" Command="{Binding LoadOtpHistoryCommand}" Background="#455A64" Style="{StaticResource ModernButtonStyle}" Margin="0,0,8,0"/>
-                                <Button Content="Xuất Excel" Command="{Binding ExportOtpHistoryToExcelCommand}" Background="#4CAF50" Style="{StaticResource ModernButtonStyle}" Margin="0"/>
+                            <Border Width="40" Height="40" CornerRadius="20" Background="#5C6BC0" HorizontalAlignment="Center" VerticalAlignment="Top">
+                                <TextBlock Text="1" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="10,5,0,0">
+                                <TextBlock Text="Cắm Modem/Box vào PC (CHƯA CÓ SIM)" FontSize="16" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
+                                <TextBlock Text="Hãy tháo toàn bộ SIM ra khỏi khay trước khi cắm cáp USB vào máy tính. Đảm bảo cổng COM đã hiện trong Device Manager." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Grid>
-                    </Border>
 
-                    <!-- OTP History DataGrid -->
-                    <Border Grid.Row="1" Background="#1E1E2F" CornerRadius="12" Margin="10" BorderThickness="1" BorderBrush="#2A2A40">
-                        <DataGrid ItemsSource="{Binding FilteredOtpHistory}"
-                                  AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
-                                  Background="{StaticResource PanelBackground}" RowBackground="{StaticResource PanelBackground}" AlternatingRowBackground="#2A2A40"
-                                  Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
-                                  HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
-                                  ColumnHeaderStyle="{StaticResource CustomHeaderStyle}"
-                                  ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
-                            <DataGrid.ContextMenu>
-                                <ContextMenu >
-                                    <MenuItem Header="Sao chép OTP" Command="{Binding Path=DataContext.CopyOtpFromHistoryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}" CommandParameter="{Binding PlacementTarget.CurrentItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}" >
-                                        <MenuItem.Icon><materialDesign:PackIcon Kind="ContentCopy"/></MenuItem.Icon>
-                                    </MenuItem>
-                                </ContextMenu>
-                            </DataGrid.ContextMenu>
-                            <DataGrid.Columns>
-                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thời gian" Binding="{Binding Timestamp}" Width="155"/>
-                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding Port}" Width="100"/>
-                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT SIM" Binding="{Binding SimPhone}" Width="130"/>
-                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Sender" Binding="{Binding Sender}" Width="120"/>
-                                <DataGridTemplateColumn Header="OTP" Width="110">
-                                    <DataGridTemplateColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <Border CornerRadius="6" Padding="6,2" Background="#33FF9800" HorizontalAlignment="Left" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Otp}" Foreground="#FF9800" FontWeight="Bold"/>
-                                            </Border>
-                                        </DataTemplate>
-                                    </DataGridTemplateColumn.CellTemplate>
-                                </DataGridTemplateColumn>
-                                <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding Content}" Width="*"/>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </Border>
-                </Grid>
+                        <Grid Margin="0,0,0,15">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Width="40" Height="40" CornerRadius="20" Background="#5C6BC0" HorizontalAlignment="Center" VerticalAlignment="Top">
+                                <TextBlock Text="2" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="10,5,0,0">
+                                <TextBlock Text="Mở Tool GSM Pro và chờ Khởi Tạo" FontSize="16" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
+                                <TextBlock Text="Mở ứng dụng Tool GSM Pro. Tool sẽ tự động quét các cổng COM và lập tức gửi lệnh ÉP TẮT SÓNG (AT+CFUN=4). Các cổng sẽ chuyển sang trạng thái Đang chờ cắm SIM (Hot-plug)." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,25">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Width="40" Height="40" CornerRadius="20" Background="#4CAF50" HorizontalAlignment="Center" VerticalAlignment="Top">
+                                <TextBlock Text="3" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="10,5,0,0">
+                                <TextBlock Text="Tiến hành Cắm Nóng SIM (Hot-Plug)" FontSize="16" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,8"/>
+                                <TextBlock Text="Bây giờ bạn có thể lần lượt cắm SIM vào các khe. Tool sẽ tự động quét ngầm, phát hiện SIM mới, tạo/đổi IMEI Fake an toàn, và CHỈ BẬT SÓNG sau khi đã ghi IMEI Fake thành công. Sóng sẽ lên màu xanh (Active) và IMEI hiển thị là IMEI an toàn." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Grid>
+                        
+                        <Separator Background="#3D3D5C" Margin="0,10,0,20"/>
+                        
+                        <TextBlock Text="🛠 CÁC CƠ CHẾ BẢO VỆ ĐÃ ĐƯỢC TÍCH HỢP:" FontSize="16" FontWeight="Bold" Foreground="#FF9800" Margin="0,0,0,15"/>
+                        <TextBlock Text="• Khóa cứng (Safety Lock): Nếu Tool không thể ép tắt sóng ban đầu, cổng đó sẽ bị khóa hoàn toàn (STATUS_NO_RESPONSE) để bảo vệ." FontSize="14" Foreground="#B0BEC5" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                        <TextBlock Text="• Quét ngầm (Continuous Polling): Tool liên tục quét tìm SIM 24/24 (không giới hạn thời gian cắm nóng)." FontSize="14" Foreground="#B0BEC5" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                        <TextBlock Text="• Khóa kép (Double Lock): Trước khi ghi đè IMEI, Tool bồi thêm một lệnh tắt sóng tuyệt đối (AT+CFUN=0) và chỉ kích hoạt lại (AT+CFUN=1) nếu đã ghi xong." FontSize="14" Foreground="#B0BEC5" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                        
+                        <Separator Background="#3D3D5C" Margin="0,20"/>
+                        
+                        <TextBlock Text="📱 HƯỚNG DẪN CÁC TÍNH NĂNG KHÁC" FontSize="20" FontWeight="Bold" Foreground="#2196F3" Margin="0,0,0,20"/>
+                        
+                        <!-- Tính năng Webhook -->
+                        <Grid Margin="0,0,0,20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <materialDesign:PackIcon Kind="Web" Width="40" Height="40" Foreground="#5C6BC0" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                                <TextBlock Text="1. Webhook Tự Động (Forward OTP/SMS lên Server)" FontSize="16" FontWeight="Bold" Foreground="#B2DFDB" Margin="0,0,0,8"/>
+                                <TextBlock Text="Dùng để đẩy OTP tự động sang Telegram, Zalo, hoặc Website riêng.&#x0a;• Vào Cài Đặt (Bánh răng) -> Thêm Rule Webhook.&#x0a;• Bạn có thể lọc Sender (VD: Zalo, Telegram) hoặc tích 'Chỉ lấy OTP' để bỏ qua tin nhắn rác.&#x0a;• Dữ liệu gửi đi dạng JSON chuẩn." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Tính năng USSD/Nạp thẻ -->
+                        <Grid Margin="0,0,0,20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <materialDesign:PackIcon Kind="ConsoleLine" Width="40" Height="40" Foreground="#FF9800" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                                <TextBlock Text="2. Kiểm tra tài khoản &amp; Chạy USSD Hàng Loạt" FontSize="16" FontWeight="Bold" Foreground="#B2DFDB" Margin="0,0,0,8"/>
+                                <TextBlock Text="• Chuột phải vào cổng -> Chọn 'Kiểm tra tài khoản' (Ctrl+B) để check số dư.&#x0a;• Chạy USSD hàng loạt: Chọn nhiều cổng (tích ☑) -> Chuột phải -> 'Chạy USSD Tùy Chỉnh' (VD: *101#).&#x0a;• Nạp thẻ: Chuột phải -> 'Nạp thẻ / Top-up', nhập mã thẻ cào." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Tính năng Blacklist -->
+                        <Grid Margin="0,0,0,20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <materialDesign:PackIcon Kind="BlockHelper" Width="40" Height="40" Foreground="#E53935" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                                <TextBlock Text="3. Lọc Tin Nhắn Rác (Blacklist / Whitelist)" FontSize="16" FontWeight="Bold" Foreground="#B2DFDB" Margin="0,0,0,8"/>
+                                <TextBlock Text="• Vào Cài Đặt -> Blacklist: Nhập các đầu số rác (VD: QC, 1900). Tool sẽ không lưu vào Lịch sử OTP để tránh rác màn hình.&#x0a;• Whitelist: Chỉ cho phép nhận SMS từ danh sách nhất định." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Tính năng Đổi IMEI -->
+                        <Grid Margin="0,0,0,20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <materialDesign:PackIcon Kind="Cellphone" Width="40" Height="40" Foreground="#4CAF50" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                                <TextBlock Text="4. Bật/Tắt tính năng Fake IMEI" FontSize="16" FontWeight="Bold" Foreground="#B2DFDB" Margin="0,0,0,8"/>
+                                <TextBlock Text="• Tool luôn được thiết kế ưu tiên bảo vệ IMEI. Để sử dụng, hãy vào Cài Đặt -> Kéo xuống dưới cùng -> Bật '[ƯU TIÊN 1] Bật tính năng giả lập (Fake IMEI)'.&#x0a;• Bạn có thể bấm 'Reset định danh tất cả thiết bị' nếu muốn khởi tạo lại toàn bộ IMEI mới cho đợt SIM tiếp theo." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
         </TabControl>
@@ -1880,6 +1923,11 @@ GET  /api/history
                                     </Style>
                                 </StackPanel.Style>
 
+                                <!-- Cảnh báo chưa hỗ trợ -->
+                                <Border Background="#33FF5722" BorderBrush="#FF5722" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+                                    <TextBlock Text="⚠️ Tính năng MMS tạm thời chưa được hỗ trợ trong Hàng đợi lệnh vì cần cấu hình APN phức tạp." Foreground="#FFCCBC" FontSize="11" TextWrapping="Wrap"/>
+                                </Border>
+
                                 <!-- Người nhận -->
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>
@@ -2230,6 +2278,11 @@ GET  /api/history
                                     </Style>
                                 </StackPanel.Style>
 
+                                <!-- Cảnh báo đã hỗ trợ -->
+                                <Border Background="#334CAF50" BorderBrush="#4CAF50" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+                                    <TextBlock Text="✔️ Đã hỗ trợ chạy tải Data ngầm (Tương thích tốt nhất với chip Quectel) để tiêu thụ dung lượng KB." Foreground="#C8E6C9" FontSize="11" TextWrapping="Wrap"/>
+                                </Border>
+
                                 <!-- Dung lượng data -->
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>
@@ -2320,6 +2373,12 @@ GET  /api/history
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
+                                
+                                <!-- Cảnh báo chưa hỗ trợ -->
+                                <Border Background="#33FF5722" BorderBrush="#FF5722" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10">
+                                    <TextBlock Text="⚠️ Tính năng Đổi IMEI qua Hàng đợi lệnh bị khóa để đảm bảo an toàn. Việc đổi IMEI sẽ khởi động lại sóng, làm đứt kết nối cổng COM và gãy toàn bộ hàng đợi phía sau. Vui lòng bật Fake IMEI tự động ở phần Cài Đặt." Foreground="#FFCCBC" FontSize="11" TextWrapping="Wrap"/>
+                                </Border>
+
                                 <!-- IMEI -->
                                 <Grid Margin="0,0,0,6">
                                     <Grid.ColumnDefinitions>

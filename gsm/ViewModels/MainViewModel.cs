@@ -4678,6 +4678,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (int.TryParse(item.Content.Replace("s", ""), out int d))
                     await Task.Delay(d * 1000);
             }
+            else if (cmdType == "Data")
+            {
+                if (int.TryParse(item.Content.Replace(" KB", "").Replace(" ", ""), out int kb))
+                {
+                    await ConsumeDataQuectelAsync(portName, kb);
+                }
+            }
             else
             {
                 Application.Current.Dispatcher.Invoke(() => { item.Result = "Bỏ qua"; item.Error = "Chưa hỗ trợ"; });
@@ -4691,6 +4698,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         
         UpdateCommandCounts();
+    }
+
+    private async Task ConsumeDataQuectelAsync(string portName, int kilobytes)
+    {
+        // 1. Kích hoạt mạng 4G/3G (PDP Context)
+        await _modemService.SendCommandAsync(portName, "AT+QIACT=1", timeoutMs: 15000);
+        
+        // 2. Cấu hình HTTP (Context ID = 1)
+        await _modemService.SendCommandAsync(portName, "AT+QHTTPCFG=\"contextid\",1", timeoutMs: 3000);
+        await _modemService.SendCommandAsync(portName, "AT+QHTTPCFG=\"responseheader\",0", timeoutMs: 3000);
+        
+        // Link tải 1 file rác ~100KB để nuốt dung lượng Data
+        string testUrl = "http://speedtest.ftp.otenet.gr/files/test100k.db"; 
+        
+        // Tính số lần tải cần thiết (ví dụ nhập 500 KB => tải 5 lần)
+        int loops = kilobytes / 100;
+        if (loops == 0) loops = 1;
+        
+        for (int i = 0; i < loops; i++)
+        {
+            // Báo độ dài URL cho Modem biết
+            string resp = await _modemService.SendCommandAsync(portName, $"AT+QHTTPURL={testUrl.Length},80", timeoutMs: 10000);
+            
+            // Modem phản hồi chữ CONNECT nghĩa là nó đã sẵn sàng nhận link gốc
+            if (resp.Contains("CONNECT"))
+            {
+                // Gửi Link dạng RAW (không kèm dấu enter \r\n ở đuôi, vì modem chỉ đọc đúng Length byte)
+                await _modemService.SendRawAsync(portName, testUrl, timeoutMs: 10000);
+                
+                // Bắt đầu lệnh tải (Timeout 60s cho mạng chậm)
+                await _modemService.SendCommandAsync(portName, "AT+QHTTPGET=80", timeoutMs: 60000);
+            }
+            
+            await Task.Delay(1000); // Nghỉ 1 giây giữa các lần tải
+        }
     }
 
     [RelayCommand]

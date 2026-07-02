@@ -8,7 +8,7 @@
         mc:Ignorable="d"
         Title="Quản lý IMEI" Height="700" Width="1000"
         WindowStartupLocation="CenterOwner"
-        Background="#F5F5F5">
+        Background="#0f172a" Foreground="#e2e8f0">
 
     <Window.DataContext>
         <viewmodels:ImeiManagerViewModel/>
@@ -27,21 +27,26 @@
                   CanUserAddRows="False"
                   CanUserDeleteRows="False"
                   IsReadOnly="True"
-                  Background="White"
-                  BorderBrush="#E0E0E0"
+                  Background="#1e293b"
+                  BorderBrush="#334155"
                   BorderThickness="1"
-                  RowHeight="30"
+                  RowHeight="35"
+                  Foreground="White"
                   HeadersVisibility="Column"
-                  GridLinesVisibility="All"
-                  HorizontalGridLinesBrush="#E0E0E0"
-                  VerticalGridLinesBrush="#E0E0E0">
+                  GridLinesVisibility="Horizontal"
+                  HorizontalGridLinesBrush="#334155"
+                  VerticalGridLinesBrush="Transparent"
+                  RowBackground="#1e293b"
+                  AlternatingRowBackground="#0f172a">
             <DataGrid.ColumnHeaderStyle>
                 <Style TargetType="DataGridColumnHeader">
-                    <Setter Property="Background" Value="#00BCD4"/>
-                    <Setter Property="Foreground" Value="White"/>
+                    <Setter Property="Background" Value="#0f172a"/>
+                    <Setter Property="Foreground" Value="#94a3b8"/>
                     <Setter Property="FontWeight" Value="Bold"/>
-                    <Setter Property="Padding" Value="10,5"/>
+                    <Setter Property="Padding" Value="10,8"/>
                     <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                    <Setter Property="BorderBrush" Value="#334155"/>
                 </Style>
             </DataGrid.ColumnHeaderStyle>
             <DataGrid.Columns>
@@ -55,6 +60,10 @@
 
         <!-- Các chức năng bên dưới -->
         <Grid Grid.Row="1" Margin="0,15,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
@@ -63,59 +72,59 @@
             </Grid.ColumnDefinitions>
 
             <!-- Nhóm 1: Lấy dữ liệu -->
-            <GroupBox Grid.Column="0" Header="Lấy dữ liệu" Margin="0,0,10,0">
-                <StackPanel>
+            <GroupBox Grid.Row="0" Grid.Column="0" Header="Lấy dữ liệu" Margin="0,0,10,0" Foreground="White" BorderBrush="#334155" Style="{StaticResource MaterialDesignGroupBox}">
+                <StackPanel Margin="5">
                     <Button Content="Xuất .txt" 
                             Command="{Binding ExportTxtCommand}"
-                            Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"
-                            Margin="0,0,0,5" Width="130" HorizontalAlignment="Left"/>
+                            Background="#334155" Foreground="White" BorderBrush="Transparent"
+                            Margin="0,0,0,5" Padding="20,5"/>
                     <Button Content="Copy nhanh ICCID|IMEI" 
                             Command="{Binding CopyQuickCommand}"
-                            Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"
-                            Width="160" HorizontalAlignment="Left"/>
+                            Background="#334155" Foreground="White" BorderBrush="Transparent"
+                            Padding="20,5"/>
                 </StackPanel>
             </GroupBox>
 
             <!-- Nhóm 2: Kiểm tra dữ liệu -->
-            <GroupBox Grid.Column="1" Header="Kiểm tra dữ liệu" Margin="0,0,10,0">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <StackPanel Margin="0,0,10,0">
+            <GroupBox Grid.Row="0" Grid.Column="1" Header="Kiểm tra dữ liệu" Margin="0,0,10,0" Foreground="White" BorderBrush="#334155" Style="{StaticResource MaterialDesignGroupBox}">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="5">
+                    <StackPanel Margin="0,0,10,0" VerticalAlignment="Center">
                         <Button Content="Chọn file .txt" 
                                 Command="{Binding CheckImeiCommand}"
-                                Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"
-                                Width="120" Margin="0,0,0,5"/>
+                                Background="#334155" Foreground="White" BorderBrush="Transparent"
+                                Margin="0,0,0,5" Padding="20,5"/>
                         <TextBlock Text="Chọn file .txt chứa ICCID&#x0a;hoặc SĐT cần tra cứu IMEI" 
-                                   FontSize="10" Foreground="Gray" Width="140" TextWrapping="Wrap"/>
+                                   FontSize="10" Foreground="#94a3b8" Width="150" TextWrapping="Wrap"/>
                     </StackPanel>
-                    <TextBlock Text="=>" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="Bold"/>
+                    <TextBlock Text="=>" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="Bold" Foreground="#e2e8f0"/>
                     <Button Content="Kiểm tra IMEI" 
                             Command="{Binding CheckImeiCommand}"
-                            Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"
-                            Height="30" Width="110"/>
+                            Background="#334155" Foreground="White" BorderBrush="Transparent"
+                            Height="30" Padding="20,5"/>
                 </StackPanel>
             </GroupBox>
 
             <!-- Nhóm 3: Nhập dữ liệu -->
-            <GroupBox Grid.Column="2" Header="Nhập dữ liệu" HorizontalAlignment="Left">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <StackPanel Margin="0,0,10,0">
+            <GroupBox Grid.Row="0" Grid.Column="2" Header="Nhập dữ liệu" HorizontalAlignment="Left" Foreground="White" BorderBrush="#334155" Style="{StaticResource MaterialDesignGroupBox}">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="5">
+                    <StackPanel Margin="0,0,10,0" VerticalAlignment="Center">
                         <Button Content="Chọn file .txt" 
                                 Command="{Binding ImportDataCommand}"
-                                Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"
-                                Width="150" Margin="0,0,0,5"/>
+                                Background="#334155" Foreground="White" BorderBrush="Transparent"
+                                Margin="0,0,0,5" Padding="20,5"/>
                         <TextBlock Text="Định dạng ICCID|IMEI hoặc ICCID IMEI" 
-                                   FontSize="10" Foreground="Gray"/>
+                                   FontSize="10" Foreground="#94a3b8" TextWrapping="Wrap" Width="160"/>
                     </StackPanel>
-                    <TextBlock Text="=>" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="Bold"/>
+                    <TextBlock Text="=>" VerticalAlignment="Center" Margin="0,0,10,0" FontWeight="Bold" Foreground="#e2e8f0"/>
                     <Button Content="Nhập" 
                             Command="{Binding ImportDataCommand}"
-                            Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"
-                            Height="30" Width="80"/>
+                            Background="#334155" Foreground="White" BorderBrush="Transparent"
+                            Height="30" Padding="30,5"/>
                 </StackPanel>
             </GroupBox>
             
             <!-- Điều khiển phân trang & Tìm kiếm -->
-            <Grid Grid.Column="0" Grid.ColumnSpan="4" Margin="0,95,0,0">
+            <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,20,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
@@ -124,34 +133,34 @@
 
                 <!-- Paging Controls -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Bottom">
-                    <TextBlock Text="Page size:" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                    <TextBlock Text="Page size:" VerticalAlignment="Center" Margin="0,0,5,0" Foreground="#e2e8f0"/>
                     <ComboBox ItemsSource="{Binding PageSizeOptions}" 
                               SelectedItem="{Binding PageSize}" 
                               Width="80" Margin="0,0,15,0"
-                              Background="White" BorderBrush="#BDBDBD" BorderThickness="1"/>
+                              Background="#1e293b" Foreground="White" BorderBrush="#334155" BorderThickness="1"/>
                     
                     <Button Content="&lt;&lt; Previous" 
                             Command="{Binding PreviousPageCommand}"
-                            Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"
+                            Background="#334155" Foreground="White" BorderBrush="Transparent"
                             Margin="0,0,5,0"/>
                     
-                    <TextBlock Text="{Binding CurrentPage, StringFormat='Trang {0}'}" VerticalAlignment="Center" Margin="5,0"/>
-                    <TextBlock Text="/" VerticalAlignment="Center"/>
-                    <TextBlock Text="{Binding TotalPages}" VerticalAlignment="Center" Margin="5,0,10,0"/>
+                    <TextBlock Text="{Binding CurrentPage, StringFormat='Trang {0}'}" VerticalAlignment="Center" Margin="5,0" Foreground="#e2e8f0"/>
+                    <TextBlock Text="/" VerticalAlignment="Center" Foreground="#e2e8f0"/>
+                    <TextBlock Text="{Binding TotalPages}" VerticalAlignment="Center" Margin="5,0,10,0" Foreground="#e2e8f0"/>
                     
                     <Button Content="Next &gt;&gt;" 
                             Command="{Binding NextPageCommand}"
-                            Background="#E0E0E0" Foreground="Black" BorderBrush="#BDBDBD"/>
+                            Background="#334155" Foreground="White" BorderBrush="Transparent"/>
                 </StackPanel>
 
                 <!-- Search -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
                     <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" 
-                             Width="150" Margin="0,0,10,0"
+                             Width="250" Margin="0,0,10,0"
                              materialDesign:HintAssist.Hint="Tìm kiếm ICCID/IMEI/SĐT"
-                             Background="White" BorderBrush="#BDBDBD" BorderThickness="1" Padding="5,2"/>
+                             Background="#1e293b" Foreground="White" BorderBrush="#334155" BorderThickness="1" Padding="10,5"/>
                     <Button Content="Tìm kiếm" 
-                            Background="#00BCD4" Foreground="White" BorderBrush="#00BCD4"/>
+                            Background="#0ea5e9" Foreground="White" BorderBrush="Transparent"/>
                 </StackPanel>
             </Grid>
         </Grid>

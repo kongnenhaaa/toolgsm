@@ -26,9 +26,6 @@ public class AppSettings
     public bool EnableApiServer { get; set; } = true;
     public int ApiServerPort { get; set; } = 8080;
 
-    // Ping SIM
-    public bool EnableSimPing { get; set; } = true;
-    public int SimPingIntervalMinutes { get; set; } = 5;
 
     // Tự động bắt máy
     public bool EnableAutoAnswer { get; set; } = true;

@@ -11,9 +11,9 @@
                 <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesign3.Defaults.xaml" />
             </ResourceDictionary.MergedDictionaries>
             
-            <SolidColorBrush x:Key="AppBackground" Color="#12121E"/>
-            <SolidColorBrush x:Key="PanelBackground" Color="#1E1E2F"/>
-            <SolidColorBrush x:Key="AccentColor" Color="#E91E63"/>
+            <SolidColorBrush x:Key="AppBackground" Color="#0f172a"/>
+            <SolidColorBrush x:Key="PanelBackground" Color="#1e293b"/>
+            <SolidColorBrush x:Key="AccentColor" Color="#38bdf8"/>
             
             <!-- Professional Button Style -->
             <Style TargetType="Button" x:Key="ModernButtonStyle" BasedOn="{StaticResource MaterialDesignRaisedButton}">
@@ -42,8 +42,8 @@
 
             <!-- Modern DataGrid Row Style -->
             <Style TargetType="DataGridRow" x:Key="ProDataGridRowStyle">
-                <Setter Property="Background" Value="#1E1E2F"/>
-                <Setter Property="BorderBrush" Value="#2A2A40"/>
+                <Setter Property="Background" Value="#1e293b"/>
+                <Setter Property="BorderBrush" Value="#334155"/>
                 <Setter Property="BorderThickness" Value="0,0,0,1"/>
                 <Setter Property="Padding" Value="0"/>
                 <Setter Property="Margin" Value="0"/>
@@ -53,27 +53,26 @@
                 <Style.Triggers>
                     <!-- Alternating Row Color -->
                     <Trigger Property="AlternationIndex" Value="1">
-                        <Setter Property="Background" Value="#181825"/>
+                        <Setter Property="Background" Value="#0f172a"/>
                     </Trigger>
                     <Trigger Property="IsMouseOver" Value="True">
                         <Setter Property="Background" Value="#2D2D44"/>
                     </Trigger>
                     <Trigger Property="IsSelected" Value="True">
-                        <Setter Property="Background" Value="#3F51B5"/>
+                        <Setter Property="Background" Value="#0ea5e9"/>
                         <Setter Property="Foreground" Value="White"/>
                     </Trigger>
                 </Style.Triggers>
             </Style>
 
-            <!-- Professional DataGrid Column Header Style -->
             <Style TargetType="DataGridColumnHeader" x:Key="ProDataGridColumnHeaderStyle">
-                <Setter Property="Background" Value="#232338"/>
-                <Setter Property="Foreground" Value="#E0E0E0"/>
+                <Setter Property="Background" Value="#0f172a"/>
+                <Setter Property="Foreground" Value="#94a3b8"/>
                 <Setter Property="Padding" Value="14,14,14,14"/>
-                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="FontWeight" Value="Bold"/>
                 <Setter Property="FontSize" Value="14"/>
-                <Setter Property="BorderThickness" Value="0,0,0,2"/>
-                <Setter Property="BorderBrush" Value="#3F51B5"/>
+                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                <Setter Property="BorderBrush" Value="#334155"/>
                 <Setter Property="HorizontalContentAlignment" Value="Left"/>
                 <Setter Property="VerticalContentAlignment" Value="Center"/>
                 <Setter Property="Template">

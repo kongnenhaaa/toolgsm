@@ -528,6 +528,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public System.ComponentModel.ICollectionView FilteredPortsView { get; }
 
+    private bool _isAllPortsSelected;
+    public bool IsAllPortsSelected
+    {
+        get => _isAllPortsSelected;
+        set
+        {
+            if (SetProperty(ref _isAllPortsSelected, value))
+            {
+                if (FilteredPortsView != null)
+                {
+                    foreach (SimPort port in FilteredPortsView)
+                    {
+                        port.IsSelected = value;
+                    }
+                }
+            }
+        }
+    }
+
     public System.Collections.IEnumerable FilteredSmsMessages =>
         SmsMessages.Where(s =>
             MatchesFilter(s.ReceiverPhone, SmsPhoneFilter) &&
@@ -812,56 +831,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }, lifetimeToken);
 
-        // Ping SIM định kỳ để phát hiện SIM mất kết nối
-        _ = Task.Run(async () =>
-        {
-            while (!lifetimeToken.IsCancellationRequested)
-            {
-                int intervalMin = SettingsService.Current.SimPingIntervalMinutes > 0
-                    ? SettingsService.Current.SimPingIntervalMinutes : 5;
-                try
-                {
-                    await Task.Delay(TimeSpan.FromMinutes(intervalMin), lifetimeToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
 
-                if (!SettingsService.Current.EnableSimPing) continue;
-
-                var portsCopy = GetPortsSnapshot();
-                foreach (var p in portsCopy)
-                {
-                    if (lifetimeToken.IsCancellationRequested) break;
-                    try
-                    {
-                        string resp = await _modemService.SendCommandAsync(p.PortName, "AT", timeoutMs: 3000, silent: true);
-                        if (!resp.Contains("OK"))
-                        {
-                            if (p.Status != SimStatus.NoResponse)
-                            {
-                                Application.Current.Dispatcher.Invoke(() => p.Status = SimStatus.NoResponse);
-                                RecordPortError(p.PortName, "SIM ping timeout");
-                                AddLog($"[{p.PortName}] SIM không phản hồi khi ping!", "WARN");
-                                _ = TelegramService.SendMessageAsync($"⚠️ <b>SIM Không Phản Hồi</b>\nCổng: {p.PortName}\nSĐT: {p.PhoneNumber}");
-                                ToastService.ShowSimOffline(p.PortName);
-                            }
-                        }
-                        else if (p.Status == SimStatus.NoResponse)
-                        {
-                            Application.Current.Dispatcher.Invoke(() => p.Status = SimStatus.Active);
-                            AddLog($"[{p.PortName}] SIM đã khôi phục kết nối.", "SUCCESS");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        RecordPortError(p.PortName, ex.Message);
-                    }
-                    await Task.Delay(500, lifetimeToken);
-                }
-            }
-        }, lifetimeToken);
 
         // Tự động quét vét SMS (Periodic SMS Sweep)
         _ = Task.Run(async () =>

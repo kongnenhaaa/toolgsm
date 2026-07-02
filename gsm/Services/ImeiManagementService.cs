@@ -65,6 +65,18 @@ public class ImeiManagementService
         {
             var cachedEntry = getBackupEntry(ccid);
 
+            // [FIX LOGIC]: Đưa ưu tiên chặn SIM lạ lên hàng đầu (Tính năng 3)
+            if (cachedEntry == null && settings.BlockUnknownSims)
+            {
+                Log($"[{portName}] SIM mới chưa có trong kho IMEI. Đã chặn, chờ chấp thuận thủ công.", "WARNING");
+
+                return new ImeiProcessResult
+                {
+                    Status = ImeiProcessStatus.SecurityBlocked,
+                    ErrorMessage = "SIM mới chưa được chấp thuận"
+                };
+            }
+
             // Ưu tiên 2: Phục hồi từ backup nếu có (và nếu tính năng Restore được bật)
             if (settings.EnableImeiRestore && cachedEntry != null)
             {
@@ -131,44 +143,31 @@ public class ImeiManagementService
                 }
                 else if (cachedEntry == null)
                 {
-                    if (settings.BlockUnknownSims)
+                    if (!DeviceSpoofingService.IsValidImei(NormalizeImei(currentImei)))
                     {
-                        Log($"[{portName}] SIM mới chưa có trong kho IMEI. Đã chặn, chờ chấp thuận thủ công.", "WARNING");
-
-                        return new ImeiProcessResult
-                        {
-                            Status = ImeiProcessStatus.SecurityBlocked,
-                            ErrorMessage = "SIM mới chưa được chấp thuận"
-                        };
+                        Log($"[{portName}] IMEI gốc hiện tại ({currentImei}) không hợp lệ (sai độ dài hoặc checksum). Từ chối tạo bản Backup tự động.", "WARNING");
                     }
                     else
                     {
-                        if (!DeviceSpoofingService.IsValidImei(NormalizeImei(currentImei)))
+                        var newEntry = new SimBackupEntry
                         {
-                            Log($"[{portName}] IMEI gốc hiện tại ({currentImei}) không hợp lệ (sai độ dài hoặc checksum). Từ chối tạo bản Backup tự động.", "WARNING");
-                        }
-                        else
-                        {
-                            var newEntry = new SimBackupEntry
-                            {
-                                Ccid = ccid,
-                                Imei = currentImei,
-                                PhoneNumber = port.PhoneNumber,
-                                CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                                LicenseKeySuffix = string.Empty,
-                                KeyMismatch = "false",
-                                SourceFile = "auto-learn"
-                            };
-                            saveBackupEntry(newEntry);
-                            Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+                            Ccid = ccid,
+                            Imei = currentImei,
+                            PhoneNumber = port.PhoneNumber,
+                            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                            LicenseKeySuffix = string.Empty,
+                            KeyMismatch = "false",
+                            SourceFile = "auto-learn"
+                        };
+                        saveBackupEntry(newEntry);
+                        Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
 
-                            dispatcherInvoke(() =>
-                            {
-                                port.CreatedAt = newEntry.CreatedAt;
-                                port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
-                                port.KeyMismatch = newEntry.KeyMismatch;
-                            });
-                        }
+                        dispatcherInvoke(() =>
+                        {
+                            port.CreatedAt = newEntry.CreatedAt;
+                            port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
+                            port.KeyMismatch = newEntry.KeyMismatch;
+                        });
                     }
                 }
             }

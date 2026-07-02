@@ -754,13 +754,15 @@ namespace gsm.Services
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 10000, true);
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,0", 10000, true); // Sửa lỗi 305 Invalid text mode parameter
 
+                string safeContent = _vm.RemoveDiacritics(content);
+
                 string result = "";
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
                     result = await _vm.ModemService.SendSmsAsync(
                         portId,
                         recipient,
-                        content,
+                        safeContent,
                         timeoutMs: 45000
                     );
 

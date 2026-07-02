@@ -284,7 +284,7 @@
                                     
                                     <Separator Background="#3D3D5C" Margin="0,20"/>
                                     <TextBlock Text="LỌC TIN NHẮN (SMS)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                                    <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding AppSettings.ReceiveAllSms}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
+                                    <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding IsReceiveAllSmsEnabled}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
                                     <TextBlock Text="*Lưu ý: Bật tính năng này bạn sẽ nhận cả tin nhắn rác, quảng cáo từ nhà mạng." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
 
                                     <Separator Background="#3D3D5C" Margin="0,20"/>
@@ -1199,7 +1199,7 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Serial" Binding="{Binding Serial}" Width="180" HeaderTemplate="{StaticResource SerialHeaderTemplate}"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
-                            <DataGridTemplateColumn Header="TKC" Width="110">
+                            <DataGridTemplateColumn Header="TKC" Width="110" ClipboardContentBinding="{Binding Balance}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Balance}" TextWrapping="Wrap" Foreground="#4CAF50" FontWeight="SemiBold" VerticalAlignment="Center"/>
@@ -1207,7 +1207,7 @@ GET  /api/history
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             
-                            <DataGridTemplateColumn Header="OTP" Width="110">
+                            <DataGridTemplateColumn Header="OTP" Width="110" ClipboardContentBinding="{Binding Otp}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border CornerRadius="6" Padding="6,2" HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -1234,7 +1234,7 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lệch Key" Binding="{Binding KeyMismatch}" Width="100"/>
-                            <DataGridTemplateColumn Header="Kết nối" Width="110">
+                            <DataGridTemplateColumn Header="Kết nối" Width="110" ClipboardContentBinding="{Binding Status}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border CornerRadius="6" Padding="8,4" HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -1270,7 +1270,7 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Health" Width="150">
+                            <DataGridTemplateColumn Header="Health" Width="150" ClipboardContentBinding="{Binding HealthSummary}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border Background="#263238" CornerRadius="10" Padding="8,3" ToolTip="{Binding LastError}">
@@ -1286,7 +1286,7 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi cuối" Binding="{Binding LastError}" Width="180"/>
                             
                             <!-- Tín hiệu Signal Bars -->
-                            <DataGridTemplateColumn Header="Tín hiệu" Width="100">
+                            <DataGridTemplateColumn Header="Tín hiệu" Width="100" ClipboardContentBinding="{Binding SignalStrength}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="5,0">
@@ -1299,7 +1299,7 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             
                             <!-- #8: Tô đỏ HSD nếu sắp hết hạn (dưới 7 ngày) -->
-                            <DataGridTemplateColumn Header="HSD" Width="120">
+                            <DataGridTemplateColumn Header="HSD" Width="120" ClipboardContentBinding="{Binding ExpiryDate}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding ExpiryDate}">

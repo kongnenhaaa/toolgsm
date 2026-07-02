@@ -210,6 +210,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    public bool IsReceiveAllSmsEnabled
+    {
+        get => SettingsService.Current.ReceiveAllSms;
+        set
+        {
+            if (SettingsService.Current.ReceiveAllSms != value)
+            {
+                SettingsService.Current.ReceiveAllSms = value;
+                SettingsService.SaveSettings(SettingsService.Current);
+                OnPropertyChanged();
+            }
+        }
+    }
+
     public bool IsTelegramNotificationEnabled
     {
         get => SettingsService.Current.EnableTelegramNotification;
@@ -1925,8 +1939,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 // 1. Tìm người gửi (Sender)
+                var pduMatch = Regex.Match(e.Data, @"\+CMGR:\s*\d+,,(\d+)\r?\n([0-9A-Fa-f]+)");
                 var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
-                if (senderMatch.Success)
+                if (pduMatch.Success)
+                {
+                    string pduHex = pduMatch.Groups[2].Value.Trim();
+                    cleanContent = DecodePdu(pduHex, out senderPhone);
+                    // Loại bỏ các ký tự thừa
+                    cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
+                    cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
+                }
+                else if (senderMatch.Success)
                 {
                     senderPhone = DecodeUcs2(senderMatch.Groups[1].Value); // Giải mã HEX nếu có
                     
@@ -3634,7 +3657,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private string RemoveDiacritics(string text)
+    public string RemoveDiacritics(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return text;
         string normalizedString = text.Normalize(NormalizationForm.FormD);
@@ -3821,6 +3844,153 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
 
 
+    private string DecodePdu(string pdu, out string senderPhone)
+    {
+        senderPhone = "UNKNOWN";
+        try
+        {
+            if (string.IsNullOrWhiteSpace(pdu) || pdu.Length < 14) return "";
+
+            int smscLen = int.Parse(pdu.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
+            int smscEnd = 2 + smscLen * 2;
+            
+            // first octet of SMS-DELIVER
+            int firstOctet = int.Parse(pdu.Substring(smscEnd, 2), System.Globalization.NumberStyles.HexNumber);
+            bool hasUdh = (firstOctet & 0x40) != 0;
+
+            int senderLen = int.Parse(pdu.Substring(smscEnd + 2, 2), System.Globalization.NumberStyles.HexNumber);
+            int toa = int.Parse(pdu.Substring(smscEnd + 4, 2), System.Globalization.NumberStyles.HexNumber);
+            bool isAlphaNumeric = ((toa & 0x70) == 0x50);
+            
+            int senderBytes = isAlphaNumeric ? (senderLen * 7 + 7) / 8 : (senderLen + 1) / 2;
+            int senderStart = smscEnd + 6;
+            int senderEnd = senderStart + senderBytes * 2;
+            
+            // decode sender
+            string senderHex = pdu.Substring(senderStart, senderBytes * 2);
+            if (isAlphaNumeric)
+            {
+                byte[] toaBytes = new byte[senderHex.Length / 2];
+                for (int i = 0; i < toaBytes.Length; i++)
+                    toaBytes[i] = Convert.ToByte(senderHex.Substring(i * 2, 2), 16);
+                
+                string bitString = "";
+                foreach (byte b in toaBytes)
+                {
+                    string bin = Convert.ToString(b, 2).PadLeft(8, '0');
+                    char[] binArray = bin.ToCharArray();
+                    Array.Reverse(binArray);
+                    bitString += new string(binArray);
+                }
+
+                StringBuilder senderSb = new StringBuilder();
+                for (int i = 0; i < bitString.Length; i += 7)
+                {
+                    if (i + 7 > bitString.Length) break;
+                    string charBits = bitString.Substring(i, 7);
+                    char[] charArray = charBits.ToCharArray();
+                    Array.Reverse(charArray);
+                    int charVal = Convert.ToInt32(new string(charArray), 2);
+                    senderSb.Append((char)(charVal != 0 ? charVal : 64)); 
+                }
+                
+                int numChars = (senderLen * 4) / 7;
+                if (senderSb.Length > numChars) senderSb.Length = numChars;
+                senderPhone = senderSb.ToString();
+            }
+            else
+            {
+                StringBuilder senderSb = new StringBuilder();
+                for (int i = 0; i < senderHex.Length; i += 2)
+                {
+                    senderSb.Append(senderHex[i + 1]);
+                    senderSb.Append(senderHex[i]);
+                }
+                if (senderSb.Length > 0 && senderSb[senderSb.Length - 1] == 'F') senderSb.Length--;
+                senderPhone = senderSb.ToString();
+            }
+
+            int pid = int.Parse(pdu.Substring(senderEnd, 2), System.Globalization.NumberStyles.HexNumber);
+            int dcs = int.Parse(pdu.Substring(senderEnd + 2, 2), System.Globalization.NumberStyles.HexNumber);
+            
+            int udlIdx = senderEnd + 18;
+            int udl = int.Parse(pdu.Substring(udlIdx, 2), System.Globalization.NumberStyles.HexNumber);
+            string ud = pdu.Substring(udlIdx + 2);
+            
+            bool isUcs2 = false;
+            if ((dcs & 0xF0) < 0xE0) 
+            {
+                if (((dcs >> 2) & 0x03) == 0x02) isUcs2 = true;
+            }
+            if (dcs == 0x08 || dcs == 0x19 || dcs == 0x18 || dcs == 0x11) isUcs2 = true;
+            
+            if (isUcs2)
+            {
+                int udhLengthBytes = 0;
+                if (hasUdh)
+                {
+                    udhLengthBytes = int.Parse(ud.Substring(0, 2), System.Globalization.NumberStyles.HexNumber) + 1;
+                }
+                
+                StringBuilder sb = new StringBuilder();
+                int start = udhLengthBytes * 2;
+                for (int i = start; i < ud.Length && i < udl * 2; i += 4)
+                {
+                    if (i + 4 <= ud.Length)
+                    {
+                        sb.Append((char)Convert.ToInt32(ud.Substring(i, 4), 16));
+                    }
+                }
+                return sb.ToString();
+            }
+            else
+            {
+                byte[] udBytes = new byte[ud.Length / 2];
+                for (int i = 0; i < udBytes.Length; i++)
+                    udBytes[i] = Convert.ToByte(ud.Substring(i * 2, 2), 16);
+
+                string bitString = "";
+                foreach (byte b in udBytes)
+                {
+                    string bin = Convert.ToString(b, 2).PadLeft(8, '0');
+                    char[] binArray = bin.ToCharArray();
+                    Array.Reverse(binArray);
+                    bitString += new string(binArray);
+                }
+
+                int startIndexBits = 0;
+                if (hasUdh)
+                {
+                    int udhLen = udBytes[0];
+                    int udhTotalBytes = udhLen + 1;
+                    int udhBits = udhTotalBytes * 8;
+                    int fillBits = 7 - (udhBits % 7);
+                    if (fillBits == 7) fillBits = 0;
+                    startIndexBits = udhBits + fillBits;
+                }
+
+                StringBuilder sb = new StringBuilder();
+                for (int i = startIndexBits; i < bitString.Length; i += 7)
+                {
+                    if (i + 7 > bitString.Length) break;
+                    string charBits = bitString.Substring(i, 7);
+                    char[] charArray = charBits.ToCharArray();
+                    Array.Reverse(charArray);
+                    int charVal = Convert.ToInt32(new string(charArray), 2);
+                    sb.Append((char)(charVal != 0 ? charVal : 64)); 
+                }
+                
+                int charsToRead = hasUdh ? (udl - ((startIndexBits) / 7)) : udl;
+                if (sb.Length > charsToRead) sb.Length = charsToRead;
+                return sb.ToString();
+            }
+        }
+        catch (Exception ex)
+        {
+            return $"Lỗi giải mã PDU: {ex.Message}";
+        }
+    }
+
     private string DecodeUcs2(string hexString)
     {
         try
@@ -3903,14 +4073,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 try
                 {
-                    await _modemService.SendSmsAsync(sourcePort, phone, content, timeoutMs: 30000);
-                    AddLog($"[BULK SMS] [{sourcePort}] → {phone}: OK", "SUCCESS");
-                    sent++;
+                    await _modemService.SendCommandAsync(sourcePort, "AT+CSCS=\"GSM\"", 5000, true);
+                    await _modemService.SendCommandAsync(sourcePort, "AT+CSMP=17,167,0,0", 5000, true);
+
+                    string safeContent = RemoveDiacritics(content);
+                    string result = await _modemService.SendSmsAsync(sourcePort, phone, safeContent, timeoutMs: 30000);
+
+                    if (result.Contains("OK") || result.Contains("+CMGS:"))
+                    {
+                        AddLog($"[BULK SMS] [{sourcePort}] → {phone}: OK", "SUCCESS");
+                        sent++;
+                    }
+                    else
+                    {
+                        AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {result}", "ERROR");
+                        failed++;
+                    }
                 }
                 catch (Exception ex)
                 {
                     AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {ex.Message}", "ERROR");
                     failed++;
+                }
+                finally
+                {
+                    await _modemService.SendCommandAsync(sourcePort, "AT+CSCS=\"UCS2\"", 5000, true);
+                    await _modemService.SendCommandAsync(sourcePort, "AT+CSMP=17,167,0,8", 5000, true);
                 }
 
                 await Task.Delay(2000); // 2 giây giữa các tin
@@ -4479,7 +4667,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (cmdType == "SMS")
             {
-                await _modemService.SendSmsAsync(portName, item.Recipient, item.Content, timeoutMs: 30000);
+                await SendSmsThrottledAsync(portName, item.Recipient, item.Content);
             }
             else if (cmdType == "Call")
             {

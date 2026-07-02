@@ -108,29 +108,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _topUpMode = "Selected";
 
-    [ObservableProperty]
-    private string _composeSmsPhone = string.Empty;
+    // ComposeSms properties removed
 
-    [ObservableProperty]
-    private string _composeSmsContent = string.Empty;
-
-    [ObservableProperty]
-    private bool _isComposeSmsDialogOpen;
-
-    [ObservableProperty]
-    private string _composeSmsMode = "Selected";
-
-    [ObservableProperty]
-    private string _customUssdCode = string.Empty;
-    
-    [ObservableProperty]
-    private string _customUssdOutput = string.Empty;
-
-    [ObservableProperty]
-    private bool _isCustomUssdDialogOpen;
-
-    [ObservableProperty]
-    private string _customUssdMode = "Selected";
+    // Custom USSD properties removed
 
     [ObservableProperty] private string _commandPanelMmsRecipients = string.Empty;
     [ObservableProperty] private string _commandPanelMmsTitle = string.Empty;
@@ -337,32 +317,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _callManagerOutput = string.Empty;
 
-    [ObservableProperty]
-    private bool _isNetworkSimDialogOpen;
-
-    [ObservableProperty]
-    private string _networkSimSelectedPort = string.Empty;
-
-    [ObservableProperty]
-    private string _networkSimOutput = string.Empty;
-
-    [ObservableProperty]
-    private string _networkOperator = string.Empty;
-
-    [ObservableProperty]
-    private string _pinCode = string.Empty;
-
-    [ObservableProperty]
-    private string _phonebookIndex = string.Empty;
-
-    [ObservableProperty]
-    private string _phonebookNumber = string.Empty;
-
-    [ObservableProperty]
-    private string _phonebookName = string.Empty;
-
-    [ObservableProperty]
-    private string _ussdCommand = string.Empty;
+    // Network & Sim properties removed
 
     [ObservableProperty]
     private AppSettings _appSettings = new();
@@ -3371,110 +3326,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
-    private void OpenCustomUssdDialog(string mode)
-    {
-        CustomUssdMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
-        CustomUssdCode = string.Empty;
-        CustomUssdOutput = string.Empty;
-        IsCustomUssdDialogOpen = true;
-    }
+    // Custom USSD methods removed
 
-    [RelayCommand]
-    private async Task ExecuteCustomUssdAsync()
-    {
-        if (string.IsNullOrWhiteSpace(CustomUssdCode))
-        {
-            SnackbarMessageQueue.Enqueue("Vui lòng nhập mã USSD (VD: *098#).");
-            return;
-        }
-
-        string ussdCode = CustomUssdCode.Trim();
-
-        var targetPorts = new System.Collections.Generic.List<SimPort>();
-        if (CustomUssdMode == "Selected")
-        {
-            if (SelectedPort != null) targetPorts.Add(SelectedPort);
-        }
-        else if (CustomUssdMode == "Checked")
-        {
-            targetPorts = Ports.Where(p => p.IsSelected).ToList();
-        }
-        else if (CustomUssdMode == "All")
-        {
-            targetPorts = Ports.Where(IsActive).ToList();
-        }
-
-        if (targetPorts.Count == 0)
-        {
-            SnackbarMessageQueue.Enqueue("Không có cổng nào được chọn để chạy USSD.");
-            return;
-        }
-
-        CustomUssdOutput = $"Bắt đầu chạy USSD {ussdCode} cho {targetPorts.Count} cổng...\n";
-        SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh USSD cho {targetPorts.Count} cổng...");
-        AddLog($"Bắt đầu gửi USSD {ussdCode} cho {targetPorts.Count} cổng.");
-
-        var tasks = targetPorts.Select(async port =>
-        {
-            string result = await SendUssdThrottledAsync(port.PortName, ussdCode, "USSD Tùy Chỉnh", logResult: true);
-            App.Current.Dispatcher.Invoke(() =>
-            {
-                CustomUssdOutput += $"[{port.PortName}] {result}\n";
-            });
-        });
-
-        await Task.WhenAll(tasks);
-        CustomUssdOutput += "\nHoàn tất chạy USSD!";
-    }
-
-    [RelayCommand]
-    private void OpenComposeSmsDialog(string mode)
-    {
-        ComposeSmsMode = string.IsNullOrEmpty(mode) ? "Selected" : mode;
-        ComposeSmsPhone = string.Empty;
-        ComposeSmsContent = string.Empty;
-        IsComposeSmsDialogOpen = true;
-    }
-
-    [RelayCommand]
-    private async Task ExecuteComposeSmsAsync()
-    {
-        IsComposeSmsDialogOpen = false;
-        if (string.IsNullOrWhiteSpace(ComposeSmsPhone) || string.IsNullOrWhiteSpace(ComposeSmsContent))
-        {
-            SnackbarMessageQueue.Enqueue("Vui lòng nhập SĐT người nhận và nội dung tin nhắn.");
-            return;
-        }
-
-        var targetPorts = new System.Collections.Generic.List<SimPort>();
-        if (ComposeSmsMode == "Selected")
-        {
-            if (SelectedPort != null) targetPorts.Add(SelectedPort);
-        }
-        else if (ComposeSmsMode == "Checked")
-        {
-            targetPorts = Ports.Where(p => p.IsSelected).ToList();
-        }
-        else if (ComposeSmsMode == "All")
-        {
-            targetPorts = Ports.Where(IsActive).ToList();
-        }
-
-        if (targetPorts.Count == 0)
-        {
-            SnackbarMessageQueue.Enqueue("Không có cổng nào được chọn để gửi tin nhắn.");
-            return;
-        }
-
-        SnackbarMessageQueue.Enqueue($"Đang đẩy lệnh gửi tin nhắn từ {targetPorts.Count} cổng...");
-        AddLog($"Bắt đầu gửi tin nhắn đến {ComposeSmsPhone} từ {targetPorts.Count} cổng...");
-
-        foreach (var port in targetPorts)
-        {
-            _ = SendSmsThrottledAsync(port.PortName, ComposeSmsPhone, ComposeSmsContent);
-        }
-    }
+    // ComposeSms methods removed
 
 
 
@@ -3729,88 +3583,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
-    private void OpenNetworkSimDialog()
-    {
-        NetworkSimSelectedPort = Ports.Count > 0 ? Ports.FirstOrDefault(p => p.IsSelected)?.PortName ?? Ports.First().PortName : string.Empty;
-        NetworkOperator = string.Empty;
-        PinCode = string.Empty;
-        PhonebookIndex = string.Empty;
-        PhonebookNumber = string.Empty;
-        PhonebookName = string.Empty;
-        UssdCommand = string.Empty;
-        NetworkSimOutput = string.Empty;
-        IsNetworkSimDialogOpen = true;
-    }
-
-    [RelayCommand]
-    private async Task NetworkSimActionAsync(string action)
-    {
-        if (string.IsNullOrWhiteSpace(NetworkSimSelectedPort))
-        {
-            SnackbarMessageQueue.Enqueue("Vui lòng chọn cổng để thực hiện.");
-            return;
-        }
-
-        string cmd = string.Empty;
-
-        switch (action)
-        {
-            case "CheckRegistration": cmd = "AT+CREG?"; break;
-            case "CheckOperator": cmd = "AT+COPS?"; break;
-            case "SetOperatorAuto": cmd = "AT+COPS=0"; break;
-            case "SetOperatorManual":
-                if (string.IsNullOrWhiteSpace(NetworkOperator)) return;
-                cmd = $"AT+COPS=1,2,\"{NetworkOperator}\""; 
-                break;
-            case "SignalQuality": cmd = "AT+CSQ"; break;
-            case "NetworkInfo": cmd = "AT+QNWINFO"; break;
-            case "SetScanAuto": cmd = "AT+QCFG=\"nwscanmode\",0"; break;
-            case "SetScanLte": cmd = "AT+QCFG=\"nwscanmode\",3"; break;
-            case "ReadImsi": cmd = "AT+CIMI"; break;
-            case "ReadIccid": cmd = "AT+QCCID"; break;
-            case "EnterPin":
-                if (string.IsNullOrWhiteSpace(PinCode)) return;
-                cmd = $"AT+CPIN=\"{PinCode}\"";
-                break;
-            case "CheckPinStatus": cmd = "AT+CPIN?"; break;
-            case "CheckSimDetect": cmd = "AT+QSIMSTAT?"; break;
-            case "ReadPhonebook":
-                cmd = "AT+CPBR=1,10";
-                break;
-            case "WritePhonebook":
-                if (string.IsNullOrWhiteSpace(PhonebookIndex) || string.IsNullOrWhiteSpace(PhonebookNumber)) return;
-                cmd = $"AT+CPBW={PhonebookIndex},\"{PhonebookNumber}\",129,\"{PhonebookName}\"";
-                break;
-            case "SendUssd":
-                if (string.IsNullOrWhiteSpace(UssdCommand)) return;
-                cmd = $"AT+CUSD=1,\"{UssdCommand}\",15";
-                break;
-        }
-
-        if (string.IsNullOrEmpty(cmd)) return;
-
-        NetworkSimOutput += $"> {cmd}\n";
-        try
-        {
-            if (action == "SendUssd")
-            {
-                await _modemService.SendCommandAsync(NetworkSimSelectedPort, "AT+CSCS=\"GSM\"", 5000, true);
-                string result = await _modemService.SendCommandAsync(NetworkSimSelectedPort, cmd, timeoutMs: 15000);
-                await _modemService.SendCommandAsync(NetworkSimSelectedPort, "AT+CSCS=\"UCS2\"", 5000, true);
-                NetworkSimOutput += $"{result}\n";
-            }
-            else
-            {
-                string result = await _modemService.SendCommandAsync(NetworkSimSelectedPort, cmd, timeoutMs: 8000);
-                NetworkSimOutput += $"{result}\n";
-            }
-        }
-        catch (Exception ex)
-        {
-            NetworkSimOutput += $"[ERROR] {ex.Message}\n";
-        }
-    }
+    // Network & Sim methods removed
 
 
 

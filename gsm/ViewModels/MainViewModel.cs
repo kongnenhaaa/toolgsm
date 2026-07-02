@@ -4741,6 +4741,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SnackbarMessageQueue.Enqueue("Tính năng chưa được hỗ trợ.");
         await Task.CompletedTask;
     }
+
+    [RelayCommand]
+    private void OpenImeiManager()
+    {
+        var win = new ImeiManagerWindow();
+        win.ShowDialog();
+    }
 }
 
 public partial class ExportColumnItem : ObservableObject

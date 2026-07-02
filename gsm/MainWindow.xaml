@@ -866,6 +866,9 @@ GET  /api/history
             </Border>
             
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="15,0">
+                <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý IMEI" Height="36" Width="36" Margin="10,0,0,0" Command="{Binding OpenImeiManagerCommand}">
+                    <materialDesign:PackIcon Kind="CellphoneSettings" Foreground="White" Width="20" Height="20"/>
+                </Button>
                 <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Settings" Height="36" Width="36" Margin="10,0,0,0" Command="{Binding OpenSettingsDialogCommand}">
                     <materialDesign:PackIcon Kind="Cog" Foreground="White" Width="20" Height="20"/>
                 </Button>

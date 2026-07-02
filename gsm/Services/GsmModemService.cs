@@ -13,6 +13,7 @@ namespace gsm.Services;
 public interface IGsmModemService
 {
     Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000, bool silent = false);
+    Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false);
     Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 15000);
     Task SweepUnreadSmsAsync(string portName);
     void StartPollingNetwork(string portName);
@@ -610,7 +611,7 @@ public class GsmModemService : IGsmModemService
     /// </summary>
     public async Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false)
     {
-        if (!_ports.TryGetValue(portName, out var sp) || !sp.IsOpen)
+        if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen)
         {
             return "ERROR: Port not open";
         }

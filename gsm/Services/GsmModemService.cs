@@ -22,6 +22,7 @@ public interface IGsmModemService
     void Disconnect(string portName);
     void DisconnectAll();
     void StartHotplugWaitLoop(string portName);
+    Task ReinitializeSettingsAsync(string portName);
     
     // Events
     event EventHandler<GsmDataEventArgs> SmsReceived;
@@ -231,6 +232,41 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    public async Task ReinitializeSettingsAsync(string portName)
+    {
+        // Chờ modem boot lên (AT trả về OK)
+        bool ready = false;
+        while (true)
+        {
+            if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
+            string ping = await SendCommandAsync(portName, "AT", 3000, silent: true);
+            if (!ping.Contains("Timeout") && !ping.Contains("ERROR"))
+            {
+                ready = true;
+                break;
+            }
+            await Task.Delay(2000);
+        }
+
+        if (!ready) 
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "ERROR: Modem đã bị rút trong lúc khởi động lại." });
+            return;
+        }
+
+        await Task.Delay(1000);
+        await SendCommandAsync(portName, "ATE0", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CLIP=1", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+QAUDMOD=2", 5000, silent: true); 
+        await SendCommandAsync(portName, "AT+QDAI=3", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CMGD=1,4", 10000, silent: true); 
+        await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 5000, silent: true);
+        
+        StartPollingNetwork(portName);
+    }
+
     /// <summary>
     /// Kích hoạt vòng lặp chờ SIM (Hot-plug). Đưa modem vào chế độ máy bay và liên tục kiểm tra CCID.
     /// Dùng khi khởi động không có SIM, hoặc khi người dùng yêu cầu chuẩn bị đổi SIM.
@@ -271,9 +307,10 @@ public class GsmModemService : IGsmModemService
     public void StartPollingNetwork(string portName)
     {
         // Tạo luồng ngầm chờ thiết bị đăng ký mạng thành công để lấy nhà mạng (Tránh việc AT+COPS? chạy quá sớm lúc chưa có sóng)
+        // Lặp vô hạn cho đến khi có mạng hoặc cổng bị rút
         _ = Task.Run(async () =>
         {
-            for (int i = 0; i < 15; i++) // Thử tối đa 30 giây (15 lần x 2s)
+            while (true)
             {
                 await Task.Delay(2000);
                 if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
@@ -482,13 +519,9 @@ public class GsmModemService : IGsmModemService
                     if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
                     {
                         // Đợi USSD từ tổng đài. VNSKY có lỗi gửi "+CME ERROR: 100" trước "+CUSD:"
-                        if (!currentData.Contains("+CUSD:"))
+                        if (currentData.Contains("+CME ERROR: 100"))
                         {
-                            // Bỏ qua OK hoặc CME ERROR 100 để tiếp tục chờ CUSD thực sự
-                            if (currentData.Contains("OK\r\n") || currentData.Contains("+CME ERROR: 100"))
-                            {
-                                return; 
-                            }
+                            return; // Bỏ qua CME ERROR 100 để tiếp tục chờ CUSD thực sự từ VNSKY
                         }
                     }
 
@@ -575,7 +608,7 @@ public class GsmModemService : IGsmModemService
     public async Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000, bool silent = false)
     {
         // Kéo dài thời gian chờ cho các lệnh đặc biệt
-        if (command.StartsWith("AT+CUSD")) timeoutMs = 15000;
+        if (command.StartsWith("AT+CUSD")) timeoutMs = 45000;
         else if (command.StartsWith("AT+CMGR")) timeoutMs = 20000;
 
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen)

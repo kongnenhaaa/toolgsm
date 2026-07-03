@@ -927,8 +927,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
             if (port == null) return;
 
-            port.LastError = error;
-            if (error.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
+            string cleanError = error ?? string.Empty;
+            if (cleanError.Contains("AT+"))
+            {
+                // Ẩn các dòng chứa lệnh AT+ khỏi giao diện để tránh làm người dùng khó hiểu
+                cleanError = string.Join(Environment.NewLine, cleanError.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                       .Where(line => !line.Trim().StartsWith("AT+")));
+            }
+            port.LastError = string.IsNullOrWhiteSpace(cleanError) ? "ERROR" : cleanError.Trim();
+
+            if (error != null && error.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
             {
                 port.TimeoutCount++;
             }
@@ -1343,6 +1351,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     Application.Current.Dispatcher.Invoke(() => UpdateDashboard());
                 }
+
+                // 3. Tự động thử lại lấy TKC nếu bị thiếu (do mạng bận hoặc timeout ngầm)
+                var portsMissingBalance = GetPortsSnapshot().Where(p => 
+                    IsActive(p) && 
+                    !string.IsNullOrWhiteSpace(p.NetworkProvider) && 
+                    string.IsNullOrWhiteSpace(p.Balance) && 
+                    p.PortName != "COM_VIRTUAL").ToList();
+
+                foreach (var port in portsMissingBalance)
+                {
+                    // Tránh gửi cùng lúc quá nhiều, kiểm tra cooldown 60 giây
+                    if (!_lastUssdByPort.TryGetValue(port.PortName, out var lastUssdTime) || (DateTime.UtcNow - lastUssdTime).TotalSeconds > 60)
+                    {
+                        // Cập nhật ngay lập tức thời gian để các vòng lặp sau không spam queue
+                        _lastUssdByPort[port.PortName] = DateTime.UtcNow;
+                        _ = SendUssdThrottledAsync(port.PortName, GetUssdCodeForProvider(port.NetworkProvider), "Thử lại lấy TKC bị thiếu", maxRetries: 1);
+                    }
+                }
             }
         }, lifetimeToken);
     }
@@ -1503,7 +1529,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (port == null)
             {
-                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]"))
+                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = SimStatus.Active, SignalStrength = 0 };
                     port.ReconnectCount++;
@@ -1542,6 +1568,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     
                     // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
                     ussdContent = DecodeUcs2(ussdContent);
+                    System.IO.File.AppendAllText("ussd_debug.txt", $"[{DateTime.Now}] [{e.PortName}] {ussdContent}\n");
 
                     // Thử match đầu số Viettel (032-039, 086, 096, 097, 098) và Vinaphone (081-085, 088, 091, 094)
                     var phoneMatch = Regex.Match(ussdContent, @"(?:84|0)(3[2-9]|8[1-9]|9[1-9])\d{7}");
@@ -1622,7 +1649,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         // đều sẽ dùng chung 1 lệnh *101# để vừa lấy SĐT vừa lấy Số dư (TKC).
                         if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
                         {
-                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxRetries: 3);
+                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxRetries: 99999);
                             await Task.Delay(2000); // Đợi mạng xử lý xong lệnh trước
                         }
 
@@ -1720,7 +1747,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                         Services.DeviceSpoofingService.MarkApplied(ccid);
                                         AddLog($"[{e.PortName}] [SPOOF_APPLIED] Đã áp dụng và xác minh thành công Fake IMEI cho SIM CCID: {ccid}", "SUCCESS");
                                     }
-                                    _modemService.StartPollingNetwork(port.PortName);
+                                    
+                                    // Bắt buộc khởi tạo lại cài đặt (AT+CMGF=1, CSCS...) 
+                                    // vì nếu vừa chạy CFUN=1,1 xong modem sẽ mất hết cài đặt tạm thời.
+                                    _ = _modemService.ReinitializeSettingsAsync(port.PortName);
                                 }
                                 else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
                                 {
@@ -1828,6 +1858,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (port == null) return;
 
         port.Status = SimStatus.Active;
+        port.TimeoutCount = 0;
+        port.SmsErrorCount = 0;
+        port.ReconnectCount = 0;
+        port.LastError = string.Empty;
         port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
         UpdateDashboard();
 
@@ -2756,7 +2790,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
             AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
-            return await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxRetries: 3, logResult: true);
+            return await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxRetries: 99999, logResult: true);
         }
         return "ERROR: Cổng không hợp lệ hoặc không có thông tin nhà mạng";
     }
@@ -2865,8 +2899,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     AddLog($"[{portName}] Dừng retry USSD vì có lệnh SMS đang ưu tiên.", "INFO");
                     break;
                 }
-                AddLog($"[{portName}] Lỗi USSD ({result.Trim()}). Thử lại sau 3 giây... (Lần {i + 1}/{maxRetries})", "WARN");
-                await Task.Delay(TimeSpan.FromSeconds(3 + i * 2), _lifetimeCts.Token);
+                int delaySecs = Math.Min(3 + i * 2, 30);
+                AddLog($"[{portName}] Lỗi USSD ({result.Trim()}). Thử lại sau {delaySecs} giây... (Lần {i + 1}/{maxRetries})", "WARN");
+                await Task.Delay(TimeSpan.FromSeconds(delaySecs), _lifetimeCts.Token);
             }
         }
 

@@ -788,6 +788,21 @@ GET  /api/history
                                     <MenuItem Header="⚡ Khởi động lại TẤT CẢ Modem" Command="{Binding RebootModemCommand}" CommandParameter="All">
                                     </MenuItem>
                                     <Separator Background="#444"/>
+                                    <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding ClearSmsCommand}" CommandParameter="Selected">
+                                    </MenuItem>
+                                    <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên TẤT CẢ CỔNG" Command="{Binding ClearSmsCommand}" CommandParameter="All">
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
+
+                        <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Ngắt sóng an toàn để đổi SIM" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="SimOutline" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#81C784"/>
+                                <TextBlock Text="Đổi SIM mới" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}" Foreground="#81C784"/>
+                            </StackPanel>
+                            <Button.ContextMenu>
+                                <ContextMenu>
                                     <MenuItem Header="🛡️ CHUẨN BỊ ĐỔI SIM CÁC CỔNG ĐÃ CHỌN (An Toàn)" Command="{Binding PrepareSwapSimCommand}" Foreground="#81C784">
                                         <MenuItem.ToolTip>
                                             <ToolTip Content="Ngắt sóng các cổng đã chọn để bạn có thể rút khay SIM ra thay SIM mới mà không bị lộ IMEI phần cứng." />
@@ -797,11 +812,6 @@ GET  /api/history
                                         <MenuItem.ToolTip>
                                             <ToolTip Content="Ngắt sóng tất cả các cổng để bạn có thể rút khay SIM ra thay SIM mới mà không bị lộ IMEI phần cứng." />
                                         </MenuItem.ToolTip>
-                                    </MenuItem>
-                                    <Separator Background="#444"/>
-                                    <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding ClearSmsCommand}" CommandParameter="Selected">
-                                    </MenuItem>
-                                    <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên TẤT CẢ CỔNG" Command="{Binding ClearSmsCommand}" CommandParameter="All">
                                     </MenuItem>
                                 </ContextMenu>
                             </Button.ContextMenu>

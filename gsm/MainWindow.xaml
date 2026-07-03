@@ -365,22 +365,15 @@ GET  /api/history
                                     <TextBlock Text="📱 QUẢN LÝ IMEI &amp; ĐỊNH DANH THIẾT BỊ" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
                                     <TextBlock Text="*Tính năng Fake IMEI hoặc Phục hồi IMEI có thể khiến mạch tự động mất sóng vài giây (Reset radio) để áp dụng cấu hình mới." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
                                     
-                                    <CheckBox Content="[ƯU TIÊN 1] Bật tính năng giả lập (Fake IMEI) và tạo Profile thiết bị ngẫu nhiên" 
-                                              IsChecked="{Binding AppSettings.EnableDeviceSpoofing}" 
-                                              Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,5"/>
-                                    
-                                    <CheckBox Content="[ƯU TIÊN 2] Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác" 
+
+                                    <CheckBox Content="[1] Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác" 
                                               IsChecked="{Binding AppSettings.EnableImeiRestore}" 
                                               Foreground="#FFB300" FontWeight="Medium" Margin="0,0,0,5"/>
                                               
-                                    <CheckBox Content="[ƯU TIÊN 3] Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)" 
+                                    <CheckBox Content="[2] Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)" 
                                               IsChecked="{Binding AppSettings.BlockUnknownSims}" 
                                               Foreground="#90CAF9" FontWeight="Medium" Margin="0,0,0,15"/>
-                                    
-                                    <Button Content="Reset định danh tất cả thiết bị" 
-                                            Command="{Binding ResetAllIdentitiesCommand}" 
-                                            Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#FFB300" 
-                                            HorizontalAlignment="Left" Padding="15,4"/>
+
                                 </StackPanel>
                             </Border>
                         </StackPanel>
@@ -933,23 +926,18 @@ GET  /api/history
 
                             <!-- 3 Ưu tiên IMEI -->
                             <StackPanel Orientation="Horizontal">
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[1] Fake IMEI" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
-                                        <ToggleButton IsChecked="{Binding IsDeviceSpoofingEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật tính năng giả lập (Fake IMEI) và tạo Profile thiết bị ngẫu nhiên"/>
-                                    </StackPanel>
-                                </Border>
+
 
                                 <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[2] Phục hồi IMEI" Foreground="#FFB300" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
+                                        <TextBlock Text="[1] Phục hồi IMEI" Foreground="#FFB300" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
                                         <ToggleButton IsChecked="{Binding IsImeiRestoreEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác"/>
                                     </StackPanel>
                                 </Border>
 
                                 <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[3] Chặn SIM lạ" Foreground="#90CAF9" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
+                                        <TextBlock Text="[2] Chặn SIM lạ" Foreground="#90CAF9" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
                                         <ToggleButton IsChecked="{Binding IsBlockUnknownSimsEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)"/>
                                     </StackPanel>
                                 </Border>
@@ -1302,60 +1290,68 @@ GET  /api/history
                 </TabItem.Header>
                 <ScrollViewer Margin="20" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                     <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
-                        <TextBlock Text="📖 HƯỚNG DẪN QUY TRÌNH KẾT NỐI MODEM &amp; CẮM SIM AN TOÀN 100%" FontSize="24" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,20"/>
+                        <TextBlock Text="📖 HƯỚNG DẪN QUẢN LÝ IMEI &amp; ĐỔI SIM" FontSize="24" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,20"/>
 
                         <Border Background="#1e293b" CornerRadius="10" Padding="20" BorderThickness="1" BorderBrush="#334155" Margin="0,0,0,20">
                             <StackPanel>
-                                <TextBlock Text="CẢNH BÁO QUAN TRỌNG VỀ LỘ IMEI" FontSize="18" FontWeight="Bold" Foreground="#FF5252" Margin="0,0,0,15"/>
-                                <TextBlock Text="Mạch GSM/Modem sẽ luôn tự động khởi động và BẬT SÓNG ngay khi được cấp nguồn từ cổng USB. Nếu bạn cắm SIM vào modem trước khi cắm USB vào máy tính, nhà mạng sẽ ngay lập tức nhận được IMEI gốc của phần cứng mạch. Phần mềm KHÔNG THỂ can thiệp chặn quá trình này nếu nó diễn ra trước khi Tool kết nối được với mạch."
+                                <TextBlock Text="MỘT SỐ NGUYÊN TẮC CƠ BẢN" FontSize="18" FontWeight="Bold" Foreground="#2196F3" Margin="0,0,0,15"/>
+                                <TextBlock Text="Tool GSM Pro phiên bản mới đã loại bỏ hoàn toàn tính năng Fake IMEI (giả lập thiết bị ảo) để đảm bảo độ ổn định và an toàn cao nhất với các mạch phần cứng bị khóa Firmware. Tool hiện tại sử dụng 100% IMEI thật của mạch."
                                            FontSize="14" Foreground="White" TextWrapping="Wrap" LineHeight="24" Margin="0,0,0,10"/>
                             </StackPanel>
                         </Border>
 
-                        <TextBlock Text="✅ QUY TRÌNH CHUẨN 3 BƯỚC (BẢO MẬT IMEI TUYỆT ĐỐI)" FontSize="18" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-
-                        <Grid Margin="0,0,0,15">
+                        <TextBlock Text="✅ QUY TRÌNH XỬ LÝ SIM MỚI (LẦN ĐẦU CẮM)" FontSize="18" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                        <TextBlock Text="Khi một SIM mới (chưa từng được Tool lưu lại) được cắm vào mạch, Tool sẽ ứng xử dựa trên tuỳ chọn [Chặn SIM lạ]:" FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,10"/>
+                        
+                        <Grid Margin="10,0,0,15">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="30"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <Border Width="40" Height="40" CornerRadius="20" Background="#5C6BC0" HorizontalAlignment="Center" VerticalAlignment="Top">
-                                <TextBlock Text="1" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <StackPanel Grid.Column="1" Margin="10,5,0,0">
-                                <TextBlock Text="Cắm Modem/Box vào PC (CHƯA CÓ SIM)" FontSize="16" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
-                                <TextBlock Text="Hãy tháo toàn bộ SIM ra khỏi khay trước khi cắm cáp USB vào máy tính. Đảm bảo cổng COM đã hiện trong Device Manager." 
-                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
+                            <TextBlock Text="•" Foreground="#FF5252" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Nếu ĐANG BẬT [Chặn SIM lạ]:" FontSize="15" FontWeight="Bold" Foreground="#FF5252"/>
+                                <TextBlock Text="Tool sẽ ngay lập tức vô hiệu hóa cổng COM, đổi màu trạng thái sang Đỏ (Security Blocked) và báo Lỗi Cảnh báo. SIM này sẽ không hoạt động, không nhận được tin nhắn hay thao tác nào.&#x0a;Để cấp quyền sử dụng, hãy click Chuột phải vào dòng SIM đó -&gt; Chọn 'Chấp Thuận SIM Lạ'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
+                            </StackPanel>
+                        </Grid>
+                        
+                        <Grid Margin="10,0,0,25">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="30"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="•" Foreground="#4CAF50" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Nếu ĐANG TẮT [Chặn SIM lạ]:" FontSize="15" FontWeight="Bold" Foreground="#4CAF50"/>
+                                <TextBlock Text="Tool sẽ tự động chấp nhận SIM này. Nó lấy IMEI gốc hiện tại của mạch phần cứng và gán vĩnh viễn cặp [CCID của SIM] + [IMEI của mạch] vào Kho dữ liệu Backup (imei_backup.csv). Lần sau cắm lại SIM này, Tool sẽ nhận diện nó là 'SIM cũ đã có Backup'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
                             </StackPanel>
                         </Grid>
 
-                        <Grid Margin="0,0,0,15">
+
+                        <TextBlock Text="✅ QUY TRÌNH XỬ LÝ SIM CŨ (ĐÃ TỪNG CẮM &amp; CÓ BACKUP)" FontSize="18" FontWeight="Bold" Foreground="#FFB300" Margin="0,0,0,15"/>
+                        <TextBlock Text="Khi một SIM cũ (đã có trong file backup) được cắm vào bất kỳ mạch/cổng nào, Tool sẽ kiểm tra IMEI hiện tại của mạch và so sánh với IMEI đã lưu trong Backup. Nó sẽ ứng xử dựa trên tuỳ chọn [Phục hồi IMEI]:" FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,10"/>
+                        
+                        <Grid Margin="10,0,0,15">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="30"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <Border Width="40" Height="40" CornerRadius="20" Background="#5C6BC0" HorizontalAlignment="Center" VerticalAlignment="Top">
-                                <TextBlock Text="2" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <StackPanel Grid.Column="1" Margin="10,5,0,0">
-                                <TextBlock Text="Mở Tool GSM Pro và chờ Khởi Tạo" FontSize="16" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
-                                <TextBlock Text="Mở ứng dụng Tool GSM Pro. Tool sẽ tự động quét các cổng COM và lập tức gửi lệnh ÉP TẮT SÓNG (AT+CFUN=4). Các cổng sẽ chuyển sang trạng thái Đang chờ cắm SIM (Hot-plug)." 
-                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
+                            <TextBlock Text="•" Foreground="#FFB300" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Nếu ĐANG BẬT [Phục hồi IMEI]:" FontSize="15" FontWeight="Bold" Foreground="#FFB300"/>
+                                <TextBlock Text="Nếu IMEI của mạch khác với IMEI Backup, Tool sẽ tự động ra lệnh (AT+EGMR) để ép ghi lại IMEI cũ vào mạch. Điều này giúp nhà mạng không phát hiện ra việc bạn đã đổi khay SIM hay đổi thiết bị." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
                             </StackPanel>
                         </Grid>
-
-                        <Grid Margin="0,0,0,25">
+                        
+                        <Grid Margin="10,0,0,25">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="30"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <Border Width="40" Height="40" CornerRadius="20" Background="#4CAF50" HorizontalAlignment="Center" VerticalAlignment="Top">
-                                <TextBlock Text="3" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <StackPanel Grid.Column="1" Margin="10,5,0,0">
-                                <TextBlock Text="Tiến hành Cắm Nóng SIM (Lần đầu)" FontSize="16" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,8"/>
-                                <TextBlock Text="Bây giờ bạn có thể lần lượt cắm SIM vào các khe. Tool sẽ tự động quét ngầm, phát hiện SIM mới, tạo/đổi IMEI Fake an toàn, và CHỈ BẬT SÓNG sau khi đã ghi IMEI Fake thành công. Sóng sẽ lên màu xanh (Active) và IMEI hiển thị là IMEI an toàn." 
-                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
+                            <TextBlock Text="•" Foreground="#9E9E9E" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="Nếu ĐANG TẮT [Phục hồi IMEI]:" FontSize="15" FontWeight="Bold" Foreground="#9E9E9E"/>
+                                <TextBlock Text="Tool sẽ bỏ qua quá trình kiểm tra. SIM sẽ nhận và sử dụng đúng IMEI nguyên bản gốc của cổng COM mà nó đang cắm vào." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
                             </StackPanel>
                         </Grid>
 
@@ -1365,21 +1361,14 @@ GET  /api/history
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <Border Width="40" Height="40" CornerRadius="20" Background="#E91E63" HorizontalAlignment="Center" VerticalAlignment="Top">
-                                <TextBlock Text="4" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <TextBlock Text="!" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <StackPanel Grid.Column="1" Margin="10,5,0,0">
                                 <TextBlock Text="Thay Đổi SIM Mới (TUYỆT ĐỐI QUAN TRỌNG)" FontSize="16" FontWeight="Bold" Foreground="#E91E63" Margin="0,0,0,8"/>
-                                <TextBlock Text="Khi đang dùng mà muốn thay SIM khác, KHÔNG ĐƯỢC RÚT SIM RA NGAY! Bạn phải chọn cổng COM trên phần mềm -> Bấm nút [Làm mới / Reset] -> Chọn [CHUẨN BỊ ĐỔI SIM]. Chờ Tool ngắt sóng vô tuyến xong thì bạn mới được rút khay SIM và cắm SIM mới vào để tránh bị nhà mạng quét lỗi Thay Đổi Thiết Bị." 
+                                <TextBlock Text="Khi đang dùng mà muốn thay SIM khác, KHÔNG ĐƯỢC RÚT SIM RA NGAY! Bạn phải chọn cổng COM trên phần mềm -&gt; Bấm nút [Làm mới / Reset] -&gt; Chọn [CHUẨN BỊ ĐỔI SIM]. Chờ Tool ngắt sóng vô tuyến xong thì bạn mới được rút khay SIM và cắm SIM mới vào để tránh bị nhà mạng quét lỗi Thay Đổi Thiết Bị." 
                                            FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Grid>
-                        
-                        <Separator Background="#334155" Margin="0,10,0,20"/>
-                        
-                        <TextBlock Text="🛠 CÁC CƠ CHẾ BẢO VỆ ĐÃ ĐƯỢC TÍCH HỢP:" FontSize="16" FontWeight="Bold" Foreground="#FF9800" Margin="0,0,0,15"/>
-                        <TextBlock Text="• Khóa cứng (Safety Lock): Nếu Tool không thể ép tắt sóng ban đầu, cổng đó sẽ bị khóa hoàn toàn (STATUS_NO_RESPONSE) để bảo vệ." FontSize="14" Foreground="#B0BEC5" Margin="20,0,0,10" TextWrapping="Wrap"/>
-                        <TextBlock Text="• Quét ngầm (Continuous Polling): Tool liên tục quét tìm SIM 24/24 (không giới hạn thời gian cắm nóng)." FontSize="14" Foreground="#B0BEC5" Margin="20,0,0,10" TextWrapping="Wrap"/>
-                        <TextBlock Text="• Khóa kép (Double Lock): Trước khi ghi đè IMEI, Tool bồi thêm một lệnh tắt sóng tuyệt đối (AT+CFUN=0) và chỉ kích hoạt lại (AT+CFUN=1) nếu đã ghi xong." FontSize="14" Foreground="#B0BEC5" Margin="20,0,0,10" TextWrapping="Wrap"/>
                         
                         <Separator Background="#3D3D5C" Margin="0,20"/>
                         

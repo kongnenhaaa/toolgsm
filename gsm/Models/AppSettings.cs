@@ -54,13 +54,7 @@ public class AppSettings
     /// <summary>Danh sách các quy tắc tự động forward OTP/SMS qua HTTP webhook.</summary>
     public System.Collections.Generic.List<WebhookRule> WebhookRules { get; set; } = new();
 
-    // ========== DEVICE SPOOFING (FAKE IMEI) ==========
-    /// <summary>
-    /// Bật/tắt tính năng tự động Fake IMEI (Spoofing) cho các cổng COM.
-    /// Dữ liệu định danh được lưu riêng trong file device_identities.json (không trong appsettings).
-    /// </summary>
-    public bool EnableDeviceSpoofing { get; set; } = false;
-    
+
     // ========== IMEI BACKUP & RESTORE ==========
     /// <summary>
     /// Bật/tắt chặn SIM lạ. Nếu bật, SIM mới (chưa có trong kho) sẽ bị chặn và chờ chấp thuận thủ công.
@@ -69,8 +63,7 @@ public class AppSettings
     public bool BlockUnknownSims { get; set; } = true;
 
     /// <summary>
-    /// Bật/tắt tự động phục hồi (Restore) IMEI đã sao lưu nếu thẻ SIM bị cắm sang module/cổng khác.
-    /// Tính năng này sẽ tự động bị bỏ qua nếu EnableDeviceSpoofing = true.
+    /// Bật/tắt tự động phục hồi (Restore) IMEI đã sao lưu nếu thẻ SIM bị chuyển sang cổng khác.
     /// </summary>
     public bool EnableImeiRestore { get; set; } = true;
 }

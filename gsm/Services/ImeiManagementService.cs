@@ -35,6 +35,13 @@ public class ImeiManagementService
         _logAction?.Invoke(message, level);
     }
 
+    private bool IsValidImei(string imei)
+    {
+        if (string.IsNullOrWhiteSpace(imei)) return false;
+        var clean = new string(imei.Where(char.IsDigit).ToArray());
+        return clean.Length == 15;
+    }
+
     private string NormalizeImei(string? imei)
     {
         if (string.IsNullOrWhiteSpace(imei)) return string.Empty;
@@ -82,17 +89,9 @@ public class ImeiManagementService
             {
                 string candidateImei = NormalizeImei(cachedEntry.Imei);
                 
-                // Cập nhật lại Tên Thiết bị dựa trên nguồn gốc
-                if (cachedEntry.SourceFile == "device-spoof")
-                {
-                    var identity = DeviceSpoofingService.GetOrCreateByCcid(ccid, portName, port.PhoneNumber);
-                    dispatcherInvoke(() => port.DeviceName = identity.DeviceName);
-                }
-                else
-                {
-                    dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
-                }
-                if (DeviceSpoofingService.IsValidImei(candidateImei))
+                dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
+
+                if (IsValidImei(candidateImei))
                 {
                     targetImei = candidateImei;
                     targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
@@ -113,35 +112,7 @@ public class ImeiManagementService
                     Log($"[{portName}] Bản Backup IMEI không hợp lệ ({candidateImei}). Bỏ qua Restore để bảo vệ thiết bị.", "ERROR");
                 }
             }
-            // Ưu tiên 1: Tạo/Sử dụng fake IMEI cho SIM mới hoặc khi Restore tắt
-            else if (settings.EnableDeviceSpoofing)
-            {
-                var identity = DeviceSpoofingService.GetOrCreateByCcid(ccid, portName, port.PhoneNumber);
-                targetImei = NormalizeImei(identity.AssignedImei);
-                targetSource = $"SPOOF ({identity.DeviceName})";
-
-                if (cachedEntry == null && DeviceSpoofingService.IsValidImei(targetImei))
-                {
-                    saveBackupEntry(new SimBackupEntry
-                    {
-                        Ccid = ccid,
-                        Imei = targetImei,
-                        PhoneNumber = port.PhoneNumber,
-                        CreatedAt = identity.CreatedAt,
-                        LicenseKeySuffix = string.Empty,
-                        KeyMismatch = "false",
-                        SourceFile = "device-spoof"
-                    });
-
-                    Log($"[{portName}] [SPOOF_BACKUP] Đã lưu Fake IMEI {targetImei} cho CCID {ccid} vào imei_backup.csv.", "SUCCESS");
-
-                    AppendSpoofImeiExcel(portName, ccid, targetImei, port.PhoneNumber, identity.DeviceName, identity.CreatedAt);
-                }
-
-                dispatcherInvoke(() => port.DeviceName = identity.DeviceName);
-                Log($"[{portName}] [DEVICE_SPOOF] SIM CCID={ccid} định danh: {identity.DeviceName} | IMEI mục tiêu: {targetImei}");
-            }
-            // Mặc định (GSM Modem) khi cả Fake IMEI và Restore IMEI đều không áp dụng
+            // Mặc định (GSM Modem) khi Restore IMEI không áp dụng
             else
             {
                 dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
@@ -152,7 +123,7 @@ public class ImeiManagementService
                 }
                 else if (cachedEntry == null)
                 {
-                    if (!DeviceSpoofingService.IsValidImei(NormalizeImei(currentImei)))
+                    if (!IsValidImei(NormalizeImei(currentImei)))
                     {
                         Log($"[{portName}] IMEI gốc hiện tại ({currentImei}) không hợp lệ (sai độ dài hoặc checksum). Từ chối tạo bản Backup tự động.", "WARNING");
                     }
@@ -203,11 +174,11 @@ public class ImeiManagementService
                 await Task.Delay(1000);
 
                 bool success = false;
+                bool isUnsupported = false;
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
                     Log($"[{portName}] Thử ghi IMEI lần {attempt}/3...");
 
-                    bool isUnsupported = false;
                     bool isDisconnected = false;
                     string writeResp = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000);
                     if (IsConnectionError(writeResp))
@@ -265,7 +236,8 @@ public class ImeiManagementService
                 if (!success)
                 {
                     Log($"[{portName}] Đã thử ghi IMEI 3 lần nhưng không thành công.", "ERROR");
-                    return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.WrongImei };
+                    string errorMsg = isUnsupported ? "Mạch không hỗ trợ đổi IMEI (Khóa Firmware)" : "Ghi đè IMEI thất bại";
+                    return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = errorMsg };
                 }
             }
             else
@@ -279,8 +251,14 @@ public class ImeiManagementService
                 await Task.Delay(1500);
             }
 
-            string checkFinalResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
-            string checkFinalImei = NormalizeImei(checkFinalResp);
+            string checkFinalImei = string.Empty;
+            for (int i = 0; i < 3; i++)
+            {
+                string checkFinalResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
+                checkFinalImei = NormalizeImei(checkFinalResp);
+                if (!string.IsNullOrEmpty(checkFinalImei)) break;
+                await Task.Delay(1000);
+            }
             
             bool matched = (checkFinalImei == expectedImei) && !string.IsNullOrEmpty(checkFinalImei);
             Log($"[{portName}] [IMEI_FINAL] current={checkFinalImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");

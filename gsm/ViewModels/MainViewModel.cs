@@ -260,20 +260,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool IsDeviceSpoofingEnabled
-    {
-        get => SettingsService.Current.EnableDeviceSpoofing;
-        set
-        {
-            if (SettingsService.Current.EnableDeviceSpoofing != value)
-            {
-                SettingsService.Current.EnableDeviceSpoofing = value;
-                SettingsService.SaveSettings(SettingsService.Current);
-                OnPropertyChanged();
-            }
-        }
-    }
-
     public bool IsImeiRestoreEnabled
     {
         get => SettingsService.Current.EnableImeiRestore;
@@ -720,7 +706,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _speechToTextService.LogMessage += (s, msg) => AddLog(msg);
         _ = _speechToTextService.InitializeAsync();
         
-        Services.DeviceSpoofingService.OnError += DeviceSpoofingService_OnError;
         
         InitializeHardware();
         
@@ -940,8 +925,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 port.TimeoutCount++;
             }
-            if (error.Contains("SMS", StringComparison.OrdinalIgnoreCase) ||
-                error.Contains("+CMS ERROR", StringComparison.OrdinalIgnoreCase))
+            if (error != null && (error.Contains("SMS", StringComparison.OrdinalIgnoreCase) ||
+                error.Contains("+CMS ERROR", StringComparison.OrdinalIgnoreCase)))
             {
                 port.SmsErrorCount++;
             }
@@ -1234,31 +1219,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IsWebhookDialogOpen = false;
     }
 
-    [RelayCommand]
-    private void ResetAllIdentities()
-    {
-        var result = System.Windows.MessageBox.Show(
-            "Bạn có chắc muốn làm mới lại TOÀN BỘ định danh thiết bị?\n\n" +
-            "⚠️ Cảnh báo: Tất cả SIM sẽ nhận IMEI ngẫu nhiên MỚI trong lần cắm lại.\n" +
-            "Nhà mạng sẽ thấy IMEI thay đổi — chỉ dùng khi thực sự cần thiết!",
-            "Xác nhận Reset Định Danh",
-            System.Windows.MessageBoxButton.YesNo,
-            System.Windows.MessageBoxImage.Warning);
-
-        if (result == System.Windows.MessageBoxResult.Yes)
-        {
-            // Xóa toàn bộ file device_identities.json
-            Services.DeviceSpoofingService.ClearAll();
-
-            // Reset DeviceName hiển thị trên UI
-            foreach (var port in Ports)
-                port.DeviceName = "Chờ nhận dạng...";
-
-            SnackbarMessageQueue.Enqueue(
-                $"Đã xóa định danh. Rút & cắm lại SIM để nhận IMEI mới. " +
-                $"(Backup: {Services.DeviceSpoofingService.BackupFilePath})");
-        }
-    }
 
     [RelayCommand]
     private void BrowseSoundFile(string parameter)
@@ -1392,20 +1352,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         string targetImei = port.Imei ?? "";
         string sourceFile = "manual-approve";
-
-        // Nếu người dùng có bật tính năng Fake IMEI, ta sẽ tạo IMEI giả cho nó luôn trước khi lưu vào backup
-        if (SettingsService.Current.EnableDeviceSpoofing)
-        {
-            var identity = Services.DeviceSpoofingService.GetOrCreateByCcid(port.Serial, port.PortName, port.PhoneNumber);
-            if (Services.DeviceSpoofingService.IsValidImei(identity.AssignedImei))
-            {
-                targetImei = identity.AssignedImei;
-                sourceFile = "device-spoof";
-                
-                // Lưu vào lịch sử file excel của DeviceSpoofing luôn để đồng bộ
-                Services.ImeiManagementService.AppendSpoofImeiExcel(port.PortName, port.Serial, targetImei, port.PhoneNumber ?? "", identity.DeviceName, identity.CreatedAt);
-            }
-        }
 
         var newEntry = new gsm.Models.SimBackupEntry
         {
@@ -1699,7 +1645,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         AddLog($"[{e.PortName}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
                     }
 
-                    AddLog($"[{e.PortName}] [IMEI_MODE] Fake={AppSettings.EnableDeviceSpoofing} Restore={AppSettings.EnableImeiRestore} BlockNew={AppSettings.BlockUnknownSims}");
+                    AddLog($"[{e.PortName}] [IMEI_MODE] Restore={AppSettings.EnableImeiRestore} BlockNew={AppSettings.BlockUnknownSims}");
 
                     // Thực hiện kiểm tra và khôi phục IMEI bất đồng bộ để tránh treo UI thread
                     _ = Task.Run(async () =>
@@ -1741,13 +1687,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 {
                                     port.Imei = result.FinalImei;
                                     MarkPortActiveAfterInit(e.PortName);
-                                    
-                                    if (result.Status == Services.ImeiProcessStatus.Applied && AppSettings.EnableDeviceSpoofing)
-                                    {
-                                        Services.DeviceSpoofingService.MarkApplied(ccid);
-                                        AddLog($"[{e.PortName}] [SPOOF_APPLIED] Đã áp dụng và xác minh thành công Fake IMEI cho SIM CCID: {ccid}", "SUCCESS");
-                                    }
-                                    
                                     // Bắt buộc khởi tạo lại cài đặt (AT+CMGF=1, CSCS...) 
                                     // vì nếu vừa chạy CFUN=1,1 xong modem sẽ mất hết cài đặt tạm thời.
                                     _ = _modemService.ReinitializeSettingsAsync(port.PortName);
@@ -3172,7 +3111,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsWebNotificationEnabled));
         OnPropertyChanged(nameof(IsWatchdogEnabled));
         OnPropertyChanged(nameof(IsAutoAnswerEnabled));
-        OnPropertyChanged(nameof(IsDeviceSpoofingEnabled));
+
         OnPropertyChanged(nameof(IsImeiRestoreEnabled));
         OnPropertyChanged(nameof(IsBlockUnknownSimsEnabled));
 
@@ -4319,11 +4258,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void DeviceSpoofingService_OnError(string msg) => AddLog(msg, "ERROR");
-
     public void Dispose()
     {
-        Services.DeviceSpoofingService.OnError -= DeviceSpoofingService_OnError;
         if (!_lifetimeCts.IsCancellationRequested)
         {
             _lifetimeCts.Cancel();

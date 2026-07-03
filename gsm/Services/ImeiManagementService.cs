@@ -80,9 +80,18 @@ public class ImeiManagementService
             // Ưu tiên 2: Phục hồi từ backup nếu có (và nếu tính năng Restore được bật)
             if (settings.EnableImeiRestore && cachedEntry != null)
             {
-                dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
-                
                 string candidateImei = NormalizeImei(cachedEntry.Imei);
+                
+                // Cập nhật lại Tên Thiết bị dựa trên nguồn gốc
+                if (cachedEntry.SourceFile == "device-spoof")
+                {
+                    var identity = DeviceSpoofingService.GetOrCreateByCcid(ccid, portName, port.PhoneNumber);
+                    dispatcherInvoke(() => port.DeviceName = identity.DeviceName);
+                }
+                else
+                {
+                    dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
+                }
                 if (DeviceSpoofingService.IsValidImei(candidateImei))
                 {
                     targetImei = candidateImei;
@@ -228,14 +237,11 @@ public class ImeiManagementService
                         dispatcherInvoke(() => port.Imei = targetImei);
                         Log($"[{portName}] Ghi đè IMEI thành công ở lần thử {attempt}: {targetImei}", "SUCCESS");
 
-                        string cfun1 = await _modemService.SendCommandAsync(portName, "AT+CFUN=1", 30000);
-                        if (!cfun1.Contains("OK"))
-                        {
-                            Log($"[{portName}] Bật sóng (AT+CFUN=1) thất bại sau khi ghi IMEI.", "ERROR");
-                            return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOnFailed };
-                        }
-                        await Task.Delay(2000);
-                        break;
+                        Log($"[{portName}] Đã gửi lệnh khởi động lại modem (AT+CFUN=1,1) để áp dụng IMEI mới triệt để vào Baseband.", "INFO");
+                        string cfun1 = await _modemService.SendCommandAsync(portName, "AT+CFUN=1,1", 30000, silent: true);
+                        
+                        // Trả về Applied ngay lập tức, vì modem sẽ mất kết nối USB khi khởi động lại
+                        return new ImeiProcessResult { Status = ImeiProcessStatus.Applied, FinalImei = targetImei };
                     }
                     else
                     {
@@ -317,7 +323,7 @@ public class ImeiManagementService
                respLower.Contains("rút cáp");
     }
 
-    private void AppendSpoofImeiExcel(string portName, string ccid, string imei, string phoneNumber, string deviceName, string createdAt)
+    public static void AppendSpoofImeiExcel(string portName, string ccid, string imei, string phoneNumber, string deviceName, string createdAt)
     {
         try
         {
@@ -344,11 +350,10 @@ public class ImeiManagementService
             worksheet.Cells[row, 5].Value = createdAt;
             
             package.Save();
-            Log($"[{portName}] Đã ghi bổ sung Fake IMEI {imei} vào file spoof_imei_backup.xlsx.", "SUCCESS");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Log($"[{portName}] Lỗi khi lưu spoof IMEI ra Excel: {ex.Message}", "ERROR");
+            // Fail silently or handle
         }
     }
 }

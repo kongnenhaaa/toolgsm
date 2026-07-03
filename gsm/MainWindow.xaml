@@ -788,6 +788,17 @@ GET  /api/history
                                     <MenuItem Header="⚡ Khởi động lại TẤT CẢ Modem" Command="{Binding RebootModemCommand}" CommandParameter="All">
                                     </MenuItem>
                                     <Separator Background="#444"/>
+                                    <MenuItem Header="🛡️ CHUẨN BỊ ĐỔI SIM CÁC CỔNG ĐÃ CHỌN (An Toàn)" Command="{Binding PrepareSwapSimCommand}" Foreground="#81C784">
+                                        <MenuItem.ToolTip>
+                                            <ToolTip Content="Ngắt sóng các cổng đã chọn để bạn có thể rút khay SIM ra thay SIM mới mà không bị lộ IMEI phần cứng." />
+                                        </MenuItem.ToolTip>
+                                    </MenuItem>
+                                    <MenuItem Header="🛡️ CHUẨN BỊ ĐỔI SIM TẤT CẢ (An Toàn)" Command="{Binding PrepareSwapSimCommand}" CommandParameter="All" Foreground="#81C784">
+                                        <MenuItem.ToolTip>
+                                            <ToolTip Content="Ngắt sóng tất cả các cổng để bạn có thể rút khay SIM ra thay SIM mới mà không bị lộ IMEI phần cứng." />
+                                        </MenuItem.ToolTip>
+                                    </MenuItem>
+                                    <Separator Background="#444"/>
                                     <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding ClearSmsCommand}" CommandParameter="Selected">
                                     </MenuItem>
                                     <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên TẤT CẢ CỔNG" Command="{Binding ClearSmsCommand}" CommandParameter="All">
@@ -1332,8 +1343,23 @@ GET  /api/history
                                 <TextBlock Text="3" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <StackPanel Grid.Column="1" Margin="10,5,0,0">
-                                <TextBlock Text="Tiến hành Cắm Nóng SIM (Hot-Plug)" FontSize="16" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,8"/>
+                                <TextBlock Text="Tiến hành Cắm Nóng SIM (Lần đầu)" FontSize="16" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,8"/>
                                 <TextBlock Text="Bây giờ bạn có thể lần lượt cắm SIM vào các khe. Tool sẽ tự động quét ngầm, phát hiện SIM mới, tạo/đổi IMEI Fake an toàn, và CHỈ BẬT SÓNG sau khi đã ghi IMEI Fake thành công. Sóng sẽ lên màu xanh (Active) và IMEI hiển thị là IMEI an toàn." 
+                                           FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid Margin="0,0,0,25">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="60"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Width="40" Height="40" CornerRadius="20" Background="#E91E63" HorizontalAlignment="Center" VerticalAlignment="Top">
+                                <TextBlock Text="4" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="10,5,0,0">
+                                <TextBlock Text="Thay Đổi SIM Mới (TUYỆT ĐỐI QUAN TRỌNG)" FontSize="16" FontWeight="Bold" Foreground="#E91E63" Margin="0,0,0,8"/>
+                                <TextBlock Text="Khi đang dùng mà muốn thay SIM khác, KHÔNG ĐƯỢC RÚT SIM RA NGAY! Bạn phải chọn cổng COM trên phần mềm -> Bấm nút [Làm mới / Reset] -> Chọn [CHUẨN BỊ ĐỔI SIM]. Chờ Tool ngắt sóng vô tuyến xong thì bạn mới được rút khay SIM và cắm SIM mới vào để tránh bị nhà mạng quét lỗi Thay Đổi Thiết Bị." 
                                            FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Grid>

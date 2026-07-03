@@ -1358,26 +1358,43 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (string.IsNullOrEmpty(port.Serial) || string.IsNullOrEmpty(port.Imei))
+        if (string.IsNullOrEmpty(port.Serial))
         {
-            SnackbarMessageQueue.Enqueue($"Lỗi: Không tìm thấy CCID hoặc IMEI của {port.PortName}.");
+            SnackbarMessageQueue.Enqueue($"Lỗi: Không tìm thấy CCID của {port.PortName}.");
             return;
+        }
+
+        string targetImei = port.Imei ?? "";
+        string sourceFile = "manual-approve";
+
+        // Nếu người dùng có bật tính năng Fake IMEI, ta sẽ tạo IMEI giả cho nó luôn trước khi lưu vào backup
+        if (SettingsService.Current.EnableDeviceSpoofing)
+        {
+            var identity = Services.DeviceSpoofingService.GetOrCreateByCcid(port.Serial, port.PortName, port.PhoneNumber);
+            if (Services.DeviceSpoofingService.IsValidImei(identity.AssignedImei))
+            {
+                targetImei = identity.AssignedImei;
+                sourceFile = "device-spoof";
+                
+                // Lưu vào lịch sử file excel của DeviceSpoofing luôn để đồng bộ
+                Services.ImeiManagementService.AppendSpoofImeiExcel(port.PortName, port.Serial, targetImei, port.PhoneNumber ?? "", identity.DeviceName, identity.CreatedAt);
+            }
         }
 
         var newEntry = new gsm.Models.SimBackupEntry
         {
             Ccid = port.Serial,
-            Imei = port.Imei,
+            Imei = targetImei,
             PhoneNumber = port.PhoneNumber ?? "",
             CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
             LicenseKeySuffix = string.Empty,
             KeyMismatch = "false",
-            SourceFile = "manual-approve"
+            SourceFile = sourceFile
         };
         
         AddNewImeiCacheEntry(newEntry);
         
-        AddLog($"[{port.PortName}] Đã chấp thuận thủ công SIM lạ (CCID: {port.Serial}, IMEI: {port.Imei}).", "SUCCESS");
+        AddLog($"[{port.PortName}] Đã chấp thuận thủ công SIM lạ (CCID: {port.Serial}, IMEI mục tiêu: {targetImei}).", "SUCCESS");
         SnackbarMessageQueue.Enqueue($"Đã lưu SIM {port.PortName} vào kho. Đang khởi động lại cổng...");
 
         await RefreshPortAsync(port.PortName);
@@ -1567,18 +1584,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     
                     // Sửa lỗi Parse nhầm "1đ" từ tin nhắn báo không đủ tiền hoặc quảng cáo cước phí
                     // Cập nhật hỗ trợ TKG (Tài Khoản Gốc) của Viettel
-                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|So du|Số dư)[^\d]*?(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)", RegexOptions.IgnoreCase);
+                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK)[^\d]*?(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)", RegexOptions.IgnoreCase);
                     if (strictMatch.Success) 
-
                     {
                         port.Balance = strictMatch.Groups[1].Value + " " + strictMatch.Groups[2].Value;
                     }
                     else
                     {
                         // Fallback nếu nhà mạng trả về format lạ, nhưng phải tránh các từ khóa rác và tránh cước phí (vd: 1000d/ngay)
-                        if (!Regex.IsMatch(ussdContent, @"khong du|chua du|cuoc|uu dai|tang|gia|khong lo|ho tro|phi", RegexOptions.IgnoreCase))
+                        if (!Regex.IsMatch(ussdContent, @"khong du|chua du|cuoc|uu dai|tang|gia|khong lo|ho tro|phi|dang ky", RegexOptions.IgnoreCase))
                         {
-                            var fallback = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ)(?!/)", RegexOptions.IgnoreCase);
+                            var fallback = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)(?!/)", RegexOptions.IgnoreCase);
                             if (fallback.Success) port.Balance = fallback.Groups[1].Value + " " + fallback.Groups[2].Value;
                         }
                     }
@@ -2092,7 +2108,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
-                if (extractedOtp == "N/A" && TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port))
+                if (extractedOtp == "N/A" && TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port, receiveAll))
                 {
                     AddLog($"[{e.PortName}] Da ghep doan SMS tiep theo tu {senderPhone} vao tin truoc.", "INFO");
                     if (!string.IsNullOrEmpty(e.MsgIndex))
@@ -2213,7 +2229,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
-    private bool TryAppendToRecentMultipartSms(string portName, string senderPhone, string content, SimPort? port)
+    private bool TryAppendToRecentMultipartSms(string portName, string senderPhone, string content, SimPort? port, bool receiveAll = false)
     {
         if (string.IsNullOrWhiteSpace(content))
             return false;
@@ -2275,6 +2291,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 foreach (var rule in SettingsService.Current.WebhookRules.Where(r => r.Enabled))
                 {
                     await WebhookService.TriggerAsync(rule, portName, simPhone, senderPhone, newOtp, existing.Content);
+                }
+            });
+        }
+        else if (receiveAll)
+        {
+            string simPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
+            string safeContent = System.Net.WebUtility.HtmlEncode(existing.Content);
+            string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
+            _ = Task.Run(async () =>
+            {
+                if (SettingsService.Current.EnableTelegramNotification)
+                {
+                    await TelegramService.SendMessageAsync($"📩 <b>Tin Nhắn Ghép (Toàn Văn) Từ {portName}</b>\n📱 SĐT: {simPhone}\n👤 Từ: {safeSender}\n📝 Nội dung: <i>{safeContent}</i>");
                 }
             });
         }
@@ -2643,6 +2672,46 @@ public partial class MainViewModel : ObservableObject, IDisposable
             await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1,1");
         }
     }
+
+    [RelayCommand]
+    private async Task PrepareSwapSim(string mode)
+    {
+        List<Models.SimPort> targetPorts;
+        
+        if (mode == "Selected")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (đánh dấu ☑) để chuẩn bị đổi SIM.");
+                return;
+            }
+        }
+        else
+        {
+            targetPorts = Ports.ToList();
+        }
+
+
+        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn ép ngắt sóng {targetPorts.Count} modem để chuẩn bị thay SIM?\nThao tác này sẽ tắt sóng vô tuyến để tránh rò rỉ IMEI.", "Chuẩn bị Đổi SIM", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes)
+            return;
+
+        SnackbarMessageQueue.Enqueue($"Đang ép ngắt sóng {targetPorts.Count} cổng để chờ thay SIM...");
+        AddLog($"Bắt đầu ngắt sóng {targetPorts.Count} cổng...");
+
+        foreach (var port in targetPorts)
+        {
+            Application.Current.Dispatcher.Invoke(() => port.Status = SimStatus.Connecting);
+            _ = Task.Run(async () => 
+            {
+                await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4");
+                _modemService.StartHotplugWaitLoop(port.PortName);
+            });
+        }
+        
+        SnackbarMessageQueue.Enqueue("Đã ngắt sóng an toàn. Bạn có thể rút khay SIM ra và cắm SIM mới vào.");
+    }
+
 
     [RelayCommand]
     private async Task ClearSmsAsync(string mode)
@@ -3602,7 +3671,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             int toa = int.Parse(pdu.Substring(smscEnd + 4, 2), System.Globalization.NumberStyles.HexNumber);
             bool isAlphaNumeric = ((toa & 0x70) == 0x50);
             
-            int senderBytes = isAlphaNumeric ? (senderLen * 7 + 7) / 8 : (senderLen + 1) / 2;
+            int senderBytes = (senderLen + 1) / 2;
             int senderStart = smscEnd + 6;
             int senderEnd = senderStart + senderBytes * 2;
             
@@ -3721,7 +3790,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 
                 int charsToRead = hasUdh ? (udl - ((startIndexBits) / 7)) : udl;
-                if (sb.Length > charsToRead) sb.Length = charsToRead;
+                if (charsToRead >= 0 && sb.Length > charsToRead) sb.Length = charsToRead;
+                else if (charsToRead < 0) sb.Clear(); // or handle it somehow, maybe it's just invalid PDU. sb.Length = 0 is safe.
                 return sb.ToString();
             }
         }

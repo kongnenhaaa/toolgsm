@@ -799,7 +799,45 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
                 }
             }
-        });
+        }, lifetimeToken);
+
+        // Tự động kiểm tra phát hiện rút SIM (Hot-plug Auto-Airplane)
+        _ = Task.Run(async () =>
+        {
+            while (!lifetimeToken.IsCancellationRequested)
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(3), lifetimeToken); }
+                catch (OperationCanceledException) { break; }
+
+                var portsCopy = GetPortsSnapshot();
+                foreach (var p in portsCopy)
+                {
+                    if (lifetimeToken.IsCancellationRequested) break;
+                    
+                    if (p.Status == SimStatus.Active || p.Status == SimStatus.NoResponse || p.Status == SimStatus.SecurityBlocked)
+                    {
+                        // Kiểm tra trạng thái SIM qua cổng COM
+                        string pinStatus = await _modemService.SendCommandAsync(p.PortName, "AT+CPIN?", 3000, silent: true);
+                        if (pinStatus.Contains("ERROR") || pinStatus.Contains("+CME ERROR: 10"))
+                        {
+                            // Phát hiện SIM bị rút ra, lập tức khóa sóng
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                AddLog($"[{p.PortName}] Phát hiện thẻ SIM bị rút ra. Tự động chuyển cổng về chế độ Tắt sóng (AT+CFUN=4)...");
+                                p.Status = SimStatus.Connecting;
+                                p.PhoneNumber = string.Empty;
+                                p.Serial = string.Empty;
+                                p.Imei = string.Empty; // Xoá IMEI trên UI để lần cắm sau tự đọc lại IMEI thật
+                                UpdateDashboard();
+                            });
+                            
+                            // Gọi vòng lặp chờ SIM (trong vòng lặp này nó sẽ liên tục gửi AT+CFUN=4)
+                            _modemService.StartHotplugWaitLoop(p.PortName);
+                        }
+                    }
+                }
+            }
+        }, lifetimeToken);
 
         // Tự động phục hồi (Watchdog)
         _ = Task.Run(async () =>
@@ -2324,7 +2362,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (delta < TimeSpan.Zero)
             delta = delta.Duration();
 
-        return delta <= TimeSpan.FromSeconds(5);
+        return delta <= TimeSpan.FromSeconds(60);
     }
 
     private void ModemService_CallIncoming(object? sender, GsmDataEventArgs e)

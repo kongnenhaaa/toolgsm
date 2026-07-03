@@ -1295,7 +1295,7 @@ GET  /api/history
                         <Border Background="#1e293b" CornerRadius="10" Padding="20" BorderThickness="1" BorderBrush="#334155" Margin="0,0,0,20">
                             <StackPanel>
                                 <TextBlock Text="MỘT SỐ NGUYÊN TẮC CƠ BẢN" FontSize="18" FontWeight="Bold" Foreground="#2196F3" Margin="0,0,0,15"/>
-                                <TextBlock Text="Tool GSM Pro phiên bản mới đã loại bỏ hoàn toàn tính năng Fake IMEI (giả lập thiết bị ảo) để đảm bảo độ ổn định và an toàn cao nhất với các mạch phần cứng bị khóa Firmware. Tool hiện tại sử dụng 100% IMEI thật của mạch."
+                                <TextBlock Text="Tool GSM Pro phiên bản mới được trang bị tính năng Khóa sóng tự động (Auto-Airplane Mode) và Phục hồi IMEI thông minh. Tool sẽ tự động Fake IMEI để chống bị nhà mạng khóa SIM, quy trình cắm rút cực kỳ đơn giản và an toàn tuyệt đối."
                                            FontSize="14" Foreground="White" TextWrapping="Wrap" LineHeight="24" Margin="0,0,0,10"/>
                             </StackPanel>
                         </Border>
@@ -1364,8 +1364,8 @@ GET  /api/history
                                 <TextBlock Text="!" Foreground="White" FontWeight="Bold" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                             </Border>
                             <StackPanel Grid.Column="1" Margin="10,5,0,0">
-                                <TextBlock Text="Thay Đổi SIM Mới (TUYỆT ĐỐI QUAN TRỌNG)" FontSize="16" FontWeight="Bold" Foreground="#E91E63" Margin="0,0,0,8"/>
-                                <TextBlock Text="Khi đang dùng mà muốn thay SIM khác, KHÔNG ĐƯỢC RÚT SIM RA NGAY! Bạn phải chọn cổng COM trên phần mềm -&gt; Bấm nút [Làm mới / Reset] -&gt; Chọn [CHUẨN BỊ ĐỔI SIM]. Chờ Tool ngắt sóng vô tuyến xong thì bạn mới được rút khay SIM và cắm SIM mới vào để tránh bị nhà mạng quét lỗi Thay Đổi Thiết Bị." 
+                                <TextBlock Text="Thay Đổi Thẻ SIM (TỰ ĐỘNG KHÓA MÕM)" FontSize="16" FontWeight="Bold" Foreground="#E91E63" Margin="0,0,0,8"/>
+                                <TextBlock Text="Khi muốn thay SIM khác, bạn chỉ cần RÚT THẺ SIM CŨ RA. Sau đó, ĐỢI KHOẢNG 2 ĐẾN 3 GIÂY. Tool sẽ tự động nhận diện cổng vừa bị rút SIM và lập tức ép nó về trạng thái Tắt sóng (Airplane Mode). Sau khi đợi 3 giây xong, bạn cứ thoải mái chọc thẻ SIM mới vào rồi bấm Làm mới trên Tool. Việc chờ 3 giây này đảm bảo SIM mới cắm vào sẽ không bị lộ IMEI phần cứng lên VinaPhone, giúp chống khóa SIM 100%!" 
                                            FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Grid>

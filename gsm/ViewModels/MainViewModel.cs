@@ -1371,6 +1371,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }, lifetimeToken);
     }
 
+    private string GenerateRandomImei()
+    {
+        string[] tacs = new[] { 
+            "35293630", // iPhone 14 Pro Max
+            "35307371", // iPhone 14
+            "35198031", // Samsung S23
+            "35435973", // Samsung S23 Ultra
+            "35925411", // iPhone 12
+            "35483211", // Samsung S21
+            "35832011"  // iPhone 13
+        };
+        var random = new Random();
+        string tac = tacs[random.Next(tacs.Length)];
+        string snr = random.Next(0, 999999).ToString("D6");
+        string imeiWithoutCheck = tac + snr;
+        
+        // Calculate Luhn check digit
+        int sum = 0;
+        for (int i = 0; i < 14; i++)
+        {
+            int digit = imeiWithoutCheck[i] - '0';
+            if (i % 2 != 0)
+            {
+                digit *= 2;
+                if (digit > 9) digit -= 9;
+            }
+            sum += digit;
+        }
+        int checkDigit = (10 - (sum % 10)) % 10;
+        return imeiWithoutCheck + checkDigit;
+    }
+
     [RelayCommand]
     private async Task ApproveUnknownSim(SimPort port)
     {
@@ -1388,7 +1420,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        string targetImei = port.Imei ?? "";
+        string targetImei = GenerateRandomImei();
         string sourceFile = "manual-approve";
 
         var newEntry = new gsm.Models.SimBackupEntry
@@ -4383,6 +4415,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
             GetCommandPanelRecipient(),
             GetCommandPanelContent(),
             CurrentCommandPanelMode);
+    }
+
+    [RelayCommand]
+    private async Task RunSingleCommandQueueAsync()
+    {
+        AddCommandQueue();
+        if (CommandQueue.Count > 0)
+        {
+            await RunCommandQueueAsync();
+        }
+    }
+
+    [RelayCommand]
+    private async Task RunSingleWithErrorCommandQueueAsync()
+    {
+        AddCommandQueue();
+        if (CommandQueue.Count > 0)
+        {
+            await RunWithErrorCommandQueueAsync();
+        }
     }
 
     private string GetCommandPanelRecipient() => CommandPanelTab switch

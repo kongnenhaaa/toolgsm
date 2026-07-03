@@ -2389,14 +2389,14 @@ GET  /api/history
                                     Style="{StaticResource ModernButtonStyle}"
                                     Height="26"
                                     Margin="0,0,8,0"
-                                    Command="{Binding RunCommandQueueCommand}"/>
+                                    Command="{Binding RunSingleCommandQueueCommand}"/>
 
                             <Button Content="Chạy cộng lỗi"
                                     Background="#EC3F9B"
                                     Style="{StaticResource ModernButtonStyle}"
                                     Height="26"
                                     Margin="0,0,8,0"
-                                    Command="{Binding RunWithErrorCommandQueueCommand}"/>
+                                    Command="{Binding RunSingleWithErrorCommandQueueCommand}"/>
 
                             <Button Content="+ Thêm"
                                     Background="#12B886"

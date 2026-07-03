@@ -141,14 +141,29 @@ public class GsmModemService : IGsmModemService
 
     private async Task InitializeModemAsync(string portName)
     {
-        // Chờ 2 giây để thiết bị khởi động hoàn toàn trước khi gửi lệnh AT, tránh bị treo hoặc timeout
+        // Ping test để loại bỏ các cổng rác (NMEA, DM, Audio) không phản hồi lệnh AT, tránh treo USB
+        // Thử 3 lần để hỗ trợ các Modem đang bật chế độ Auto-baud (lần đầu sẽ bị rớt để đồng bộ baud rate)
+        string ping = "ERROR";
+        for (int i = 0; i < 3; i++)
+        {
+            ping = await SendCommandAsync(portName, "AT", 2000, silent: true);
+            if (!ping.Contains("Timeout") && !ping.Contains("ERROR")) break;
+            await Task.Delay(500);
+        }
         
+        if (ping.Contains("Timeout") || ping.Contains("ERROR"))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Bỏ qua cổng vì không phản hồi lệnh AT cơ bản: {ping}" });
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
+            return;
+        }
+
         // Ngắt sóng ngay, chặn đăng ký mạng bằng IMEI cũ
         bool cfunOffSuccess = false;
         for (int i = 0; i < 5; i++)
         {
             string cfunResp = await SendCommandAsync(portName, "AT+CFUN=4", 30000);
-            if (!cfunResp.Contains("ERROR"))
+            if (!cfunResp.Contains("ERROR") || cfunResp.Contains("+CME ERROR"))
             {
                 cfunOffSuccess = true;
                 break;
@@ -588,6 +603,7 @@ public class GsmModemService : IGsmModemService
             if (completedTask == timeoutTask)
             {
                 tcs.TrySetCanceled();
+                _commandTcs.TryRemove(portName, out _);
                 return "ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)";
             }
             
@@ -602,6 +618,10 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
+            if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
+            {
+                _commandTcs.TryRemove(portName, out _);
+            }
             semaphore.Release();
         }
     }

@@ -1486,7 +1486,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (port == null)
             {
-                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:"))
+                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = SimStatus.Active, SignalStrength = 0 };
                     port.ReconnectCount++;
@@ -1498,7 +1498,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
 
-            if (e.Data.Contains("+CSQ:"))
+            if (e.Data.StartsWith("[WAITING_FOR_SIM]"))
+            {
+                port.Status = SimStatus.Connecting;
+                port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
+                port.PhoneNumber = string.Empty;
+                port.Imei = string.Empty;
+                port.Serial = string.Empty;
+                port.NetworkProvider = string.Empty;
+                port.Balance = string.Empty;
+            }
+            else if (e.Data.Contains("+CSQ:"))
             {
                 var match = Regex.Match(e.Data, @"\+CSQ:\s*(\d+)");
                 if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
@@ -1592,31 +1602,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     
                     _ = Task.Run(async () => 
                     {
-                        string? phoneUssd = null;
-                        if (networkUpper.Contains("VINAPHONE") || networkUpper.Contains("VINA") || networkUpper.Contains("WINTEL") || networkUpper.Contains("ITELECOM") || networkUpper.Contains("ITEL"))
+                        // Theo yêu cầu của người dùng: Tất cả các nhà mạng (Viettel, Vina, Mobi, Vietnamobile...) 
+                        // đều sẽ dùng chung 1 lệnh *101# để vừa lấy SĐT vừa lấy Số dư (TKC).
+                        if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
                         {
-                            phoneUssd = "*110#";
-                        }
-                        else if (networkUpper.Contains("MOBIFONE") || networkUpper.Contains("MOBI") || networkUpper.Contains("LOCAL") || networkUpper.Contains("SKY"))
-                        {
-                            phoneUssd = "*0#";
-                        }
-                        else if (networkUpper.Contains("VIETNAMOBILE") || networkUpper.Contains("VNM"))
-                        {
-                            phoneUssd = "*123#";
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(phoneUssd) && string.IsNullOrWhiteSpace(port.PhoneNumber))
-                        {
-                            await SendUssdThrottledAsync(port.PortName, phoneUssd, "Tự động lấy SĐT", maxRetries: 3);
+                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxRetries: 3);
                             await Task.Delay(2000); // Đợi mạng xử lý xong lệnh trước
-                        }
-
-                        // Viettel hiện tại lệnh *101# sẽ trả về CẢ Số Điện Thoại VÀ Số Dư (TKG)
-                        if (string.IsNullOrWhiteSpace(port.Balance) || (networkUpper.Contains("VIETTEL") && string.IsNullOrWhiteSpace(port.PhoneNumber)))
-                        {
-                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy TKC", maxRetries: 3);
-                            await Task.Delay(2000);
                         }
 
                         // Tự động chuyển hướng cuộc gọi nếu tính năng được bật
@@ -1651,6 +1642,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var match = Regex.Match(e.Data, @"\b([A-Za-z0-9]{18,22})\b");
                 if (match.Success)
                 {
+                    port.Status = SimStatus.Active;
+                    if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug).")
+                    {
+                        port.DeviceName = "Đã nhận SIM, đang khởi tạo...";
+                    }
+
                     string ccid = NormalizeCcid(match.Groups[1].Value);
                     port.Serial = ccid;
                     if (_simCache.TryGetValue(ccid, out var cachedPhone))

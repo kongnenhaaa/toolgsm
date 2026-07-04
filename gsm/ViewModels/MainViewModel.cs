@@ -31,7 +31,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly FirebaseService _firebaseService;
     private readonly ApiServerService? _apiServerService;
     private readonly ConcurrentDictionary<string, string> _callFailures = new();
-    private readonly ConcurrentDictionary<string, AudioRecordingService> _activeRecordings = new();
+    private readonly ConcurrentDictionary<string, bool> _activeRamRecordings = new();
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
     private readonly object _logFileLock = new();
 
@@ -2561,15 +2561,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Tự động nhận cuộc gọi và ghi âm
             if (IsAutoAnswerEnabled)
             {
-                if (!_activeRecordings.ContainsKey(e.PortName))
+                if (!_activeRamRecordings.ContainsKey(e.PortName))
                 {
                     AddLog($"[{e.PortName}] Đang tự động bắt máy cuộc gọi đến...", "INFO");
                     await _modemService.SendCommandAsync(e.PortName, "ATA");
 
-                    var recorder = new AudioRecordingService();
-                    recorder.LogMessage += (s, msg) => AddLog($"[{e.PortName}] {msg}", "INFO");
-                    recorder.StartRecording(e.PortName);
-                    _activeRecordings[e.PortName] = recorder;
+                    AddLog($"[{e.PortName}] Bắt đầu thu âm vào RAM của mạch Quectel...", "INFO");
+                    await _modemService.SendCommandAsync(e.PortName, "AT+QAUDRD=1,\"call.wav\",13,0");
+                    _activeRamRecordings[e.PortName] = true;
                 }
             }
             else
@@ -2594,16 +2593,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string transcript = string.Empty;
             bool hadRecording = false;
 
-            if (_activeRecordings.TryRemove(e.PortName, out var recorder))
+            if (_activeRamRecordings.TryRemove(e.PortName, out _))
             {
-                wavFilePath = recorder.StopRecording();
-                recorder.Dispose();
-                hadRecording = File.Exists(wavFilePath) && new FileInfo(wavFilePath).Length > 44;
+                AddLog($"[{e.PortName}] Đang chốt file ghi âm RAM...");
+                await _modemService.SendCommandAsync(e.PortName, "AT+QAUDRD=0"); // Dừng ghi âm
+
+                AddLog($"[{e.PortName}] Đang tải file ghi âm qua cổng COM... (Vui lòng chờ)");
+                
+                string logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+                if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
+                
+                wavFilePath = Path.Combine(logDir, $"call_{e.PortName}_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
+                string downloadedFile = await _modemService.DownloadFileFromModemAsync(e.PortName, "call.wav", wavFilePath);
+
+                hadRecording = File.Exists(downloadedFile) && new FileInfo(downloadedFile).Length > 0;
 
                 if (hadRecording)
                 {
-                    AddLog($"[{e.PortName}] Đã ghi âm xong, đang phân tích nội dung cuộc gọi...");
-                    transcript = await Task.Run(() => _speechToTextService.RecognizeWavFile(wavFilePath));
+                    AddLog($"[{e.PortName}] Đã tải xong file âm thanh từ mạch, đang phân tích...");
+                    transcript = await Task.Run(() => _speechToTextService.RecognizeWavFile(downloadedFile));
+                }
+                else
+                {
+                    AddLog($"[{e.PortName}] Tải file âm thanh thất bại hoặc file trống.", "ERROR");
                 }
             }
 
@@ -4485,11 +4497,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _apiServerService?.Stop();
         _modemService.DisconnectAll();
 
-        foreach (var recorder in _activeRecordings.Values)
-        {
-            recorder.Dispose();
-        }
-        _activeRecordings.Clear();
+        _activeRamRecordings.Clear();
         _activeCallers.Clear();
 
         foreach (var semaphore in _smsSendLocks.Values)

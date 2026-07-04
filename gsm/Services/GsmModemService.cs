@@ -16,6 +16,7 @@ public interface IGsmModemService
     Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false);
     Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 15000);
     Task SweepUnreadSmsAsync(string portName);
+    Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile);
     void StartPollingNetwork(string portName);
     List<string> GetAvailablePorts();
     void ConnectAll(int baudRate = 115200);
@@ -47,6 +48,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _commandTcs = new();
     private readonly ConcurrentDictionary<string, int> _connectionErrors = new();
     private readonly ConcurrentDictionary<string, DateTime> _sleepingPorts = new();
+    private readonly ConcurrentDictionary<string, SerialDataReceivedEventHandler> _dataReceivedHandlers = new();
+    private readonly ConcurrentDictionary<string, bool> _isDownloading = new();
     private readonly object _connectLock = new object();
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
@@ -89,11 +92,13 @@ public class GsmModemService : IGsmModemService
                             RtsEnable = true
                         };
                         
-                        sp.DataReceived += (s, e) => HandleDataReceived(p, sp);
+                        SerialDataReceivedEventHandler handler = (s, e) => HandleDataReceived(p, sp);
+                        sp.DataReceived += handler;
                         sp.ErrorReceived += (s, e) => HandleErrorReceived(p, sp);
                         sp.Open();
                         
                         _serialPorts.TryAdd(p, sp);
+                        _dataReceivedHandlers.TryAdd(p, handler);
                         _semaphores.TryAdd(p, new SemaphoreSlim(1, 1));
                         _portBuffers.TryAdd(p, new StringBuilder());
                         _connectionErrors.TryRemove(p, out _); // Reset lỗi khi kết nối thành công
@@ -363,8 +368,128 @@ public class GsmModemService : IGsmModemService
         });
     }
 
+    public async Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile)
+    {
+        if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return string.Empty;
+        if (!_semaphores.TryGetValue(portName, out var semaphore)) return string.Empty;
+
+        await semaphore.WaitAsync();
+        _isDownloading[portName] = true;
+        try
+        {
+            if (_dataReceivedHandlers.TryGetValue(portName, out var handler))
+            {
+                sp.DataReceived -= handler;
+            }
+
+            sp.DiscardInBuffer();
+            sp.Write($"AT+QFOPEN=\"{remoteFile}\",2\r");
+            
+            string res = await ReadUntilAsync(sp, "OK", 3000);
+            if (string.IsNullOrWhiteSpace(res)) return string.Empty;
+
+            var match = Regex.Match(res, @"\+QFOPEN:\s*(\d+)");
+            if (!match.Success) return string.Empty;
+            int handleId = int.Parse(match.Groups[1].Value);
+
+            using var fs = new FileStream(localFile, FileMode.Create, FileAccess.Write);
+            
+            while(true)
+            {
+                sp.Write($"AT+QFREAD={handleId},4096\r");
+                
+                string line = "";
+                bool eof = false;
+                DateTime start = DateTime.Now;
+                while ((DateTime.Now - start).TotalSeconds < 5)
+                {
+                    if (sp.BytesToRead > 0)
+                    {
+                        line += (char)sp.ReadChar();
+                        if (line.EndsWith("CONNECT ")) break;
+                        if (line.Contains("OK\r\n")) { eof = true; break; }
+                    }
+                    else await Task.Delay(10);
+                }
+                if (eof) break;
+
+                start = DateTime.Now;
+                string lenStr = "";
+                while((DateTime.Now - start).TotalSeconds < 2)
+                {
+                    if (sp.BytesToRead > 0)
+                    {
+                        char c = (char)sp.ReadChar();
+                        if (c == '\r') continue;
+                        if (c == '\n') break;
+                        lenStr += c;
+                    }
+                    else await Task.Delay(5);
+                }
+
+                if (!int.TryParse(lenStr, out int bytesToRead) || bytesToRead <= 0) break;
+
+                byte[] buf = new byte[bytesToRead];
+                int total = 0;
+                start = DateTime.Now;
+                while(total < bytesToRead && (DateTime.Now - start).TotalSeconds < 5)
+                {
+                    if (sp.BytesToRead > 0)
+                    {
+                        total += sp.Read(buf, total, bytesToRead - total);
+                    }
+                    else await Task.Delay(5);
+                }
+                fs.Write(buf, 0, total);
+
+                await ReadUntilAsync(sp, "OK", 1000);
+            }
+
+            sp.Write($"AT+QFCLOSE={handleId}\r");
+            await ReadUntilAsync(sp, "OK", 1000);
+            
+            // Delete file from RAM to free up memory
+            sp.Write($"AT+QFDEL=\"{remoteFile}\"\r");
+            await ReadUntilAsync(sp, "OK", 1000);
+
+            return localFile;
+        }
+        catch(Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi tải file {remoteFile}: {ex.Message}" });
+            return string.Empty;
+        }
+        finally
+        {
+            _isDownloading[portName] = false;
+            if (_dataReceivedHandlers.TryGetValue(portName, out var handler))
+            {
+                sp.DataReceived += handler;
+            }
+            semaphore.Release();
+        }
+    }
+
+    private async Task<string> ReadUntilAsync(SerialPort sp, string keyword, int timeoutMs)
+    {
+        string current = "";
+        DateTime start = DateTime.Now;
+        while ((DateTime.Now - start).TotalMilliseconds < timeoutMs)
+        {
+            if (sp.BytesToRead > 0)
+            {
+                current += sp.ReadExisting();
+                if (current.Contains(keyword)) return current;
+            }
+            await Task.Delay(10);
+        }
+        return current;
+    }
+
     private void HandleDataReceived(string portName, SerialPort sp)
     {
+        if (_isDownloading.TryGetValue(portName, out var isDown) && isDown) return;
+
         try
         {
             string chunk = sp.ReadExisting();
@@ -653,6 +778,8 @@ public class GsmModemService : IGsmModemService
             _portBuffers.TryRemove(portName, out _);
             _commandTcs.TryRemove(portName, out _);
             _connectionErrors.TryRemove(portName, out _);
+            _dataReceivedHandlers.TryRemove(portName, out _);
+            _isDownloading.TryRemove(portName, out _);
             _sleepingPorts.TryRemove(portName, out _);
         }
     }

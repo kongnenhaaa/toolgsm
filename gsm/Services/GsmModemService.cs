@@ -505,6 +505,18 @@ public class GsmModemService : IGsmModemService
                 buffer.Replace("NO CARRIER", "");
                 currentData = buffer.ToString();
             }
+            else if (currentData.Contains("BUSY"))
+            {
+                CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "BUSY" });
+                buffer.Replace("BUSY", "");
+                currentData = buffer.ToString();
+            }
+            else if (currentData.Contains("NO ANSWER"))
+            {
+                CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "NO ANSWER" });
+                buffer.Replace("NO ANSWER", "");
+                currentData = buffer.ToString();
+            }
 
             // ---------------------------------------------------------
             // 1.5. BẮT KẾT QUẢ USSD (+CUSD)
@@ -607,6 +619,8 @@ public class GsmModemService : IGsmModemService
         _semaphores.Clear();
         _portBuffers.Clear();
         _commandTcs.Clear();
+        _connectionErrors.Clear();
+        _sleepingPorts.Clear();
     }
 
     public void Disconnect(string portName)
@@ -626,10 +640,11 @@ public class GsmModemService : IGsmModemService
         {
             try { sem.Dispose(); } catch { }
             _semaphores.TryRemove(portName, out _);
+            _portBuffers.TryRemove(portName, out _);
+            _commandTcs.TryRemove(portName, out _);
+            _connectionErrors.TryRemove(portName, out _);
+            _sleepingPorts.TryRemove(portName, out _);
         }
-
-        _portBuffers.TryRemove(portName, out _);
-        _commandTcs.TryRemove(portName, out _);
     }
 
     public async Task<string> SendCommandAsync(string portName, string command, int timeoutMs = 5000, bool silent = false)
@@ -781,12 +796,7 @@ public class GsmModemService : IGsmModemService
         bool lockAcquired = await semaphore.WaitAsync(timeoutMs);
         if (!lockAcquired) return "ERROR: Timeout waiting for lock";
 
-        var tcs = new TaskCompletionSource<string>("AT+CMGS", TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commandTcs.TryAdd(portName, tcs))
-        {
-            semaphore.Release();
-            return "ERROR: Another command is already in progress";
-        }
+        TaskCompletionSource<string> tcs = null;
 
         try
         {
@@ -797,8 +807,14 @@ public class GsmModemService : IGsmModemService
 
             // Chuyển sang GSM charset để gửi tin nhắn văn bản thông thường (tránh lỗi 350 do UCS2)
             sp.Write("AT+CSCS=\"GSM\"\r");
-            await Task.Delay(200);
-            sp.DiscardInBuffer();
+            await Task.Delay(400); // Đợi đủ lâu để AT+CSCS trả về OK
+            sp.DiscardInBuffer();  // Vứt bỏ chữ OK của AT+CSCS để không làm loạn kết quả AT+CMGS
+
+            tcs = new TaskCompletionSource<string>("AT+CMGS", TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_commandTcs.TryAdd(portName, tcs))
+            {
+                return "ERROR: Another command is already in progress";
+            }
 
             sp.Write($"AT+CMGS=\"{phoneNumber}\"\r");
 

@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -30,6 +30,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly SpeechToTextService _speechToTextService;
     private readonly FirebaseService _firebaseService;
     private readonly ApiServerService? _apiServerService;
+    private readonly ConcurrentDictionary<string, string> _callFailures = new();
     private readonly ConcurrentDictionary<string, AudioRecordingService> _activeRecordings = new();
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
     private readonly object _logFileLock = new();
@@ -852,7 +853,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         // Kiểm tra trạng thái SIM qua cổng COM
                         string pinStatus = await _modemService.SendCommandAsync(p.PortName, "AT+CPIN?", 3000, silent: true);
-                        if (pinStatus.Contains("ERROR") || pinStatus.Contains("+CME ERROR: 10"))
+                        
+                        bool isSystemError = pinStatus.Contains("Timeout") || pinStatus.Contains("ERROR: Another command is already in progress");
+                        
+                        if (!isSystemError && (pinStatus.Contains("ERROR") || pinStatus.Contains("+CME ERROR: 10")))
                         {
                             // Phát hiện SIM bị rút ra, lập tức khóa sóng
                             Application.Current.Dispatcher.Invoke(() =>
@@ -1561,7 +1565,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     _modemService.Disconnect(p.PortName);
                 }
-                await Task.Delay(1000);
+                await Task.Delay(2000);
                 _modemService.ConnectAll(115200);
             });
         }
@@ -1578,7 +1582,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Task.Run(async () =>
             {
                 _modemService.DisconnectAll();
-                await Task.Delay(1000); 
+                await Task.Delay(2000); 
                 _modemService.ConnectAll(115200);
             });
         }
@@ -1595,7 +1599,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await Task.Run(async () =>
         {
             _modemService.Disconnect(portName);
-            await Task.Delay(1000);
+            await Task.Delay(2000);
             _modemService.ConnectAll(115200);
         });
         
@@ -1618,7 +1622,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Task.Run(async () =>
         {
             _modemService.DisconnectAll();
-            await Task.Delay(1000); 
+            await Task.Delay(2000); 
             _modemService.ConnectAll(115200);
         });
     }
@@ -1673,7 +1677,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     
                     // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
                     ussdContent = DecodeUcs2(ussdContent);
-                    port.LastCommandResult = ussdContent;
+                    port.LastUssdResult = ussdContent;
+                    port.UpdateDisplayResult(CommandPanelTab);
                     System.IO.File.AppendAllText("ussd_debug.txt", $"[{DateTime.Now}] [{e.PortName}] {ussdContent}\n");
 
                     // Thử match đầu số Viettel (032-039, 086, 096, 097, 098) và Vinaphone (081-085, 088, 091, 094)
@@ -2124,7 +2129,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         AddLog($"[{e.PortName}] Nhà mạng báo hết tiền. Đang kiểm tra số dư thực tế...", "WARNING");
                         _ = Task.Run(async () =>
                         {
-                            await Task.Delay(1000);
+                            await Task.Delay(2000);
                             await CheckBalanceForPortAsync(e.PortName);
                         });
                         isZaloError = true;
@@ -2575,9 +2580,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
     private void ModemService_CallEnded(object? sender, GsmDataEventArgs e)
     {
+        if (e.Data == "NO CARRIER" || e.Data == "BUSY" || e.Data == "NO ANSWER")
+        {
+            _callFailures[e.PortName] = e.Data;
+        }
+
         Application.Current.Dispatcher.InvokeAsync(async () =>
         {
-            AddLog($"[{e.PortName}] Cuộc gọi đã kết thúc.");
+            AddLog($"[{e.PortName}] Cuộc gọi đã kết thúc. ({e.Data})");
 
             string callerDisplay = _activeCallers.TryRemove(e.PortName, out var caller) ? caller : "Số ẩn";
             string wavFilePath = string.Empty;
@@ -4065,14 +4075,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     string safeContent = RemoveDiacritics(content);
                     string result = await _modemService.SendSmsAsync(sourcePort, phone, safeContent, timeoutMs: 30000);
 
+                    var port = Ports.FirstOrDefault(p => p.PortName == sourcePort);
                     if (result.Contains("OK") || result.Contains("+CMGS:"))
                     {
                         AddLog($"[BULK SMS] [{sourcePort}] → {phone}: OK", "SUCCESS");
+                        if (port != null) { port.LastSmsResult = "Gửi thành công"; port.UpdateDisplayResult(CommandPanelTab); }
                         sent++;
                     }
                     else
                     {
                         AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {result}", "ERROR");
+                        if (port != null) { port.LastSmsResult = result; port.UpdateDisplayResult(CommandPanelTab); }
                         failed++;
                     }
                 }
@@ -4507,6 +4520,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             CommandPanelTab = type;
             ClearCommandPanelErrors();
+            
+            // Cập nhật hiển thị kết quả cho tất cả các cổng
+            foreach (var port in Ports)
+            {
+                port.UpdateDisplayResult(type);
+            }
         }
     }
 
@@ -4552,21 +4571,95 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task RunSingleCommandQueueAsync()
     {
-        AddCommandQueue();
-        if (CommandQueue.Count > 0)
+        ClearCommandPanelErrors();
+        bool isValid = true;
+
+        if (CommandPanelTab == "USSD" && string.IsNullOrWhiteSpace(CommandPanelUssdText))
         {
-            await RunCommandQueueAsync();
+            HasUssdError = true; isValid = false;
+        }
+        else if (CommandPanelTab == "SMS")
+        {
+            if (string.IsNullOrWhiteSpace(CommandPanelSmsRecipient)) { HasSmsRecipientError = true; isValid = false; }
+            if (string.IsNullOrWhiteSpace(CommandPanelSmsContent)) { HasSmsContentError = true; isValid = false; }
+        }
+        else if (CommandPanelTab == "Call" && string.IsNullOrWhiteSpace(CommandPanelCallNumber))
+        {
+            HasCallNumberError = true; isValid = false;
+        }
+        else if (CommandPanelTab == "Data" && CommandPanelDataAmount <= 0)
+        {
+            HasDataAmountError = true; isValid = false;
+        }
+        else if (CommandPanelTab == "Delay" && CommandPanelDelaySeconds <= 0)
+        {
+            HasDelaySecondsError = true; isValid = false;
+        }
+
+        if (!isValid) return;
+
+        var singleItem = new CommandQueueItem
+        {
+            CommandId = Guid.NewGuid().ToString("N")[..8],
+            Recipient = GetCommandPanelRecipient(),
+            Type = CommandPanelTab,
+            Content = GetCommandPanelContent(),
+            Status = "Chờ"
+        };
+
+        var targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
+        if (!targetPorts.Any() && SelectedPort != null && IsActive(SelectedPort))
+            targetPorts.Add(SelectedPort);
+
+        if (!targetPorts.Any())
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn cổng để thực thi.");
+            return;
+        }
+
+        foreach (var p in targetPorts)
+        {
+            if (SmsInProgressPorts.ContainsKey(p.PortName))
+            {
+                SnackbarMessageQueue.Enqueue("Đang có tác vụ chạy trên cổng " + p.PortName + ". Vui lòng đợi.");
+                return;
+            }
+        }
+
+        foreach (var p in targetPorts)
+        {
+            SmsInProgressPorts[p.PortName] = true;
+        }
+
+        SnackbarMessageQueue.Enqueue($"Bắt đầu chạy lệnh {CommandPanelTab}...");
+
+        try
+        {
+            var tasks = new List<Task>();
+            foreach (var p in targetPorts)
+            {
+                tasks.Add(Task.Run(async () =>
+                {
+                    if (!_lifetimeCts.Token.IsCancellationRequested)
+                    {
+                        await ExecuteCommandQueueItemAsync(p.PortName, singleItem);
+                    }
+                }));
+            }
+            await Task.WhenAll(tasks);
+            SnackbarMessageQueue.Enqueue($"Đã chạy xong lệnh {CommandPanelTab}.");
+        }
+        finally
+        {
+            foreach (var p in targetPorts)
+                SmsInProgressPorts.TryRemove(p.PortName, out _);
         }
     }
 
     [RelayCommand]
     private async Task RunSingleWithErrorCommandQueueAsync()
     {
-        AddCommandQueue();
-        if (CommandQueue.Count > 0)
-        {
-            await RunWithErrorCommandQueueAsync();
-        }
+        await RunSingleCommandQueueAsync();
     }
 
     private string GetCommandPanelRecipient() => CommandPanelTab switch
@@ -4630,7 +4723,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var p in targetPorts)
         {
             SmsInProgressPorts[p.PortName] = true;
-            p.LastCommandResult = "Đang khởi chạy..."; // Xóa kết quả cũ ngay lập tức
         }
 
         SnackbarMessageQueue.Enqueue("Bắt đầu chạy kịch bản...");
@@ -4668,9 +4760,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string finalResult = "";
             var port = Ports.FirstOrDefault(p => p.PortName == portName);
-            if (port != null) port.LastCommandResult = "Đang chạy...";
-
             string cmdType = item.Type ?? "";
+
+            if (port != null) 
+            {
+                if (cmdType == "USSD") port.LastUssdResult = "Đang chạy...";
+                else if (cmdType == "SMS") port.LastSmsResult = "Đang chạy...";
+                else if (cmdType == "Call") port.LastCallResult = "Đang chạy...";
+                else if (cmdType == "MMS") port.LastMmsResult = "Đang chạy...";
+                else if (cmdType == "IMEI") port.LastImeiResult = "Đang chạy...";
+                else if (cmdType == "Data") port.LastDataResult = "Đang chạy...";
+                else if (cmdType == "Delay") port.LastDelayResult = "Đang chạy...";
+                port.UpdateDisplayResult(CommandPanelTab);
+            }
             if (cmdType == "USSD")
             {
                 finalResult = await SendUssdThrottledAsync(portName, item.Content, "Kịch bản", maxAttempts: CommandPanelRetryCount + 1);
@@ -4696,12 +4798,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (int.TryParse(durationStr, out int duration) && duration > 0)
                     {
                         finalResult = $"Đang gọi (Tự tắt sau {duration}s)";
-                        // Chạy ngầm delay và tắt máy
-                        _ = Task.Run(async () =>
+                        
+                        // Cập nhật UI ngay lập tức để báo đang chờ
+                        if (port != null) port.LastCallResult = finalResult;
+                        port?.UpdateDisplayResult(CommandPanelTab);
+                        
+                        _callFailures.TryRemove(portName, out _);
+                        bool failed = false;
+                        
+                        // Chờ đúng thời gian được cấu hình (kiểm tra mỗi 500ms xem cuộc gọi có bị từ chối sớm không)
+                        for (int i = 0; i < duration * 2; i++)
                         {
-                            await Task.Delay(duration * 1000);
+                            await Task.Delay(500);
+                            if (_callFailures.TryGetValue(portName, out string failReason))
+                            {
+                                finalResult = $"Cuộc gọi thất bại ({failReason})";
+                                failed = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!failed)
+                        {
                             await _modemService.SendCommandAsync(portName, "ATH", timeoutMs: 5000);
-                        });
+                            finalResult = "Gọi thành công";
+                        }
                     }
                 }
             }
@@ -4727,20 +4848,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (port != null)
             {
+                string currentRes = cmdType switch 
+                {
+                    "USSD" => port.LastUssdResult,
+                    "SMS" => port.LastSmsResult,
+                    "Call" => port.LastCallResult,
+                    "MMS" => port.LastMmsResult,
+                    "IMEI" => port.LastImeiResult,
+                    "Data" => port.LastDataResult,
+                    "Delay" => port.LastDelayResult,
+                    _ => ""
+                };
+
                 // [FIX RACE CONDITION]: Nếu nhà mạng trả về kết quả (+CUSD) quá nhanh, 
                 // sự kiện LogMessage đã cập nhật LastCommandResult thành kết quả thực sự.
                 // Do đó, ta chỉ ghi đè "Đang chờ nhà mạng phản hồi..." nếu kết quả hiện tại vẫn là "Đang chạy..." hoặc "Đang khởi chạy...".
-                if (finalResult == "Dang ch? nh m?ng ph?n h?i..." || finalResult == "Dang g?i...")
+                if (finalResult == "Đang chờ nhà mạng phản hồi..." || finalResult == "Đang gọi...")
                 {
-                    if (port.LastCommandResult == "Dang ch?y..." || port.LastCommandResult == "Đang khởi chạy...")
+                    if (currentRes == "Đang chạy..." || currentRes == "Đang khởi chạy...")
                     {
-                        port.LastCommandResult = finalResult;
+                        if (cmdType == "USSD") port.LastUssdResult = finalResult;
+                        else if (cmdType == "SMS") port.LastSmsResult = finalResult;
+                        else if (cmdType == "Call") port.LastCallResult = finalResult;
                     }
                 }
                 else
                 {
-                    port.LastCommandResult = finalResult;
+                    if (cmdType == "USSD") port.LastUssdResult = finalResult;
+                    else if (cmdType == "SMS") port.LastSmsResult = finalResult;
+                    else if (cmdType == "Call") port.LastCallResult = finalResult;
+                    else if (cmdType == "MMS") port.LastMmsResult = finalResult;
+                    else if (cmdType == "IMEI") port.LastImeiResult = finalResult;
+                    else if (cmdType == "Data") port.LastDataResult = finalResult;
+                    else if (cmdType == "Delay") port.LastDelayResult = finalResult;
                 }
+                
+                port.UpdateDisplayResult(CommandPanelTab);
             }
 
             Application.Current.Dispatcher.Invoke(() => item.Status = "Xong");

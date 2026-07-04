@@ -47,6 +47,26 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _lastCommandResult = string.Empty;
 
+    public string LastUssdResult { get; set; } = string.Empty;
+    public string LastSmsResult { get; set; } = string.Empty;
+    public string LastCallResult { get; set; } = string.Empty;
+    public string LastMmsResult { get; set; } = string.Empty;
+    public string LastImeiResult { get; set; } = string.Empty;
+    public string LastDataResult { get; set; } = string.Empty;
+    public string LastDelayResult { get; set; } = string.Empty;
+
+    public void UpdateDisplayResult(string currentTab)
+    {
+        if (currentTab == "USSD") LastCommandResult = LastUssdResult;
+        else if (currentTab == "SMS") LastCommandResult = LastSmsResult;
+        else if (currentTab == "Call") LastCommandResult = LastCallResult;
+        else if (currentTab == "MMS") LastCommandResult = LastMmsResult;
+        else if (currentTab == "IMEI") LastCommandResult = LastImeiResult;
+        else if (currentTab == "Data") LastCommandResult = LastDataResult;
+        else if (currentTab == "Delay" || currentTab == "Trễ") LastCommandResult = LastDelayResult;
+        else LastCommandResult = "";
+    }
+
     [ObservableProperty]
     private int _timeoutCount;
 

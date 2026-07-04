@@ -2565,6 +2565,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     AddLog($"[{e.PortName}] Đang tự động bắt máy cuộc gọi đến...", "INFO");
                     await _modemService.SendCommandAsync(e.PortName, "ATA");
+                    await Task.Delay(1500);
 
                     AddLog($"[{e.PortName}] Bắt đầu thu âm vào RAM của mạch Quectel...", "INFO");
                     await _modemService.SendCommandAsync(e.PortName, "AT+QAUDRD=1,\"call.wav\",13,0");

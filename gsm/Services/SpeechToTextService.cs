@@ -86,16 +86,21 @@ public class SpeechToTextService
 
         try
         {
-            // Sử dụng NAudio để tự động đọc Header WAV và lấy SampleRate chuẩn xác
             using var reader = new WaveFileReader(wavFilePath);
             
-            // Khởi tạo nhận diện giọng nói với Sample Rate khớp chính xác với file ghi âm
-            using var recognizer = new VoskRecognizer(_model, reader.WaveFormat.SampleRate);
+            // AI Model yêu cầu 16kHz, nếu file Quectel là 8kHz thì phải Resample lên 16kHz
+            var outFormat = new WaveFormat(16000, 16, 1);
+            using var resampler = new MediaFoundationResampler(reader, outFormat)
+            {
+                ResamplerQuality = 60
+            };
+            
+            using var recognizer = new VoskRecognizer(_model, 16000.0f);
             
             byte[] buffer = new byte[4096];
             int bytesRead;
 
-            while ((bytesRead = reader.Read(buffer, 0, buffer.Length)) > 0)
+            while ((bytesRead = resampler.Read(buffer, 0, buffer.Length)) > 0)
             {
                 recognizer.AcceptWaveform(buffer, bytesRead);
             }
@@ -122,15 +127,15 @@ public class SpeechToTextService
                 var numberWords = new System.Collections.Generic.Dictionary<string, string>
                 {
                     {"không", "0"}, {"khong", "0"},
-                    {"một", "1"}, {"mốt", "1"}, {"mot", "1"},
-                    {"hai", "2"},
-                    {"ba", "3"},
-                    {"bốn", "4"}, {"bon", "4"},
-                    {"năm", "5"}, {"lăm", "5"}, {"nam", "5"}, {"lam", "5"}, {"ngũ", "5"}, // Bổ sung "ngũ" (thường bị nhận diện sai từ "năm")
-                    {"sáu", "6"}, {"sau", "6"},
-                    {"bảy", "7"}, {"bay", "7"},
-                    {"tám", "8"}, {"tam", "8"}, {"tả", "8"}, // Bổ sung "tả" (thường bị nhận diện sai từ "tám")
-                    {"chín", "9"}, {"chin", "9"}
+                    {"một", "1"}, {"mốt", "1"}, {"mot", "1"}, {"mua", "1"},
+                    {"hai", "2"}, {"ai", "2"}, {"ơi", "2"}, {"hơi", "2"},
+                    {"ba", "3"}, {"ngờ", "3"}, {"to", "3"}, {"nợ", "3"},
+                    {"bốn", "4"}, {"bon", "4"}, {"tốn", "4"}, {"tư", "4"}, {"trốn", "4"},
+                    {"năm", "5"}, {"lăm", "5"}, {"nam", "5"}, {"lam", "5"}, {"ngũ", "5"}, {"lâm", "5"}, 
+                    {"sáu", "6"}, {"sau", "6"}, {"sâu", "6"},
+                    {"bảy", "7"}, {"bay", "7"}, {"mấy", "7"}, {"ý", "7"},
+                    {"tám", "8"}, {"tam", "8"}, {"tả", "8"}, {"tấm", "8"}, {"tâm", "8"}, 
+                    {"chín", "9"}, {"chin", "9"}, {"chính", "9"}
                 };
 
                 // Split into words, replace known number words
@@ -146,7 +151,11 @@ public class SpeechToTextService
                 // Reconstruct the text
                 string final_text = string.Join(" ", words);
 
-                return final_text;
+                // Trích xuất CHỈ các con số (lọc bỏ toàn bộ chữ để bắt chuẩn xác chuỗi mã OTP)
+                string digitsOnly = System.Text.RegularExpressions.Regex.Replace(final_text, @"[^0-9]", "");
+
+                // Nếu không lấy được số nào, trả về chuỗi text đã được nắn sửa
+                return !string.IsNullOrEmpty(digitsOnly) ? digitsOnly : final_text;
             }
 
             return "";

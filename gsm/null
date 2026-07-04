@@ -1,5 +1,0 @@
-                // [SHIELD IMEI] Tráng một lớp IMEI Fake ngẫu nhiên làm lá chắn.
-                // Đề phòng trường hợp mạch tự động nhảy sang CFUN=1 ngay khi vừa cắm SIM vật lý vào khay (Hardware Interrupt).
-                string shieldImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
-                await _modemService.SendCommandAsync(port.PortName, $"AT+EGMR=1,7,\"{shieldImei}\"", 5000, silent: true);
-                

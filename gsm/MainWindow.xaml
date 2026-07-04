@@ -2403,18 +2403,11 @@ GET  /api/history
                                     Background="#F59E0B"
                                     Style="{StaticResource ModernButtonStyle}"
                                     Height="28"
-                                    Margin="0,0,8,0"
                                     Command="{Binding RunSingleCommandQueueCommand}">
                                 <Button.ToolTip>
                                     <ToolTip Content="Thực thi lệnh ngay trên các cổng đã chọn mà không cần thêm vào Kịch bản"/>
                                 </Button.ToolTip>
                             </Button>
-
-                            <Button Content="Chạy + Đợi kết quả"
-                                    Background="#EC3F9B"
-                                    Style="{StaticResource ModernButtonStyle}"
-                                    Height="28"
-                                    Command="{Binding RunSingleWithErrorCommandQueueCommand}"/>
                         </StackPanel>
                     </Grid>
                 </Border>

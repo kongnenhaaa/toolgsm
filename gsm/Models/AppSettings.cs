@@ -66,4 +66,10 @@ public class AppSettings
     /// Bật/tắt tự động phục hồi (Restore) IMEI đã sao lưu nếu thẻ SIM bị chuyển sang cổng khác.
     /// </summary>
     public bool EnableImeiRestore { get; set; } = true;
+
+    /// <summary>
+    /// Chế độ Nạp SIM Mới: Tự động tráng sẵn Fake IMEI cho cổng trống, 
+    /// và khi cắm SIM mới vào thì lưu luôn Fake IMEI đó làm gốc.
+    /// </summary>
+    public bool EnableNewSimIntakeMode { get; set; } = false;
 }

@@ -19,6 +19,8 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private bool _isSelected;
 
+    public bool IsRebooting { get; set; } = false;
+
     [ObservableProperty]
     private string _phoneNumber = string.Empty;
     
@@ -41,6 +43,9 @@ public partial class SimPort : ObservableObject
     
     [ObservableProperty]
     private string _status = "Active"; // Active, Inactive, Error
+
+    [ObservableProperty]
+    private string _lastCommandResult = string.Empty;
 
     [ObservableProperty]
     private int _timeoutCount;
@@ -74,6 +79,8 @@ public partial class SimPort : ObservableObject
     // Tab 2 Info
     [ObservableProperty]
     private string _imei = string.Empty;
+    
+    partial void OnImeiChanged(string value) => OnPropertyChanged(nameof(HasData));
 
     [ObservableProperty]
     private string _deviceName = string.Empty;
@@ -91,6 +98,10 @@ public partial class SimPort : ObservableObject
     
     [ObservableProperty]
     private string _serial = string.Empty;
+
+    partial void OnSerialChanged(string value) => OnPropertyChanged(nameof(HasData));
+    
+    public bool HasData => !string.IsNullOrEmpty(Imei) || !string.IsNullOrEmpty(Serial);
     
     [ObservableProperty]
     private string _balance = string.Empty;

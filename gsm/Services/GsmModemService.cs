@@ -129,7 +129,7 @@ public class GsmModemService : IGsmModemService
                 foreach (var p in newlyOpenedPorts)
                 {
                     _ = InitializeModemAsync(p);
-                    await Task.Delay(1000); // Giãn cách 1000ms giữa các cổng để giảm tải băng thông và dòng điện USB
+                    await Task.Delay(10); // Giãn cách cực ngắn (10ms) để tải đồng loạt theo yêu cầu
                 }
             });
         }
@@ -226,6 +226,26 @@ public class GsmModemService : IGsmModemService
         else
         {
             if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
+            
+            // NEW SIM INTAKE MODE: PRE-COAT FAKE IMEI
+            var settings = gsm.Services.SettingsService.Current;
+            if (settings != null && settings.EnableNewSimIntakeMode)
+            {
+                string cleanImei = imei.Replace("OK", "").Trim();
+                string[] fakeTacs = new[] { "35293630", "35307371", "35198031", "35435973", "35925411", "35483211", "35832011" };
+                bool isAlreadyFake = false;
+                foreach(var t in fakeTacs) { if(cleanImei.StartsWith(t)) { isAlreadyFake = true; break; } }
+                
+                if (!isAlreadyFake && !string.IsNullOrEmpty(cleanImei))
+                {
+                    string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NEW_SIM_MODE] Đang tráng sẵn Fake IMEI: {targetImei}" });
+                    await SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000);
+                    await SendCommandAsync(portName, "AT+CFUN=1,1", 30000); // Reboot modem
+                    return; // Return and wait for it to reconnect
+                }
+            }
+
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
 
             StartHotplugWaitLoop(portName);
@@ -291,6 +311,13 @@ public class GsmModemService : IGsmModemService
                     // [CRITICAL FIX] Ngay khi nhận diện CCID thành công, đè ngay lập tức 1 lệnh CFUN=4 nữa.
                     // Đảm bảo triệt tiêu hoàn toàn trường hợp modem tự động bật sóng trong tích tắc.
                     await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+
+                    // Cập nhật IMEI hiện tại trước khi báo CCID
+                    string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
+                    if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" });
+                    }
                     
                     string newCcid = pollResp;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {newCcid.Replace("OK", "").Trim()}" });
@@ -768,6 +795,11 @@ public class GsmModemService : IGsmModemService
             sp.DiscardInBuffer();
             sp.DiscardOutBuffer();
 
+            // Chuyển sang GSM charset để gửi tin nhắn văn bản thông thường (tránh lỗi 350 do UCS2)
+            sp.Write("AT+CSCS=\"GSM\"\r");
+            await Task.Delay(200);
+            sp.DiscardInBuffer();
+
             sp.Write($"AT+CMGS=\"{phoneNumber}\"\r");
 
             var timeoutTask = Task.Delay(5000);
@@ -817,6 +849,12 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
+            // Trả lại UCS2 charset để đọc tin nhắn tiếng Việt
+            if (_serialPorts.TryGetValue(portName, out var sp2) && sp2.IsOpen)
+            {
+                sp2.Write("AT+CSCS=\"UCS2\"\r");
+            }
+
             if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
                 _commandTcs.TryRemove(portName, out _);
             semaphore.Release();

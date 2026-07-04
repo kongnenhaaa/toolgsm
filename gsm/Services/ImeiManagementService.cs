@@ -21,6 +21,98 @@ public class ImeiProcessResult
 
 public class ImeiManagementService
 {
+    public static string GenerateRandomImei()
+    {
+        string[] tacs = new[] { 
+            "35293630", // iPhone 14 Pro Max
+            "35307371", // iPhone 14
+            "35293425", // iPhone 14 Pro
+            "35443477", // iPhone 15 Pro
+            "35684784", // iPhone 15 Plus
+            "35300911", // iPhone 12 Pro Max
+            "35689020", // Samsung Galaxy S23 Ultra
+            "35205562", // Samsung Galaxy S22 Ultra
+            "35848511", // Samsung Galaxy S21 Ultra 5G
+            "35623011", // Samsung Galaxy Note 20 Ultra
+            "35398226", // iPhone 13 Pro Max
+            "35874288", // iPhone 15
+            "35919376", // iPhone 15 Pro Max
+            "35179311", // Samsung Galaxy Z Fold 4
+            "35385711", // Samsung Galaxy Z Flip 4
+            "35424597", // Google Pixel 8 Pro
+            "35639611", // Google Pixel 7 Pro
+            "35824511", // Google Pixel 6
+            "86129004", // Xiaomi 13 Pro
+            "86333405", // Oppo Reno 6
+            "86542704", // Oppo Find X3 Pro
+            "86770205", // Oppo Find X5 Pro
+            "86744805", // Vivo X70 Pro
+            "86086705"  // Huawei P50 Pro
+        };
+        var random = new Random();
+        string tac = tacs[random.Next(tacs.Length)];
+        string snr = random.Next(0, 999999).ToString("D6");
+        string imeiWithoutCheck = tac + snr;
+        
+        int sum = 0;
+        for (int i = 0; i < 14; i++)
+        {
+            int digit = imeiWithoutCheck[i] - '0';
+            if (i % 2 != 0)
+            {
+                digit *= 2;
+                if (digit > 9) digit -= 9;
+            }
+            sum += digit;
+        }
+        int checkDigit = (10 - (sum % 10)) % 10;
+        return imeiWithoutCheck + checkDigit;
+    }
+
+    public static string GetDeviceNameFromImei(string imei)
+    {
+        if (string.IsNullOrWhiteSpace(imei) || imei.Length < 8) return "Mặc định (GSM Modem)";
+        
+        string tac = imei.Substring(0, 8);
+        return tac switch
+        {
+            "35293630" => "iPhone 14 Pro Max",
+            "35307371" => "iPhone 14",
+            "35293425" => "iPhone 14 Pro",
+            "35443477" => "iPhone 15 Pro",
+            "35684784" => "iPhone 15 Plus",
+            "35300911" => "iPhone 12 Pro Max",
+            "35689020" => "Samsung Galaxy S23 Ultra",
+            "35205562" => "Samsung Galaxy S22 Ultra",
+            "35848511" => "Samsung Galaxy S21 Ultra 5G",
+            "35623011" => "Samsung Galaxy Note 20 Ultra",
+            "35398226" => "iPhone 13 Pro Max",
+            "35874288" => "iPhone 15",
+            "35919376" => "iPhone 15 Pro Max",
+            "35179311" => "Samsung Galaxy Z Fold 4",
+            "35385711" => "Samsung Galaxy Z Flip 4",
+            "35424597" => "Google Pixel 8 Pro",
+            "35639611" => "Google Pixel 7 Pro",
+            "35824511" => "Google Pixel 6",
+            "86129004" => "Xiaomi 13 Pro",
+            "86333405" => "Oppo Reno 6",
+            "86542704" => "Oppo Find X3 Pro",
+            "86770205" => "Oppo Find X5 Pro",
+            "86744805" => "Vivo X70 Pro",
+            "86086705" => "Huawei P50 Pro",
+            // Legacy / Older generated TACs from previous versions
+            "35198031" => "Samsung Galaxy S23",
+            "35435973" => "Samsung Galaxy S23 Ultra (Cũ)",
+            "35925411" => "iPhone 12",
+            "35483211" => "Samsung Galaxy S21",
+            "35832011" => "iPhone 13",
+            "35384110" => "iPhone 11",
+            "35303609" => "iPhone X",
+            "86940804" => "Xiaomi Redmi Note 10",
+            _ => "Mặc định (GSM Modem)"
+        };
+    }
+
     private readonly IGsmModemService _modemService;
     private readonly Action<string, string> _logAction;
 
@@ -73,7 +165,8 @@ public class ImeiManagementService
             var cachedEntry = getBackupEntry(ccid);
 
             // [FIX LOGIC]: Đưa ưu tiên chặn SIM lạ lên hàng đầu (Tính năng 3)
-            if (cachedEntry == null && settings.BlockUnknownSims)
+            // Nếu chế độ Nạp SIM Mới đang bật, bỏ qua bước chặn này để lưu trực tiếp IMEI đã tráng
+            if (cachedEntry == null && settings.BlockUnknownSims && !settings.EnableNewSimIntakeMode)
             {
                 Log($"[{portName}] SIM mới chưa có trong kho IMEI. Đã chặn, chờ chấp thuận thủ công.", "WARNING");
 
@@ -89,7 +182,7 @@ public class ImeiManagementService
             {
                 string candidateImei = NormalizeImei(cachedEntry.Imei);
                 
-                dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
+                dispatcherInvoke(() => port.DeviceName = GetDeviceNameFromImei(candidateImei));
 
                 if (IsValidImei(candidateImei))
                 {
@@ -115,7 +208,7 @@ public class ImeiManagementService
             // Mặc định (GSM Modem) khi Restore IMEI không áp dụng
             else
             {
-                dispatcherInvoke(() => port.DeviceName = "Mặc định (GSM Modem)");
+                dispatcherInvoke(() => port.DeviceName = GetDeviceNameFromImei(currentImei));
 
                 if (cachedEntry != null && !settings.EnableImeiRestore)
                 {
@@ -137,10 +230,18 @@ public class ImeiManagementService
                             CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                             LicenseKeySuffix = string.Empty,
                             KeyMismatch = "false",
-                            SourceFile = "auto-learn"
+                            SourceFile = settings.EnableNewSimIntakeMode ? "new-sim-intake" : "auto-learn"
                         };
                         saveBackupEntry(newEntry);
-                        Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+                        
+                        if (settings.EnableNewSimIntakeMode)
+                        {
+                            Log($"[{portName}] (Nạp SIM Mới) Đã ghi nhận Fake IMEI tráng sẵn: {currentImei} gắn với CCID: {ccid}.", "SUCCESS");
+                        }
+                        else
+                        {
+                            Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+                        }
 
                         dispatcherInvoke(() =>
                         {

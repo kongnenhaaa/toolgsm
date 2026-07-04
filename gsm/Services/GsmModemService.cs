@@ -167,7 +167,15 @@ public class GsmModemService : IGsmModemService
         bool cfunOffSuccess = false;
         for (int i = 0; i < 5; i++)
         {
-            string cfunResp = await SendCommandAsync(portName, "AT+CFUN=4", 30000);
+            // Kiểm tra trạng thái hiện tại trước
+            string cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
+            if (cfunStatus.Contains("+CFUN: 4") || cfunStatus.Contains("+CFUN: 0"))
+            {
+                cfunOffSuccess = true;
+                break;
+            }
+
+            string cfunResp = await SendCommandAsync(portName, "AT+CFUN=4", 15000);
             if (!cfunResp.Contains("ERROR") || cfunResp.Contains("+CME ERROR"))
             {
                 cfunOffSuccess = true;

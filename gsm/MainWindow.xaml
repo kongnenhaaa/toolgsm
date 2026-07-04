@@ -1512,36 +1512,12 @@ GET  /api/history
                                     </Style>
                                 </Button.Style>
                             </Button>
-                            <Button Content="MMS" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="MMS" Margin="0,0,4,0">
-                                <Button.Style>
-                                    <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
-                                        <Setter Property="Background" Value="#252A36"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="MMS">
-                                                <Setter Property="Background" Value="#5B5CF6"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Button.Style>
-                            </Button>
                             <Button Content="Gọi" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="Call" Margin="0,0,4,0">
                                 <Button.Style>
                                     <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
                                         <Setter Property="Background" Value="#252A36"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding CommandPanelTab}" Value="Call">
-                                                <Setter Property="Background" Value="#5B5CF6"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Button.Style>
-                            </Button>
-                            <Button Content="IMEI" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="IMEI" Margin="0,0,4,0">
-                                <Button.Style>
-                                    <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
-                                        <Setter Property="Background" Value="#252A36"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="IMEI">
                                                 <Setter Property="Background" Value="#5B5CF6"/>
                                             </DataTrigger>
                                         </Style.Triggers>
@@ -1560,12 +1536,36 @@ GET  /api/history
                                     </Style>
                                 </Button.Style>
                             </Button>
-                            <Button Content="Trễ" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="Delay" Margin="0,0,0,0">
+                            <Button Content="IMEI" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="IMEI" Margin="0,0,4,0">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
+                                        <Setter Property="Background" Value="#252A36"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="IMEI">
+                                                <Setter Property="Background" Value="#5B5CF6"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="Trễ" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="Delay" Margin="0,0,4,0">
                                 <Button.Style>
                                     <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
                                         <Setter Property="Background" Value="#252A36"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding CommandPanelTab}" Value="Delay">
+                                                <Setter Property="Background" Value="#5B5CF6"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="MMS" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="MMS" Margin="0,0,0,0">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
+                                        <Setter Property="Background" Value="#252A36"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="MMS">
                                                 <Setter Property="Background" Value="#5B5CF6"/>
                                             </DataTrigger>
                                         </Style.Triggers>

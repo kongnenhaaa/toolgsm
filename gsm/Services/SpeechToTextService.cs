@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Threading.Tasks;
+using NAudio.Wave;
 using Vosk;
 
 namespace gsm.Services;
@@ -85,14 +86,12 @@ public class SpeechToTextService
 
         try
         {
-            // Khởi tạo nhận diện giọng nói (Không dùng grammar vì các từ ngoài từ điển gốc có thể gây lỗi nhận diện trống)
-            using var recognizer = new VoskRecognizer(_model, 16000.0f);
-            using var stream = new FileStream(wavFilePath, FileMode.Open, FileAccess.Read);
-            using var reader = new BinaryReader(stream);
-
-            // Bỏ qua header của file WAV (thường là 44 bytes đầu tiên)
-            stream.Seek(44, SeekOrigin.Begin);
-
+            // Sử dụng NAudio để tự động đọc Header WAV và lấy SampleRate chuẩn xác
+            using var reader = new WaveFileReader(wavFilePath);
+            
+            // Khởi tạo nhận diện giọng nói với Sample Rate khớp chính xác với file ghi âm
+            using var recognizer = new VoskRecognizer(_model, reader.WaveFormat.SampleRate);
+            
             byte[] buffer = new byte[4096];
             int bytesRead;
 

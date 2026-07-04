@@ -200,6 +200,7 @@ public class GsmModemService : IGsmModemService
         // Bật xuất âm thanh cuộc gọi ra cổng USB (UAC) cho Quectel EC20
         await SendCommandAsync(portName, "AT+QAUDMOD=2", 30000); 
         await SendCommandAsync(portName, "AT+QDAI=3", 30000); 
+        await SendCommandAsync(portName, "AT+QPCMV=1,2", 30000); 
         
         string imei = await SendCommandAsync(portName, "AT+CGSN", 30000);
         
@@ -289,6 +290,7 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CLIP=1", 5000, silent: true);
         await SendCommandAsync(portName, "AT+QAUDMOD=2", 5000, silent: true); 
         await SendCommandAsync(portName, "AT+QDAI=3", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+QPCMV=1,2", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CMGD=1,4", 10000, silent: true); 
         await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 5000, silent: true);
         

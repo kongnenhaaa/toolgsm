@@ -66,7 +66,7 @@ public class AudioRecordingService : IDisposable
             _waveIn = new WaveInEvent
             {
                 DeviceNumber = deviceNumber,
-                WaveFormat = new WaveFormat(16000, 1) // 16kHz, Mono - Chuẩn bắt buộc của Vosk
+                WaveFormat = new WaveFormat(8000, 1) // 8kHz, Mono - Chuẩn âm thanh gốc của GSM/Quectel
             };
 
             _waveIn.DataAvailable += WaveIn_DataAvailable;

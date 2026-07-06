@@ -114,6 +114,26 @@ public class ApiServerService
             else if (req.HttpMethod == "POST" && path == "/api/send-sms")
                 await HandleSendSms(req, resp);
 
+            else if (req.HttpMethod == "GET" && path.StartsWith("/api/proxy/reset/"))
+            {
+                string portName = path["/api/proxy/reset/".Length..].ToUpper();
+                bool result = await _vm.ModemService.ResetNetworkAsync(portName);
+                if (result)
+                {
+                    await WriteJson(resp, new { success = true, message = $"Đã gửi lệnh ngắt/bật mạng cho {portName}" });
+                }
+                else
+                {
+                    resp.StatusCode = 404;
+                    await WriteJson(resp, new { success = false, error = $"Cổng {portName} không tồn tại hoặc lỗi lệnh" });
+                }
+            }
+
+            else if (req.HttpMethod == "GET" && path == "/api/proxies")
+            {
+                await WriteJson(resp, _vm.ProxyManager.GetProxies());
+            }
+
             else
             {
                 resp.StatusCode = 404;

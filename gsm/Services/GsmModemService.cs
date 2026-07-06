@@ -24,6 +24,7 @@ public interface IGsmModemService
     void DisconnectAll();
     void StartHotplugWaitLoop(string portName);
     Task ReinitializeSettingsAsync(string portName);
+    Task<bool> ResetNetworkAsync(string portName);
     
     // Events
     event EventHandler<GsmDataEventArgs> SmsReceived;
@@ -263,6 +264,29 @@ public class GsmModemService : IGsmModemService
 
             StartHotplugWaitLoop(portName);
         }
+    }
+
+    public async Task<bool> ResetNetworkAsync(string portName)
+    {
+        if (!_serialPorts.ContainsKey(portName)) return false;
+        
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[PROXY] Đang ngắt sóng để lấy IP mới..." });
+        
+        // Gửi lệnh ngắt sóng
+        string respOff = await SendCommandAsync(portName, "AT+CFUN=4", 10000);
+        if (respOff.Contains("ERROR"))
+        {
+            // Thử ngắt sóng kiểu khác (với một số modem là CFUN=0)
+            respOff = await SendCommandAsync(portName, "AT+CFUN=0", 10000);
+        }
+        
+        await Task.Delay(3000); // Chờ 3 giây để mạng ngắt hoàn toàn
+        
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[PROXY] Đang bật lại sóng, vui lòng đợi..." });
+        // Gửi lệnh bật lại sóng
+        string respOn = await SendCommandAsync(portName, "AT+CFUN=1", 10000);
+        
+        return !respOn.Contains("ERROR");
     }
 
     public async Task ReinitializeSettingsAsync(string portName)
@@ -931,7 +955,7 @@ public class GsmModemService : IGsmModemService
         bool lockAcquired = await semaphore.WaitAsync(timeoutMs);
         if (!lockAcquired) return "ERROR: Timeout waiting for lock";
 
-        TaskCompletionSource<string> tcs = null;
+        TaskCompletionSource<string>? tcs = null;
 
         try
         {

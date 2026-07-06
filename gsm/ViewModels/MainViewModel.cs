@@ -29,6 +29,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private readonly SpeechToTextService _speechToTextService;
     private readonly FirebaseService _firebaseService;
+    public ProxyManagerService ProxyManager { get; }
     private readonly ApiServerService? _apiServerService;
     private readonly ConcurrentDictionary<string, string> _callFailures = new();
     private readonly ConcurrentDictionary<string, bool> _activeRamRecordings = new();
@@ -767,6 +768,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _firebaseService = new FirebaseService(this);
         _firebaseService.Start();
 
+        // Khởi động Proxy Manager
+        ProxyManager = new ProxyManagerService();
+        ProxyManager.Start();
+
         // API Server (port 8080)
         if (SettingsService.Current.EnableApiServer)
         {
@@ -1071,6 +1076,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 string archive = AppPaths.ForRuntimeFile($"system_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
                 System.IO.File.Move(logFile, archive, overwrite: true);
+
+                // Tự động dọn dẹp, chỉ giữ lại 5 file log cũ nhất (khoảng 25MB)
+                try
+                {
+                    var dirInfo = new System.IO.DirectoryInfo(System.IO.Path.GetDirectoryName(logFile) ?? "");
+                    var oldLogs = dirInfo.GetFiles("system_log_*.txt")
+                                         .OrderByDescending(f => f.CreationTime)
+                                         .Skip(5)
+                                         .ToList();
+                    foreach (var oldLog in oldLogs)
+                    {
+                        oldLog.Delete();
+                    }
+                }
+                catch { }
             }
             System.IO.File.AppendAllText(logFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}");
             }
@@ -4819,7 +4839,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         for (int i = 0; i < duration * 2; i++)
                         {
                             await Task.Delay(500);
-                            if (_callFailures.TryGetValue(portName, out string failReason))
+                            if (_callFailures.TryGetValue(portName, out string? failReason))
                             {
                                 finalResult = $"Cuộc gọi thất bại ({failReason})";
                                 failed = true;

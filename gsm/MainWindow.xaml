@@ -1404,7 +1404,7 @@ GET  /api/history
                                 
                                 <TextBlock Text="• USSD: Chọn mã lệnh (VD: *101#) hoặc tự nhập, sau đó ấn '[+] Thêm vào kịch bản'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• SMS: Gửi tin nhắn đồng loạt. Nhập SĐT và Nội dung -> '[+] Thêm vào kịch bản'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                <TextBlock Text="• MMS: Gửi tin nhắn đa phương tiện có đính kèm file ảnh/video." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
+                                <TextBlock Text="• Proxy: Xem trạng thái và quản lý thiết lập Proxy cho SIM." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• Gọi: Nhập SĐT và thời gian (giây). Tool sẽ tự động ngắt cuộc gọi khi hết thời gian." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• IMEI: Sinh mã IMEI ngẫu nhiên hoặc tự cấu hình để ghi đè xuống thiết bị." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• Data: Cấu hình bật hoặc tắt kết nối dữ liệu mạng 3G/4G." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
@@ -1560,12 +1560,12 @@ GET  /api/history
                                     </Style>
                                 </Button.Style>
                             </Button>
-                            <Button Content="MMS" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="MMS" Margin="0,0,0,0">
+                            <Button Content="Proxy" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="Proxy" Margin="0,0,0,0">
                                 <Button.Style>
                                     <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
                                         <Setter Property="Background" Value="#252A36"/>
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="MMS">
+                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="Proxy">
                                                 <Setter Property="Background" Value="#5B5CF6"/>
                                             </DataTrigger>
                                         </Style.Triggers>
@@ -1809,212 +1809,34 @@ GET  /api/history
                                 </Grid>
                             </StackPanel>
 
-                            <!-- MMS -->
+                            <!-- Proxy -->
                             <StackPanel VerticalAlignment="Top">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="Visibility" Value="Collapsed"/>
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="MMS">
+                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="Proxy">
                                                 <Setter Property="Visibility" Value="Visible"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
 
-                                <!-- Cảnh báo chưa hỗ trợ -->
-                                <Border Background="#33FF5722" BorderBrush="#FF5722" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10">
-                                    <TextBlock Text="⚠️ Tính năng MMS tạm thời chưa được hỗ trợ trong Hàng đợi lệnh vì cần cấu hình APN phức tạp." Foreground="#FFCCBC" FontSize="11" TextWrapping="Wrap"/>
-                                </Border>
-
-                                <!-- Người nhận -->
-                                <Grid Margin="0,0,0,6">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="90"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <Border Grid.Column="0"
-                                            Background="#1e293b"
-                                            BorderBrush="#334155"
-                                            BorderThickness="1,1,0,1"
-                                            Padding="8,6">
-                                        <TextBlock Text="Người nhận"
-                                                   Foreground="White"
-                                                   FontWeight="Bold"
-                                                   FontSize="12"/>
-                                    </Border>
-
-                                    <Border Grid.Column="1"
-                                            Background="#1e293b"
-                                            BorderBrush="#334155"
-                                            BorderThickness="1"
-                                            Padding="8,6">
-                                        <Grid>
-                                            <TextBox Text="{Binding CommandPanelMmsRecipients, UpdateSourceTrigger=PropertyChanged}"
-                                                     Background="Transparent"
-                                                     BorderThickness="0"
-                                                     Foreground="White"
-                                                     AcceptsReturn="True"
-                                                     TextWrapping="Wrap"
-                                                     Height="54"
-                                                     Padding="0"
-                                                     materialDesign:HintAssist.Hint="Nhập số điện thoại hoặc email, rồi nhấn Enter, dấu cách, dấu phẩy hoặc dán danh sách"/>
-                                            <TextBlock Text="0/6"
-                                                       Foreground="#B8C0D0"
-                                                       FontSize="11"
-                                                       HorizontalAlignment="Left"
-                                                       VerticalAlignment="Bottom"
-                                                       Margin="0,0,0,0"/>
-                                        </Grid>
-                                    </Border>
-                                </Grid>
-
-                                <!-- Tiêu đề -->
-                                <Grid Margin="0,0,0,6">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="90"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <Border Grid.Column="0"
-                                            Background="#1e293b"
-                                            BorderBrush="#334155"
-                                            BorderThickness="1,1,0,1"
-                                            Padding="8,6">
-                                        <TextBlock Text="Tiêu đề"
-                                                   Foreground="White"
-                                                   FontWeight="Bold"
-                                                   FontSize="12"/>
-                                    </Border>
-
-                                    <Border Grid.Column="1"
-                                            Background="#1e293b"
-                                            BorderBrush="#334155"
-                                            BorderThickness="1"
-                                            Padding="8,3">
-                                        <Grid>
-                                            <TextBox Text="{Binding CommandPanelMmsTitle, UpdateSourceTrigger=PropertyChanged}"
-                                                     Background="Transparent"
-                                                     BorderThickness="0"
-                                                     Foreground="White"
-                                                     Height="24"
-                                                     Padding="0"
-                                                     materialDesign:HintAssist.Hint="Tiêu đề MMS (không bắt buộc)"/>
-                                            <TextBlock Text="0/200"
-                                                       Foreground="#B8C0D0"
-                                                       FontSize="11"
-                                                       HorizontalAlignment="Right"
-                                                       VerticalAlignment="Center"/>
-                                        </Grid>
-                                    </Border>
-                                </Grid>
-
-                                <!-- Tệp đính kèm -->
-                                <Grid Margin="0,0,0,8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="90"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <Border Grid.Column="0"
-                                            Background="#1e293b"
-                                            BorderBrush="#334155"
-                                            BorderThickness="1,1,0,1"
-                                            Padding="8,6">
-                                        <TextBlock Text="Tệp đính kèm"
-                                                    Foreground="White"
-                                                    FontWeight="Bold"
-                                                    FontSize="12"/>
-                                    </Border>
-
-                                    <Border Grid.Column="1"
-                                            Background="#1e293b"
-                                            BorderBrush="#334155"
-                                            BorderThickness="1"
-                                            Padding="8,6">
-                                        <Grid>
-                                            <StackPanel VerticalAlignment="Top">
-                                                <TextBlock Text="0/12"
-                                                           Foreground="#B8C0D0"
-                                                           FontSize="11"
-                                                           Margin="0,0,0,8"/>
-                                                <TextBlock Text="Chưa chọn tệp đính kèm nào."
-                                                           Foreground="#B8C0D0"
-                                                           FontSize="11"/>
-                                            </StackPanel>
-
-                                            <Button Content="Chọn tệp"
-                                                    HorizontalAlignment="Right"
-                                                    VerticalAlignment="Top"
-                                                    Background="#EC3F9B"
-                                                    Style="{StaticResource ModernButtonStyle}"
-                                                    Height="28"
-                                                    Command="{Binding BrowseMmsAttachmentCommand}"/>
-                                        </Grid>
-                                    </Border>
-                                </Grid>
-
-                                <!-- Thiết lập nâng cao -->
-                                <Expander Header="Thiết lập MMS nâng cao"
-                                          IsExpanded="{Binding CommandPanelMmsAdvancedOpen}"
-                                          Foreground="#DDE2FF"
-                                          Background="#1e293b"
-                                          BorderBrush="#334155"
-                                          BorderThickness="1"
-                                          Margin="0,0,0,8">
-                                    <StackPanel VerticalAlignment="Top" Margin="8">
-                                        <TextBlock Text="APN, proxy, gateway MMS, UAProf..."
-                                                   Foreground="#B8C0D0"
-                                                   FontSize="11"/>
+                                <!-- Hướng dẫn Proxy -->
+                                <Border Background="#1e293b" BorderBrush="#334155" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,10">
+                                    <StackPanel>
+                                        <TextBlock Text="Proxy Server Tự Động Đang Chạy Ngầm" Foreground="White" FontWeight="Bold" FontSize="14" Margin="0,0,0,6"/>
+                                        <TextBlock Text="Hệ thống đã tự động quét các mạng 3G/4G của SIM và khởi tạo Proxy Server nội bộ thành công." Foreground="#B8C0D0" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                        <TextBlock Text="Port mặc định: 3001, 3002... tương ứng với từng cổng mạng." Foreground="#B8C0D0" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                        <TextBlock Text="👉 Cách dùng API tự động:" Foreground="#EC3F9B" FontWeight="Bold" FontSize="12" Margin="0,0,0,4"/>
+                                        <TextBlock Text="1. Lấy danh sách IP và Port Proxy: GET http://localhost:8080/api/proxies" Foreground="#FFCCBC" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                        <TextBlock Text="2. Gửi lệnh Reset IP cho một cổng (ví dụ COM5): GET http://localhost:8080/api/proxy/reset/COM5" Foreground="#FFCCBC" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                        <TextBlock Text="*Tính năng Hàng đợi lệnh tạm vô hiệu hóa trên tab này do Proxy chạy nền tự động." Foreground="#8892B0" FontSize="11" FontStyle="Italic" TextWrapping="Wrap" Margin="0,8,0,0"/>
                                     </StackPanel>
-                                </Expander>
-
-                                <Border Background="#1e293b"
-                                        BorderBrush="#334155"
-                                        BorderThickness="1"
-                                        Padding="8,6"
-                                        Margin="0,0,0,8">
-                                    <TextBlock Text="Hàng đợi sẽ hiển thị từng bước như cấu hình người nhận, tải tệp, đặt tiêu đề, gửi và dọn dẹp."
-                                               Foreground="#B8C0D0"
-                                               FontSize="11"
-                                               TextWrapping="Wrap"/>
                                 </Border>
-
-                                <!-- Chế độ / thử lại -->
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="58"/>
-                                        <ColumnDefinition Width="100"/>
-                                        <ColumnDefinition Width="58"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <TextBlock Text="Chế độ" Foreground="White" VerticalAlignment="Center"/>
-
-                                    <ComboBox Grid.Column="1"
-                                              SelectedIndex="{Binding CommandPanelModeIndex}"
-                                              Height="28">
-                                        <ComboBoxItem Content="Đồng thời"/>
-                                        <ComboBoxItem Content="Tuần tự"/>
-                                    </ComboBox>
-
-                                    <TextBlock Grid.Column="2"
-                                               Text="Thử lại"
-                                               Foreground="White"
-                                               VerticalAlignment="Center"
-                                               Margin="8,0,0,0"/>
-
-                                    <TextBox Grid.Column="3"
-                                             Text="{Binding CommandPanelRetryCount, UpdateSourceTrigger=PropertyChanged}"
-                                             Height="28"
-                                             Background="#1e293b"
-                                             Foreground="White"
-                                             BorderBrush="#334155"
-                                             BorderThickness="1"
-                                             Padding="8,3"/>
-                                </Grid>
                             </StackPanel>
+
+
 
                             <!-- Gọi -->
                             <StackPanel VerticalAlignment="Top">

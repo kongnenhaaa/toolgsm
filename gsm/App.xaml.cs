@@ -42,6 +42,12 @@ namespace gsm
             try
             {
                 string logFile = "crash.log";
+                var fi = new System.IO.FileInfo(logFile);
+                if (fi.Exists && fi.Length > 1024 * 1024) // 1MB
+                {
+                    fi.Delete();
+                }
+                
                 string content = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{source}]\r\n{ex.GetType().Name}: {ex.Message}\r\n{ex.StackTrace}\r\n\r\n";
                 if (ex.InnerException != null)
                 {

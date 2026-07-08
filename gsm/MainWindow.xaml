@@ -747,6 +747,12 @@ GET  /api/history
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
+                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Command="{Binding SetMyVnptPasswordCommand}" ToolTip="Đặt pass MyVNPT cho các cổng đang chọn" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="Key" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Đặt pass MyVNPT" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
+                            </StackPanel>
+                        </Button>
                         <!-- Sidebar USSD Button removed -->
                         <Button Background="#424242" Command="{Binding OpenExportExcelDialogCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Xuất danh sách cổng ra file Excel" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
                             <StackPanel Orientation="Horizontal">

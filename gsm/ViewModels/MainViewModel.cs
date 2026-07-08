@@ -185,6 +185,99 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ClearCommandPanelErrors();
     }
 
+    [RelayCommand]
+    private async Task SetMyVnptPassword(object obj)
+    {
+        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        
+        // Nếu click từ ContextMenu của 1 dòng cụ thể mà chưa tick chọn
+        if (obj is SimPort clickedPort && !targetPorts.Contains(clickedPort))
+        {
+            targetPorts.Add(clickedPort);
+        }
+
+        if (!targetPorts.Any())
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng để đặt mật khẩu MyVNPT.");
+            return;
+        }
+
+        int count = 0;
+        foreach (var port in targetPorts)
+        {
+            if (string.IsNullOrWhiteSpace(port.PhoneNumber) || port.PhoneNumber == "Chưa lấy được số")
+            {
+                AddLog($"[{port.PortName}] Bỏ qua vì chưa có số điện thoại.", "WARN");
+                continue;
+            }
+
+            count++;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang kiểm tra trạng thái tài khoản số {port.PhoneNumber}..."));
+                    using var client = new System.Net.Http.HttpClient();
+                    string phone = port.PhoneNumber.StartsWith("0") ? "84" + port.PhoneNumber.Substring(1) : port.PhoneNumber;
+                    
+                    // 1. Kiểm tra tài khoản
+                    var checkPayload = new { msisdn = phone };
+                    string checkJson = System.Text.Json.JsonSerializer.Serialize(checkPayload);
+                    using var checkRequest = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, "https://api-myvnpt.vnpt.vn/mapi_v2/services/authen_check_account");
+                    checkRequest.Content = new System.Net.Http.StringContent(checkJson, System.Text.Encoding.UTF8, "application/json");
+                    checkRequest.Headers.TryAddWithoutValidation("Authorization", "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b");
+                    checkRequest.Headers.TryAddWithoutValidation("Device-Info", "a6d10733-aaed-47a5-aa83-2446121b3e4e|a6d10733-aaed-47a5-aa83-2446121b3e4e|unknown|Android||3.3.97.Prd|motog(7)|10|");
+                    checkRequest.Headers.TryAddWithoutValidation("Language", "vi_VN");
+                    checkRequest.Headers.TryAddWithoutValidation("User-Agent", "okhttp/4.7.2");
+                    
+                    var checkResponse = await client.SendAsync(checkRequest);
+                    string checkResponseContent = await checkResponse.Content.ReadAsStringAsync();
+                    
+                    bool accountExists = checkResponseContent.Contains("\"error_code\":\"3\"") || checkResponseContent.Contains("\"error_code\": \"3\"");
+                    string otpService = accountExists ? "authen_miss_password" : "authen_register";
+                    string modeStr = accountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
+                    
+                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Trạng thái: {modeStr}. Đang yêu cầu OTP..."));
+                    
+                    var payload = new
+                    {
+                        msisdn = phone,
+                        otp_service = otpService
+                    };
+                    string json = System.Text.Json.JsonSerializer.Serialize(payload);
+                    using var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, "https://api-myvnpt.vnpt.vn/mapi_v2/services/otp_send");
+                    request.Content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+
+                    request.Headers.TryAddWithoutValidation("Authorization", "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b");
+                    request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
+                    request.Headers.TryAddWithoutValidation("Device-Info", "a6d10733-aaed-47a5-aa83-2446121b3e4e|a6d10733-aaed-47a5-aa83-2446121b3e4e|unknown|Android||3.3.97.Prd|motog(7)|10|");
+                    request.Headers.TryAddWithoutValidation("Language", "vi_VN");
+                    request.Headers.TryAddWithoutValidation("User-Agent", "okhttp/4.7.2");
+
+                    var response = await client.SendAsync(request);
+                    string responseContent = await response.Content.ReadAsStringAsync();
+
+                    if (responseContent.Contains("\"error_code\":\"0\"") || responseContent.Contains("\"errorCode\":\"0\"") || responseContent.Contains("\"error_code\": \"0\""))
+                    {
+                        Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO"));
+                    }
+                    else
+                    {
+                        Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Gửi yêu cầu OTP thất bại: {responseContent}", "ERROR"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Lỗi gửi yêu cầu OTP: {ex.Message}", "ERROR"));
+                }
+            });
+            await Task.Delay(500); // Tránh gửi request quá nhanh
+        }
+        
+        if (count > 0)
+            SnackbarMessageQueue.Enqueue($"Đã gửi lệnh yêu cầu OTP cho {count} cổng.");
+    }
+
     [ObservableProperty]
     private bool _isCallManagerDialogOpen;
 
@@ -1446,113 +1539,138 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private async Task ApproveUnknownSim(SimPort port)
+    private void ApproveUnknownSim(object obj)
     {
-        if (port == null) return;
+        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
         
-        if (port.Status != SimStatus.SecurityBlocked)
+        if (obj is SimPort clickedPort && !targetPorts.Contains(clickedPort))
         {
-            SnackbarMessageQueue.Enqueue($"Cổng {port.PortName} không bị chặn.");
+            targetPorts.Add(clickedPort);
+        }
+
+        if (!targetPorts.Any())
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (tick vào ô vuông) để chấp thuận SIM.");
             return;
         }
 
-        if (string.IsNullOrEmpty(port.Serial))
+        int successCount = 0;
+        foreach (var port in targetPorts)
         {
-            SnackbarMessageQueue.Enqueue($"Lỗi: Không tìm thấy CCID của {port.PortName}.");
-            return;
-        }
-
-        string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
-        string sourceFile = "manual-approve";
-
-        var newEntry = new gsm.Models.SimBackupEntry
-        {
-            Ccid = port.Serial,
-            Imei = targetImei,
-            PhoneNumber = port.PhoneNumber ?? "",
-            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-            LicenseKeySuffix = string.Empty,
-            KeyMismatch = "false",
-            SourceFile = sourceFile
-        };
-        
-        AddNewImeiCacheEntry(newEntry);
-        
-        AddLog($"[{port.PortName}] Đã chấp thuận thủ công SIM lạ (CCID: {port.Serial}, IMEI mục tiêu: {targetImei}).", "SUCCESS");
-        SnackbarMessageQueue.Enqueue($"Đã lưu SIM {port.PortName} vào kho. Đang tráng IMEI...");
-
-        _ = Task.Run(async () =>
-        {
-            Application.Current.Dispatcher.Invoke(() => 
+            if (port == null) continue;
+            
+            if (port.Status != SimStatus.SecurityBlocked)
             {
-                port.Status = SimStatus.Connecting;
-                port.DeviceName = "Đang tráng IMEI Fake...";
-            });
-
-            string currentImei = NormalizeImei(port.Imei);
-            if (string.IsNullOrEmpty(currentImei))
-            {
-                currentImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 10000, silent: true);
-                currentImei = NormalizeImei(currentImei);
+                continue;
             }
-            
-            var result = await _imeiManagementService.ProcessImeiAsync(
-                port,
-                port.Serial,
-                currentImei,
-                AppSettings,
-                (queryCcid) => { _imeiCache.TryGetValue(queryCcid, out var e); return e; },
-                (newE) => AddNewImeiCacheEntry(newE),
-                (action) => Application.Current.Dispatcher.Invoke(action)
-            );
-            
-            Application.Current.Dispatcher.Invoke(() => 
+
+            if (string.IsNullOrEmpty(port.Serial))
             {
-                if (result.Status == Services.ImeiProcessStatus.Matched)
+                AddLog($"[{port.PortName}] Lỗi: Không tìm thấy CCID.", "ERROR");
+                continue;
+            }
+
+            successCount++;
+            string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
+            string sourceFile = "manual-approve";
+
+            var newEntry = new gsm.Models.SimBackupEntry
+            {
+                Ccid = port.Serial,
+                Imei = targetImei,
+                PhoneNumber = port.PhoneNumber ?? "",
+                CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                LicenseKeySuffix = string.Empty,
+                KeyMismatch = "false",
+                SourceFile = sourceFile
+            };
+            
+            AddNewImeiCacheEntry(newEntry);
+            
+            AddLog($"[{port.PortName}] Đã chấp thuận thủ công SIM lạ (CCID: {port.Serial}, IMEI mục tiêu: {targetImei}).", "SUCCESS");
+
+            _ = Task.Run(async () =>
+            {
+                Application.Current.Dispatcher.Invoke(() => 
                 {
-                    port.IsRebooting = false;
-                    port.Imei = result.FinalImei;
-                    MarkPortActiveAfterInit(port.PortName);
-                    _ = _modemService.ReinitializeSettingsAsync(port.PortName);
-                }
-                else if (result.Status == Services.ImeiProcessStatus.Applied)
-                {
-                    port.IsRebooting = true;
-                    port.Imei = result.FinalImei;
-                    port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
                     port.Status = SimStatus.Connecting;
-                    
-                    // [FIX] Handle modems with separate USB bridge chips that don't drop USB on AT+CFUN=1,1
-                    _ = Task.Run(async () =>
+                    port.DeviceName = "Đang tráng IMEI Fake...";
+                });
+
+                string currentImei = NormalizeImei(port.Imei);
+                if (string.IsNullOrEmpty(currentImei))
+                {
+                    currentImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 10000, silent: true);
+                    currentImei = NormalizeImei(currentImei);
+                }
+                
+                var result = await _imeiManagementService.ProcessImeiAsync(
+                    port,
+                    port.Serial,
+                    currentImei,
+                    AppSettings,
+                    (queryCcid) => { _imeiCache.TryGetValue(queryCcid, out var e); return e; },
+                    (newE) => AddNewImeiCacheEntry(newE),
+                    (action) => Application.Current.Dispatcher.Invoke(action)
+                );
+                
+                Application.Current.Dispatcher.Invoke(() => 
+                {
+                    if (result.Status == Services.ImeiProcessStatus.Matched)
                     {
-                        await Task.Delay(15000);
-                        if (port.IsRebooting)
+                        port.IsRebooting = false;
+                        port.Imei = result.FinalImei;
+                        MarkPortActiveAfterInit(port.PortName);
+                        _ = _modemService.ReinitializeSettingsAsync(port.PortName);
+                    }
+                    else if (result.Status == Services.ImeiProcessStatus.Applied)
+                    {
+                        port.IsRebooting = true;
+                        port.Imei = result.FinalImei;
+                        port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
+                        port.Status = SimStatus.Connecting;
+                        
+                        // [FIX] Handle modems with separate USB bridge chips that don't drop USB on AT+CFUN=1,1
+                        _ = Task.Run(async () =>
                         {
-                            Application.Current.Dispatcher.Invoke(() => 
+                            await Task.Delay(15000);
+                            if (port.IsRebooting)
                             {
-                                port.IsRebooting = false;
-                                AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
-                                _modemService.StartHotplugWaitLoop(port.PortName);
-                            });
-                        }
-                    });
-                }
-                else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
-                {
-                    port.Status = SimStatus.SecurityBlocked;
-                    port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? gsm.Models.SecurityErrors.WrongImei : result.ErrorMessage;
-                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                    UpdateDashboard();
-                }
-                else
-                {
-                    port.Status = SimStatus.NoResponse;
-                    port.LastError = "Lỗi xử lý IMEI";
-                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                    UpdateDashboard();
-                }
+                                Application.Current.Dispatcher.Invoke(() => 
+                                {
+                                    port.IsRebooting = false;
+                                    AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
+                                    _modemService.StartHotplugWaitLoop(port.PortName);
+                                });
+                            }
+                        });
+                    }
+                    else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
+                    {
+                        port.Status = SimStatus.SecurityBlocked;
+                        port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? gsm.Models.SecurityErrors.WrongImei : result.ErrorMessage;
+                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                        UpdateDashboard();
+                    }
+                    else
+                    {
+                        port.Status = SimStatus.NoResponse;
+                        port.LastError = "Lỗi xử lý IMEI";
+                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                        UpdateDashboard();
+                    }
+                });
             });
-        });
+        }
+        
+        if (successCount > 0)
+        {
+            SnackbarMessageQueue.Enqueue($"Đã lưu {successCount} SIM lạ vào kho và đang tráng IMEI...");
+        }
+        else
+        {
+            SnackbarMessageQueue.Enqueue("Không có SIM nào bị chặn trong các cổng đã chọn.");
+        }
     }
 
     [RelayCommand]
@@ -2375,6 +2493,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     // Phát âm thanh cảnh báo OTP
                     Services.SoundAlertService.PlayOtp();
+
+                    // Tự động kiểm tra nếu là OTP MyVNPT thì đổi pass
+                    if (cleanContent.Contains("ma xac thuc OTP tren MyVNPT") || cleanContent.Contains("MyVNPT"))
+                    {
+                        AddLog($"[{e.PortName}] Phát hiện OTP MyVNPT, tiến hành đổi mật khẩu...", "INFO");
+                        _ = Services.MyVnptService.SetPasswordAsync(e.PortName, receiverPhone, extractedOtp, (msg, type) => AddLog(msg, type));
+                    }
 
                     // Thông báo Toast Windows
                     ToastService.ShowOtp(e.PortName, receiverPhone, extractedOtp, senderPhone);

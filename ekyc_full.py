@@ -34,6 +34,7 @@ BEARER_TOKEN    = "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15
 DEVICE_INFO     = "6a66365c-8a19-47f0-bf7a-8f206869d0de|6a66365c-8a19-47f0-bf7a-8f206869d0de|unknown|Android||3.3.99.Prd|SM-S901B|13|"
 MAC_ADDRESS     = "a9494f35748322ab"
 CLIENT_SESSION  = f"ANDROID_SM-S901B_32_Device_3.6.6_{MAC_ADDRESS}_1783369872502_com.vnp.myvinaphone"
+AI_TOKEN        = "8928skjhfa89298jahga1771vbvb"   # Constants.AI_TOKEN (hardcoded in app)
 MYVNPT_BASE     = "https://api-myvnpt.vnpt.vn"
 IDG_BASE        = "https://api.idg.vnpt.vn"
 IV_ZEROS        = bytes(16)
@@ -303,7 +304,7 @@ mask_url  = f"{IDG_BASE}/ai/v4/face/mask?challenge_code={CHALLENGE_CODE_HEX}"
 mask_body = {
     "img":            FAR_HASH,
     "client_session": CLIENT_SESSION,
-    "token":          ACCESS_TOKEN,
+    "token":          AI_TOKEN,   # Constants.AI_TOKEN - hardcoded in app
     "step_id":        0,
 }
 try:
@@ -331,9 +332,9 @@ live_url  = f"{IDG_BASE}/ai/v4/face/liveness-3d?challenge_code={CHALLENGE_CODE_H
 live_body = {
     "far_img":        FAR_HASH,
     "near_img":       NEAR_HASH,
-    "scan3d":         FAR_HASH,   # fallback (3D scan not available from photo)
+    "scan3d":         FAR_HASH,
     "client_session": CLIENT_SESSION,
-    "token":          ACCESS_TOKEN,
+    "token":          AI_TOKEN,   # Constants.AI_TOKEN - hardcoded in app
 }
 try:
     r = requests.post(live_url, headers=idg_headers(True), json=live_body,

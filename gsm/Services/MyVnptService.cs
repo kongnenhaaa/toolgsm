@@ -1,0 +1,119 @@
+using System;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+using gsm.Models;
+
+namespace gsm.Services;
+
+public static class MyVnptService
+{
+    private static readonly HttpClient _client = new HttpClient();
+
+    public static async Task SetPasswordAsync(string portName, string phone, string otp, Action<string, string> addLogCallback)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(phone) || phone == "Chưa lấy được số")
+            {
+                addLogCallback?.Invoke($"[{portName}] Không có SĐT hợp lệ để đổi MK MyVNPT", "ERROR");
+                return;
+            }
+
+            if (phone.StartsWith("0"))
+            {
+                phone = "84" + phone.Substring(1);
+            }
+
+            string pwd = "123456a@A";
+            string hashedPwd = CreateMD5(pwd).ToUpper();
+
+            // 1. Kiểm tra tài khoản để biết gọi api nào
+            var checkPayload = new { msisdn = phone };
+            string checkJson = JsonSerializer.Serialize(checkPayload);
+            using var checkRequest = new HttpRequestMessage(HttpMethod.Post, "https://api-myvnpt.vnpt.vn/mapi_v2/services/authen_check_account");
+            checkRequest.Content = new StringContent(checkJson, Encoding.UTF8, "application/json");
+            checkRequest.Headers.TryAddWithoutValidation("Authorization", "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b");
+            checkRequest.Headers.TryAddWithoutValidation("Device-Info", "a6d10733-aaed-47a5-aa83-2446121b3e4e|a6d10733-aaed-47a5-aa83-2446121b3e4e|unknown|Android||3.3.97.Prd|motog(7)|10|");
+            checkRequest.Headers.TryAddWithoutValidation("Language", "vi_VN");
+            checkRequest.Headers.TryAddWithoutValidation("User-Agent", "okhttp/4.7.2");
+
+            var checkResponse = await _client.SendAsync(checkRequest);
+            string checkResponseContent = await checkResponse.Content.ReadAsStringAsync();
+            bool accountExists = checkResponseContent.Contains("\"error_code\":\"3\"") || checkResponseContent.Contains("\"error_code\": \"3\"");
+
+            // 2. Gọi api set pass tương ứng
+            string targetUrl = accountExists 
+                ? "https://api-myvnpt.vnpt.vn/mapi_v2/services/authen_miss_password" 
+                : "https://api-myvnpt.vnpt.vn/mapi_v2/services/authen_register";
+
+            object payload;
+            if (accountExists)
+            {
+                payload = new
+                {
+                    msisdn = phone,
+                    otp = otp,
+                    password = hashedPwd
+                };
+            }
+            else
+            {
+                payload = new
+                {
+                    msisdn = phone,
+                    password = hashedPwd,
+                    pin = otp
+                };
+            }
+
+            string json = JsonSerializer.Serialize(payload);
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, targetUrl);
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b");
+            request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
+            request.Headers.TryAddWithoutValidation("Device-Info", "a6d10733-aaed-47a5-aa83-2446121b3e4e|a6d10733-aaed-47a5-aa83-2446121b3e4e|unknown|Android||3.3.97.Prd|motog(7)|10|");
+            request.Headers.TryAddWithoutValidation("Language", "vi_VN");
+            request.Headers.TryAddWithoutValidation("User-Agent", "okhttp/4.7.2");
+
+            var response = await _client.SendAsync(request);
+            var responseContent = await response.Content.ReadAsStringAsync();
+
+            string modeStr = accountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
+            if (responseContent.Contains("\"error_code\":\"0\"") || responseContent.Contains("\"errorCode\":\"0\"") || responseContent.Contains("\"error_code\": \"0\""))
+            {
+                addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thành công ({modeStr})! Pass: {pwd}", "SUCCESS");
+                string logPath = AppPaths.ForRuntimeFile("myvnpt_passwords.txt");
+                System.IO.File.AppendAllText(logPath, $"{phone}|{pwd}\n");
+            }
+            else
+            {
+                addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thất bại ({modeStr}): {responseContent}", "ERROR");
+            }
+        }
+        catch (Exception ex)
+        {
+            addLogCallback?.Invoke($"[{portName}] Lỗi đặt mật khẩu MyVNPT: {ex.Message}", "ERROR");
+        }
+    }
+
+    private static string CreateMD5(string input)
+    {
+        using (MD5 md5 = MD5.Create())
+        {
+            byte[] inputBytes = Encoding.UTF8.GetBytes(input);
+            byte[] hashBytes = md5.ComputeHash(inputBytes);
+
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < hashBytes.Length; i++)
+            {
+                sb.Append(hashBytes[i].ToString("x2"));
+            }
+            return sb.ToString();
+        }
+    }
+}

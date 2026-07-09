@@ -2187,10 +2187,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // 1. Tìm người gửi (Sender)
                 var pduMatch = Regex.Match(e.Data, @"\+CMGR:\s*\d+,,(\d+)\r?\n([0-9A-Fa-f]+)");
                 var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
+                int concatRef = 0, concatTotal = 0, concatSeq = 0;
                 if (pduMatch.Success)
                 {
                     string pduHex = pduMatch.Groups[2].Value.Trim();
-                    cleanContent = DecodePdu(pduHex, out senderPhone);
+                    cleanContent = DecodePdu(pduHex, out senderPhone, out concatRef, out concatTotal, out concatSeq);
                     // Loại bỏ các ký tự thừa
                     cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
@@ -2198,16 +2199,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 else if (senderMatch.Success)
                 {
                     senderPhone = DecodeUcs2(senderMatch.Groups[1].Value); // Giải mã HEX nếu có
-                    
+
                     // Xóa dòng header +CMGR đi để lấy nội dung text sạch
                     cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
                     cleanContent = Regex.Replace(cleanContent, @"\r?\nOK\r?\n?$", "").Trim();
                     cleanContent = DecodeUcs2(cleanContent); // Giải mã Tiếng Việt
-                    
+
                     // Gộp nội dung thành 1 dòng để tránh lỗi hiển thị trên UI bị mất chữ (do rớt dòng)
                     cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
                     // Thay thế khoảng trắng kép
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
+                }
+
+                // 1b. Tin nhắn dài bị chia phần (concatenated SMS, theo UDH chuẩn 3GPP).
+                // Chỉ xử lý tiếp khi đã gom ĐỦ tất cả các phần; nếu thiếu phần thì lưu vào buffer,
+                // xóa tin ở SIM (đã đọc xong, tránh đầy bộ nhớ) và dừng lại chờ phần tiếp theo.
+                if (concatTotal > 1)
+                {
+                    bool isComplete = TryBufferConcatenatedSms(e.PortName, senderPhone, concatRef, concatTotal, concatSeq, cleanContent, out string assembledContent);
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+
+                    if (!isComplete)
+                    {
+                        AddLog($"[{e.PortName}] Đã nhận phần {concatSeq}/{concatTotal} của tin nhắn dài từ {senderPhone}, đang chờ ghép đủ...", "INFO");
+                        return;
+                    }
+
+                    AddLog($"[{e.PortName}] Đã ghép đủ {concatTotal} phần tin nhắn dài từ {senderPhone}.", "INFO");
+                    cleanContent = assembledContent;
                 }
 
                 // Tự động kiểm tra TKC khi nhận thông báo trừ tiền từ tổng đài:
@@ -2558,6 +2580,109 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 AddLog($"[{e.PortName}] Lỗi xử lý SMS: {ex.Message}", "ERROR");
             }
         });
+    }
+
+    private class MultipartSmsBuffer
+    {
+        public string PortName = "";
+        public string SenderPhone = "";
+        public int ConcatRef;
+        public int ConcatTotal;
+        public DateTime LastUpdated;
+        public Dictionary<int, string> Parts = new();
+    }
+
+    // Bộ nhớ đệm ghép các phần SMS dài (concatenated SMS) đang chờ đủ theo ConcatRef+Sender+Port.
+    private readonly List<MultipartSmsBuffer> _multipartSmsBuffers = new();
+    private static readonly TimeSpan MultipartSmsBufferTimeout = TimeSpan.FromMinutes(3);
+
+    // Gom một phần (part) của tin nhắn dài vào buffer theo đúng số thứ tự (seq) khai báo trong UDH.
+    // Trả về true và xuất nội dung đã ghép đủ khi đã nhận được toàn bộ concatTotal phần.
+    private bool TryBufferConcatenatedSms(string portName, string senderPhone, int concatRef, int concatTotal, int concatSeq, string partContent, out string assembledContent)
+    {
+        assembledContent = string.Empty;
+        var now = DateTime.Now;
+
+        // Dọn các buffer bị bỏ dở quá lâu (phần bị mất/lỗi mạng): hiển thị luôn phần đã có để tránh mất dữ liệu.
+        for (int i = _multipartSmsBuffers.Count - 1; i >= 0; i--)
+        {
+            var stale = _multipartSmsBuffers[i];
+            if (now - stale.LastUpdated > MultipartSmsBufferTimeout)
+            {
+                _multipartSmsBuffers.RemoveAt(i);
+                AddLog($"[{stale.PortName}] Tin nhắn dài từ {stale.SenderPhone} bị thiếu phần (chỉ nhận {stale.Parts.Count}/{stale.ConcatTotal}) sau {MultipartSmsBufferTimeout.TotalMinutes:0} phút, hiển thị phần đã nhận được.", "WARN");
+                string partial = string.Join("", stale.Parts.OrderBy(kv => kv.Key).Select(kv => kv.Value));
+                DeliverAssembledSms(stale.PortName, stale.SenderPhone, partial);
+            }
+        }
+
+        var buffer = _multipartSmsBuffers.FirstOrDefault(b =>
+            b.PortName == portName && b.SenderPhone == senderPhone &&
+            b.ConcatRef == concatRef && b.ConcatTotal == concatTotal);
+
+        if (buffer == null)
+        {
+            buffer = new MultipartSmsBuffer
+            {
+                PortName = portName,
+                SenderPhone = senderPhone,
+                ConcatRef = concatRef,
+                ConcatTotal = concatTotal
+            };
+            _multipartSmsBuffers.Add(buffer);
+        }
+
+        buffer.Parts[concatSeq] = partContent;
+        buffer.LastUpdated = now;
+
+        if (buffer.Parts.Count < concatTotal)
+            return false;
+
+        assembledContent = string.Join("", buffer.Parts.OrderBy(kv => kv.Key).Select(kv => kv.Value));
+        assembledContent = Regex.Replace(assembledContent, @"\s+", " ").Trim();
+        _multipartSmsBuffers.Remove(buffer);
+        return true;
+    }
+
+    // Xử lý một tin nhắn dài đã ghép đủ nhưng bị timeout khi đang gom dở (không đợi thêm được nữa):
+    // vẫn cố trích OTP/hiển thị lên UI bằng đúng luồng xử lý chuẩn.
+    private void DeliverAssembledSms(string portName, string senderPhone, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return;
+
+        var port = Ports.FirstOrDefault(p => p.PortName == portName);
+        string extractedOtp = ExtractOtp(content);
+        string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
+
+        if (extractedOtp != "N/A")
+        {
+            OtpHistoryService.Append(portName, receiverPhone, senderPhone, extractedOtp, content);
+            OtpReceivedEvent?.Invoke(portName, extractedOtp);
+            Services.SoundAlertService.PlayOtp();
+            ToastService.ShowOtp(portName, receiverPhone, extractedOtp, senderPhone);
+        }
+
+        SmsMessages.Insert(0, new SmsMessage
+        {
+            PortName = portName,
+            ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
+            Content = content,
+            Sender = senderPhone,
+            Otp = extractedOtp,
+            ReceiverPhone = port?.PhoneNumber ?? "",
+            NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
+            Status = port?.Status ?? SimStatus.Connecting,
+            CallCount = "0",
+            ForwardContent = "Không"
+        });
+
+        if (port != null)
+        {
+            port.Sender = senderPhone;
+            port.Otp = extractedOtp;
+            port.LastMessageContent = content;
+            port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+        }
     }
 
     private bool TryAppendToRecentMultipartSms(string portName, string senderPhone, string content, SimPort? port, bool receiveAll = false)
@@ -4010,16 +4135,64 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
 
 
-    private string DecodePdu(string pdu, out string senderPhone)
+    // Phân tích User Data Header (UDH) để lấy thông tin ghép tin nhắn dài (concatenated SMS).
+    // udHex: chuỗi hex của phần User Data (bắt đầu bằng UDHL nếu hasUdh = true).
+    // Trả về udhTotalBytes = tổng số byte của UDH (kể cả byte độ dài) để bên gọi bỏ qua khi đọc nội dung.
+    private void ParseUdh(string udHex, out int udhTotalBytes, out int concatRef, out int concatTotal, out int concatSeq)
+    {
+        udhTotalBytes = 0;
+        concatRef = 0;
+        concatTotal = 0;
+        concatSeq = 0;
+
+        if (string.IsNullOrEmpty(udHex) || udHex.Length < 2) return;
+
+        int udhl = int.Parse(udHex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
+        int endPos = (udhl + 1) * 2; // vị trí kết thúc UDH tính theo ký tự hex
+        if (udHex.Length < endPos) return; // UDH khai báo dài hơn dữ liệu thực có -> PDU lỗi, bỏ qua
+
+        udhTotalBytes = udhl + 1;
+
+        int pos = 2; // bỏ qua byte UDHL, bắt đầu đọc các Information Element (IE)
+        while (pos + 4 <= endPos)
+        {
+            int iei = int.Parse(udHex.Substring(pos, 2), System.Globalization.NumberStyles.HexNumber);
+            int iedl = int.Parse(udHex.Substring(pos + 2, 2), System.Globalization.NumberStyles.HexNumber);
+            int dataStart = pos + 4;
+            if (dataStart + iedl * 2 > endPos) break; // IE khai báo vượt quá UDH -> dừng đọc
+
+            if (iei == 0x00 && iedl == 3)
+            {
+                // Concat SMS - tham chiếu 8-bit: [ref][total][seq]
+                concatRef = int.Parse(udHex.Substring(dataStart, 2), System.Globalization.NumberStyles.HexNumber);
+                concatTotal = int.Parse(udHex.Substring(dataStart + 2, 2), System.Globalization.NumberStyles.HexNumber);
+                concatSeq = int.Parse(udHex.Substring(dataStart + 4, 2), System.Globalization.NumberStyles.HexNumber);
+            }
+            else if (iei == 0x08 && iedl == 4)
+            {
+                // Concat SMS - tham chiếu 16-bit: [refHi][refLo][total][seq]
+                concatRef = int.Parse(udHex.Substring(dataStart, 4), System.Globalization.NumberStyles.HexNumber);
+                concatTotal = int.Parse(udHex.Substring(dataStart + 4, 2), System.Globalization.NumberStyles.HexNumber);
+                concatSeq = int.Parse(udHex.Substring(dataStart + 6, 2), System.Globalization.NumberStyles.HexNumber);
+            }
+
+            pos = dataStart + iedl * 2;
+        }
+    }
+
+    private string DecodePdu(string pdu, out string senderPhone, out int concatRef, out int concatTotal, out int concatSeq)
     {
         senderPhone = "UNKNOWN";
+        concatRef = 0;
+        concatTotal = 0;
+        concatSeq = 0;
         try
         {
             if (string.IsNullOrWhiteSpace(pdu) || pdu.Length < 14) return "";
 
             int smscLen = int.Parse(pdu.Substring(0, 2), System.Globalization.NumberStyles.HexNumber);
             int smscEnd = 2 + smscLen * 2;
-            
+
             // first octet of SMS-DELIVER
             int firstOctet = int.Parse(pdu.Substring(smscEnd, 2), System.Globalization.NumberStyles.HexNumber);
             bool hasUdh = (firstOctet & 0x40) != 0;
@@ -4090,16 +4263,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             if (dcs == 0x08 || dcs == 0x19 || dcs == 0x18 || dcs == 0x11) isUcs2 = true;
             
+            int udhTotalBytesShared = 0;
+            if (hasUdh)
+            {
+                ParseUdh(ud, out udhTotalBytesShared, out concatRef, out concatTotal, out concatSeq);
+            }
+
             if (isUcs2)
             {
-                int udhLengthBytes = 0;
-                if (hasUdh)
-                {
-                    udhLengthBytes = int.Parse(ud.Substring(0, 2), System.Globalization.NumberStyles.HexNumber) + 1;
-                }
-                
                 StringBuilder sb = new StringBuilder();
-                int start = udhLengthBytes * 2;
+                int start = udhTotalBytesShared * 2;
                 for (int i = start; i < ud.Length && i < udl * 2; i += 4)
                 {
                     if (i + 4 <= ud.Length)
@@ -4127,9 +4300,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 int startIndexBits = 0;
                 if (hasUdh)
                 {
-                    int udhLen = udBytes[0];
-                    int udhTotalBytes = udhLen + 1;
-                    int udhBits = udhTotalBytes * 8;
+                    int udhBits = udhTotalBytesShared * 8;
                     int fillBits = 7 - (udhBits % 7);
                     if (fillBits == 7) fillBits = 0;
                     startIndexBits = udhBits + fillBits;

@@ -21,36 +21,48 @@ public class ImeiProcessResult
 
 public class ImeiManagementService
 {
+    public static readonly string[] FakeTacs = new[] {
+        "35293630", // iPhone 14 Pro Max
+        "35307371", // iPhone 14
+        "35293425", // iPhone 14 Pro
+        "35443477", // iPhone 15 Pro
+        "35684784", // iPhone 15 Plus
+        "35300911", // iPhone 12 Pro Max
+        "35689020", // Samsung Galaxy S23 Ultra
+        "35205562", // Samsung Galaxy S22 Ultra
+        "35848511", // Samsung Galaxy S21 Ultra 5G
+        "35623011", // Samsung Galaxy Note 20 Ultra
+        "35398226", // iPhone 13 Pro Max
+        "35874288", // iPhone 15
+        "35919376", // iPhone 15 Pro Max
+        "35179311", // Samsung Galaxy Z Fold 4
+        "35385711", // Samsung Galaxy Z Flip 4
+        "35424597", // Google Pixel 8 Pro
+        "35639611", // Google Pixel 7 Pro
+        "35824511", // Google Pixel 6
+        "86129004", // Xiaomi 13 Pro
+        "86333405", // Oppo Reno 6
+        "86542704", // Oppo Find X3 Pro
+        "86770205", // Oppo Find X5 Pro
+        "86744805", // Vivo X70 Pro
+        "86086705"  // Huawei P50 Pro
+    };
+
+    public static bool IsFakeImei(string imei)
+    {
+        if (string.IsNullOrWhiteSpace(imei) || imei.Length < 8) return false;
+        string tac = imei.Substring(0, 8);
+        foreach (var t in FakeTacs)
+        {
+            if (tac == t) return true;
+        }
+        return false;
+    }
+
     public static string GenerateRandomImei()
     {
-        string[] tacs = new[] { 
-            "35293630", // iPhone 14 Pro Max
-            "35307371", // iPhone 14
-            "35293425", // iPhone 14 Pro
-            "35443477", // iPhone 15 Pro
-            "35684784", // iPhone 15 Plus
-            "35300911", // iPhone 12 Pro Max
-            "35689020", // Samsung Galaxy S23 Ultra
-            "35205562", // Samsung Galaxy S22 Ultra
-            "35848511", // Samsung Galaxy S21 Ultra 5G
-            "35623011", // Samsung Galaxy Note 20 Ultra
-            "35398226", // iPhone 13 Pro Max
-            "35874288", // iPhone 15
-            "35919376", // iPhone 15 Pro Max
-            "35179311", // Samsung Galaxy Z Fold 4
-            "35385711", // Samsung Galaxy Z Flip 4
-            "35424597", // Google Pixel 8 Pro
-            "35639611", // Google Pixel 7 Pro
-            "35824511", // Google Pixel 6
-            "86129004", // Xiaomi 13 Pro
-            "86333405", // Oppo Reno 6
-            "86542704", // Oppo Find X3 Pro
-            "86770205", // Oppo Find X5 Pro
-            "86744805", // Vivo X70 Pro
-            "86086705"  // Huawei P50 Pro
-        };
         var random = new Random();
-        string tac = tacs[random.Next(tacs.Length)];
+        string tac = FakeTacs[random.Next(FakeTacs.Length)];
         string snr = random.Next(0, 999999).ToString("D6");
         string imeiWithoutCheck = tac + snr;
         

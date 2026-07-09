@@ -246,10 +246,8 @@ public class GsmModemService : IGsmModemService
             if (settings != null && settings.EnableNewSimIntakeMode)
             {
                 string cleanImei = imei.Replace("OK", "").Trim();
-                string[] fakeTacs = new[] { "35293630", "35307371", "35198031", "35435973", "35925411", "35483211", "35832011" };
-                bool isAlreadyFake = false;
-                foreach(var t in fakeTacs) { if(cleanImei.StartsWith(t)) { isAlreadyFake = true; break; } }
-                
+                bool isAlreadyFake = gsm.Services.ImeiManagementService.IsFakeImei(cleanImei);
+
                 if (!isAlreadyFake && !string.IsNullOrEmpty(cleanImei))
                 {
                     string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();

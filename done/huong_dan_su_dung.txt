@@ -1,0 +1,57 @@
+# HƯỚNG DẪN SỬ DỤNG TOOL BYPASS eKYC VNPT
+
+Tài liệu này hướng dẫn cách chạy và sử dụng hệ thống Bypass nhận diện khuôn mặt (eKYC) của app My VNPT.
+
+## 1. YÊU CẦU CHUẨN BỊ
+- **Mạng:** Điện thoại và Máy tính (PC) phải kết nối chung một mạng Wi-Fi.
+- **Trên Điện thoại:** 
+  - Tải App VNPT gốc nguyên bản từ CH Play (không dùng app mod/chỉnh sửa).
+  - Máy đã Root và cài Xposed/LSPosed.
+  - Cài đặt file `JustTrustMe.apk` (có sẵn trong thư mục này) vào điện thoại. Sau đó mở LSPosed bật nó lên và tick chọn vào các app VNPT để chặn SSL Pinning.
+  - Cài chứng chỉ của Mitmproxy (mitmproxy-ca-cert.pem) vào thư mục gốc (System Root).
+  - Cài app proxy (Ví dụ: Postern) và cấu hình trỏ về IP của máy tính, cổng 8080.
+- **Trên Máy tính (PC):**
+  - Cài đặt Python 3.10 trở lên.
+  - Cài đặt thư viện: Mở CMD gõ `pip install mitmproxy`.
+
+---
+
+## 2. QUY TRÌNH SỬ DỤNG
+Quy trình gồm 2 giai đoạn: Lấy dữ liệu khuôn mặt thật (CAPTURE) và Đánh tráo dữ liệu (BYPASS). 
+**Lưu ý quan trọng:** Bạn xác thực cho CCCD của ai thì PHẢI LẤY ĐƯỢC khuôn mặt của người đó (do hệ thống sẽ so khớp 1:1 khuôn mặt quét được với khuôn mặt trên CCCD).
+
+### GIAI ĐOẠN 1: BẮT DỮ LIỆU KHUÔN MẶT (CAPTURE)
+Nếu bạn đã có file json capture từ trước của đúng người cần xác thực, bạn có thể bỏ qua Giai đoạn 1 và sang thẳng Giai đoạn 2.
+
+1. Mở file `mitm_ekyc.py` bằng Notepad hoặc trình soạn thảo code.
+2. Tìm dòng chữ `MODE = "BYPASS"` (ở dòng số 9) và sửa nó thành: 
+   `MODE = "CAPTURE"`
+3. Lưu file lại.
+4. Nháy đúp vào file `run_mitm.bat` để bật Proxy lên. (Cửa sổ CMD màu đen sẽ hiện ra).
+5. Trên điện thoại: Bật app Postern (Proxy), sau đó mở app My VNPT.
+6. Tiến hành ấn Xác thực và đưa khuôn mặt thật (hoặc chiếu ảnh lên màn hình máy tính rồi dí cam vào) để app quét qua bước liveness.
+7. Khi quét xong, trên màn hình CMD của máy tính sẽ báo "CAPTURED Liveness-3D". Lúc này trong thư mục sẽ tự sinh ra 2 file: `capture_liveness_resp.json` và `capture_mask_resp.json`.
+
+### GIAI ĐOẠN 2: BYPASS VÀ ĐÁNH TRÁO KẾT QUẢ
+Khi bạn đã có file capture, bạn có thể bypass bước quét mặt bao nhiêu lần tùy thích cho tài khoản đó.
+
+1. Mở file `capture_liveness_resp.json` vừa nhận được.
+2. Tìm chuỗi cực dài ở phần `"dataBase64": "..."`. Copy chuỗi đó lên các trang giải mã Base64 (ví dụ: base64decode.org) để giải mã.
+3. Trong kết quả giải mã, bạn sẽ thấy 2 đoạn mã quan trọng: `"near_img": "..."` và `"far_img": "..."`. 
+   *(Mã thường có dạng: zone4/idg.../IDG01_...)*
+4. Mở file `mitm_ekyc.py` lên. Tìm đến dòng số 17 và 18.
+5. Thay thế giá trị của `VALID_NEAR_HASH` bằng mã `"near_img"` vừa lấy được.
+6. Thay thế giá trị của `VALID_FAR_HASH` bằng mã `"far_img"` vừa lấy được.
+7. Sửa lại chế độ hoạt động:
+   `MODE = "BYPASS"`
+8. Lưu file `mitm_ekyc.py` lại.
+9. Tắt cửa sổ proxy màu đen đang chạy đi, sau đó nháy đúp vào `run_mitm.bat` để khởi động lại.
+10. Trên điện thoại: Giờ đây mỗi khi ấn Xác thực eKYC, bạn không cần đưa mặt thật vào nữa (có thể che camera), tool sẽ tự động tiêm mã chuẩn vào và hệ thống sẽ báo xác thực thành công!
+
+---
+
+## 3. CÁC LỖI THƯỜNG GẶP
+- **App báo mất kết nối mạng:** Do IP máy tính của bạn đã bị thay đổi. Hãy mở CMD gõ `ipconfig` để xem IPv4 mới, sau đó vào điện thoại sửa lại IP trong app Postern cho đúng.
+- **Lỗi SSL/dh key too small:** Là do bạn chạy lệnh `mitmdump` trực tiếp thay vì chạy bằng file `run_mitm.bat`. Bắt buộc phải chạy bằng file `.bat` để tool hạ chuẩn bảo mật xuống thì mới kết nối được với server VNPT.
+- **Báo lỗi "Khuôn mặt không khớp":** Do khuôn mặt bạn dùng ở Giai đoạn 1 không phải là chủ nhân của cái thẻ CCCD bạn dùng để xác thực ở Giai đoạn 2.
+- **Mất nút xác thực trên App:** Nghĩa là tài khoản/số điện thoại đó đã được xác thực thành công trước đó rồi. Bạn phải lấy tài khoản khác chưa xác thực ra để test.

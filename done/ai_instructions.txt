@@ -1,0 +1,60 @@
+# Instructions for AI Agent: VNPT eKYC Bypass Workflow
+
+Hello future AI! When the user asks you to "run the eKYC bypass tool" or "set up the bypass", please follow this exact workflow to automate the process for them. All required files are located in this directory (`c:\Users\congn\Pictures\kyc_mobile\done` or wherever this file is currently located).
+
+## Context
+This tool intercepts and modifies the eKYC requests made by the My VNPT Android app. It bypasses the IDG face liveness check by intercepting the `/ai/v4/face/liveness-3d` and `/ai/v4/face/mask` API endpoints.
+
+Because the VNPT backend performs a **1:1 Face Matching** against the user's ID card (CCCD) *after* the liveness check, the injected face hashes MUST belong to the actual person whose ID card is being verified. 
+
+Therefore, the workflow has two phases: **CAPTURE** (to get the real person's face hashes) and **BYPASS** (to replay those hashes).
+
+## Division of Responsibilities
+To achieve maximum automation, you (the AI) and the User have distinct roles:
+- **User's One-Time Setup (Phone)**: The user manually configures the phone once. This includes installing the CA cert, enabling LSPosed for the `JustTrustMe` module targeting VNPT apps, and pointing the Proxy app (Postern) to the PC's IP.
+- **AI's Job (Automation)**: If the user needs `JustTrustMe.apk` installed, you can use ADB (`adb install JustTrustMe.apk`) if the device is connected via USB. Beyond that, your primary job is to automate Phase 1 and Phase 2 below on the PC side (editing Python scripts and managing the proxy).
+
+## Prerequisites (Mobile Environment)
+To run this tool successfully, the Android device MUST meet these requirements:
+1. **Rooted Device**: The phone must be rooted (e.g. Magisk).
+2. **Xposed/LSPosed Environment**: Installed and active.
+3. **SSL Unpinning Module**: Install `JustTrustMe.apk` (provided in this directory) onto the phone. Enable it in LSPosed and ensure it targets the VNPT app(s).
+4. **System CA Certificate**: The `mitmproxy-ca-cert.pem` must be installed into the `/system/etc/security/cacerts/` directory (System Root level, not User level).
+5. **Proxy App**: An app like Postern or Super Proxy must route traffic to the PC's IP.
+6. **Original VNPT App**: Use the unmodified VNPT app from the Play Store. Do not use a modded APK.
+
+## Phase 1: CAPTURE MODE (If the user needs to register a new face)
+*Skip to Phase 2 if the user says they already have captured hashes and just want to run the bypass.*
+
+1. **Edit Configuration:** Open `mitm_ekyc.py`. Ensure the `MODE` variable at the top is set to `"CAPTURE"`.
+2. **Start Proxy:** Terminate any running `mitmdump.exe` processes (`taskkill /F /IM mitmdump.exe`). Then, execute `run_mitm.bat` in the background. 
+   - *CRITICAL:* Always use `run_mitm.bat`. Do not run `mitmdump` directly. The `.bat` file sets `OPENSSL_CONF=openssl_lowsec.cnf` which lowers the SECLEVEL to 0 to prevent "dh key too small" errors from VNPT servers.
+3. **Instruct User:** Tell the user to connect their phone's proxy (e.g. Postern) to your PC's IP address on port 8080. Ask them to perform a real face scan (or show a photo/video) on the app.
+4. **Monitor:** Wait until the files `capture_liveness_resp.json` and `capture_mask_resp.json` are generated or updated in the directory.
+
+## Phase 2: BYPASS MODE (Automating the exploit)
+1. **Extract Hashes:**
+   - Read `capture_liveness_resp.json`. The file contains a `dataBase64` field. Decode this Base64 string into a JSON object.
+   - Extract `near_img` and `far_img` from `imgs` inside the decoded JSON.
+   - Example python extraction:
+     ```python
+     import json, base64
+     with open('capture_liveness_resp.json', 'r', encoding='utf-8') as f:
+         b64 = json.load(f)['dataBase64']
+         data = json.loads(base64.b64decode(b64).decode('utf-8'))
+         new_near = data['imgs']['near_img']
+         new_far = data['imgs']['far_img']
+     ```
+2. **Inject Hashes:** 
+   - Open `mitm_ekyc.py`.
+   - Replace the values of `VALID_NEAR_HASH` and `VALID_FAR_HASH` with the newly extracted hashes.
+   - Change `MODE = "CAPTURE"` to `MODE = "BYPASS"`.
+3. **Restart Proxy:** 
+   - Kill the existing `mitmdump.exe` (`taskkill /F /IM mitmdump.exe`).
+   - Run `run_mitm.bat` in the background.
+4. **Final Instruction:** Tell the user the proxy is running in BYPASS mode. They can now perform the eKYC flow on their phone (for the specific person whose face was captured). They can point the camera anywhere; the script will inject the valid face hashes.
+
+## Troubleshooting
+- **User lost internet on phone:** The PC's IP address likely changed. Check `ipconfig`, tell the user the new IP, and ensure `run_mitm.bat` (not `mitmdump`) is being used to prevent SSL handshake errors.
+- **"Khuôn mặt không khớp" (Face does not match) error:** The injected face hashes do not match the face on the ID card being submitted. The user MUST perform the CAPTURE phase (Phase 1) using the face of the person on the ID card.
+- **Button is missing in the app:** The SIM/Account is already verified (`errorCode 1307`). Tell the user to test with an unverified account.

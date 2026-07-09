@@ -11,6 +11,34 @@ namespace gsm.Services;
 public static class MyVnptService
 {
     private static readonly HttpClient _client = new HttpClient();
+    private static readonly Random _random = new Random();
+
+    private static string GetRandomDeviceModel()
+    {
+        int type = _random.Next(5);
+        switch (type)
+        {
+            case 0: return $"SM-G{_random.Next(900, 999)}F";
+            case 1: return $"SM-A{_random.Next(10, 99)}5F";
+            case 2: return $"Pixel {_random.Next(4, 8)}";
+            case 3: return $"CPH{_random.Next(2000, 2500)}";
+            case 4: return $"Redmi Note {_random.Next(7, 12)}";
+            default: return "motog(7)";
+        }
+    }
+
+    private static string GetRandomDeviceInfo()
+    {
+        string deviceId = Guid.NewGuid().ToString();
+        string model = GetRandomDeviceModel();
+        int osVersion = _random.Next(9, 14);
+        return $"{deviceId}|{deviceId}|unknown|Android||3.3.97.Prd|{model}|{osVersion}|";
+    }
+
+    private static string GetRandomUserAgent()
+    {
+        return $"okhttp/4.{_random.Next(7, 12)}.{_random.Next(0, 5)}";
+    }
 
     public static async Task SetPasswordAsync(string portName, string phone, string otp, Action<string, string> addLogCallback, Action<bool, string>? onComplete = null)
     {
@@ -29,6 +57,8 @@ public static class MyVnptService
 
             string pwd = "123456a@A";
             string hashedPwd = CreateMD5(pwd).ToUpper();
+            string deviceInfo = GetRandomDeviceInfo();
+            string userAgent = GetRandomUserAgent();
 
             // 1. Kiểm tra tài khoản để biết gọi api nào
             var checkPayload = new { msisdn = phone };
@@ -36,9 +66,9 @@ public static class MyVnptService
             using var checkRequest = new HttpRequestMessage(HttpMethod.Post, "https://api-myvnpt.vnpt.vn/mapi_v2/services/authen_check_account");
             checkRequest.Content = new StringContent(checkJson, Encoding.UTF8, "application/json");
             checkRequest.Headers.TryAddWithoutValidation("Authorization", "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b");
-            checkRequest.Headers.TryAddWithoutValidation("Device-Info", "a6d10733-aaed-47a5-aa83-2446121b3e4e|a6d10733-aaed-47a5-aa83-2446121b3e4e|unknown|Android||3.3.97.Prd|motog(7)|10|");
+            checkRequest.Headers.TryAddWithoutValidation("Device-Info", deviceInfo);
             checkRequest.Headers.TryAddWithoutValidation("Language", "vi_VN");
-            checkRequest.Headers.TryAddWithoutValidation("User-Agent", "okhttp/4.7.2");
+            checkRequest.Headers.TryAddWithoutValidation("User-Agent", userAgent);
 
             var checkResponse = await _client.SendAsync(checkRequest);
             string checkResponseContent = await checkResponse.Content.ReadAsStringAsync();
@@ -76,9 +106,9 @@ public static class MyVnptService
 
             request.Headers.TryAddWithoutValidation("Authorization", "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b");
             request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
-            request.Headers.TryAddWithoutValidation("Device-Info", "a6d10733-aaed-47a5-aa83-2446121b3e4e|a6d10733-aaed-47a5-aa83-2446121b3e4e|unknown|Android||3.3.97.Prd|motog(7)|10|");
+            request.Headers.TryAddWithoutValidation("Device-Info", deviceInfo);
             request.Headers.TryAddWithoutValidation("Language", "vi_VN");
-            request.Headers.TryAddWithoutValidation("User-Agent", "okhttp/4.7.2");
+            request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
 
             var response = await _client.SendAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();

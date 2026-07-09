@@ -659,6 +659,18 @@ namespace gsm.Services
                                     finalStatus = "done";
                                 }
                             }
+                            else if (recipient == "SYSTEM" && content == "CLEAR_OTP")
+                            {
+                                if (port != null)
+                                {
+                                    Application.Current.Dispatcher.Invoke(() => {
+                                        port.Otp = "";
+                                        port.LastError = "";
+                                    });
+                                }
+                                finalResult = "CLEAR_OTP completed";
+                                finalStatus = "done";
+                            }
                             else if (recipient == "SYSTEM" && content == "REFRESH_PORT")
                             {
                                 await _vm.RefreshPortAsync(portId);

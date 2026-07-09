@@ -34,8 +34,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, string> _callFailures = new();
     private readonly ConcurrentDictionary<string, bool> _activeRamRecordings = new();
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
+    private readonly ConcurrentDictionary<string, bool> _pendingMyVnptPasswordPorts = new();
     private readonly object _logFileLock = new();
-
+    
     public event Action<string, string>? OtpReceivedEvent;
 
     private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(3);
@@ -260,6 +261,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (responseContent.Contains("\"error_code\":\"0\"") || responseContent.Contains("\"errorCode\":\"0\"") || responseContent.Contains("\"error_code\": \"0\""))
                     {
                         Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO"));
+                        _pendingMyVnptPasswordPorts[port.PortName] = true;
                     }
                     else
                     {
@@ -1460,11 +1462,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Ports.Clear();
         SmsMessages.Clear();
 
-        Task.Run(() =>
-        {
-            _modemService.ConnectAll(115200);
-        });
-        
         StartAutoPortWatcher();
     }
 
@@ -1475,15 +1472,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             while (!lifetimeToken.IsCancellationRequested)
             {
-                try
-                {
-                    await Task.Delay(3000, lifetimeToken); // Quét 3 giây 1 lần
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-                
                 var availablePorts = _modemService.GetAvailablePorts();
                 bool hasChanges = false;
                 
@@ -1533,6 +1521,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         _lastUssdByPort[port.PortName] = DateTime.UtcNow;
                         _ = SendUssdThrottledAsync(port.PortName, GetUssdCodeForProvider(port.NetworkProvider), "Thử lại lấy TKC bị thiếu", maxAttempts: 1);
                     }
+                }
+
+                try
+                {
+                    await Task.Delay(3000, lifetimeToken); // Quét 3 giây 1 lần
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
                 }
             }
         }, lifetimeToken);
@@ -2497,8 +2494,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // Tự động kiểm tra nếu là OTP MyVNPT thì đổi pass
                     if (cleanContent.Contains("ma xac thuc OTP tren MyVNPT") || cleanContent.Contains("MyVNPT"))
                     {
-                        AddLog($"[{e.PortName}] Phát hiện OTP MyVNPT, tiến hành đổi mật khẩu...", "INFO");
-                        _ = Services.MyVnptService.SetPasswordAsync(e.PortName, receiverPhone, extractedOtp, (msg, type) => AddLog(msg, type));
+                        if (_pendingMyVnptPasswordPorts.TryRemove(e.PortName, out _))
+                        {
+                            AddLog($"[{e.PortName}] Phát hiện OTP MyVNPT, tiến hành đổi mật khẩu...", "INFO");
+                            _ = Services.MyVnptService.SetPasswordAsync(e.PortName, receiverPhone, extractedOtp, (msg, type) => AddLog(msg, type), (isSuccess, message) => {
+                                if (port != null)
+                                {
+                                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                                    {
+                                        port.LastMessageContent = message;
+                                        port.LastSmsResult = message;
+                                        port.UpdateDisplayResult(CommandPanelTab);
+                                    });
+                                }
+                            });
+                        }
+                        else
+                        {
+                            AddLog($"[{e.PortName}] Nhận OTP MyVNPT nhưng không có yêu cầu từ tool, bỏ qua đặt mật khẩu.", "INFO");
+                        }
                     }
 
                     // Thông báo Toast Windows
@@ -2535,7 +2549,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // PHẢI XÓA SMS NGAY CẢ KHI KHÔNG CÓ OTP ĐỂ TRÁNH TRÀN BỘ NHỚ SIM (SIM FULL SẼ KHÔNG NHẬN ĐƯỢC SMS NỮA)
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
-                        AddLog($"[{e.PortName}] Đã xóa tin nhắn {e.MsgIndex} (Không tìm thấy OTP) để giải phóng bộ nhớ SIM.", "WARN");
                         await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
                     }
                 }

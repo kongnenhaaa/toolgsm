@@ -12,7 +12,7 @@ public static class MyVnptService
 {
     private static readonly HttpClient _client = new HttpClient();
 
-    public static async Task SetPasswordAsync(string portName, string phone, string otp, Action<string, string> addLogCallback)
+    public static async Task SetPasswordAsync(string portName, string phone, string otp, Action<string, string> addLogCallback, Action<bool, string>? onComplete = null)
     {
         try
         {
@@ -89,15 +89,18 @@ public static class MyVnptService
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thành công ({modeStr})! Pass: {pwd}", "SUCCESS");
                 string logPath = AppPaths.ForRuntimeFile("myvnpt_passwords.txt");
                 System.IO.File.AppendAllText(logPath, $"{phone}|{pwd}\n");
+                onComplete?.Invoke(true, "Đặt pass thành công");
             }
             else
             {
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thất bại ({modeStr}): {responseContent}", "ERROR");
+                onComplete?.Invoke(false, $"Lỗi đặt pass");
             }
         }
         catch (Exception ex)
         {
             addLogCallback?.Invoke($"[{portName}] Lỗi đặt mật khẩu MyVNPT: {ex.Message}", "ERROR");
+            onComplete?.Invoke(false, $"Lỗi đặt pass");
         }
     }
 

@@ -186,17 +186,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task SetMyVnptPassword(object obj)
     {
-        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
-        
-        // Nếu click từ ContextMenu của 1 dòng cụ thể mà chưa tick chọn
-        if (obj is SimPort clickedPort && !targetPorts.Contains(clickedPort))
+        List<Models.SimPort> targetPorts = new();
+
+        if (obj is string mode)
+        {
+            if (mode == "All")
+            {
+                targetPorts = Ports.Where(IsActive).ToList();
+            }
+            else if (mode == "Selected")
+            {
+                targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
+            }
+            else if (mode == "RetryFailed")
+            {
+                targetPorts = Ports.Where(p => IsActive(p) && p.LastMessageContent != null && 
+                    (p.LastMessageContent.Contains("thất bại", StringComparison.OrdinalIgnoreCase) || 
+                     p.LastMessageContent.Contains("lỗi", StringComparison.OrdinalIgnoreCase) || 
+                     p.LastMessageContent.Contains("không nhận được", StringComparison.OrdinalIgnoreCase))).ToList();
+            }
+        }
+        else if (obj is Models.SimPort clickedPort)
         {
             targetPorts.Add(clickedPort);
+        }
+        else
+        {
+            targetPorts = Ports.Where(p => p.IsSelected && IsActive(p)).ToList();
         }
 
         if (!targetPorts.Any())
         {
-            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng để đặt mật khẩu MyVNPT.");
+            SnackbarMessageQueue.Enqueue("Không tìm thấy cổng nào phù hợp hoặc chưa chọn cổng.");
             return;
         }
 
@@ -1754,8 +1775,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         // đều sẽ dùng chung 1 lệnh *101# để vừa lấy SĐT vừa lấy Số dư (TKC).
                         if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
                         {
-                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 99999);
-                            await Task.Delay(2000); // Đợi mạng xử lý xong lệnh trước
+                            while ((string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance)) && !_lifetimeCts.Token.IsCancellationRequested)
+                            {
+                                await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 1);
+                                for (int wait = 0; wait < 15; wait++)
+                                {
+                                    if ((!string.IsNullOrWhiteSpace(port.PhoneNumber) && !string.IsNullOrWhiteSpace(port.Balance)) || _lifetimeCts.Token.IsCancellationRequested)
+                                        break;
+                                    await Task.Delay(1000);
+                                }
+                            }
                         }
                     });
                 }
@@ -2752,8 +2781,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
 
-            // Gọi bất đồng bộ không chờ (để throttler bên trong hàm tự động xếp hàng)
-            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra số dư", maxAttempts: 3, logResult: true);
+            // Đặt lại Balance để đảm bảo lấy số dư mới nhất
+            port.Balance = "";
+
+            // Gọi bất đồng bộ không chờ
+            _ = Task.Run(async () =>
+            {
+                while (string.IsNullOrWhiteSpace(port.Balance) && !_lifetimeCts.Token.IsCancellationRequested)
+                {
+                    await SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra số dư", maxAttempts: 1, logResult: true);
+                    
+                    // Chờ tối đa 15 giây để nhận kết quả
+                    for (int wait = 0; wait < 15; wait++)
+                    {
+                        if (!string.IsNullOrWhiteSpace(port.Balance) || _lifetimeCts.Token.IsCancellationRequested)
+                            break;
+                        await Task.Delay(1000);
+                    }
+                }
+                AddLog($"[{port.PortName}] Đã kiểm tra thành công số dư: {port.Balance}", "SUCCESS");
+            });
         }
     }
 
@@ -2877,7 +2924,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
             AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
-            return await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxAttempts: 99999, logResult: true);
+            port.Balance = "";
+            while (string.IsNullOrWhiteSpace(port.Balance) && !_lifetimeCts.Token.IsCancellationRequested)
+            {
+                await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxAttempts: 1, logResult: true);
+                for (int wait = 0; wait < 15; wait++)
+                {
+                    if (!string.IsNullOrWhiteSpace(port.Balance) || _lifetimeCts.Token.IsCancellationRequested)
+                        break;
+                    await Task.Delay(1000);
+                }
+            }
+            return port.Balance;
         }
         return "ERROR: Cổng không hợp lệ hoặc không có thông tin nhà mạng";
     }

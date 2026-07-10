@@ -495,14 +495,6 @@
                             </StackPanel>
                         </RadioButton>
                         
-                        <RadioButton GroupName="SidebarMenu" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
-                                     Style="{StaticResource MaterialDesignTabRadioButton}" Margin="0,5" Height="45" HorizontalContentAlignment="Left" Padding="15,0">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                <materialDesign:PackIcon Kind="HelpCircleOutline" Width="20" Height="20" Margin="0,0,15,0" VerticalAlignment="Center"/>
-                                <TextBlock Text="Hướng Dẫn" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
-                            </StackPanel>
-                        </RadioButton>
-                        
                         <Separator Background="#334155" Margin="10,15" />
                         <TextBlock Text="CÔNG CỤ" FontSize="12" Foreground="#94a3b8" FontWeight="SemiBold" Margin="15,0,0,10" Style="{StaticResource SidebarTextStyle}"/>
                         
@@ -553,11 +545,24 @@
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Command="{Binding SetMyVnptPasswordCommand}" ToolTip="Đang chạy chức năng" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Đang chạy chức năng" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="Key" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Kiểm tra" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Chạy TẤT CẢ các cổng" Command="{Binding SetMyVnptPasswordCommand}" CommandParameter="All">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="SelectAll"/></MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="Chạy CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding SetMyVnptPasswordCommand}" CommandParameter="Selected">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="CursorDefaultClick"/></MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="Chạy LẠI những cổng BÁO LỖI OTP" Command="{Binding SetMyVnptPasswordCommand}" CommandParameter="RetryFailed">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="ReloadAlert"/></MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                         </Button>
                         <!-- Sidebar USSD Button removed -->
                         <Button Background="#424242" Command="{Binding OpenExportExcelDialogCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Xuất danh sách cổng ra file Excel" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
@@ -565,22 +570,6 @@
                                 <materialDesign:PackIcon Kind="MicrosoftExcel" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#4CAF50"/>
                                 <TextBlock Text="Xuất Excel" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
-                        </Button>
-                        <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Quét tin nhắn kẹt" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
-                            <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Broom" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#00E676"/>
-                                <TextBlock Text="Quét tin kẹt" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
-                            </StackPanel>
-                            <Button.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Quét TẤT CẢ các cổng" Command="{Binding SweepSmsCommand}" CommandParameter="All">
-                                        <MenuItem.Icon><materialDesign:PackIcon Kind="Broom"/></MenuItem.Icon>
-                                    </MenuItem>
-                                    <MenuItem Header="Quét CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding SweepSmsCommand}" CommandParameter="Selected">
-                                        <MenuItem.Icon><materialDesign:PackIcon Kind="CursorDefaultClick"/></MenuItem.Icon>
-                                    </MenuItem>
-                                </ContextMenu>
-                            </Button.ContextMenu>
                         </Button>
                         <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Làm mới hoặc Khởi động lại cổng" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
                             <StackPanel Orientation="Horizontal">
@@ -605,40 +594,8 @@
                             </Button.ContextMenu>
                         </Button>
 
-                        <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Ngắt sóng an toàn để đổi SIM" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
-                            <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="SimOutline" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#81C784"/>
-                                <TextBlock Text="Đổi SIM mới" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}" Foreground="#81C784"/>
-                            </StackPanel>
-                            <Button.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="🛡️ CHUẨN BỊ ĐỔI SIM CÁC CỔNG ĐÃ CHỌN (An Toàn)" Command="{Binding PrepareSwapSimCommand}" Foreground="#81C784">
-                                        <MenuItem.ToolTip>
-                                            <ToolTip Content="Ngắt sóng các cổng đã chọn để bạn có thể rút khay SIM ra thay SIM mới mà không bị lộ IMEI phần cứng." />
-                                        </MenuItem.ToolTip>
-                                    </MenuItem>
-                                    <MenuItem Header="🛡️ CHUẨN BỊ ĐỔI SIM TẤT CẢ (An Toàn)" Command="{Binding PrepareSwapSimCommand}" CommandParameter="All" Foreground="#81C784">
-                                        <MenuItem.ToolTip>
-                                            <ToolTip Content="Ngắt sóng tất cả các cổng để bạn có thể rút khay SIM ra thay SIM mới mà không bị lộ IMEI phần cứng." />
-                                        </MenuItem.ToolTip>
-                                    </MenuItem>
-                                </ContextMenu>
-                            </Button.ContextMenu>
-                        </Button>
 
-                        <Button Background="#26C6DA" Command="{Binding OpenTopUpDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}" ToolTip="Nạp thẻ cào điện thoại" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
-                            <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="CreditCardPlus" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="Nạp thẻ" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
-                            </StackPanel>
-                        </Button>
                         <!-- Sidebar ComposeSms Button removed -->
-                        <Button Background="#66BB6A" Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Quản lý lịch sử và thực hiện cuộc gọi" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
-                            <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Phone" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="Quản lý cuộc gọi" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
-                            </StackPanel>
-                        </Button>
                     </StackPanel>
                 </ScrollViewer>
             </Grid>
@@ -661,13 +618,7 @@
                         <TextBlock Text="Trang chủ" FontSize="18" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="15,0">
-                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Terminal (Lệnh AT)" Height="40" Width="40" Command="{Binding OpenAtCommandDialogCommand}" Background="#1e293b" BorderThickness="0">
-                            <materialDesign:PackIcon Kind="Terminal" Foreground="#2196F3" Width="20" Height="20"/>
-                        </Button>
 
-                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Cài đặt hệ thống" Height="40" Width="40" Command="{Binding OpenSettingsDialogCommand}" Background="#1e293b" BorderThickness="0">
-                            <materialDesign:PackIcon Kind="Cog" Foreground="#e2e8f0" Width="20" Height="20"/>
-                        </Button>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -1058,70 +1009,6 @@
             </TabItem>
 
 
-            <!-- TAB 5: HƯỚNG DẪN SỬ DỤNG -->
-            <TabItem>
-                <TabItem.Header>
-                    <StackPanel Orientation="Horizontal">
-                        <materialDesign:PackIcon Kind="BookOpenPageVariant" VerticalAlignment="Center" Margin="0,0,5,0"/>
-                        <TextBlock Text="Hướng Dẫn" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </TabItem.Header>
-                <ScrollViewer Margin="20" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                    <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
-
-                        
-                        <TextBlock Text="📱 HƯỚNG DẪN CÁC TÍNH NĂNG KHÁC" FontSize="20" FontWeight="Bold" Foreground="#2196F3" Margin="0,0,0,20"/>
-                        
-                        <!-- Hướng dẫn Bảng Hàng Đợi Lệnh -->
-                        <Grid Margin="0,0,0,20">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="60"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <materialDesign:PackIcon Kind="RocketLaunch" Width="40" Height="40" Foreground="#E91E63" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                                <TextBlock Text="1. Bảng Hàng Đợi Lệnh (Góc trên bên phải)" FontSize="16" FontWeight="Bold" Foreground="#B2DFDB" Margin="0,0,0,8"/>
-                                <TextBlock Text="Bảng Hàng đợi lệnh là nơi bạn xếp chồng và chạy liên hoàn các thao tác. Hỗ trợ các tính năng:" FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="0,0,0,10"/>
-                                
-                                <TextBlock Text="• USSD: Chọn mã lệnh (VD: *101#) hoặc tự nhập, sau đó ấn '[+] Thêm vào kịch bản'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                <TextBlock Text="• SMS: Gửi tin nhắn đồng loạt. Nhập SĐT và Nội dung -> '[+] Thêm vào kịch bản'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                <TextBlock Text="• Proxy: Xem trạng thái và quản lý thiết lập Proxy cho SIM." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                <TextBlock Text="• Gọi: Nhập SĐT và thời gian (giây). Tool sẽ tự động ngắt cuộc gọi khi hết thời gian." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                <TextBlock Text="• Data: Cấu hình bật hoặc tắt kết nối dữ liệu mạng 3G/4G." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                <TextBlock Text="• Trễ: Thêm khoảng thời gian chờ (giây) giữa các lệnh. Rất hữu ích để tạo kịch bản tự động hóa (VD: Gọi -> Trễ 10s -> Gửi SMS)." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                
-                                <TextBlock Text="💡 Mẹo: Bạn có thể chọn nhiều cổng cùng lúc (tick ô vuông đầu dòng), sau đó bấm 'Chạy ngay lập tức' để thực thi lệnh đồng loạt trên tất cả các cổng đó!" FontSize="14" Foreground="#A5D6A7" FontStyle="Italic" TextWrapping="Wrap" LineHeight="22" Margin="0,10,0,0"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- Tính năng Webhook -->
-                        <Grid Margin="0,0,0,20">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="60"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <materialDesign:PackIcon Kind="Web" Width="40" Height="40" Foreground="#5C6BC0" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                                <TextBlock Text="2. Webhook Tự Động (Forward OTP/SMS lên Server)" FontSize="16" FontWeight="Bold" Foreground="#B2DFDB" Margin="0,0,0,8"/>
-                                <TextBlock Text="Vào Cài Đặt (Bánh răng) -> Thêm Rule Webhook để tự động đẩy tin nhắn OTP về Telegram, Zalo hoặc API riêng." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- Tính năng Khác -->
-                        <Grid Margin="0,0,0,20">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="60"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <materialDesign:PackIcon Kind="Menu" Width="40" Height="40" Foreground="#FF9800" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                                <TextBlock Text="3. Các phím tắt &amp; thao tác nhanh" FontSize="16" FontWeight="Bold" Foreground="#B2DFDB" Margin="0,0,0,8"/>
-                                <TextBlock Text="• Kiểm tra số dư: Chuột phải vào cổng -> 'Kiểm tra tài khoản' (Ctrl+B).&#x0a;• Lọc tin nhắn rác: Vào Cài đặt -> Cấu hình Blacklist / Whitelist.&#x0a;• Nạp thẻ: Chuột phải vào cổng -> 'Nạp thẻ / Top-up'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
 
         </TabControl>
 

@@ -1536,6 +1536,56 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task RegisterEzComAsync(object targetObj)
+    {
+        string target = targetObj as string ?? "Selected";
+        var targetPorts = target == "All" ? Ports.ToList() : Ports.Where(p => p.IsSelected).ToList();
+
+        if (targetPorts.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng!");
+            return;
+        }
+
+        AddLog($"Bắt đầu đăng ký EZ COM cho {targetPorts.Count} cổng...", "INFO");
+        SnackbarMessageQueue.Enqueue($"Đang gửi lệnh đăng ký EZ COM cho {targetPorts.Count} cổng...");
+
+        int skipped = 0;
+        foreach (var port in targetPorts)
+        {
+            if (port.Status != SimStatus.Active)
+            {
+                AddLog($"[{port.PortName}] Bỏ qua vì SIM không ở trạng thái Active (hiện tại: {port.Status}).", "WARN");
+                skipped++;
+                continue;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                Application.Current.Dispatcher.Invoke(() => port.LastMessageContent = "Đang gửi DK EZ...");
+                AddLog($"[{port.PortName}] Đang gửi lệnh DK EZ đến 888...", "INFO");
+                string result = await _modemService.SendSmsAsync(port.PortName, "888", "DK EZ");
+                if (result.Contains("ERROR") || result.Contains("TIMEOUT"))
+                {
+                    Application.Current.Dispatcher.Invoke(() => port.LastMessageContent = $"Lỗi gửi DK EZ: {result}");
+                    AddLog($"[{port.PortName}] Lỗi gửi DK EZ: {result}", "ERROR");
+                }
+                else
+                {
+                    Application.Current.Dispatcher.Invoke(() => port.LastMessageContent = "Đã gửi DK EZ, chờ 888 phản hồi...");
+                    AddLog($"[{port.PortName}] Đã gửi DK EZ thành công, đang chờ phản hồi từ 888...", "SUCCESS");
+                }
+            });
+            await Task.Delay(200);
+        }
+        
+        if (skipped > 0)
+        {
+            SnackbarMessageQueue.Enqueue($"Đã bỏ qua {skipped} cổng do chưa kết nối xong (Status != Active).");
+        }
+    }
+
+    [RelayCommand]
     private void ApproveUnknownSim(object obj)
     {
         var targetPorts = Ports.Where(p => p.IsSelected).ToList();
@@ -2295,6 +2345,39 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (isZaloError)
                 {
+                    if (!string.IsNullOrEmpty(e.MsgIndex))
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
+                    }
+                    return;
+                }
+
+                // Tự động xác nhận đăng ký ezCom từ tổng đài
+                var ezMatch = Regex.Match(cleanContentLower, @"soan tin\s+(ez\s*\d+)", RegexOptions.IgnoreCase);
+                if (ezMatch.Success)
+                {
+                    string confirmMsg = ezMatch.Groups[1].Value.ToUpper();
+                    if (port != null) port.LastMessageContent = $"Nhận mã {confirmMsg}. Đang xác nhận...";
+                    AddLog($"[{e.PortName}] Nhận yêu cầu xác nhận ezCom. Đang tự động gửi: {confirmMsg} đến 888", "INFO");
+                    _ = Task.Run(async () =>
+                    {
+                        string result = await _modemService.SendSmsAsync(e.PortName, "888", confirmMsg);
+                        if (result.Contains("ERROR") || result.Contains("TIMEOUT"))
+                        {
+                            Application.Current.Dispatcher.Invoke(() => {
+                                if (port != null) port.LastMessageContent = $"Lỗi xác nhận EZ: {result}";
+                            });
+                            AddLog($"[{e.PortName}] Lỗi gửi xác nhận EZ: {result}", "ERROR");
+                        }
+                        else
+                        {
+                            Application.Current.Dispatcher.Invoke(() => {
+                                if (port != null) port.LastMessageContent = "Đã xác nhận EZ! Chờ KQ từ 888...";
+                            });
+                            AddLog($"[{e.PortName}] Đã xác nhận EZ thành công!", "SUCCESS");
+                        }
+                    });
+                    
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
                         await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");

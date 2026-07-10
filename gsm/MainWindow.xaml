@@ -826,6 +826,22 @@ GET  /api/history
                                 <TextBlock Text="Nạp thẻ" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                         </Button>
+                        <Button Background="#E91E63" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Đăng ký dịch vụ EZ COM (Vinaphone)" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="SimAlert" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Đăng ký EZ COM" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
+                            </StackPanel>
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Đăng ký EZ COM cho TẤT CẢ các cổng" Command="{Binding RegisterEzComCommand}" CommandParameter="All">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="CheckAll"/></MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="Đăng ký EZ COM CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding RegisterEzComCommand}" CommandParameter="Selected">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="CursorDefaultClick"/></MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
                         <!-- Sidebar ComposeSms Button removed -->
                         <Button Background="#66BB6A" Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Quản lý lịch sử và thực hiện cuộc gọi" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
                             <StackPanel Orientation="Horizontal">

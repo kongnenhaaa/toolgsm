@@ -56,6 +56,19 @@ public static class MyVnptService
             }
 
             string pwd = "123456a@A";
+            try
+            {
+                string passPath = AppPaths.ForRuntimeFile("dat_passvnpt.txt");
+                if (System.IO.File.Exists(passPath))
+                {
+                    string filePass = System.IO.File.ReadAllText(passPath).Trim();
+                    if (!string.IsNullOrEmpty(filePass))
+                    {
+                        pwd = filePass;
+                    }
+                }
+            }
+            catch { }
             string hashedPwd = CreateMD5(pwd).ToUpper();
             string deviceInfo = GetRandomDeviceInfo();
             string userAgent = GetRandomUserAgent();

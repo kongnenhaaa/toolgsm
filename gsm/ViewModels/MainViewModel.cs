@@ -27,7 +27,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public IGsmModemService ModemService => _modemService;
 
-    private readonly SpeechToTextService _speechToTextService;
     private readonly FirebaseService _firebaseService;
     public ProxyManagerService ProxyManager { get; }
     private readonly ApiServerService? _apiServerService;
@@ -258,7 +257,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     if (responseContent.Contains("\"error_code\":\"0\"") || responseContent.Contains("\"errorCode\":\"0\"") || responseContent.Contains("\"error_code\": \"0\""))
                     {
-                        Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO"));
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            port.LastMessageContent = "Đã gửi yêu cầu OTP, đang đợi...";
+                            AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO");
+                        });
                         _pendingMyVnptPasswordPorts[port.PortName] = true;
                         
                         _ = Task.Run(async () =>
@@ -266,18 +269,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             await Task.Delay(30000);
                             if (_pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _))
                             {
-                                Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Lỗi không nhận được OTP trong vòng 30s", "ERROR"));
+                                Application.Current.Dispatcher.Invoke(() => 
+                                {
+                                    port.LastMessageContent = "Lỗi: Không nhận được OTP trong 30s";
+                                    AddLog($"[{port.PortName}] Lỗi không nhận được OTP trong vòng 30s", "ERROR");
+                                });
                             }
                         });
                     }
                     else
                     {
-                        Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Gửi yêu cầu OTP thất bại: {responseContent}", "ERROR"));
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            port.LastMessageContent = "Lỗi, đợi 1 phút";
+                            AddLog($"[{port.PortName}] Gửi yêu cầu OTP thất bại: {responseContent}", "ERROR");
+                        });
                     }
                 }
                 catch (Exception ex)
                 {
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Lỗi gửi yêu cầu OTP: {ex.Message}", "ERROR"));
+                    Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        port.LastMessageContent = $"Lỗi: {ex.Message}";
+                        AddLog($"[{port.PortName}] Lỗi gửi yêu cầu OTP: {ex.Message}", "ERROR");
+                    });
                 }
             });
             await Task.Delay(500); // Tránh gửi request quá nhanh
@@ -796,11 +811,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _modemService.CallIncoming += ModemService_CallIncoming;
         _modemService.CallEnded += ModemService_CallEnded;
         
-        _speechToTextService = new SpeechToTextService();
-        _speechToTextService.LogMessage += (s, msg) => AddLog(msg);
-        _ = _speechToTextService.InitializeAsync();
-        
-        
         InitializeHardware();
         
         ConnectionSeries = new ISeries[]
@@ -837,6 +847,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _apiServerService.Start(SettingsService.Current.ApiServerPort);
             AddLog($"[API] REST API server đang chạy tại http://localhost:{SettingsService.Current.ApiServerPort}/api/");
         }
+
+        EnsureVnptPasswordFile();
 
         var lifetimeToken = _lifetimeCts.Token;
 
@@ -1600,6 +1612,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
             await Task.Delay(2000); 
             _modemService.ConnectAll(115200);
         });
+    }
+    private void EnsureVnptPasswordFile()
+    {
+        try
+        {
+            string passPath = AppPaths.ForRuntimeFile("input_kiemtra.txt");
+            if (System.IO.File.Exists(passPath))
+            {
+                string content = System.IO.File.ReadAllText(passPath).Trim();
+                if (string.IsNullOrEmpty(content))
+                {
+                    System.IO.File.WriteAllText(passPath, "123456a@A");
+                    Application.Current.Dispatcher.InvokeAsync(() => 
+                        SnackbarMessageQueue.Enqueue("File input_kiemtra.txt chưa set mk. Đã xóa bỏ đi ghi mật khẩu mặc định là 123456a@A vào đó"));
+                }
+            }
+            else
+            {
+                System.IO.File.WriteAllText(passPath, "123456a@A");
+            }
+        }
+        catch (Exception ex)
+        {
+            AddLog($"Lỗi kiểm tra file mật khẩu VNPT: {ex.Message}", "ERROR");
+        }
     }
 
     private void ModemService_LogMessage(object? sender, GsmDataEventArgs e)
@@ -2519,8 +2556,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (hadRecording)
                 {
-                    AddLog($"[{e.PortName}] Đã tải xong file âm thanh từ mạch, đang phân tích...");
-                    transcript = await Task.Run(() => _speechToTextService.RecognizeWavFile(downloadedFile));
+                    AddLog($"[{e.PortName}] Đã tải xong file âm thanh từ mạch: {wavFilePath}");
+                    transcript = "Đã lưu ghi âm: " + Path.GetFileName(wavFilePath);
                 }
                 else
                 {

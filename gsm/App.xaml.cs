@@ -38,24 +38,7 @@ namespace gsm
 
         private void LogCrash(Exception? ex, string source)
         {
-            if (ex == null) return;
-            try
-            {
-                string logFile = "crash.log";
-                var fi = new System.IO.FileInfo(logFile);
-                if (fi.Exists && fi.Length > 1024 * 1024) // 1MB
-                {
-                    fi.Delete();
-                }
-                
-                string content = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{source}]\r\n{ex.GetType().Name}: {ex.Message}\r\n{ex.StackTrace}\r\n\r\n";
-                if (ex.InnerException != null)
-                {
-                    content += $"Inner Exception:\r\n{ex.InnerException.GetType().Name}: {ex.InnerException.Message}\r\n{ex.InnerException.StackTrace}\r\n\r\n";
-                }
-                System.IO.File.AppendAllText(logFile, content);
-            }
-            catch { }
+            // Tắt tạo crash.log theo yêu cầu
         }
 
         protected override void OnExit(ExitEventArgs e)

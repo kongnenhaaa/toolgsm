@@ -58,7 +58,7 @@ public static class MyVnptService
             string pwd = "123456a@A";
             try
             {
-                string passPath = AppPaths.ForRuntimeFile("dat_passvnpt.txt");
+                string passPath = AppPaths.ForRuntimeFile("input_kiemtra.txt");
                 if (System.IO.File.Exists(passPath))
                 {
                     string filePass = System.IO.File.ReadAllText(passPath).Trim();

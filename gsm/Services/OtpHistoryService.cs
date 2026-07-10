@@ -16,11 +16,7 @@ public static class OtpHistoryService
 
     static OtpHistoryService()
     {
-        // Tạo file với header nếu chưa tồn tại
-        if (!File.Exists(_csvPath))
-        {
-            File.WriteAllText(_csvPath, "Timestamp,Port,SimPhone,Sender,OTP,Content\n", Encoding.UTF8);
-        }
+        // Tắt tạo file otp_history.csv theo yêu cầu
     }
 
     /// <summary>
@@ -28,24 +24,7 @@ public static class OtpHistoryService
     /// </summary>
     public static void Append(string port, string simPhone, string sender, string otp, string content)
     {
-        lock (_lock)
-        {
-            try
-            {
-                // Xóa các dòng cũ hơn 10 ngày trước khi thêm mới
-                PurgeOldRecords();
-
-                // Escape các ký tự đặc biệt trong CSV
-                string safeSender  = EscapeCsv(sender);
-                string safeContent = EscapeCsv(content);
-                string safeOtp     = EscapeCsv(otp);
-                string safePhone   = EscapeCsv(simPhone);
-
-                string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss},{port},{safePhone},{safeSender},{safeOtp},{safeContent}";
-                File.AppendAllText(_csvPath, line + "\n", Encoding.UTF8);
-            }
-            catch { /* Không để lỗi ghi file ảnh hưởng luồng chính */ }
-        }
+        // Đã tắt lưu lịch sử OTP vào file
     }
 
     /// <summary>

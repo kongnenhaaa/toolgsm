@@ -87,19 +87,7 @@
             </StackPanel>
         </DataTemplate>
 
-        <DataTemplate x:Key="ImeiHeaderTemplate">
-            <StackPanel Margin="0,5">
-                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
-                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.ImeiFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
-                </Grid>
-            </StackPanel>
-        </DataTemplate>
+
 
         <DataTemplate x:Key="SerialHeaderTemplate">
             <StackPanel Margin="0,5">
@@ -226,15 +214,9 @@
                                     
                                     <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10"/>
                                     
-                                    <Separator Background="#3D3D5C" Margin="0,15,0,15"/>
-                                    <TextBlock Text="CẤU HÌNH ÂM THANH &amp; TOAST" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                                    <CheckBox Content="Bật âm thanh cảnh báo (khi có tin nhắn/cuộc gọi)" IsChecked="{Binding IsSoundAlertEnabled}" Foreground="White" Margin="0,0,0,10"/>
-                                    <CheckBox Content="Bật âm thanh Toast (thông báo góc màn hình Windows)" IsChecked="{Binding IsToastSoundEnabled}" Foreground="White" Margin="0,0,0,10"/>
-                                    
                                     <Separator Background="#3D3D5C" Margin="0,20"/>
-                                    <TextBlock Text="LỌC TIN NHẮN (SMS)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                                    <CheckBox Content="Nhận TẤT CẢ tin nhắn thay vì chỉ nhận Zalo (Không lọc OTP)" IsChecked="{Binding IsReceiveAllSmsEnabled}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,0,5"/>
-                                    <TextBlock Text="*Lưu ý: Bật tính năng này bạn sẽ nhận cả tin nhắn rác, quảng cáo từ nhà mạng." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="25,0,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Text="TỰ ĐỘNG BẮT MÁY &amp; LẤY OTP TỪ GIỌNG NÓI" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
+                                    <CheckBox Content="Bật tự động bắt máy, ghi âm và dịch giọng nói sang chữ để lấy mã OTP" IsChecked="{Binding IsAutoAnswerEnabled}" Foreground="#00E676" FontWeight="Bold" Margin="0,0,0,10"/>
 
                                     <Separator Background="#3D3D5C" Margin="0,20"/>
                                     <TextBlock Text="CHUYỂN HƯỚNG CUỘC GỌI (Tự động chuyển cuộc gọi đến máy bạn)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
@@ -243,143 +225,10 @@
                                              Text="{Binding AppSettings.ForwardPhoneNumber}" 
                                              Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,0"/>
 
-                                    <Separator Background="#3D3D5C" Margin="0,20"/>
-                                    <TextBlock Text="LỌC TỪ ĐỘNG (SENDER FILTER)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                                    <CheckBox Content="Bật Blacklist (Chặn người gửi trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderBlacklist}" Foreground="#E53935" FontWeight="Bold" Margin="0,0,0,5"/>
-                                    <TextBox materialDesign:HintAssist.Hint="Blacklist: VD: QCBMB, 1900xxxx, spamsender" 
-                                             Text="{Binding AppSettings.SenderBlacklist}" 
-                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
-                                    <CheckBox Content="Bật Whitelist (Chỉ nhận từ số trong danh sách dưới)" IsChecked="{Binding AppSettings.EnableSenderWhitelist}" Foreground="#4CAF50" FontWeight="Bold" Margin="0,0,0,5"/>
-                                    <TextBox materialDesign:HintAssist.Hint="Whitelist: VD: ZALO, FACEBOOK, 0987654321" 
-                                             Text="{Binding AppSettings.SenderWhitelist}" 
-                                             Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="25,0,0,10"/>
-
-                                    <Separator Background="#3D3D5C" Margin="0,20"/>
-                                    <TextBlock Text="HTTP API SERVER (cổng 8080)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
-                                    <CheckBox Content="Bật HTTP API Server" IsChecked="{Binding AppSettings.EnableApiServer}" Foreground="#03A9F4" FontWeight="Bold" Margin="0,0,0,5"/>
-                                    <TextBlock Text="Danh sách Endpoints (có thể Copy/Paste cho Dev API):" Foreground="#9E9E9E" FontSize="11" Margin="25,0,0,5" TextWrapping="Wrap"/>
-                                    <TextBox IsReadOnly="True" FontFamily="Consolas" FontSize="11" Foreground="#90CAF9" Background="#111" AcceptsReturn="True" BorderBrush="#444" BorderThickness="1" Padding="8" Margin="25,0,0,5" Height="90" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                                        <TextBox.Text>
-GET  /api/ports
-GET  /api/otp/latest
-GET  /api/otp/{port}
-POST /api/send-sms
-GET  /api/history
-                                        </TextBox.Text>
-                                    </TextBox>
-
-                                    <Separator Background="#334155" Margin="0,20"/>
-                                    <TextBlock Text="🔔 ÂM THANH CẢNH BÁO" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,10"/>
-                                    <CheckBox Content="Bật âm thanh cảnh báo tùy chỉnh (OTP / SMS / Cuộc gọi)" IsChecked="{Binding AppSettings.EnableSoundAlert}" Foreground="#4DD0E1" FontWeight="Bold" Margin="0,0,0,5"/>
-                                    <CheckBox Content="Phát âm thanh Toast của Windows (Góc màn hình)" IsChecked="{Binding AppSettings.EnableToastSound}" Foreground="#FFB300" FontWeight="Bold" Margin="0,0,0,10"/>
-
-                                    <!-- Sound OTP -->
-                                    <Grid Margin="0,0,0,10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="80"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="🔑 OTP:" VerticalAlignment="Center" Foreground="#FF9800" FontWeight="SemiBold"/>
-                                        <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Đường dẫn .wav (rổng = âm hệ thống)" Text="{Binding AppSettings.SoundOtpPath}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,8,0"/>
-                                        <Button Grid.Column="2" Content="Chọn" Command="{Binding BrowseSoundFileCommand}" CommandParameter="OTP" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="8,4" Margin="0,0,5,0" FontSize="11"/>
-                                        <Button Grid.Column="3" Content="Test" Command="{Binding TestSoundAlertCommand}" CommandParameter="OTP" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#4CAF50" Padding="8,4" FontSize="11"/>
-                                    </Grid>
-
-                                    <!-- Sound SMS -->
-                                    <Grid Margin="0,0,0,10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="80"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="📩 SMS:" VerticalAlignment="Center" Foreground="#4CAF50" FontWeight="SemiBold"/>
-                                        <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Đường dẫn .wav (rổng = âm hệ thống)" Text="{Binding AppSettings.SoundSmsPath}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,8,0"/>
-                                        <Button Grid.Column="2" Content="Chọn" Command="{Binding BrowseSoundFileCommand}" CommandParameter="SMS" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="8,4" Margin="0,0,5,0" FontSize="11"/>
-                                        <Button Grid.Column="3" Content="Test" Command="{Binding TestSoundAlertCommand}" CommandParameter="SMS" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#4CAF50" Padding="8,4" FontSize="11"/>
-                                    </Grid>
-
-                                    <!-- Sound Call -->
-                                    <Grid Margin="0,0,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="80"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="📞 Gọi:" VerticalAlignment="Center" Foreground="#2196F3" FontWeight="SemiBold"/>
-                                        <TextBox Grid.Column="1" materialDesign:HintAssist.Hint="Đường dẫn .wav (rổng = âm hệ thống)" Text="{Binding AppSettings.SoundCallPath}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,8,0"/>
-                                        <Button Grid.Column="2" Content="Chọn" Command="{Binding BrowseSoundFileCommand}" CommandParameter="CALL" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="8,4" Margin="0,0,5,0" FontSize="11"/>
-                                        <Button Grid.Column="3" Content="Test" Command="{Binding TestSoundAlertCommand}" CommandParameter="CALL" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#4CAF50" Padding="8,4" FontSize="11"/>
-                                    </Grid>
-
-                                    <Separator Background="#3D3D5C" Margin="0,20"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                        <TextBlock Text="🔗 WEBHOOK TỰ ĐỘNG (Forward OTP)" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" VerticalAlignment="Center"/>
-                                        <Button Content="+ Thêm Rule" Command="{Binding OpenAddWebhookRuleCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#5C6BC0" BorderBrush="#5C6BC0" Padding="8,4" Margin="15,0,0,0" FontSize="11" materialDesign:ButtonAssist.CornerRadius="4"/>
-                                    </StackPanel>
-                                    <TextBlock Text="Khi nhận OTP/SMS, tự động POST JSON đến URL webhook. Dữ liệu mẫu (JSON Payload) dễ dàng Copy/Paste cho Dev API:" Foreground="#9E9E9E" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,5"/>
-                                    <TextBox IsReadOnly="True" FontFamily="Consolas" FontSize="11" Foreground="#A5D6A7" Background="#111" AcceptsReturn="True" BorderBrush="#444" BorderThickness="1" Padding="8" Margin="0,0,0,10" Height="120" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
-                                        <TextBox.Text>
-{
-  "port": "COM3",
-  "phone": "0912345678",
-  "sender": "Telegram",
-  "otp": "12345",
-  "content": "Telegram code 12345. Do not give this code to anyone.",
-  "timestamp": "2026-06-21 09:28:00"
-}
-                                        </TextBox.Text>
-                                    </TextBox>
-                                    <DataGrid ItemsSource="{Binding AppSettings.WebhookRules}"
-                                              AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
-                                              Background="#1A1A2A" RowBackground="#1A1A2A" AlternatingRowBackground="#202040"
-                                              Foreground="White" GridLinesVisibility="All" HorizontalGridLinesBrush="#444" VerticalGridLinesBrush="#444"
-                                              HeadersVisibility="Column" BorderThickness="1" BorderBrush="#444"
-                                              MaxHeight="160" MinHeight="60">
-                                        <DataGrid.Columns>
-                                            <DataGridCheckBoxColumn Header="Bật" Binding="{Binding Enabled}" Width="40"/>
-                                            <DataGridTextColumn Header="Tên" Binding="{Binding Name}" Width="120" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
-                                            <DataGridTextColumn Header="Lọc Sender" Binding="{Binding SenderFilter}" Width="100" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
-                                            <DataGridCheckBoxColumn Header="OTP Only" Binding="{Binding OtpOnly}" Width="70"/>
-                                            <DataGridTextColumn Header="URL Webhook" Binding="{Binding WebhookUrl}" Width="*" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
-                                            <DataGridTemplateColumn Width="140">
-                                                <DataGridTemplateColumn.CellTemplate>
-                                                    <DataTemplate>
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <Button Content="Sửa" Command="{Binding Path=DataContext.OpenEditWebhookRuleCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#29B6F6" Padding="6,2" FontSize="10" Margin="0,0,4,0"/>
-                                                            <Button Content="Xóa" Command="{Binding Path=DataContext.DeleteWebhookRuleCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" CommandParameter="{Binding}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#E53935" Padding="6,2" FontSize="10"/>
-                                                        </StackPanel>
-                                                    </DataTemplate>
-                                                </DataGridTemplateColumn.CellTemplate>
-                                            </DataGridTemplateColumn>
-                                        </DataGrid.Columns>
-                                    </DataGrid>
                                 </StackPanel>
                             </Border>
 
-                            <Border Style="{StaticResource ProDialogSectionStyle}" Background="#252538" BorderBrush="#3D3D5C" CornerRadius="8" Margin="0,0,0,15">
-                                <StackPanel>
-                                    <TextBlock Text="📱 QUẢN LÝ IMEI &amp; ĐỊNH DANH THIẾT BỊ" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                                    <TextBlock Text="*Tính năng Fake IMEI hoặc Phục hồi IMEI có thể khiến mạch tự động mất sóng vài giây (Reset radio) để áp dụng cấu hình mới." FontStyle="Italic" Foreground="#9E9E9E" FontSize="11" Margin="0,0,0,10" TextWrapping="Wrap"/>
-                                    
 
-                                    <CheckBox Content="[1] Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác" 
-                                              IsChecked="{Binding AppSettings.EnableImeiRestore}" 
-                                              Foreground="#FFB300" FontWeight="Medium" Margin="0,0,0,5"/>
-                                              
-                                    <CheckBox Content="[2] Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)" 
-                                              IsChecked="{Binding AppSettings.BlockUnknownSims}" 
-                                              Foreground="#90CAF9" FontWeight="Medium" Margin="0,0,0,5"/>
-
-                                    <CheckBox Content="[3] Nạp SIM Mới (Tráng Fake IMEI cho cổng trống)" 
-                                              IsChecked="{Binding AppSettings.EnableNewSimIntakeMode}" 
-                                              Foreground="#FF5252" FontWeight="Bold" Margin="0,0,0,15"/>
-
-                                </StackPanel>
-                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                     
@@ -389,50 +238,7 @@ GET  /api/history
                         <Button Content="Lưu Cài Đặt" Command="{Binding SaveSettingsCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
                     </StackPanel>
 
-                    <!-- WEBHOOK RULE DIALOG (Overlay Settings Dialog) -->
-                    <Border Grid.RowSpan="3" Visibility="{Binding IsWebhookDialogOpen, Converter={StaticResource BoolToVisibility}}" HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="12" Background="#1E1E2E" Padding="28" Width="540" Panel.ZIndex="100">
-                        <Border.Effect>
-                            <DropShadowEffect BlurRadius="30" ShadowDepth="0" Color="#000000" Opacity="0.7"/>
-                        </Border.Effect>
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
-                                <materialDesign:PackIcon Kind="Web" Width="28" Height="28" Foreground="#5C6BC0" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Text" Value="Thêm Webhook Rule"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsEditingExistingWebhookRule}" Value="True">
-                                                    <Setter Property="Text" Value="Sửa Webhook Rule"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </StackPanel>
 
-                            <StackPanel Grid.Row="1" Margin="0,0,0,20">
-                                <TextBox materialDesign:HintAssist.Hint="Tên rule (VD: Forward OTP Zalo)" Text="{Binding EditingWebhookRule.Name, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                                <TextBox materialDesign:HintAssist.Hint="URL Webhook (VD: https://webhook.site/abc)" Text="{Binding EditingWebhookRule.WebhookUrl, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                                <TextBox materialDesign:HintAssist.Hint="Lọc Sender (rổng=tất cả, VD: Zalo,8500,ZALO)" Text="{Binding EditingWebhookRule.SenderFilter, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                                <TextBox materialDesign:HintAssist.Hint="Header bí mật (VD: X-Secret: token123)" Text="{Binding EditingWebhookRule.SecretHeader, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,15"/>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                    <CheckBox Content="Chỉ gửi khi có OTP (OTP Only)" IsChecked="{Binding EditingWebhookRule.OtpOnly}" Foreground="#FF9800" FontWeight="Bold" Margin="0,0,30,0"/>
-                                    <CheckBox Content="Bật rule này" IsChecked="{Binding EditingWebhookRule.Enabled}" Foreground="#4CAF50" FontWeight="Bold"/>
-                                </StackPanel>
-                            </StackPanel>
-
-                            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Hủy" Command="{Binding CloseWebhookDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
-                                <Button Content="Lưu Rule" Command="{Binding SaveWebhookRuleCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#5C6BC0" BorderBrush="#5C6BC0" materialDesign:ButtonAssist.CornerRadius="6"/>
-                            </StackPanel>
-                        </Grid>
-                    </Border>
                 </Grid>
             </Border>
             </materialDesign:DialogHost.DialogContent>
@@ -747,10 +553,10 @@ GET  /api/history
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Command="{Binding SetMyVnptPasswordCommand}" ToolTip="Đặt pass MyVNPT cho các cổng đang chọn" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Command="{Binding SetMyVnptPasswordCommand}" ToolTip="Đang chạy chức năng" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="Key" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="Đặt pass MyVNPT" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
+                                <TextBlock Text="Kiểm tra" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                         </Button>
                         <!-- Sidebar USSD Button removed -->
@@ -858,9 +664,7 @@ GET  /api/history
                         <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Terminal (Lệnh AT)" Height="40" Width="40" Command="{Binding OpenAtCommandDialogCommand}" Background="#1e293b" BorderThickness="0">
                             <materialDesign:PackIcon Kind="Terminal" Foreground="#2196F3" Width="20" Height="20"/>
                         </Button>
-                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý IMEI" Height="40" Width="40" Margin="10,0" Command="{Binding OpenImeiManagerCommand}" Background="#1e293b" BorderThickness="0">
-                            <materialDesign:PackIcon Kind="CellphoneSettings" Foreground="#e2e8f0" Width="20" Height="20"/>
-                        </Button>
+
                         <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Cài đặt hệ thống" Height="40" Width="40" Command="{Binding OpenSettingsDialogCommand}" Background="#1e293b" BorderThickness="0">
                             <materialDesign:PackIcon Kind="Cog" Foreground="#e2e8f0" Width="20" Height="20"/>
                         </Button>
@@ -902,66 +706,7 @@ GET  /api/history
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     
-                    <!-- ToolBar GSM -->
-                    <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1">
-                        <WrapPanel Margin="10,5">
-                            <!-- Action buttons have been moved to the sidebar -->
-                            <StackPanel Orientation="Horizontal">
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Đẩy OTT Web" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsWebNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Đẩy OTP/SMS lên máy chủ Web"/>
-                                    </StackPanel>
-                                </Border>
-    
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Đẩy Telegram" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsTelegramNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bắn thông báo OTP/SMS qua Telegram"/>
-                                    </StackPanel>
-                                </Border>
-    
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Tự phục hồi (Watchdog)" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsWatchdogEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động khởi động lại Modem (AT+CFUN=1,1) khi bị lỗi/mất sóng"/>
-                                    </StackPanel>
-                                </Border>
-    
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Tự nhấc máy" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsAutoAnswerEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động bắt máy (ATA) khi có cuộc gọi đến"/>
-                                    </StackPanel>
-                                </Border>
-    
-                            </StackPanel>
 
-                            <!-- 3 Ưu tiên IMEI -->
-                            <StackPanel Orientation="Horizontal">
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[1] Phục hồi IMEI" Foreground="#FFB300" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
-                                        <ToggleButton IsChecked="{Binding IsImeiRestoreEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác"/>
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[2] Chặn SIM lạ" Foreground="#90CAF9" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
-                                        <ToggleButton IsChecked="{Binding IsBlockUnknownSimsEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)"/>
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[3] Nạp SIM Mới" Foreground="#FF5252" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
-                                        <ToggleButton IsChecked="{Binding IsNewSimIntakeModeEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Nạp SIM Mới (Tráng Fake IMEI cho cổng trống)"/>
-                                    </StackPanel>
-                                </Border>
-                            </StackPanel>
-                        </WrapPanel>
-                    </Border>
 
                     <UniformGrid Grid.Row="1" Columns="4" Margin="10,10,10,5">
                         <!-- Tổng COM -->
@@ -1075,8 +820,7 @@ GET  /api/history
                             </DataGridTemplateColumn>
 
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thiết bị (Fake)" Binding="{Binding DeviceName}" Width="160" Foreground="#29B6F6"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
+
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Serial" Binding="{Binding Serial}" Width="180" HeaderTemplate="{StaticResource SerialHeaderTemplate}"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
                             <DataGridTemplateColumn Header="TKC" Width="110" ClipboardContentBinding="{Binding Balance}">
@@ -1109,11 +853,22 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Quét vét" Binding="{Binding LastSweepTime}" Width="90" Foreground="#00E676"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
+                            <DataGridTemplateColumn Header="Nghe lại" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="▶ Nghe" 
+                                                Command="{Binding Path=DataContext.PlayAudioCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" 
+                                                CommandParameter="{Binding}" 
+                                                Style="{StaticResource MaterialDesignRaisedButton}" 
+                                                Background="#00E676" BorderBrush="#00E676" Foreground="Black" FontWeight="Bold"
+                                                Height="26" Width="70" Padding="0" 
+                                                Visibility="{Binding HasAudio, Converter={StaticResource BoolToVisibility}}"
+                                                ToolTip="Bấm để phát âm thanh ghi âm cuộc gọi"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lệch Key" Binding="{Binding KeyMismatch}" Width="100"/>
                             <DataGridTemplateColumn Header="Kết nối" Width="110" ClipboardContentBinding="{Binding Status}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -1150,15 +905,7 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Health" Width="150" ClipboardContentBinding="{Binding HealthSummary}">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#263238" CornerRadius="10" Padding="8,3" ToolTip="{Binding LastError}">
-                                            <TextBlock Text="{Binding HealthSummary}" TextWrapping="Wrap" Foreground="#B2EBF2" FontSize="11" FontWeight="Bold"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
+
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Timeout" Binding="{Binding TimeoutCount}" Width="75"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi SMS" Binding="{Binding SmsErrorCount}" Width="75"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Reconnect" Binding="{Binding ReconnectCount}" Width="85"/>
@@ -1199,8 +946,7 @@ GET  /api/history
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             
-                            <!-- #4: Cột số điện thoại nhận chuyển hướng -->
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Fwd→" Binding="{Binding ForwardedTo}" Width="130" Foreground="#03A9F4"/>
+
                             
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
@@ -1288,6 +1034,20 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhận lúc" Binding="{Binding ReceivedTime}" Width="160"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
+                            <DataGridTemplateColumn Header="Nghe lại" Width="100">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="▶ Nghe" 
+                                                Command="{Binding Path=DataContext.PlayAudioCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}" 
+                                                CommandParameter="{Binding}" 
+                                                Style="{StaticResource MaterialDesignRaisedButton}" 
+                                                Background="#00E676" BorderBrush="#00E676" Foreground="Black" FontWeight="Bold"
+                                                Height="26" Width="70" Padding="0" 
+                                                Visibility="{Binding HasAudio, Converter={StaticResource BoolToVisibility}}"
+                                                ToolTip="Bấm để phát âm thanh ghi âm cuộc gọi"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Chuyển lời" Binding="{Binding ForwardContent}" Width="100"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding Content}" Width="800"/>
@@ -1308,92 +1068,7 @@ GET  /api/history
                 </TabItem.Header>
                 <ScrollViewer Margin="20" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                     <StackPanel MaxWidth="1000" HorizontalAlignment="Left">
-                        <TextBlock Text="📖 HƯỚNG DẪN QUẢN LÝ IMEI &amp; ĐỔI SIM" FontSize="24" FontWeight="Bold" Foreground="#4CAF50" Margin="0,0,0,20"/>
 
-                        <Border Background="#1e293b" CornerRadius="10" Padding="20" BorderThickness="1" BorderBrush="#334155" Margin="0,0,0,20">
-                            <StackPanel>
-                                <TextBlock Text="LUỒNG THIẾT LẬP SIẾT CHẶT NHẤT (CHỐNG LỘ IMEI GỐC 100%)" FontSize="18" FontWeight="Bold" Foreground="#E91E63" Margin="0,0,0,15"/>
-                                <TextBlock Text="Để đảm bảo an toàn tuyệt đối, KHÔNG BAO GIỜ bị lộ IMEI phần cứng thật lên nhà mạng (chống khóa SIM 100%), bạn hãy tích BẬT ĐỒNG THỜI CẢ 3 TÍNH NĂNG ở cột trái:"
-                                           FontSize="15" Foreground="White" TextWrapping="Wrap" LineHeight="24" Margin="0,0,0,10"/>
-                                <TextBlock Text="[1] Bật Phục hồi IMEI: Đảm bảo SIM cũ cắm vào bất kỳ cổng nào cũng được ghi lại IMEI đã giả lập trước đó, rồi mới mở sóng."
-                                           FontSize="14" Foreground="#4DD0E1" TextWrapping="Wrap" LineHeight="24" Margin="10,0,0,5"/>
-                                <TextBlock Text="[2] Chặn SIM lạ: Khi bạn cắm 1 SIM hoàn toàn mới vào, mạch sẽ CÚP SÓNG NGAY LẬP TỨC (đèn đỏ) để ngăn SIM tự động lên mạng bằng IMEI gốc."
-                                           FontSize="14" Foreground="#4DD0E1" TextWrapping="Wrap" LineHeight="24" Margin="10,0,0,5"/>
-                                <TextBlock Text="[3] Nạp SIM Mới: Sau khi SIM lạ bị chặn, bạn click chuột phải chọn 'Chấp Thuận SIM Lạ', Tool sẽ lập tức bơm 1 IMEI giả mạo hoàn toàn mới vào mạch rồi mới MỞ SÓNG trở lại."
-                                           FontSize="14" Foreground="#4DD0E1" TextWrapping="Wrap" LineHeight="24" Margin="10,0,0,15"/>
-                                <TextBlock Text="📌 Quy tắc cắm rút: Rút thẻ SIM cũ ra -> Đợi 3 giây (để Tool tự động tắt sóng cổng đó) -> Cắm thẻ SIM mới vào -> Bấm Làm mới. Tool sẽ tự lo phần còn lại!"
-                                           FontSize="14" Foreground="#FFD54F" FontWeight="Bold" TextWrapping="Wrap" LineHeight="24"/>
-                            </StackPanel>
-                        </Border>
-
-                        <TextBlock Text="✅ GIẢI THÍCH CHI TIẾT QUY TRÌNH XỬ LÝ SIM MỚI" FontSize="18" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                        <TextBlock Text="Khi một SIM mới (chưa từng được lưu) được cắm vào mạch:" FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,10"/>
-                        
-                        <Grid Margin="10,0,0,15">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="30"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="•" Foreground="#FF5252" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="Nếu ĐANG BẬT [Chặn SIM lạ]:" FontSize="15" FontWeight="Bold" Foreground="#FF5252"/>
-                                <TextBlock Text="Tool sẽ ngay lập tức vô hiệu hóa cổng COM (CFUN=0), đổi trạng thái sang Đỏ (Security Blocked) để bảo vệ IMEI gốc. Để dùng SIM, click Chuột phải -&gt; 'Chấp Thuận SIM Lạ'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
-                            </StackPanel>
-                        </Grid>
-                        
-                        <Grid Margin="10,0,0,15">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="30"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="•" Foreground="#FF5252" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="Nếu BẬT [Nạp SIM Mới]:" FontSize="15" FontWeight="Bold" Foreground="#FF5252"/>
-                                <TextBlock Text="Khi SIM được chấp thuận, Tool tạo ngẫu nhiên một IMEI Fake tráng vào mạch, rồi lưu cặp [CCID của SIM] + [Fake IMEI mới] vào Kho Backup. Lần sau cắm lại SIM này, nó sẽ là SIM Cũ." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid Margin="10,0,0,25">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="30"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="•" Foreground="#4CAF50" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="Nếu TẮT cả 2 tính năng trên:" FontSize="15" FontWeight="Bold" Foreground="#4CAF50"/>
-                                <TextBlock Text="Tool sẽ tự động nhận SIM, lấy nguyên bản IMEI cứng của thiết bị (rủi ro lộ IMEI gốc) và gán vĩnh viễn vào Kho Backup." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
-                            </StackPanel>
-                        </Grid>
-
-
-                        <TextBlock Text="✅ GIẢI THÍCH CHI TIẾT QUY TRÌNH XỬ LÝ SIM CŨ (ĐÃ CÓ BACKUP)" FontSize="18" FontWeight="Bold" Foreground="#FFB300" Margin="0,0,0,15"/>
-                        <TextBlock Text="Khi một SIM cũ (đã lưu trong Backup) được cắm vào bất kỳ mạch nào:" FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,10"/>
-                        
-                        <Grid Margin="10,0,0,15">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="30"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="•" Foreground="#FFB300" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="Nếu ĐANG BẬT [Phục hồi IMEI]:" FontSize="15" FontWeight="Bold" Foreground="#FFB300"/>
-                                <TextBlock Text="Tool sẽ so sánh IMEI hiện tại của mạch với IMEI trong Backup. Nếu khác nhau, Tool tự động gửi lệnh ép ghi lại IMEI cũ vào mạch (Restore). Điều này giúp nhà mạng luôn thấy đúng 1 danh tính thiết bị." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
-                            </StackPanel>
-                        </Grid>
-                        
-                        <Grid Margin="10,0,0,25">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="30"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="•" Foreground="#9E9E9E" FontWeight="Bold" FontSize="18" HorizontalAlignment="Center"/>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="Nếu ĐANG TẮT [Phục hồi IMEI]:" FontSize="15" FontWeight="Bold" Foreground="#9E9E9E"/>
-                                <TextBlock Text="Tool bỏ qua khâu kiểm tra. SIM sẽ lên mạng bằng đúng IMEI gốc của khe cắm hiện tại (có thể bị nhà mạng phát hiện đổi thiết bị)." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22"/>
-                            </StackPanel>
-                        </Grid>
-                        
-                        <Separator Background="#3D3D5C" Margin="0,20"/>
                         
                         <TextBlock Text="📱 HƯỚNG DẪN CÁC TÍNH NĂNG KHÁC" FontSize="20" FontWeight="Bold" Foreground="#2196F3" Margin="0,0,0,20"/>
                         
@@ -1412,7 +1087,6 @@ GET  /api/history
                                 <TextBlock Text="• SMS: Gửi tin nhắn đồng loạt. Nhập SĐT và Nội dung -> '[+] Thêm vào kịch bản'." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• Proxy: Xem trạng thái và quản lý thiết lập Proxy cho SIM." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• Gọi: Nhập SĐT và thời gian (giây). Tool sẽ tự động ngắt cuộc gọi khi hết thời gian." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
-                                <TextBlock Text="• IMEI: Sinh mã IMEI ngẫu nhiên hoặc tự cấu hình để ghi đè xuống thiết bị." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• Data: Cấu hình bật hoặc tắt kết nối dữ liệu mạng 3G/4G." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 <TextBlock Text="• Trễ: Thêm khoảng thời gian chờ (giây) giữa các lệnh. Rất hữu ích để tạo kịch bản tự động hóa (VD: Gọi -> Trễ 10s -> Gửi SMS)." FontSize="14" Foreground="#CFD8DC" TextWrapping="Wrap" LineHeight="22" Margin="10,0,0,5"/>
                                 
@@ -1542,18 +1216,7 @@ GET  /api/history
                                     </Style>
                                 </Button.Style>
                             </Button>
-                            <Button Content="IMEI" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="IMEI" Margin="0,0,4,0">
-                                <Button.Style>
-                                    <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
-                                        <Setter Property="Background" Value="#252A36"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="IMEI">
-                                                <Setter Property="Background" Value="#5B5CF6"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Button.Style>
-                            </Button>
+
                             <Button Content="Trễ" Command="{Binding SelectCommandPanelTabCommand}" CommandParameter="Delay" Margin="0,0,4,0">
                                 <Button.Style>
                                     <Style TargetType="Button" BasedOn="{StaticResource MiniCommandButtonStyle}">
@@ -2088,75 +1751,7 @@ GET  /api/history
                                 
                             </StackPanel>
                             
-                            <!-- IMEI -->
-                            <StackPanel VerticalAlignment="Top">
-                                <StackPanel.Style>
-                                    <Style TargetType="StackPanel">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CommandPanelTab}" Value="IMEI">
-                                                <Setter Property="Visibility" Value="Visible"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </StackPanel.Style>
-                                
-                                <!-- Cảnh báo chưa hỗ trợ -->
-                                <Border Background="#33FF5722" BorderBrush="#FF5722" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,10">
-                                    <TextBlock Text="⚠️ Tính năng Đổi IMEI qua Hàng đợi lệnh bị khóa để đảm bảo an toàn. Việc đổi IMEI sẽ khởi động lại sóng, làm đứt kết nối cổng COM và gãy toàn bộ hàng đợi phía sau. Vui lòng bật Fake IMEI tự động ở phần Cài Đặt." Foreground="#FFCCBC" FontSize="11" TextWrapping="Wrap"/>
-                                </Border>
 
-                                <!-- IMEI -->
-                                <Grid Margin="0,0,0,6">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="65"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <TextBlock Text="Mã IMEI" Foreground="White" VerticalAlignment="Center"/>
-                                    <TextBox Grid.Column="1"
-                                             Text="{Binding CommandPanelImeiValue, UpdateSourceTrigger=PropertyChanged}"
-                                             Height="28"
-                                             Background="#1e293b"
-                                             Foreground="White"
-                                             BorderBrush="#334155"
-                                             BorderThickness="1"
-                                             Padding="8,3"/>
-                                </Grid>
-
-                                <Grid Margin="0,0,0,6">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="65"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="40"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <TextBlock Text="Chế độ" Foreground="White" VerticalAlignment="Center"/>
-
-                                    <ComboBox Grid.Column="1"
-                                              SelectedIndex="{Binding CommandPanelModeIndex}"
-                                              Height="28">
-                                        <ComboBoxItem Content="Đồng thời"/>
-                                        <ComboBoxItem Content="Tuần tự"/>
-                                    </ComboBox>
-
-                                    <TextBlock Grid.Column="2"
-                                               Text="Thử lại"
-                                               Foreground="White"
-                                               VerticalAlignment="Center"
-                                               Margin="8,0,0,0"/>
-
-                                    <TextBox Grid.Column="3"
-                                             Text="{Binding CommandPanelRetryCount, UpdateSourceTrigger=PropertyChanged}"
-                                             Height="28"
-                                             Background="#1e293b"
-                                             Foreground="White"
-                                             BorderBrush="#334155"
-                                             BorderThickness="1"
-                                             Padding="8,3"/>
-                                </Grid>
-                            </StackPanel>
                             
                             <!-- Trễ -->
                             <StackPanel VerticalAlignment="Top">
@@ -2294,13 +1889,13 @@ GET  /api/history
                                  materialDesign:HintAssist.Hint="Lọc cổng (VD: COM41)"
                                  Style="{StaticResource SearchTextBoxStyle}" FontFamily="Consolas" Foreground="#4CAF50"/>
                         <Button Content="All" Command="{Binding SetLogFilterCommand}" CommandParameter="" Background="#333344" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="8,0,0,0"/>
-                        <Button Content="IMEI" Command="{Binding SetLogFilterCommand}" CommandParameter="[IMEI]" Background="#455A64" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
+
                         <Button Content="Firebase" Command="{Binding SetLogFilterCommand}" CommandParameter="[FIREBASE]" Background="#5C6BC0" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
                         <Button Content="SMS" Command="{Binding SetLogFilterCommand}" CommandParameter="[SMS]" Background="#00897B" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
                         <Button Content="USSD" Command="{Binding SetLogFilterCommand}" CommandParameter="[USSD]" Background="#7E57C2" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="5,0,0,0"/>
                         <TextBlock Text="|" Foreground="#444" Margin="10,0" VerticalAlignment="Center"/>
                         <TextBlock Text="{Binding FilteredLogCount, StringFormat='Hiển thị: {0} dòng'}" Foreground="Gray" VerticalAlignment="Center" FontSize="11"/>
-                        <Button Content="Reload IMEI CSV" Command="{Binding ReloadImeiBackupCommand}" Background="#607D8B" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="10,0" Margin="12,0,0,0" ToolTip="Nạp lại imei_backup.csv và imei-lookup-*.csv trong thư mục chạy"/>
+
                     </StackPanel>
                     <ListBox Grid.Row="1" ItemsSource="{Binding FilteredLogs}" SelectedItem="{Binding SelectedLog}" Background="Transparent" BorderThickness="0" Margin="10,0,10,6">
                         <ListBox.ContextMenu>

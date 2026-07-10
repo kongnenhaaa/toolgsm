@@ -163,7 +163,6 @@ public class ApiServerService
             balance  = p.Balance,
             expiry   = p.ExpiryDate,
             otp      = p.Otp,
-            forwardTo = p.ForwardedTo,
             updatedAt = p.UpdatedAt
         }).ToList();
     }

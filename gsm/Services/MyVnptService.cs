@@ -67,6 +67,10 @@ public static class MyVnptService
                         pwd = filePass;
                     }
                 }
+                else
+                {
+                    System.IO.File.WriteAllText(passPath, pwd);
+                }
             }
             catch { }
             string hashedPwd = CreateMD5(pwd).ToUpper();
@@ -130,20 +134,20 @@ public static class MyVnptService
             if (responseContent.Contains("\"error_code\":\"0\"") || responseContent.Contains("\"errorCode\":\"0\"") || responseContent.Contains("\"error_code\": \"0\""))
             {
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thành công ({modeStr})! Pass: {pwd}", "SUCCESS");
-                string logPath = AppPaths.ForRuntimeFile("myvnpt_passwords.txt");
+                string logPath = AppPaths.ForRuntimeFile("kiemtra.txt");
                 System.IO.File.AppendAllText(logPath, $"{phone}|{pwd}\n");
-                onComplete?.Invoke(true, "Đặt pass thành công");
+                onComplete?.Invoke(true, "Kiểm tra thành công");
             }
             else
             {
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thất bại ({modeStr}): {responseContent}", "ERROR");
-                onComplete?.Invoke(false, $"Lỗi đặt pass");
+                onComplete?.Invoke(false, $"Kiểm tra thất bại");
             }
         }
         catch (Exception ex)
         {
             addLogCallback?.Invoke($"[{portName}] Lỗi đặt mật khẩu MyVNPT: {ex.Message}", "ERROR");
-            onComplete?.Invoke(false, $"Lỗi đặt pass");
+            onComplete?.Invoke(false, $"Lỗi kiểm tra");
         }
     }
 

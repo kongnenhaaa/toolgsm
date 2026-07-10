@@ -24,7 +24,7 @@ namespace gsm.ViewModels;
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IGsmModemService _modemService;
-    private readonly Services.ImeiManagementService _imeiManagementService;
+
     public IGsmModemService ModemService => _modemService;
 
     private readonly SpeechToTextService _speechToTextService;
@@ -57,9 +57,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly string _cacheFilePath = AppPaths.ForRuntimeFile("sim_cache.json");
     private ConcurrentDictionary<string, string> _simCache = new();
 
-    private readonly string _imeiCacheFilePath = AppPaths.ForRuntimeFile("imei_backup.csv");
-    private ConcurrentDictionary<string, SimBackupEntry> _imeiCache = new();
-    private readonly object _imeiCacheLock = new();
+
 
     private static readonly IReadOnlyDictionary<string, string> BalanceUssdByProvider =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -262,6 +260,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO"));
                         _pendingMyVnptPasswordPorts[port.PortName] = true;
+                        
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(30000);
+                            if (_pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _))
+                            {
+                                Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Lỗi không nhận được OTP trong vòng 30s", "ERROR"));
+                            }
+                        });
                     }
                     else
                     {
@@ -371,48 +378,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool IsImeiRestoreEnabled
-    {
-        get => SettingsService.Current.EnableImeiRestore;
-        set
-        {
-            if (SettingsService.Current.EnableImeiRestore != value)
-            {
-                SettingsService.Current.EnableImeiRestore = value;
-                SettingsService.SaveSettings(SettingsService.Current);
-                OnPropertyChanged();
-            }
-        }
-    }
 
-    public bool IsNewSimIntakeModeEnabled
-    {
-        get => SettingsService.Current.EnableNewSimIntakeMode;
-        set
-        {
-            if (SettingsService.Current.EnableNewSimIntakeMode != value)
-            {
-                SettingsService.Current.EnableNewSimIntakeMode = value;
-                SettingsService.SaveSettings(SettingsService.Current);
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(AppSettings));
-            }
-        }
-    }
-
-    public bool IsBlockUnknownSimsEnabled
-    {
-        get => SettingsService.Current.BlockUnknownSims;
-        set
-        {
-            if (SettingsService.Current.BlockUnknownSims != value)
-            {
-                SettingsService.Current.BlockUnknownSims = value;
-                SettingsService.SaveSettings(SettingsService.Current);
-                OnPropertyChanged();
-            }
-        }
-    }
 
     [ObservableProperty]
     private string _callManagerSelectedPort = string.Empty;
@@ -811,10 +777,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ((System.ComponentModel.ICollectionViewLiveShaping)FilteredPortsView).LiveSortingProperties.Add("HasData");
 
         LoadSimCache();
-        LoadImeiCache();
-        ImportCsvToImeiCache();
         ExportColumns.Add(new ExportColumnItem("Cổng", "PortName"));
-        ExportColumns.Add(new ExportColumnItem("IMEI", "Imei"));
         ExportColumns.Add(new ExportColumnItem("Serial", "Serial"));
         ExportColumns.Add(new ExportColumnItem("SĐT", "PhoneNumber"));
         ExportColumns.Add(new ExportColumnItem("Tài khoản (TKC)", "Balance"));
@@ -826,7 +789,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ExportColumns.Add(new ExportColumnItem("Hạn sử dụng", "ExpiryDate"));
 
         _modemService = new GsmModemService();
-        _imeiManagementService = new Services.ImeiManagementService(_modemService, (msg, level) => AddLog(msg, level));
+
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
         _modemService.PortDisconnected += ModemService_PortDisconnected;
@@ -927,7 +890,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         try
                         {
                             await _modemService.SweepUnreadSmsAsync(p.PortName);
-                            Application.Current.Dispatcher.Invoke(() => p.LastSweepTime = DateTime.Now.ToString("HH:mm:ss"));
+                            // LastSweepTime removed
                             await Task.Delay(1000, lifetimeToken); // Tránh spam quá nhanh trên nhiều cổng
                         }
                         catch { }
@@ -936,7 +899,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }, lifetimeToken);
 
-        // Tự động kiểm tra phát hiện rút SIM (Hot-plug Auto-Airplane)
+        // Tự động kiểm tra phát hiện rút SIM (Chỉ làm rỗng UI, không khóa sóng)
         _ = Task.Run(async () =>
         {
             while (!lifetimeToken.IsCancellationRequested)
@@ -949,7 +912,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     if (lifetimeToken.IsCancellationRequested) break;
                     
-                    if (p.Status == SimStatus.Active || p.Status == SimStatus.NoResponse || p.Status == SimStatus.SecurityBlocked)
+                    if (p.Status == SimStatus.Active || p.Status == SimStatus.SecurityBlocked)
                     {
                         // Kiểm tra trạng thái SIM qua cổng COM
                         string pinStatus = await _modemService.SendCommandAsync(p.PortName, "AT+CPIN?", 3000, silent: true);
@@ -958,24 +921,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         
                         if (!isSystemError && (pinStatus.Contains("ERROR") || pinStatus.Contains("+CME ERROR: 10")))
                         {
-                            // Phát hiện SIM bị rút ra, lập tức khóa sóng
                             Application.Current.Dispatcher.Invoke(() =>
                             {
-                                AddLog($"[{p.PortName}] Phát hiện thẻ SIM bị rút ra. Tự động chuyển cổng về chế độ Tắt sóng (AT+CFUN=4)...");
-                                p.Status = SimStatus.Connecting;
+                                AddLog($"[{p.PortName}] Thẻ SIM đã bị rút ra. Cổng trở về trạng thái rỗng.");
+                                p.Status = SimStatus.NoResponse;
+                                p.DeviceName = "Không có SIM";
                                 p.PhoneNumber = string.Empty;
                                 p.Serial = string.Empty;
-                                p.Imei = string.Empty; // Xoá IMEI trên UI để lần cắm sau tự đọc lại IMEI thật
+                                p.Imei = string.Empty;
+                                p.NetworkProvider = string.Empty;
+                                p.Balance = string.Empty;
                                 UpdateDashboard();
                             });
-                            
-                            // Gọi vòng lặp chờ SIM (trong vòng lặp này nó sẽ liên tục gửi AT+CFUN=4)
-                            _modemService.StartHotplugWaitLoop(p.PortName);
                         }
                     }
                 }
             }
         }, lifetimeToken);
+
+
 
         // Tự động phục hồi (Watchdog)
         _ = Task.Run(async () =>
@@ -991,7 +955,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 foreach (var p in portsCopy)
                 {
                     if (lifetimeToken.IsCancellationRequested) break;
-                    if (p.Status == SimStatus.NoResponse || p.Status == "Offline" || p.Status == "Error")
+                    // Chỉ chạy Watchdog đối với các cổng đã từng kết nối thành công (có IMEI) để tránh spam cổng rỗng
+                    if ((p.Status == SimStatus.NoResponse || p.Status == "Offline" || p.Status == "Error") && !string.IsNullOrWhiteSpace(p.Imei))
                     {
                         // Bỏ qua watchdog reset đối với các lỗi bảo mật nghiêm trọng
                         if (p.LastError == "Sai IMEI" || p.LastError == "Lỗi đọc SIM CCID" || p.LastError == "Không tắt được sóng trước khi ghi IMEI")
@@ -1494,9 +1459,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     .Select(port => port.PortName)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                if (availablePorts.Any(p => !currentPortNames.Contains(p)))
+                var newPorts = availablePorts.Where(p => !currentPortNames.Contains(p)).ToList();
+                if (newPorts.Any())
                 {
                     hasChanges = true;
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        foreach (var np in newPorts)
+                        {
+                            var port = new SimPort { PortName = np, Status = SimStatus.Connecting, DeviceName = "Đang khởi tạo...", SignalStrength = 0 };
+                            Ports.Add(port);
+                        }
+                    });
                     _modemService.ConnectAll(115200);
                 }
 
@@ -1525,7 +1499,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 try
                 {
-                    await Task.Delay(3000, lifetimeToken); // Quét 3 giây 1 lần
+                    await Task.Delay(1000, lifetimeToken); // Quét 1 giây 1 lần
                 }
                 catch (OperationCanceledException)
                 {
@@ -1535,140 +1509,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }, lifetimeToken);
     }
 
-    [RelayCommand]
-    private void ApproveUnknownSim(object obj)
-    {
-        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
-        
-        if (obj is SimPort clickedPort && !targetPorts.Contains(clickedPort))
-        {
-            targetPorts.Add(clickedPort);
-        }
-
-        if (!targetPorts.Any())
-        {
-            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (tick vào ô vuông) để chấp thuận SIM.");
-            return;
-        }
-
-        int successCount = 0;
-        foreach (var port in targetPorts)
-        {
-            if (port == null) continue;
-            
-            if (port.Status != SimStatus.SecurityBlocked)
-            {
-                continue;
-            }
-
-            if (string.IsNullOrEmpty(port.Serial))
-            {
-                AddLog($"[{port.PortName}] Lỗi: Không tìm thấy CCID.", "ERROR");
-                continue;
-            }
-
-            successCount++;
-            string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
-            string sourceFile = "manual-approve";
-
-            var newEntry = new gsm.Models.SimBackupEntry
-            {
-                Ccid = port.Serial,
-                Imei = targetImei,
-                PhoneNumber = port.PhoneNumber ?? "",
-                CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                LicenseKeySuffix = string.Empty,
-                KeyMismatch = "false",
-                SourceFile = sourceFile
-            };
-            
-            AddNewImeiCacheEntry(newEntry);
-            
-            AddLog($"[{port.PortName}] Đã chấp thuận thủ công SIM lạ (CCID: {port.Serial}, IMEI mục tiêu: {targetImei}).", "SUCCESS");
-
-            _ = Task.Run(async () =>
-            {
-                Application.Current.Dispatcher.Invoke(() => 
-                {
-                    port.Status = SimStatus.Connecting;
-                    port.DeviceName = "Đang tráng IMEI Fake...";
-                });
-
-                string currentImei = NormalizeImei(port.Imei);
-                if (string.IsNullOrEmpty(currentImei))
-                {
-                    currentImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 10000, silent: true);
-                    currentImei = NormalizeImei(currentImei);
-                }
-                
-                var result = await _imeiManagementService.ProcessImeiAsync(
-                    port,
-                    port.Serial,
-                    currentImei,
-                    AppSettings,
-                    (queryCcid) => { _imeiCache.TryGetValue(queryCcid, out var e); return e; },
-                    (newE) => AddNewImeiCacheEntry(newE),
-                    (action) => Application.Current.Dispatcher.Invoke(action)
-                );
-                
-                Application.Current.Dispatcher.Invoke(() => 
-                {
-                    if (result.Status == Services.ImeiProcessStatus.Matched)
-                    {
-                        port.IsRebooting = false;
-                        port.Imei = result.FinalImei;
-                        MarkPortActiveAfterInit(port.PortName);
-                        _ = _modemService.ReinitializeSettingsAsync(port.PortName);
-                    }
-                    else if (result.Status == Services.ImeiProcessStatus.Applied)
-                    {
-                        port.IsRebooting = true;
-                        port.Imei = result.FinalImei;
-                        port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
-                        port.Status = SimStatus.Connecting;
-                        
-                        // [FIX] Handle modems with separate USB bridge chips that don't drop USB on AT+CFUN=1,1
-                        _ = Task.Run(async () =>
-                        {
-                            await Task.Delay(15000);
-                            if (port.IsRebooting)
-                            {
-                                Application.Current.Dispatcher.Invoke(() => 
-                                {
-                                    port.IsRebooting = false;
-                                    AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
-                                    _modemService.StartHotplugWaitLoop(port.PortName);
-                                });
-                            }
-                        });
-                    }
-                    else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
-                    {
-                        port.Status = SimStatus.SecurityBlocked;
-                        port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? gsm.Models.SecurityErrors.WrongImei : result.ErrorMessage;
-                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                        UpdateDashboard();
-                    }
-                    else
-                    {
-                        port.Status = SimStatus.NoResponse;
-                        port.LastError = "Lỗi xử lý IMEI";
-                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                        UpdateDashboard();
-                    }
-                });
-            });
-        }
-        
-        if (successCount > 0)
-        {
-            SnackbarMessageQueue.Enqueue($"Đã lưu {successCount} SIM lạ vào kho và đang tráng IMEI...");
-        }
-        else
-        {
-            SnackbarMessageQueue.Enqueue("Không có SIM nào bị chặn trong các cổng đã chọn.");
-        }
-    }
 
     [RelayCommand]
     private void RefreshPorts()
@@ -1773,7 +1613,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (port == null)
             {
-                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]"))
+                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = SimStatus.Active, SignalStrength = 0 };
                     port.ReconnectCount++;
@@ -1785,17 +1625,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
 
-            if (e.Data.StartsWith("[WAITING_FOR_SIM]"))
-            {
-                port.Status = SimStatus.Connecting;
-                port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
-                port.PhoneNumber = string.Empty;
-                port.Imei = string.Empty;
-                port.Serial = string.Empty;
-                port.NetworkProvider = string.Empty;
-                port.Balance = string.Empty;
-            }
-            else if (e.Data.Contains("+CSQ:"))
+            if (e.Data.Contains("+CSQ:"))
             {
                 var match = Regex.Match(e.Data, @"\+CSQ:\s*(\d+)");
                 if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
@@ -1844,15 +1674,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         {
                             _simCache[port.Serial] = foundNumber;
                             SaveSimCache();
-
-                            if (_imeiCache.TryGetValue(port.Serial, out var entry))
-                            {
-                                if (entry.PhoneNumber != foundNumber)
-                                {
-                                    entry.PhoneNumber = foundNumber;
-                                    SaveImeiCache();
-                                }
-                            }
                         }
                     }
                     
@@ -1899,26 +1720,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 99999);
                             await Task.Delay(2000); // Đợi mạng xử lý xong lệnh trước
                         }
-
-                        // Tự động chuyển hướng cuộc gọi nếu tính năng được bật
-                        if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))
-                        {
-                            string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
-                            if (!string.IsNullOrEmpty(randomFwd))
-                            {
-                                AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                                string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 8000);
-                                if (ccfcResult.Contains("OK"))
-                                {
-                                    Application.Current.Dispatcher.Invoke(() =>
-                                    {
-                                        port.ForwardCount++;
-                                        port.ForwardedTo = randomFwd; // #4: Lưu số đang chưa hướng để hiển thị lên bảng
-                                    });
-                                    AddLog($"[{port.PortName}] Chuyển hướng thành công → {randomFwd} (Tổng: {port.ForwardCount})", "SUCCESS");
-                                }
-                            }
-                        }
                     });
                 }
             }
@@ -1947,109 +1748,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         AddLog($"[{e.PortName}] Đã nạp SĐT từ cache: {cachedPhone}", "SUCCESS");
                     }
 
-                    AddLog($"[{e.PortName}] [IMEI_MODE] Restore={AppSettings.EnableImeiRestore} BlockNew={AppSettings.BlockUnknownSims}");
-
-                    // Thực hiện kiểm tra và khôi phục IMEI bất đồng bộ để tránh treo UI thread
-                    _ = Task.Run(async () =>
-                    {
-                        string currentImei = NormalizeImei(port.Imei);
-                        if (string.IsNullOrEmpty(currentImei))
-                        {
-                            string imeiResp = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 30000, silent: true);
-                            if (!imeiResp.Contains("ERROR"))
-                            {
-                                currentImei = NormalizeImei(imeiResp);
-                                Application.Current.Dispatcher.Invoke(() => port.Imei = currentImei);
-                            }
-                        }
-
-                        if (string.IsNullOrEmpty(currentImei))
-                        {
-                            AddLog($"[{e.PortName}] Không lấy được IMEI phần cứng để so sánh.", "WARNING");
-                        }
-                        else
-                        {
-                            var result = await _imeiManagementService.ProcessImeiAsync(
-                                port,
-                                ccid,
-                                currentImei,
-                                AppSettings,
-                                (queryCcid) => 
-                                {
-                                    _imeiCache.TryGetValue(queryCcid, out var entry);
-                                    return entry;
-                                },
-                                (newEntry) => AddNewImeiCacheEntry(newEntry),
-                                (action) => Application.Current.Dispatcher.Invoke(action)
-                            );
-
-                            Application.Current.Dispatcher.Invoke(() => 
-                            {
-                                if (result.Status == Services.ImeiProcessStatus.Matched)
-                                {
-                                    port.IsRebooting = false;
-                                    port.Imei = result.FinalImei;
-                                    MarkPortActiveAfterInit(e.PortName);
-                                    // Bắt buộc khởi tạo lại cài đặt (AT+CMGF=1, CSCS...) 
-                                    // vì nếu vừa chạy CFUN=1,1 xong modem sẽ mất hết cài đặt tạm thời.
-                                    _ = _modemService.ReinitializeSettingsAsync(port.PortName);
-                                }
-                                else if (result.Status == Services.ImeiProcessStatus.Applied)
-                                {
-                                    port.IsRebooting = true;
-                                    port.Imei = result.FinalImei;
-                                    port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
-                                    port.Status = SimStatus.Connecting;
-                                    
-                                    // [FIX] Handle modems with separate USB bridge chips that don't drop USB on AT+CFUN=1,1
-                                    _ = Task.Run(async () =>
-                                    {
-                                        await Task.Delay(15000);
-                                        if (port.IsRebooting)
-                                        {
-                                            Application.Current.Dispatcher.Invoke(() => 
-                                            {
-                                                port.IsRebooting = false;
-                                                AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
-                                                _modemService.StartHotplugWaitLoop(port.PortName);
-                                            });
-                                        }
-                                    });
-                                }
-                                else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
-                                {
-                                    UpdateImeiCacheEntry(port.Serial, entry => entry.PhoneNumber = "Unknown");
-                                    port.Status = SimStatus.SecurityBlocked;
-                                    port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? SecurityErrors.WrongImei : result.ErrorMessage;
-                                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                                    UpdateDashboard();
-                                }
-                                else
-                                {
-                                    port.Status = SimStatus.NoResponse;
-                                    port.LastError = "Lỗi xử lý IMEI";
-                                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                                    UpdateDashboard();
-                                }
-                            });
-                        }
-                    });
+                    MarkPortActiveAfterInit(e.PortName);
                 }
                 else
                 {
-                    AddLog($"[{e.PortName}] Không đọc được CCID hợp lệ để đối chiếu. Hủy kết nối để tránh lộ IMEI.", "ERROR");
-                    _ = Task.Run(() =>
-                    {
-                        Application.Current.Dispatcher.Invoke(() => 
-                        {
-                            UpdateImeiCacheEntry(port.Serial, entry => entry.PhoneNumber = "Unknown");
-                            port.Status = SimStatus.SecurityBlocked;
-                            port.LastError = SecurityErrors.ReadCcidFailed;
-                            port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                            UpdateDashboard();
-                        });
-                        _modemService.Disconnect(e.PortName);
-                    });
+                    AddLog($"[{e.PortName}] Không đọc được CCID hợp lệ.", "ERROR");
                 }
             }
             else if (e.Data.StartsWith("[PARSE_CNUM]"))
@@ -2081,20 +1784,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (!string.IsNullOrWhiteSpace(rawNumber))
                 {
                     port.PhoneNumber = rawNumber;
-                    UpdateSmsReceiverPhone(e.PortName, rawNumber);
+                    UpdateSmsReceiverPhone(port.PortName, rawNumber);
                     if (!string.IsNullOrWhiteSpace(port.Serial))
                     {
                         _simCache[port.Serial] = rawNumber;
                         SaveSimCache();
-
-                        if (_imeiCache.TryGetValue(port.Serial, out var entry))
-                        {
-                            if (entry.PhoneNumber != rawNumber)
-                            {
-                                entry.PhoneNumber = rawNumber;
-                                SaveImeiCache();
-                            }
-                        }
                     }
                 }
             }
@@ -2211,6 +1905,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                 }
 
+                senderPhone = NormalizeSenderName(senderPhone);
+
                 // 1b. Tin nhắn dài bị chia phần (concatenated SMS, theo UDH chuẩn 3GPP).
                 // Chỉ xử lý tiếp khi đã gom ĐỦ tất cả các phần; nếu thiếu phần thì lưu vào buffer,
                 // xóa tin ở SIM (đã đọc xong, tránh đầy bộ nhớ) và dừng lại chờ phần tiếp theo.
@@ -2313,124 +2009,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     return;
                 }
 
-                bool receiveAll = SettingsService.Current.ReceiveAllSms;
-
-                if (!receiveAll)
-                {
-                    // Chặn tin nhắn rác từ nhà mạng / tổng đài hệ thống
-                    // isTopUpSender: sender là tổng đài nhà mạng Viettel/Vinaphone (không bao giờ là OTP thực)
-                    bool isTopUpSender = senderPhone == "8068"    // Viettel báo trừ tiền
-                                      || senderPhone == "900"
-                                      || senderPhone == "49515355"
-                                      || senderPhone == "57515253"
-                                      || senderPhone.StartsWith("VTT",      StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VNP",      StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VNPT",     StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VIETTEL",  StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("MOBIFONE", StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VIETNAMOBILE", StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("GMOBILE",  StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("WINTEL",   StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("ITELECOM", StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("ITEL",     StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("SKY",      StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VNSKY",    StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("LOCAL",    StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("FPT",      StringComparison.OrdinalIgnoreCase);
-
-                    // isTopUpContent: nội dung mang dấu hiệu nạp tiền / cập nhật số dư
-                    bool isTopUpContent = cleanContentLower.Contains("da duoc nap")
-                                       || cleanContentLower.Contains("tai khoan cua quy khach")
-                                       || cleanContentLower.Contains("nap tien thanh cong")
-                                       || (cleanContentLower.Contains("so du hien tai") && !cleanContentLower.Contains("zalo"));
-
-                    bool isSpamContent = cleanContentLower.Contains("khoan airtime")
-                                      || cleanContentLower.Contains("ong su dung het")
-                                      || cleanContentLower.Contains("ng su dung het")
-                                      || cleanContentLower.Contains("chinh sach tai")
-                                      || cleanContentLower.Contains("tu choi nhan loi moi");
-
-                    if (isTopUpSender || isTopUpContent || isSpamContent)
-                    {
-                        AddLog($"[{e.PortName}] Đã chặn tin nhắn hệ thống/rác từ {senderPhone}");
-                        
-                        // Nếu là thông báo nạp tiền → tự động cập nhật lại TKC
-                        if (isTopUpContent)
-                        {
-                            AddLog($"[{e.PortName}] Phát hiện tin nhắn nạp thẻ, tự động cập nhật lại số dư...");
-                            _ = Task.Run(async () => 
-                            {
-                                await Task.Delay(2000);
-                                await CheckBalanceForPortAsync(e.PortName);
-                            });
-                        }
-
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        return;
-                    }
-
-                    // --- WHITELIST / BLACKLIST ---
-                var settings = SettingsService.Current;
-
-                if (settings.EnableSenderBlacklist && !string.IsNullOrWhiteSpace(settings.SenderBlacklist))
-                {
-                    var blacklist = settings.SenderBlacklist
-                        .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(s => s.Trim())
-                        .ToArray();
-
-                    bool isBlocked = blacklist.Any(b =>
-                        senderPhone.IndexOf(b, StringComparison.OrdinalIgnoreCase) >= 0);
-
-                    if (isBlocked)
-                    {
-                        AddLog($"[{e.PortName}] Đã chặn (Blacklist): {senderPhone}", "WARN");
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        return;
-                    }
-                }
-
-                if (settings.EnableSenderWhitelist && !string.IsNullOrWhiteSpace(settings.SenderWhitelist))
-                {
-                    var whitelist = settings.SenderWhitelist
-                        .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(s => s.Trim())
-                        .ToArray();
-
-                    bool isAllowed = whitelist.Any(w =>
-                        senderPhone.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
-
-                    if (!isAllowed)
-                    {
-                        AddLog($"[{e.PortName}] Bỏ qua (không trong Whitelist): {senderPhone}");
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        return;
-                    }
-                }
-                // --- END WHITELIST / BLACKLIST ---
-                    bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
-                                  senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                  senderPhone.Contains("8500") || senderPhone.Contains("7539");
-                    bool isWhatsApp = cleanContent.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                      senderPhone.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                      senderPhone.IndexOf("WA", StringComparison.OrdinalIgnoreCase) >= 0;
-                    bool isTelegram = cleanContent.IndexOf("Telegram", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                      senderPhone.IndexOf("Telegram", StringComparison.OrdinalIgnoreCase) >= 0;
-
-                    if (!isZalo && !isWhatsApp && !isTelegram)
-                    {
-                        AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không hợp lệ từ {senderPhone}");
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                        {
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        }
-                        return;
-                    }
-                }
+                bool receiveAll = true;
 
                 // 2. Tìm OTP
                 extractedOtp = ExtractOtp(cleanContent);
@@ -2438,9 +2017,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
-                if (extractedOtp == "N/A" && TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port, receiveAll))
+                if (TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port, receiveAll))
                 {
-                    AddLog($"[{e.PortName}] Da ghep doan SMS tiep theo tu {senderPhone} vao tin truoc.", "INFO");
+                    AddLog($"[{e.PortName}] Đã ghép nối phần tiếp theo của tin nhắn dài từ {senderPhone}.", "INFO");
                     if (!string.IsNullOrEmpty(e.MsgIndex))
                     {
                         await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
@@ -2694,22 +2273,51 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var existing = SmsMessages.FirstOrDefault(s =>
             s.PortName == portName &&
             s.Sender == senderPhone &&
-            s.Otp == "N/A" &&
             IsRecentSmsTime(s.ReceivedTime, now));
 
         if (existing == null)
             return false;
 
-        string previous = existing.Content?.TrimEnd() ?? string.Empty;
-        string current = content.TrimStart();
+        string previous = existing.Content?.Trim() ?? string.Empty;
+        string current = content.Trim();
         if (string.IsNullOrWhiteSpace(previous) || string.IsNullOrWhiteSpace(current))
             return false;
 
-        existing.Content = Regex.Replace($"{previous} {current}", @"\s+", " ").Trim();
+        // Xác định đúng thứ tự 2 phần tin nhắn (phần dài/phần đầu trước, phần ngắn/đuôi sau)
+        string part1, part2;
+        if ((char.IsDigit(current.LastOrDefault()) && char.IsDigit(previous.FirstOrDefault()) && current.Length < previous.Length) || (current.Length >= 120 && previous.Length < 120))
+        {
+            part1 = current;
+            part2 = previous;
+        }
+        else
+        {
+            part1 = previous;
+            part2 = current;
+        }
+
+        string mergedContent;
+        // Nếu phần 1 kết thúc bằng số và phần 2 bắt đầu bằng số (bị cắt giữa số như 18 + 001091 -> 18001091)
+        if (char.IsDigit(part1.LastOrDefault()) && char.IsDigit(part2.FirstOrDefault()))
+        {
+            mergedContent = part1 + part2;
+        }
+        else
+        {
+            mergedContent = part1 + " " + part2;
+        }
+
+        existing.Content = Regex.Replace(mergedContent, @"\s+", " ").Trim();
         existing.ReceivedTime = now.ToString("HH:mm:ss");
+        if (port != null)
+        {
+            port.LastMessageContent = existing.Content;
+            port.LastReceivedTime = existing.ReceivedTime;
+        }
 
         string newOtp = ExtractOtp(existing.Content);
-        if (newOtp != "N/A" && existing.Otp == "N/A")
+        existing.Otp = newOtp;
+        if (newOtp != "N/A")
         {
             existing.Otp = newOtp;
             
@@ -2778,6 +2386,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(FilteredSmsMessages));
         OnPropertyChanged(nameof(SmsReceivedCount));
         return true;
+    }
+
+    private string NormalizeSpokenNumbers(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+        text = Regex.Replace(text, @"\bkhông\b", "0", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bmột\b", "1", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bhai\b", "2", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bba\b", "3", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bbốn\b", "4", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bnăm\b", "5", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bsáu\b", "6", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bbảy\b", "7", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\btám\b", "8", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\bchín\b", "9", RegexOptions.IgnoreCase);
+        text = Regex.Replace(text, @"\b(?:\d\s+){3,7}\d\b", match => Regex.Replace(match.Value, @"\s+", ""));
+        return text;
     }
 
     private string ExtractOtp(string content)
@@ -2907,6 +2532,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
             string fileName = string.IsNullOrWhiteSpace(wavFilePath) ? "Không có file" : Path.GetFileName(wavFilePath);
             bool hasTranscript = !string.IsNullOrWhiteSpace(transcript) && !transcript.StartsWith("Lỗi:", StringComparison.OrdinalIgnoreCase);
+            string callOtp = "";
+            if (hasTranscript)
+            {
+                string normalizedSpeech = NormalizeSpokenNumbers(transcript);
+                callOtp = ExtractOtp(normalizedSpeech);
+                if (callOtp == "N/A") callOtp = "";
+            }
+
             string content = hasTranscript
                 ? transcript
                 : hadRecording
@@ -2919,20 +2552,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
                 Content = content,
                 Sender = callerDisplay,
-                Otp = "",
+                Otp = callOtp,
                 ReceiverPhone = receiverPhone,
                 NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
                 Status = port?.Status ?? SimStatus.Connecting,
                 CallCount = port?.CallCount.ToString() ?? "1",
-                ForwardContent = fileName
+                ForwardContent = fileName,
+                AudioFilePath = wavFilePath
             });
 
             if (port != null)
             {
                 port.LastMessageContent = content;
                 port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
-                port.Otp = "";
+                port.Otp = callOtp;
                 port.Sender = callerDisplay;
+                port.LastAudioFilePath = wavFilePath;
+            }
+
+            if (!string.IsNullOrEmpty(callOtp))
+            {
+                OtpReceivedEvent?.Invoke(e.PortName, callOtp);
             }
 
             OnPropertyChanged(nameof(FilteredSmsMessages));
@@ -2954,10 +2594,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
             string safeContent = System.Net.WebUtility.HtmlEncode(content);
             string safeFileName = System.Net.WebUtility.HtmlEncode(fileName);
+            string otpText = !string.IsNullOrEmpty(callOtp) ? $"🔑 OTP: <code>{callOtp}</code>\n" : "";
             _ = TelegramService.SendMessageAsync(
                 $"🎙 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
                 $"📱 SIM nhận: {receiverPhone}\n" +
                 $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
+                otpText +
                 $"📝 Nội dung: <i>{safeContent}</i>\n" +
                 $"💾 File: <code>{safeFileName}</code>"
             );
@@ -2978,40 +2620,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LogFilter = filter ?? string.Empty;
     }
 
-    [RelayCommand]
-    private void ReloadImeiBackup()
-    {
-        LoadImeiCache();
-        ImportCsvToImeiCache();
-
-        int applied = 0;
-        foreach (var port in Ports)
-        {
-            if (string.IsNullOrWhiteSpace(port.Serial)) continue;
-            string ccid = NormalizeCcid(port.Serial);
-            if (!_imeiCache.TryGetValue(ccid, out var entry) || entry == null) continue;
-
-            if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
-            {
-                port.PhoneNumber = entry.PhoneNumber;
-                UpdateSmsReceiverPhone(port.PortName, entry.PhoneNumber);
-                _simCache[ccid] = entry.PhoneNumber;
-            }
-
-            port.CreatedAt = entry.CreatedAt;
-            port.LicenseKeySuffix = entry.LicenseKeySuffix;
-            port.KeyMismatch = entry.KeyMismatch;
-            applied++;
-        }
-
-        if (applied > 0)
-        {
-            SaveSimCache();
-        }
-
-        AddLog($"[IMEI_SOURCE] Đã reload imei_backup.csv và áp dụng metadata cho {applied} cổng đang cắm.", "SUCCESS");
-        SnackbarMessageQueue.Enqueue($"Đã reload imei_backup.csv ({applied} cổng được cập nhật).");
-    }
 
     private string GetUssdCodeForProvider(string provider)
     {
@@ -3061,7 +2669,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 try
                 {
                     await _modemService.SweepUnreadSmsAsync(port.PortName);
-                    Application.Current.Dispatcher.Invoke(() => port.LastSweepTime = DateTime.Now.ToString("HH:mm:ss"));
+                    // LastSweepTime removed
                 }
                 catch { }
             });
@@ -3168,7 +2776,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
 
-        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn ép ngắt sóng {targetPorts.Count} modem để chuẩn bị thay SIM?\nThao tác này sẽ tắt sóng vô tuyến để tránh rò rỉ IMEI.", "Chuẩn bị Đổi SIM", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes)
+        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn ép ngắt sóng {targetPorts.Count} modem để chuẩn bị thay SIM?\nThao tác này sẽ tắt sóng vô tuyến để bạn an toàn tháo lắp SIM.", "Chuẩn bị Đổi SIM", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Question) != System.Windows.MessageBoxResult.Yes)
             return;
 
         SnackbarMessageQueue.Enqueue($"Đang ép ngắt sóng {targetPorts.Count} cổng để chờ thay SIM...");
@@ -3181,9 +2789,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4");
                 
-                // [SHIELD IMEI] Tráng một lớp IMEI Fake ngẫu nhiên làm lá chắn.
-                
-                _modemService.StartHotplugWaitLoop(port.PortName);
+                // Hotplug wait removed
             });
         }
         
@@ -3617,9 +3223,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsWatchdogEnabled));
         OnPropertyChanged(nameof(IsAutoAnswerEnabled));
 
-        OnPropertyChanged(nameof(IsImeiRestoreEnabled));
-        OnPropertyChanged(nameof(IsBlockUnknownSimsEnabled));
-        OnPropertyChanged(nameof(IsNewSimIntakeModeEnabled));
 
         // Áp dụng tính năng chuyển hướng ngay lập tức cho tất cả các cổng
         if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))
@@ -3640,7 +3243,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         Application.Current.Dispatcher.Invoke(() =>
                         {
-                            port.ForwardedTo = randomFwd; // #4: Cập nhật cột hiển thị
+                            // ForwardedTo removed
                             port.ForwardCount++;
                         });
                     }
@@ -3657,7 +3260,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 foreach (var port in activePorts)
                 {
                     await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
-                    Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
+                    // ForwardedTo removed
                     await Task.Delay(500);
                 }
             });
@@ -3731,6 +3334,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             SmsMessages.Remove(sms);
             SnackbarMessageQueue.Enqueue("Đã xóa tin nhắn.");
+        }
+    }
+
+    [RelayCommand]
+    private void PlayAudio(object? item)
+    {
+        string filePath = item switch
+        {
+            SmsMessage sms => sms.AudioFilePath,
+            SimPort port => port.LastAudioFilePath,
+            _ => string.Empty
+        };
+
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            SnackbarMessageQueue.Enqueue("❌ Không tìm thấy file ghi âm cuộc gọi này!");
+            return;
+        }
+
+        try
+        {
+            using var player = new System.Media.SoundPlayer(filePath);
+            player.Play();
+            SnackbarMessageQueue.Enqueue($"🔊 Đang phát cuộc gọi: {Path.GetFileName(filePath)}");
+        }
+        catch (Exception ex)
+        {
+            AddLog($"Lỗi phát âm thanh: {ex.Message}", "ERROR");
+            SnackbarMessageQueue.Enqueue("❌ Lỗi không thể phát file ghi âm!");
         }
     }
 
@@ -4180,6 +3812,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private string NormalizeSenderName(string sender)
+    {
+        if (string.IsNullOrWhiteSpace(sender)) return "UNKNOWN";
+        return sender.Trim();
+    }
+
     private string DecodePdu(string pdu, out string senderPhone, out int concatRef, out int concatTotal, out int concatSeq)
     {
         senderPhone = "UNKNOWN";
@@ -4509,311 +4147,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void LoadImeiCache()
-    {
-        lock (_imeiCacheLock)
-        {
-            if (File.Exists(_imeiCacheFilePath))
-            {
-                try
-                {
-                    var lines = File.ReadAllLines(_imeiCacheFilePath);
-                    var newCache = new ConcurrentDictionary<string, SimBackupEntry>();
-                    for (int i = 1; i < lines.Length; i++)
-                    {
-                        var line = lines[i];
-                        if (string.IsNullOrWhiteSpace(line)) continue;
-                        var parts = ParseCsvLine(line);
-                        if (parts.Length >= 2)
-                        {
-                            string ccid = NormalizeCcid(parts[0]);
-                            string imei = NormalizeImei(parts[1]);
-                            if (!string.IsNullOrEmpty(ccid) && !string.IsNullOrEmpty(imei))
-                            {
-                                var entry = new SimBackupEntry
-                                {
-                                    Ccid = ccid,
-                                    Imei = imei,
-                                    PhoneNumber = parts.Length >= 3 ? parts[2].Trim() : string.Empty,
-                                    CreatedAt = parts.Length >= 4 ? parts[3].Trim() : string.Empty,
-                                    LicenseKeySuffix = parts.Length >= 5 ? parts[4].Trim() : string.Empty,
-                                    KeyMismatch = parts.Length >= 6 ? parts[5].Trim() : string.Empty,
-                                    SourceFile = "imei_backup.csv"
-                                };
-                                newCache[ccid] = entry;
-                                if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
-                                {
-                                    _simCache[ccid] = entry.PhoneNumber;
-                                }
-                            }
-                        }
-                    }
-                    _imeiCache = newCache;
-                    AddLog($"[IMEI_SOURCE] Đã nạp {newCache.Count} dòng từ imei_backup.csv.", "SUCCESS");
-                }
-                catch (Exception ex)
-                {
-                    AddLog($"Lỗi đọc imei_backup.csv: {ex.Message}", "ERROR");
-                }
-            }
-        }
-    }
 
-    private void SaveImeiCache()
-    {
-        lock (_imeiCacheLock)
-        {
-            try
-            {
-                var builder = new StringBuilder();
-                builder.AppendLine("CCID,IMEI,PhoneNumber,CreatedAt,LicenseKeySuffix,KeyMismatch");
-                foreach (var kvp in _imeiCache)
-                {
-                    var entry = kvp.Value;
-                    builder.AppendLine(string.Join(",", new[]
-                    {
-                        EscapeCsv(entry.Ccid),
-                        EscapeCsv(entry.Imei),
-                        EscapeCsv(entry.PhoneNumber),
-                        EscapeCsv(entry.CreatedAt),
-                        EscapeCsv(entry.LicenseKeySuffix),
-                        EscapeCsv(entry.KeyMismatch)
-                    }));
-                }
-
-                string tempPath = _imeiCacheFilePath + ".tmp";
-                File.WriteAllText(tempPath, builder.ToString());
-
-                if (File.Exists(_imeiCacheFilePath))
-                {
-                    string backupPath = _imeiCacheFilePath.Replace(".csv", ".backup.csv");
-                    File.Copy(_imeiCacheFilePath, backupPath, overwrite: true);
-                }
-
-                File.Move(tempPath, _imeiCacheFilePath, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                AddLog($"Lỗi ghi file imei_backup.csv: {ex.Message}", "ERROR");
-            }
-        }
-    }
-
-    private void AddNewImeiCacheEntry(SimBackupEntry newEntry)
-    {
-        if (newEntry == null || string.IsNullOrEmpty(newEntry.Ccid)) return;
-        lock (_imeiCacheLock)
-        {
-            _imeiCache[newEntry.Ccid] = newEntry;
-            SaveImeiCache();
-        }
-    }
-
-    private void UpdateImeiCacheEntry(string ccid, Action<SimBackupEntry> updateAction)
-    {
-        if (string.IsNullOrEmpty(ccid)) return;
-        lock (_imeiCacheLock)
-        {
-            if (_imeiCache.TryGetValue(ccid, out var entry))
-            {
-                updateAction(entry);
-                SaveImeiCache();
-            }
-        }
-    }
-
-    private static string NormalizeImei(string? imei)
-    {
-        if (string.IsNullOrWhiteSpace(imei)) return string.Empty;
-        var match = Regex.Match(imei, @"\b(\d{14,17})\b");
-        return match.Success ? match.Groups[1].Value : imei.Replace("OK", "").Replace("ERROR", "").Trim();
-    }
-
-    private static string NormalizeCcid(string? ccid)
-    {
-        if (string.IsNullOrWhiteSpace(ccid)) return string.Empty;
-        string clean = ccid.Replace("+CCID:", "")
-                           .Replace("OK", "")
-                           .Replace("ERROR", "")
-                           .Replace("\r", "")
-                           .Replace("\n", "")
-                           .Trim();
-        clean = Regex.Replace(clean, @"\s+", "");
-        return clean;
-    }
-
-    private static string[] ParseCsvLine(string line)
-    {
-        var fields = new List<string>();
-        var current = new StringBuilder();
-        bool inQuotes = false;
-
-        for (int i = 0; i < line.Length; i++)
-        {
-            char ch = line[i];
-            if (ch == '"')
-            {
-                if (inQuotes && i + 1 < line.Length && line[i + 1] == '"')
-                {
-                    current.Append('"');
-                    i++;
-                }
-                else
-                {
-                    inQuotes = !inQuotes;
-                }
-            }
-            else if (ch == ',' && !inQuotes)
-            {
-                fields.Add(current.ToString());
-                current.Clear();
-            }
-            else
-            {
-                current.Append(ch);
-            }
-        }
-
-        fields.Add(current.ToString());
-        return fields.ToArray();
-    }
-
-    private static string EscapeCsv(string? value)
-    {
-        string text = value ?? string.Empty;
-        if (!text.Contains(',') && !text.Contains('"') && !text.Contains('\r') && !text.Contains('\n'))
-        {
-            return text;
-        }
-
-        return $"\"{text.Replace("\"", "\"\"")}\"";
-    }
-
-    private void ImportCsvToImeiCache()
-    {
-        string directoryPath = AppPaths.RuntimeDirectory;
-        if (!System.IO.Directory.Exists(directoryPath)) return;
-
-        bool hasNewImei = false;
-        bool hasNewSim = false;
-
-        try
-        {
-            var csvFiles = System.IO.Directory.GetFiles(directoryPath, "imei-lookup-*.csv");
-            foreach (var csvPath in csvFiles)
-            {
-                int importedRows = 0;
-                string sourceFile = System.IO.Path.GetFileName(csvPath);
-                string[] lines = System.IO.File.ReadAllLines(csvPath);
-                for (int i = 1; i < lines.Length; i++)
-                {
-                    string line = lines[i];
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    string[] parts = ParseCsvLine(line);
-                    if (parts.Length >= 2)
-                    {
-                        string serial = NormalizeCcid(parts[0]);
-                        string imei = NormalizeImei(parts[1]);
-                        string phone = parts.Length >= 3 ? parts[2].Trim() : "";
-                        string createdAt = parts.Length >= 4 ? parts[3].Trim() : "";
-                        string licenseKeySuffix = parts.Length >= 5 ? parts[4].Trim() : "";
-                        string keyMismatch = parts.Length >= 6 ? parts[5].Trim() : "";
-
-                        if (!string.IsNullOrEmpty(serial) && !string.IsNullOrEmpty(imei))
-                        {
-                            if (_imeiCache.TryGetValue(serial, out var existingEntry))
-                            {
-                                string normExisting = NormalizeImei(existingEntry.Imei);
-                                bool isChanged = normExisting != imei ||
-                                                 existingEntry.PhoneNumber != phone ||
-                                                 existingEntry.CreatedAt != createdAt ||
-                                                 existingEntry.LicenseKeySuffix != licenseKeySuffix ||
-                                                 existingEntry.KeyMismatch != keyMismatch;
-
-                                if (isChanged)
-                                {
-                                    if (normExisting != imei)
-                                    {
-                                        AddLog($"[IMEI_CONFLICT] Keep imei_backup.csv value for SIM {serial}. Lookup source={sourceFile} is not allowed to overwrite existing backup.", "WARN");
-                                        AddLog($"[IMEI_CONFLICT] Xung đột IMEI cho SIM {serial}: Cache={normExisting}, CSV={imei}. Chọn giá trị từ CSV.", "WARN");
-                                    }
-                                    if (normExisting == imei)
-                                    {
-                                        existingEntry.Imei = imei;
-                                    }
-                                    if (string.IsNullOrWhiteSpace(existingEntry.PhoneNumber))
-                                    {
-                                        existingEntry.PhoneNumber = phone;
-                                    }
-                                    if (string.IsNullOrWhiteSpace(existingEntry.CreatedAt))
-                                    {
-                                        existingEntry.CreatedAt = createdAt;
-                                    }
-                                    if (string.IsNullOrWhiteSpace(existingEntry.LicenseKeySuffix))
-                                    {
-                                        existingEntry.LicenseKeySuffix = licenseKeySuffix;
-                                    }
-                                    if (string.IsNullOrWhiteSpace(existingEntry.KeyMismatch))
-                                    {
-                                        existingEntry.KeyMismatch = keyMismatch;
-                                    }
-                                    hasNewImei = true;
-                                }
-                            }
-                            else
-                            {
-                                var entry = new SimBackupEntry
-                                {
-                                    Ccid = serial,
-                                    Imei = imei,
-                                    PhoneNumber = phone,
-                                    CreatedAt = createdAt,
-                                    LicenseKeySuffix = licenseKeySuffix,
-                                    KeyMismatch = keyMismatch,
-                                    SourceFile = sourceFile
-                                };
-                                _imeiCache[serial] = entry;
-                                hasNewImei = true;
-                            }
-                            importedRows++;
-                        }
-
-                        if (!string.IsNullOrEmpty(serial) && !string.IsNullOrEmpty(phone))
-                        {
-                            if (phone.StartsWith("+84", StringComparison.Ordinal))
-                            {
-                                phone = "0" + phone.Substring(3);
-                            }
-                            else if (phone.StartsWith("84", StringComparison.Ordinal) && phone.Length >= 11)
-                            {
-                                phone = "0" + phone.Substring(2);
-                            }
-
-                            if (!_simCache.TryGetValue(serial, out var existingPhone) || existingPhone != phone)
-                            {
-                                _simCache[serial] = phone;
-                                hasNewSim = true;
-                            }
-                        }
-                    }
-                }
-                AddLog($"[IMEI_SOURCE] Đã nạp {importedRows} dòng từ {System.IO.Path.GetFileName(csvPath)}.", "SUCCESS");
-            }
-        }
-        catch (Exception ex)
-        {
-            AddLog($"Lỗi nạp CSV: {ex.Message}", "ERROR");
-        }
-
-        if (hasNewImei)
-        {
-            SaveImeiCache();
-        }
-        if (hasNewSim)
-        {
-            SaveSimCache();
-        }
-    }
 
     public void Dispose()
     {
@@ -5276,11 +4610,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await Task.CompletedTask;
     }
 
-    [RelayCommand]
-    private void OpenImeiManager()
+    private static string NormalizeCcid(string? ccid)
     {
-        var win = new ImeiManagerWindow();
-        win.ShowDialog();
+        if (string.IsNullOrWhiteSpace(ccid)) return string.Empty;
+        string clean = ccid.Replace("+CCID:", "")
+                           .Replace("OK", "")
+                           .Replace("ERROR", "")
+                           .Replace("\r", "")
+                           .Replace("\n", "")
+                           .Trim();
+        clean = Regex.Replace(clean, @"\s+", "");
+        return clean;
     }
 }
 

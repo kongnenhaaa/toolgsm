@@ -29,14 +29,27 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _lastReceivedTime = string.Empty;
     
-    [ObservableProperty]
-    private string _lastSweepTime = string.Empty;
     
     [ObservableProperty]
     private string _otp = string.Empty;
     
     [ObservableProperty]
     private string _lastMessageContent = string.Empty;
+
+    private string _lastAudioFilePath = string.Empty;
+    public string LastAudioFilePath
+    {
+        get => _lastAudioFilePath;
+        set
+        {
+            if (SetProperty(ref _lastAudioFilePath, value))
+            {
+                OnPropertyChanged(nameof(HasAudio));
+            }
+        }
+    }
+
+    public bool HasAudio => !string.IsNullOrWhiteSpace(LastAudioFilePath) && System.IO.File.Exists(LastAudioFilePath);
 
     [ObservableProperty]
     private string _sender = string.Empty;
@@ -82,11 +95,7 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _lastError = string.Empty;
 
-    public string HealthSummary => $"TO:{TimeoutCount}  SMS:{SmsErrorCount}  RC:{ReconnectCount}";
 
-    partial void OnTimeoutCountChanged(int value) => OnPropertyChanged(nameof(HealthSummary));
-    partial void OnSmsErrorCountChanged(int value) => OnPropertyChanged(nameof(HealthSummary));
-    partial void OnReconnectCountChanged(int value) => OnPropertyChanged(nameof(HealthSummary));
     
     [ObservableProperty]
     private int _callCount = 0;
@@ -135,18 +144,9 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _createdAt = string.Empty;
 
-    [ObservableProperty]
-    private string _licenseKeySuffix = string.Empty;
-
-    [ObservableProperty]
-    private string _keyMismatch = string.Empty;
-    
     // New Pro Features
     [ObservableProperty]
     private int _signalStrength = 0; // 0 to 100
-
-    [ObservableProperty]
-    private string _forwardedTo = string.Empty; // SĐT đang được chuyển hướng cuộc gọi đến
 
     // #8: true nếu hết hạn trong vòng 7 ngày
     public bool IsExpiringSoon

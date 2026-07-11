@@ -501,15 +501,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public bool IsWatchdogEnabled
     {
-        get => SettingsService.Current.EnableAutoWatchdog;
+        get => true;
         set
         {
-            if (SettingsService.Current.EnableAutoWatchdog != value)
-            {
-                SettingsService.Current.EnableAutoWatchdog = value;
-                SettingsService.SaveSettings(SettingsService.Current);
-                OnPropertyChanged();
-            }
+            // Watchdog is always enabled by default
         }
     }
 

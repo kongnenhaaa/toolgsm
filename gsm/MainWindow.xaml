@@ -77,51 +77,84 @@
 
         <DataTemplate x:Key="PortNameHeaderTemplate">
             <StackPanel Margin="0,5">
-                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
+                <TextBlock Text="{Binding}" FontWeight="SemiBold" Margin="0,0,0,5"/>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
-                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.PortNameFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
+                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Width="15" Height="15">
+                        <materialDesign:PackIcon.Style>
+                            <Style TargetType="materialDesign:PackIcon">
+                                <Setter Property="Foreground" Value="#64748B"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ElementName=txtPortNameSearch, Path=IsFocused}" Value="True">
+                                        <Setter Property="Foreground" Value="#60A5FA"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </materialDesign:PackIcon.Style>
+                    </materialDesign:PackIcon>
+                    <TextBox x:Name="txtPortNameSearch" Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.PortNameFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
                 </Grid>
             </StackPanel>
         </DataTemplate>
 
         <DataTemplate x:Key="ImeiHeaderTemplate">
             <StackPanel Margin="0,5">
-                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
+                <TextBlock Text="{Binding}" FontWeight="SemiBold" Margin="0,0,0,5"/>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
-                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.ImeiFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
+                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Width="15" Height="15">
+                        <materialDesign:PackIcon.Style>
+                            <Style TargetType="materialDesign:PackIcon">
+                                <Setter Property="Foreground" Value="#64748B"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ElementName=txtImeiSearch, Path=IsFocused}" Value="True">
+                                        <Setter Property="Foreground" Value="#60A5FA"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </materialDesign:PackIcon.Style>
+                    </materialDesign:PackIcon>
+                    <TextBox x:Name="txtImeiSearch" Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.ImeiFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
                 </Grid>
             </StackPanel>
         </DataTemplate>
 
         <DataTemplate x:Key="SerialHeaderTemplate">
             <StackPanel Margin="0,5">
-                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
+                <TextBlock Text="{Binding}" FontWeight="SemiBold" Margin="0,0,0,5"/>
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
-                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.SerialFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
+                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Width="15" Height="15">
+                        <materialDesign:PackIcon.Style>
+                            <Style TargetType="materialDesign:PackIcon">
+                                <Setter Property="Foreground" Value="#64748B"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ElementName=txtSerialSearch, Path=IsFocused}" Value="True">
+                                        <Setter Property="Foreground" Value="#60A5FA"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </materialDesign:PackIcon.Style>
+                    </materialDesign:PackIcon>
+                    <TextBox x:Name="txtSerialSearch" Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.SerialFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
                 </Grid>
             </StackPanel>
         </DataTemplate>
 
         <DataTemplate x:Key="PhoneHeaderTemplate">
             <StackPanel Margin="0,5">
-                <Button Content="SĐT" FontWeight="Bold" Cursor="Hand"
+                <Button Content="SĐT" FontWeight="SemiBold" Cursor="Hand"
                         ToolTip="Nhấn để copy tất cả Số điện thoại"
-                        Foreground="#4CAF50" Background="Transparent" BorderThickness="0"
+                        Foreground="#CBD5E1" Background="Transparent" BorderThickness="0"
                         Padding="0" HorizontalAlignment="Left" FontSize="13"
                         Command="{Binding Path=DataContext.CopyAllPhonesCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
                 <Grid>
@@ -129,16 +162,27 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Foreground="Gray" Width="15" Height="15"/>
-                    <TextBox Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.PhoneNumberFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
+                    <materialDesign:PackIcon Kind="Magnify" VerticalAlignment="Center" Width="15" Height="15">
+                        <materialDesign:PackIcon.Style>
+                            <Style TargetType="materialDesign:PackIcon">
+                                <Setter Property="Foreground" Value="#64748B"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ElementName=txtPhoneSearch, Path=IsFocused}" Value="True">
+                                        <Setter Property="Foreground" Value="#60A5FA"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </materialDesign:PackIcon.Style>
+                    </materialDesign:PackIcon>
+                    <TextBox x:Name="txtPhoneSearch" Grid.Column="1" Margin="5,0,0,0" materialDesign:HintAssist.Hint="Tìm kiếm" Style="{StaticResource SearchTextBoxStyle}" Text="{Binding Path=DataContext.PhoneNumberFilter, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}"/>
                 </Grid>
             </StackPanel>
         </DataTemplate>
 
         <DataTemplate x:Key="FilterHeaderTemplate">
             <StackPanel Margin="0,5">
-                <TextBlock Text="{Binding}" FontWeight="Bold" Margin="0,0,0,5"/>
-                <Button Content="Lọc" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="0">
+                <TextBlock Text="{Binding}" FontWeight="SemiBold" Margin="0,0,0,5"/>
+                <Button Content="Lọc" Style="{StaticResource ModernButtonStyle}" Height="24" FontSize="11" Padding="8,0" Margin="0">
                     <Button.ContentTemplate>
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal">
@@ -507,7 +551,7 @@ GET  /api/history
 
                 <materialDesign:DialogHost IsOpen="{Binding IsExportExcelDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                        <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                        <Border Background="#182338" BorderBrush="#2A3952" BorderThickness="1" CornerRadius="10" Padding="24">
                             <Grid Width="450">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
@@ -516,24 +560,24 @@ GET  /api/history
                                 </Grid.RowDefinitions>
                                 
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
-                                    <materialDesign:PackIcon Kind="MicrosoftExcel" Width="28" Height="28" Foreground="#4CAF50" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                    <TextBlock Text="Cấu hình Xuất Excel" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                    <materialDesign:PackIcon Kind="MicrosoftExcel" Width="28" Height="28" Foreground="#22C55E" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="Cấu hình Xuất Excel" FontSize="20" FontWeight="Bold" Foreground="#F8FAFC" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 
                                 <StackPanel Grid.Row="1" Margin="0,0,0,24">
-                                    <TextBlock Text="Chọn các cột cần xuất:" Margin="0,0,0,12" Foreground="#B0BEC5" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Chọn các cột cần xuất:" Margin="0,0,0,12" Foreground="#94A3B8" FontWeight="SemiBold"/>
                                     <ItemsControl ItemsSource="{Binding ExportColumns}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <CheckBox Content="{Binding ColumnName}" IsChecked="{Binding IsSelected}" Foreground="White" Margin="0,4"/>
+                                                <CheckBox Content="{Binding ColumnName}" IsChecked="{Binding IsSelected}" Foreground="#F8FAFC" Margin="0,4"/>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
                                 </StackPanel>
                                 
                                 <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                                    <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
-                                    <Button Content="Xuất File" Command="{Binding ExecuteExportExcelCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" materialDesign:ButtonAssist.CornerRadius="6"/>
+                                    <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource ModernButtonStyle}" Margin="0,0,12,0"/>
+                                    <Button Content="Xuất File" Command="{Binding ExecuteExportExcelCommand}" Style="{StaticResource ModernButtonStyle}" Background="#22C55E" BorderBrush="#22C55E" Foreground="#F8FAFC" Height="36"/>
                                 </StackPanel>
                             </Grid>
                         </Border>
@@ -593,7 +637,7 @@ GET  /api/history
                         </materialDesign:DialogHost.DialogContent>
                     <materialDesign:DialogHost IsOpen="{Binding IsCallManagerDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
-                    <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                    <Border Background="#182338" BorderBrush="#2A3952" BorderThickness="1" CornerRadius="10" Padding="24">
                         <Grid Width="780">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
@@ -604,8 +648,8 @@ GET  /api/history
                             </Grid.RowDefinitions>
                             
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,24">
-                                <materialDesign:PackIcon Kind="PhoneForward" Width="28" Height="28" Foreground="#8BC34A" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="Quản lý cuộc gọi (Voice Call Hub)" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                <materialDesign:PackIcon Kind="PhoneForward" Width="28" Height="28" Foreground="#22C55E" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Quản lý cuộc gọi (Voice Call Hub)" FontSize="20" FontWeight="Bold" Foreground="#F8FAFC" VerticalAlignment="Center"/>
                             </StackPanel>
                             
                             <Grid Grid.Row="1" Margin="0,0,0,15">
@@ -616,15 +660,15 @@ GET  /api/history
                                 
                                 <ComboBox ItemsSource="{Binding CallManagerPortOptions}" SelectedValue="{Binding CallManagerSelectedPort}" 
                                           materialDesign:HintAssist.Hint="Chọn cổng thao tác" Style="{StaticResource MaterialDesignFloatingHintComboBox}" 
-                                          Foreground="White" Margin="0,0,20,0"/>
+                                          Foreground="#F8FAFC" Margin="0,0,20,0"/>
                                           
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
-                                    <Button Content="Bật Caller ID (CLIP)" Command="{Binding CallManagerActionCommand}" CommandParameter="EnableClip" Style="{StaticResource ModernButtonStyle}" Background="#424242" ToolTip="AT+CLIP=1"/>
-                                    <Button Content="Ẩn số gọi đi (CLIR)" Command="{Binding CallManagerActionCommand}" CommandParameter="EnableClir" Style="{StaticResource ModernButtonStyle}" Background="#424242" ToolTip="AT+CLIR=1"/>
+                                    <Button Content="Bật Caller ID (CLIP)" Command="{Binding CallManagerActionCommand}" CommandParameter="EnableClip" Style="{StaticResource ModernButtonStyle}" ToolTip="AT+CLIP=1"/>
+                                    <Button Content="Ẩn số gọi đi (CLIR)" Command="{Binding CallManagerActionCommand}" CommandParameter="EnableClir" Style="{StaticResource ModernButtonStyle}" ToolTip="AT+CLIR=1"/>
                                 </StackPanel>
                             </Grid>
 
-                            <Border Grid.Row="2" Style="{StaticResource ProDialogSectionStyle}">
+                            <Border Grid.Row="2" Style="{StaticResource ProDialogSectionStyle}" Background="#111B2E" BorderBrush="#2A3952">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -632,43 +676,43 @@ GET  /api/history
                                     </Grid.ColumnDefinitions>
                                     
                                     <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                        <TextBlock Text="ĐIỀU KHIỂN CUỘC GỌI" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,10"/>
+                                        <TextBlock Text="ĐIỀU KHIỂN CUỘC GỌI" FontSize="12" FontWeight="Bold" Foreground="#64748B" Margin="0,0,0,10"/>
                                         <Grid Margin="0,0,0,10">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBox materialDesign:HintAssist.Hint="SĐT gọi đi" Text="{Binding CallPhoneNumber}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,10,0"/>
-                                            <Button Grid.Column="1" Content="Gọi đi" Command="{Binding CallManagerActionCommand}" CommandParameter="Dial" Style="{StaticResource MaterialDesignRaisedButton}" Background="#4CAF50" BorderBrush="#4CAF50" ToolTip="ATD;"/>
+                                            <TextBox materialDesign:HintAssist.Hint="SĐT gọi đi" Text="{Binding CallPhoneNumber}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="#F8FAFC" Margin="0,0,10,0"/>
+                                            <Button Grid.Column="1" Content="Gọi đi" Command="{Binding CallManagerActionCommand}" CommandParameter="Dial" Style="{StaticResource ModernButtonStyle}" Background="#22C55E" BorderBrush="#22C55E" Foreground="#F8FAFC" Height="28" ToolTip="ATD;"/>
                                         </Grid>
                                         <Grid Margin="0,0,0,10">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBox materialDesign:HintAssist.Hint="Gửi DTMF (VD: 1, 2, #)" Text="{Binding DtmfTones}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,10,0"/>
-                                            <Button Grid.Column="1" Content="Gửi Tone" Command="{Binding CallManagerActionCommand}" CommandParameter="SendDtmf" Style="{StaticResource MaterialDesignRaisedButton}" Background="#FF9800" BorderBrush="#FF9800" ToolTip="AT+VTS"/>
+                                            <TextBox materialDesign:HintAssist.Hint="Gửi DTMF (VD: 1, 2, #)" Text="{Binding DtmfTones}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="#F8FAFC" Margin="0,0,10,0"/>
+                                            <Button Grid.Column="1" Content="Gửi Tone" Command="{Binding CallManagerActionCommand}" CommandParameter="SendDtmf" Style="{StaticResource ModernButtonStyle}" Background="#F59E0B" BorderBrush="#F59E0B" Foreground="#F8FAFC" Height="28" ToolTip="AT+VTS"/>
                                         </Grid>
                                         <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
-                                            <Button Content="Bắt máy" Command="{Binding CallManagerActionCommand}" CommandParameter="Answer" Style="{StaticResource MaterialDesignRaisedButton}" Background="#8BC34A" BorderBrush="#8BC34A" Margin="0,0,10,0" ToolTip="ATA"/>
-                                            <Button Content="Ngắt máy" Command="{Binding CallManagerActionCommand}" CommandParameter="HangUp" Style="{StaticResource MaterialDesignRaisedButton}" Background="#E53935" BorderBrush="#E53935" Margin="0,0,10,0" ToolTip="ATH"/>
-                                            <Button Content="Hold/Multi" Command="{Binding CallManagerActionCommand}" CommandParameter="Hold" Style="{StaticResource ModernButtonStyle}" Background="#424242" ToolTip="AT+CHLD=2"/>
+                                            <Button Content="Bắt máy" Command="{Binding CallManagerActionCommand}" CommandParameter="Answer" Style="{StaticResource ModernButtonStyle}" Background="#22C55E" BorderBrush="#22C55E" Foreground="#F8FAFC" Height="28" Margin="0,0,10,0" ToolTip="ATA"/>
+                                            <Button Content="Ngắt máy" Command="{Binding CallManagerActionCommand}" CommandParameter="HangUp" Style="{StaticResource ModernButtonStyle}" Background="#EF4444" BorderBrush="#EF4444" Foreground="#F8FAFC" Height="28" Margin="0,0,10,0" ToolTip="ATH"/>
+                                            <Button Content="Hold/Multi" Command="{Binding CallManagerActionCommand}" CommandParameter="Hold" Style="{StaticResource ModernButtonStyle}" Height="28" ToolTip="AT+CHLD=2"/>
                                         </StackPanel>
                                     </StackPanel>
                                     
                                     <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                                        <TextBlock Text="CẤU HÌNH &amp; CHUYỂN TIẾP" FontSize="12" FontWeight="Bold" Foreground="Gray" Margin="0,0,0,10"/>
+                                        <TextBlock Text="CẤU HÌNH &amp; CHUYỂN TIẾP" FontSize="12" FontWeight="Bold" Foreground="#64748B" Margin="0,0,0,10"/>
                                         <Grid Margin="0,0,0,10">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <TextBox materialDesign:HintAssist.Hint="SĐT Chuyển tiếp" Text="{Binding ForwardNumber}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,10,0"/>
-                                            <Button Grid.Column="1" Content="Chuyển tiếp" Command="{Binding CallManagerActionCommand}" CommandParameter="SetForwarding" Style="{StaticResource MaterialDesignRaisedButton}" Background="#2196F3" BorderBrush="#2196F3" ToolTip="AT+CCFC"/>
+                                            <TextBox materialDesign:HintAssist.Hint="SĐT Chuyển tiếp" Text="{Binding ForwardNumber}" Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="#F8FAFC" Margin="0,0,10,0"/>
+                                            <Button Grid.Column="1" Content="Chuyển tiếp" Command="{Binding CallManagerActionCommand}" CommandParameter="SetForwarding" Style="{StaticResource ModernButtonStyle}" Background="#3B82F6" BorderBrush="#3B82F6" Foreground="#F8FAFC" Height="28" ToolTip="AT+CCFC"/>
                                         </Grid>
                                         <WrapPanel Margin="0,5,0,0">
-                                            <Button Content="DS Cuộc Gọi (CLCC)" Command="{Binding CallManagerActionCommand}" CommandParameter="CallStatus" Style="{StaticResource ModernButtonStyle}" Background="#5C6BC0" ToolTip="AT+CLCC" Margin="0,0,10,10"/>
-                                            <Button Content="Call Waiting" Command="{Binding CallManagerActionCommand}" CommandParameter="CallWaiting" Style="{StaticResource ModernButtonStyle}" Background="#424242" ToolTip="AT+CCWA=1,1,1" Margin="0,0,10,10"/>
+                                            <Button Content="DS Cuộc Gọi (CLCC)" Command="{Binding CallManagerActionCommand}" CommandParameter="CallStatus" Style="{StaticResource ModernButtonStyle}" Height="28" ToolTip="AT+CLCC" Margin="0,0,10,10"/>
+                                            <Button Content="Call Waiting" Command="{Binding CallManagerActionCommand}" CommandParameter="CallWaiting" Style="{StaticResource ModernButtonStyle}" Height="28" ToolTip="AT+CCWA=1,1,1" Margin="0,0,10,10"/>
                                         </WrapPanel>
                                     </StackPanel>
                                 </Grid>
@@ -679,7 +723,7 @@ GET  /api/history
                                      Margin="0,0,0,24"/>
                             
                             <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A"/>
+                                <Button Content="Đóng" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource ModernButtonStyle}"/>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -704,7 +748,7 @@ GET  /api/history
         </Grid.ColumnDefinitions>
 
         <!-- Sidebar -->
-        <Border Grid.Column="0" Background="#1e293b" BorderBrush="#334155" BorderThickness="0,0,1,0">
+        <Border Grid.Column="0" Background="#090D16" BorderBrush="#2A3952" BorderThickness="0,0,1,0">
             <Grid>
                 <Grid.Resources>
                     <Style TargetType="TextBlock" x:Key="SidebarTextStyle">
@@ -731,7 +775,7 @@ GET  /api/history
                 <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="10,20">
                         <RadioButton GroupName="SidebarMenu" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=0}" 
-                                     Style="{StaticResource MaterialDesignTabRadioButton}" Margin="0,5" Height="45" HorizontalContentAlignment="Left" Padding="15,0">
+                                     Style="{StaticResource SidebarTabRadioButtonStyle}" Margin="0,5" Height="45" HorizontalContentAlignment="Left" Padding="15,0">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <materialDesign:PackIcon Kind="UsbPort" Width="20" Height="20" Margin="0,0,15,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Quản lý GSM" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
@@ -739,7 +783,7 @@ GET  /api/history
                         </RadioButton>
                         
                         <RadioButton GroupName="SidebarMenu" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=1}" 
-                                     Style="{StaticResource MaterialDesignTabRadioButton}" Margin="0,5" Height="45" HorizontalContentAlignment="Left" Padding="15,0">
+                                     Style="{StaticResource SidebarTabRadioButtonStyle}" Margin="0,5" Height="45" HorizontalContentAlignment="Left" Padding="15,0">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <materialDesign:PackIcon Kind="MessageText" Width="20" Height="20" Margin="0,0,15,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Tin Nhắn SMS" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
@@ -747,7 +791,7 @@ GET  /api/history
                         </RadioButton>
                         
                         <RadioButton GroupName="SidebarMenu" IsChecked="{Binding SelectedTabIndex, Converter={StaticResource EqualityToBooleanConverter}, ConverterParameter=2}" 
-                                     Style="{StaticResource MaterialDesignTabRadioButton}" Margin="0,5" Height="45" HorizontalContentAlignment="Left" Padding="15,0">
+                                     Style="{StaticResource SidebarTabRadioButtonStyle}" Margin="0,5" Height="45" HorizontalContentAlignment="Left" Padding="15,0">
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <materialDesign:PackIcon Kind="HelpCircleOutline" Width="20" Height="20" Margin="0,0,15,0" VerticalAlignment="Center"/>
                                 <TextBlock Text="Hướng Dẫn" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
@@ -757,15 +801,15 @@ GET  /api/history
                         <Separator Background="#334155" Margin="10,15" />
                         <TextBlock Text="CÔNG CỤ" FontSize="12" Foreground="#94a3b8" FontWeight="SemiBold" Margin="15,0,0,10" Style="{StaticResource SidebarTextStyle}"/>
                         
-                        <Button Background="#5C6BC0" Command="{Binding ToggleCommandPanelCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Mở/đóng bảng lệnh" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Command="{Binding ToggleCommandPanelCommand}" Style="{StaticResource SidebarToolButtonStyle}" ToolTip="Mở/đóng bảng lệnh">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Asterisk" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="Asterisk" Foreground="#A7B2C7" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Bảng lệnh" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                         </Button>
-                        <Button Background="#F06292" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Sắp xếp cổng" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Style="{StaticResource SidebarToolButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Sắp xếp cổng">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="SortAscending" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="SortAscending" Foreground="#A7B2C7" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Sắp xếp cổng" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                             <Button.ContextMenu>
@@ -788,9 +832,9 @@ GET  /api/history
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Kiểm tra số dư" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Style="{StaticResource SidebarToolButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Kiểm tra số dư">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Wallet" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="Wallet" Foreground="#A7B2C7" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Kiểm tra số dư" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                             <Button.ContextMenu>
@@ -804,9 +848,9 @@ GET  /api/history
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Đặt pass MyVNPT" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Style="{StaticResource SidebarToolButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Đặt pass MyVNPT">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Key" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="Key" Foreground="#F59E0B" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Đặt pass MyVNPT" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                             <Button.ContextMenu>
@@ -824,15 +868,15 @@ GET  /api/history
                             </Button.ContextMenu>
                         </Button>
                         <!-- Sidebar USSD Button removed -->
-                        <Button Background="#424242" Command="{Binding OpenExportExcelDialogCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Xuất danh sách cổng ra file Excel" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Command="{Binding OpenExportExcelDialogCommand}" Style="{StaticResource SidebarToolButtonStyle}" ToolTip="Xuất danh sách cổng ra file Excel">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="MicrosoftExcel" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#4CAF50"/>
+                                <materialDesign:PackIcon Kind="MicrosoftExcel" Foreground="#22C55E" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Xuất Excel" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                         </Button>
-                        <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Quét tin nhắn kẹt" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Style="{StaticResource SidebarToolButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Quét tin nhắn kẹt">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Broom" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#00E676"/>
+                                <materialDesign:PackIcon Kind="Broom" Foreground="#22D3EE" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Quét tin kẹt" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                             <Button.ContextMenu>
@@ -846,9 +890,9 @@ GET  /api/history
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Làm mới hoặc Khởi động lại cổng" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Style="{StaticResource SidebarToolButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Làm mới hoặc Khởi động lại cổng">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Refresh" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="Refresh" Foreground="#EF4444" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Làm mới / Reset" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                             <Button.ContextMenu>
@@ -874,10 +918,10 @@ GET  /api/history
                             </Button.ContextMenu>
                         </Button>
 
-                        <Button Background="#424242" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Ngắt sóng an toàn để đổi SIM" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Style="{StaticResource SidebarToolButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Ngắt sóng an toàn để đổi SIM">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="SimOutline" VerticalAlignment="Center" Margin="0,0,10,0" Foreground="#81C784"/>
-                                <TextBlock Text="Đổi SIM mới" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}" Foreground="#81C784"/>
+                                <materialDesign:PackIcon Kind="SimOutline" Foreground="#A7B2C7" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Đổi SIM mới" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                             <Button.ContextMenu>
                                 <ContextMenu>
@@ -895,22 +939,22 @@ GET  /api/history
                             </Button.ContextMenu>
                         </Button>
 
-                        <Button Background="#9C27B0" Style="{StaticResource ModernButtonStyle}" Command="{Binding ApproveUnknownSimCommand}" CommandParameter="AllBlocked" ToolTip="Duyệt tất cả SIM lạ đang bị chặn" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Command="{Binding ApproveUnknownSimCommand}" CommandParameter="AllBlocked" Style="{StaticResource SidebarToolButtonStyle}" ToolTip="Duyệt tất cả SIM lạ đang bị chặn">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="CheckDecagram" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="CheckDecagram" Foreground="#A7B2C7" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Duyệt tất cả SIM lạ" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                         </Button>
 
-                        <Button Background="#26C6DA" Command="{Binding OpenTopUpDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}" ToolTip="Nạp thẻ cào điện thoại" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Command="{Binding OpenTopUpDialogCommand}" CommandParameter="All" Style="{StaticResource PrimarySidebarToolButtonStyle}" ToolTip="Nạp thẻ cào điện thoại">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="CreditCardPlus" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="CreditCardPlus" Foreground="White" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Nạp thẻ" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                         </Button>
-                        <Button Background="#E91E63" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Đăng ký dịch vụ EZ COM (Vinaphone)" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Style="{StaticResource SidebarToolButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Đăng ký dịch vụ EZ COM (Vinaphone)">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="SimAlert" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="SimAlert" Foreground="#A7B2C7" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Đăng ký EZ COM" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                             <Button.ContextMenu>
@@ -925,9 +969,9 @@ GET  /api/history
                             </Button.ContextMenu>
                         </Button>
                         <!-- Sidebar ComposeSms Button removed -->
-                        <Button Background="#66BB6A" Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Quản lý lịch sử và thực hiện cuộc gọi" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Command="{Binding OpenCallManagerDialogCommand}" Style="{StaticResource SidebarToolButtonStyle}" ToolTip="Quản lý lịch sử và thực hiện cuộc gọi">
                             <StackPanel Orientation="Horizontal">
-                                <materialDesign:PackIcon Kind="Phone" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <materialDesign:PackIcon Kind="Phone" Foreground="#A7B2C7" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Quản lý cuộc gọi" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
                         </Button>
@@ -946,24 +990,24 @@ GET  /api/history
             </Grid.RowDefinitions>
 
             <!-- Header -->
-            <Border Grid.Row="0" Background="#0f172a" BorderBrush="#1e293b" BorderThickness="0,0,0,1">
+            <Border Grid.Row="0" Background="#111B2E" BorderBrush="#2A3952" BorderThickness="0,0,0,1">
                 <Grid>
                     <StackPanel Orientation="Horizontal" Margin="20,0" VerticalAlignment="Center">
-                        <ToggleButton x:Name="ToggleSidebarButton" Style="{StaticResource MaterialDesignHamburgerToggleButton}" Foreground="White" Margin="0,0,15,0"/>
-                        <TextBlock Text="Trang chủ" FontSize="18" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Center"/>
+                        <ToggleButton x:Name="ToggleSidebarButton" Style="{StaticResource MaterialDesignHamburgerToggleButton}" Foreground="#CBD5E1" Margin="0,0,15,0"/>
+                        <TextBlock Text="Trang chủ" FontSize="20" FontWeight="SemiBold" Foreground="#F8FAFC" VerticalAlignment="Center"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="15,0">
-                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Terminal (Lệnh AT)" Height="40" Width="40" Command="{Binding OpenAtCommandDialogCommand}" Background="#1e293b" BorderThickness="0">
-                            <materialDesign:PackIcon Kind="Terminal" Foreground="#2196F3" Width="20" Height="20"/>
+                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Terminal (Lệnh AT)" Height="40" Width="40" Command="{Binding OpenAtCommandDialogCommand}" Background="Transparent" BorderThickness="0">
+                            <materialDesign:PackIcon Kind="Terminal" Foreground="#60A5FA" Width="20" Height="20"/>
                         </Button>
-                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý IMEI" Height="40" Width="40" Margin="10,0" Command="{Binding OpenImeiManagerCommand}" Background="#1e293b" BorderThickness="0">
-                            <materialDesign:PackIcon Kind="CellphoneSettings" Foreground="#e2e8f0" Width="20" Height="20"/>
+                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý IMEI" Height="40" Width="40" Margin="10,0" Command="{Binding OpenImeiManagerCommand}" Background="Transparent" BorderThickness="0">
+                            <materialDesign:PackIcon Kind="CellphoneSettings" Foreground="#CBD5E1" Width="20" Height="20"/>
                         </Button>
-                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý hiển thị (Ẩn/Hiện cột)" Height="40" Width="40" Margin="0,0,10,0" Command="{Binding OpenDisplayColumnsDialogCommand}" Background="#1e293b" BorderThickness="0">
-                            <materialDesign:PackIcon Kind="ViewColumn" Foreground="#FF9800" Width="20" Height="20"/>
+                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý hiển thị (Ẩn/Hiện cột)" Height="40" Width="40" Margin="0,0,10,0" Command="{Binding OpenDisplayColumnsDialogCommand}" Background="Transparent" BorderThickness="0">
+                            <materialDesign:PackIcon Kind="ViewColumn" Foreground="#F59E0B" Width="20" Height="20"/>
                         </Button>
-                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Cài đặt hệ thống" Height="40" Width="40" Command="{Binding OpenSettingsDialogCommand}" Background="#1e293b" BorderThickness="0">
-                            <materialDesign:PackIcon Kind="Cog" Foreground="#e2e8f0" Width="20" Height="20"/>
+                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Cài đặt hệ thống" Height="40" Width="40" Command="{Binding OpenSettingsDialogCommand}" Background="Transparent" BorderThickness="0">
+                            <materialDesign:PackIcon Kind="Cog" Foreground="#CBD5E1" Width="20" Height="20"/>
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -999,138 +1043,89 @@ GET  /api/history
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     
-                    <!-- ToolBar GSM -->
-                    <Border Grid.Row="0" Background="{StaticResource AppBackground}" BorderBrush="#333" BorderThickness="0,0,0,1">
-                        <WrapPanel Margin="10,5">
-                            <!-- Action buttons have been moved to the sidebar -->
-                            <StackPanel Orientation="Horizontal">
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Đẩy OTT Web" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsWebNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Đẩy OTP/SMS lên máy chủ Web"/>
-                                    </StackPanel>
-                                </Border>
-    
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Đẩy Telegram" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsTelegramNotificationEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bắn thông báo OTP/SMS qua Telegram"/>
-                                    </StackPanel>
-                                </Border>
-    
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Tự phục hồi (Watchdog)" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsWatchdogEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động khởi động lại Modem (AT+CFUN=1,1) khi bị lỗi/mất sóng"/>
-                                    </StackPanel>
-                                </Border>
-    
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8" Visibility="Collapsed">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="Tự nhấc máy" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
-                                        <ToggleButton IsChecked="{Binding IsAutoAnswerEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động bắt máy (ATA) khi có cuộc gọi đến"/>
-                                    </StackPanel>
-                                </Border>
-    
-                            </StackPanel>
-
-                            <!-- 3 Ưu tiên IMEI -->
-                            <StackPanel Orientation="Horizontal" Visibility="Collapsed">
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[1] Phục hồi IMEI" Foreground="#FFB300" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
-                                        <ToggleButton IsChecked="{Binding IsImeiRestoreEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác"/>
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[2] Chặn SIM lạ" Foreground="#90CAF9" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold" Visibility="Collapsed"/>
-                                        <ToggleButton IsChecked="{Binding IsBlockUnknownSimsEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)" Visibility="Collapsed"/>
-                                    </StackPanel>
-                                </Border>
-
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[3] Nạp SIM Mới" Foreground="#FF5252" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
-                                        <ToggleButton IsChecked="{Binding IsNewSimIntakeModeEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Nạp SIM Mới (Tráng Fake IMEI cho cổng trống)"/>
-                                    </StackPanel>
-                                </Border>
-                            </StackPanel>
-                        </WrapPanel>
-                    </Border>
-
-                    <UniformGrid Grid.Row="1" Columns="4" Margin="10,10,10,5">
+                    <UniformGrid Grid.Row="0" Columns="4" Margin="10,10,10,5">
                         <!-- Tổng COM -->
-                        <Border Background="#1E1E2E" CornerRadius="8" Margin="0,0,8,0" Padding="15,10">
+                        <Border Background="#182338" BorderBrush="#2A3952" BorderThickness="1" CornerRadius="10" Margin="0,0,8,0">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                    <TextBlock Text="Tổng COM" Foreground="#A0A0B0" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
-                                    <TextBlock Text="{Binding TotalPortCount}" Foreground="White" FontSize="22" FontWeight="Bold"/>
-                                </StackPanel>
-                                <materialDesign:PackIcon Grid.Column="1" Kind="UsbPort" Width="28" Height="28" Foreground="#3A3A4A" VerticalAlignment="Center"/>
+                                <Border Background="#3B82F6" Width="4" HorizontalAlignment="Left" VerticalAlignment="Stretch" CornerRadius="3,0,0,3"/>
+                                <Grid Margin="15,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="8,0,0,0">
+                                        <TextBlock Text="Tổng COM" Foreground="#CBD5E1" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding TotalPortCount}" Foreground="#3B82F6" FontSize="22" FontWeight="Bold"/>
+                                    </StackPanel>
+                                    <materialDesign:PackIcon Grid.Column="1" Kind="UsbPort" Width="28" Height="28" Foreground="#3B82F6" VerticalAlignment="Center"/>
+                                </Grid>
                             </Grid>
                         </Border>
                         
                         <!-- Online -->
-                        <Border Background="#11281F" CornerRadius="8" Margin="0,0,8,0" Padding="15,10">
+                        <Border Background="#182338" BorderBrush="#2A3952" BorderThickness="1" CornerRadius="10" Margin="0,0,8,0">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                    <TextBlock Text="Online" Foreground="#8BE6B0" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
-                                    <TextBlock Text="{Binding OnlinePortCount}" Foreground="#4CAF50" FontSize="22" FontWeight="Bold"/>
-                                </StackPanel>
-                                <materialDesign:PackIcon Grid.Column="1" Kind="CheckCircleOutline" Width="28" Height="28" Foreground="#1B5E20" VerticalAlignment="Center"/>
+                                <Border Background="#22C55E" Width="4" HorizontalAlignment="Left" VerticalAlignment="Stretch" CornerRadius="3,0,0,3"/>
+                                <Grid Margin="15,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="8,0,0,0">
+                                        <TextBlock Text="Online" Foreground="#CBD5E1" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding OnlinePortCount}" Foreground="#22C55E" FontSize="22" FontWeight="Bold"/>
+                                    </StackPanel>
+                                    <materialDesign:PackIcon Grid.Column="1" Kind="CheckCircleOutline" Width="28" Height="28" Foreground="#22C55E" VerticalAlignment="Center"/>
+                                </Grid>
                             </Grid>
                         </Border>
                         
                         <!-- Offline -->
-                        <Border Background="#2A1820" CornerRadius="8" Margin="0,0,8,0" Padding="15,10">
+                        <Border Background="#182338" BorderBrush="#2A3952" BorderThickness="1" CornerRadius="10" Margin="0,0,8,0">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                    <TextBlock Text="Offline" Foreground="#FF9AA8" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
-                                    <TextBlock Text="{Binding OfflinePortCount}" Foreground="#FF5252" FontSize="22" FontWeight="Bold"/>
-                                </StackPanel>
-                                <materialDesign:PackIcon Grid.Column="1" Kind="CloseCircleOutline" Width="28" Height="28" Foreground="#8E1D2A" VerticalAlignment="Center"/>
+                                <Border Background="#EF4444" Width="4" HorizontalAlignment="Left" VerticalAlignment="Stretch" CornerRadius="3,0,0,3"/>
+                                <Grid Margin="15,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="8,0,0,0">
+                                        <TextBlock Text="Offline" Foreground="#CBD5E1" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding OfflinePortCount}" Foreground="#EF4444" FontSize="22" FontWeight="Bold"/>
+                                    </StackPanel>
+                                    <materialDesign:PackIcon Grid.Column="1" Kind="CloseCircleOutline" Width="28" Height="28" Foreground="#EF4444" VerticalAlignment="Center"/>
+                                </Grid>
                             </Grid>
                         </Border>
                         
                         <!-- SMS Nhận -->
-                        <Border Background="#2E2211" CornerRadius="8" Margin="0,0,0,0" Padding="15,10">
+                        <Border Background="#182338" BorderBrush="#2A3952" BorderThickness="1" CornerRadius="10" Margin="0,0,0,0">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                    <TextBlock Text="SMS Nhận" Foreground="#FFD27A" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
-                                    <TextBlock Text="{Binding SmsReceivedCount}" Foreground="#FF9800" FontSize="22" FontWeight="Bold"/>
-                                </StackPanel>
-                                <materialDesign:PackIcon Grid.Column="1" Kind="MessageTextOutline" Width="28" Height="28" Foreground="#7A5212" VerticalAlignment="Center"/>
+                                <Border Background="#F59E0B" Width="4" HorizontalAlignment="Left" VerticalAlignment="Stretch" CornerRadius="3,0,0,3"/>
+                                <Grid Margin="15,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="8,0,0,0">
+                                        <TextBlock Text="SMS Nhận" Foreground="#CBD5E1" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding SmsReceivedCount}" Foreground="#F59E0B" FontSize="22" FontWeight="Bold"/>
+                                    </StackPanel>
+                                    <materialDesign:PackIcon Grid.Column="1" Kind="MessageTextOutline" Width="28" Height="28" Foreground="#F59E0B" VerticalAlignment="Center"/>
+                                </Grid>
                             </Grid>
                         </Border>
                     </UniformGrid>
 
                     
                     <!-- GSM DataGrid Wrapper -->
-                    <Border Grid.Row="2" Background="#1e293b" CornerRadius="12" Margin="10" Padding="5">
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                            <DataGrid ItemsSource="{Binding FilteredPortsView}" SelectedItem="{Binding SelectedPort}" 
+                    <Border Grid.Row="1" Background="#182338" BorderBrush="#2A3952" BorderThickness="1" CornerRadius="10" Margin="10" Padding="5">
+                        <Grid>
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                                <DataGrid x:Name="MainDataGrid" ItemsSource="{Binding FilteredPortsView}" SelectedItem="{Binding SelectedPort}" 
                                       MouseDoubleClick="DataGrid_MouseDoubleClick"
                                       Style="{StaticResource ProDataGridStyle}"
                                       Margin="1"
@@ -1220,27 +1215,39 @@ GET  /api/history
                                         <Border CornerRadius="6" Padding="8,4" HorizontalAlignment="Left" VerticalAlignment="Center">
                                             <Border.Style>
                                                 <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="#33F44336"/>
+                                                    <Setter Property="Background" Value="#1EEF4444"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding Status}" Value="Active">
-                                                            <Setter Property="Background" Value="#334CAF50"/>
+                                                            <Setter Property="Background" Value="#1E22C55E"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding Status}" Value="Offline">
-                                                            <Setter Property="Background" Value="#339E9E9E"/>
+                                                            <Setter Property="Background" Value="#1EEF4444"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Connecting">
+                                                            <Setter Property="Background" Value="#1EF59E0B"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Status}" Value="Unknown">
+                                                            <Setter Property="Background" Value="#1E64748B"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontWeight="Bold">
+                                            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontWeight="SemiBold">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="#F44336"/>
+                                                        <Setter Property="Foreground" Value="#EF4444"/>
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding Status}" Value="Active">
-                                                                <Setter Property="Foreground" Value="#4CAF50"/>
+                                                                <Setter Property="Foreground" Value="#22C55E"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding Status}" Value="Offline">
-                                                                <Setter Property="Foreground" Value="#9E9E9E"/>
+                                                                <Setter Property="Foreground" Value="#EF4444"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Connecting">
+                                                                <Setter Property="Foreground" Value="#F59E0B"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Unknown">
+                                                                <Setter Property="Foreground" Value="#64748B"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -1307,7 +1314,25 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150" Visibility="{Binding Data.AppSettings.ShowColLastReceived, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
                         </DataGrid.Columns>
                     </DataGrid>
-                        </ScrollViewer>
+                            </ScrollViewer>
+                            
+                            <!-- Empty State Panel -->
+                            <StackPanel x:Name="EmptyStatePanel" VerticalAlignment="Center" HorizontalAlignment="Center" Panel.ZIndex="10">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ElementName=MainDataGrid, Path=HasItems}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <materialDesign:PackIcon Kind="UsbPort" Width="48" Height="48" Foreground="#64748B" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                                <TextBlock Text="Chưa phát hiện thiết bị" Foreground="#CBD5E1" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,0,0,5"/>
+                                <TextBlock Text="Kết nối thiết bị hoặc nhấn Làm mới để bắt đầu" Foreground="#64748B" FontSize="13" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
                     </Border>
                 </Grid>
             </TabItem>
@@ -1342,11 +1367,11 @@ GET  /api/history
                                     <TextBlock Text="NGƯỜI GỬI" FontSize="11" Foreground="Gray" FontWeight="Bold" Margin="0,0,0,4"/>
                                     <TextBox Width="140" Text="{Binding SmsSenderFilter, UpdateSourceTrigger=PropertyChanged}" materialDesign:HintAssist.Hint="Tìm người gửi..." Style="{StaticResource SearchTextBoxStyle}"/>
                                 </StackPanel>
-                                <Button Content="Lọc Dữ Liệu" Command="{Binding ApplySmsFilterCommand}" Background="#F06292" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
+                                <Button Content="Lọc Dữ Liệu" Command="{Binding ApplySmsFilterCommand}" Style="{StaticResource ModernButtonStyle}" Width="110" Height="34" VerticalAlignment="Bottom" Margin="0"/>
                             </StackPanel>
 
                             <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
-                                <Button Command="{Binding MarkAllSmsReadCommand}" Background="#424242" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
+                                <Button Command="{Binding MarkAllSmsReadCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Đánh dấu đã đọc" Width="34" Padding="0" Margin="0,0,8,0">
                                     <materialDesign:PackIcon Kind="CheckAll" Foreground="White"/>
                                 </Button>
                                 <Button Command="{Binding DeleteFilteredSmsCommand}" Background="#E53935" Style="{StaticResource ModernButtonStyle}" ToolTip="Xóa tin nhắn" Width="34" Padding="0" Margin="0,0,8,0">
@@ -2381,15 +2406,15 @@ GET  /api/history
 
 
         <!-- #6: Terminal Log với bộ lọc theo cổng -->
-        <Expander Grid.Row="2" Background="#020617" Foreground="#4CAF50" ExpandDirection="Up" Padding="0" Header="Lịch sử AT Commands (Terminal)" FontFamily="Consolas">
-            <Border BorderBrush="#333" BorderThickness="0,1,0,0" Height="170">
+        <Expander Grid.Row="2" Background="#080E1A" Foreground="#CBD5E1" ExpandDirection="Up" Padding="0" Header="Lịch sử AT Commands (Terminal)" FontFamily="Consolas">
+            <Border BorderBrush="#2A3952" BorderThickness="0,1,0,0" Background="#080E1A" Height="170">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <!-- Filter bar -->
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Background="#020617" Margin="10,4">
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Background="#080E1A" Margin="10,4">
                         <materialDesign:PackIcon Kind="FilterOutline" VerticalAlignment="Center" Foreground="Gray" Margin="0,0,6,0"/>
                         <TextBox Width="120" Text="{Binding LogFilter, UpdateSourceTrigger=PropertyChanged}" 
                                  materialDesign:HintAssist.Hint="Lọc cổng (VD: COM41)"
@@ -2416,10 +2441,36 @@ GET  /api/history
                         </ListBox.ContextMenu>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding Time}" Foreground="Gray" Margin="0,0,10,0"/>
-                                    <TextBlock Text="{Binding Level}" Foreground="Cyan" Margin="0,0,10,0" Width="50"/>
-                                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,2">
+                                    <TextBlock Text="{Binding Time}" Foreground="#64748B" Margin="0,0,10,0" FontFamily="Consolas"/>
+                                    <TextBlock Text="{Binding Level}" Margin="0,0,10,0" Width="65" FontWeight="Bold" FontFamily="Consolas">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="#60A5FA"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Level}" Value="ERROR">
+                                                        <Setter Property="Foreground" Value="#F87171"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Level}" Value="WARN">
+                                                        <Setter Property="Foreground" Value="#FBBF24"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Level}" Value="WARNING">
+                                                        <Setter Property="Foreground" Value="#FBBF24"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Level}" Value="SUCCESS">
+                                                        <Setter Property="Foreground" Value="#4ADE80"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Level}" Value="FIREBASE">
+                                                        <Setter Property="Foreground" Value="#60A5FA"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Level}" Value="INFO">
+                                                        <Setter Property="Foreground" Value="#60A5FA"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding Message}" Foreground="#CBD5E1" TextWrapping="Wrap" FontFamily="Consolas"/>
                                 </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -2429,12 +2480,12 @@ GET  /api/history
         </Expander>
 
         <!-- Status Bar -->
-        <StatusBar Grid.Row="3" Background="#020617" Foreground="#94a3b8" Padding="10,5" BorderBrush="#334155" BorderThickness="0,1,0,0">
+        <StatusBar Grid.Row="3" Background="#080E1A" Foreground="#CBD5E1" Padding="10,5" BorderBrush="#2A3952" BorderThickness="0,1,0,0">
             <StatusBarItem>
                 <TextBlock Text="{Binding Ports.Count, StringFormat='Số lượng cổng: \{0\}'}"/>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Center">
-                <TextBlock Text="{Binding VnptSummaryText}" Foreground="#FFC107" FontWeight="Bold"/>
+                <TextBlock Text="{Binding VnptSummaryText}" Foreground="#F59E0B" FontWeight="Bold"/>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Text="{Binding SmsMessages.Count, StringFormat='Mẹo: Giữ Ctrl và lăn chuột để phóng to/thu nhỏ bảng | Tổng SMS: \{0\}'}"/>

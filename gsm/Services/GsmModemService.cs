@@ -372,6 +372,8 @@ public class GsmModemService : IGsmModemService
         // Lặp vô hạn cho đến khi có mạng hoặc cổng bị rút
         _ = Task.Run(async () =>
         {
+            int attempts = 0;
+            int recoveryCount = 0;
             while (true)
             {
                 await Task.Delay(2000);
@@ -382,6 +384,30 @@ public class GsmModemService : IGsmModemService
                 {
                     // Lấy mạng thành công, nhả sự kiện ra để ViewModel bắt và tự động chạy USSD
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = copsStr.Trim() });
+                    break;
+                }
+
+                attempts++;
+                
+                // Khôi phục sóng nếu kẹt quá lâu (Khoảng 20 giây = 10 lần)
+                if (attempts > 10 && recoveryCount < 2)
+                {
+                    attempts = 0;
+                    recoveryCount++;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_RECOVERY] Không tìm thấy sóng, đang thử khôi phục mạng lần {recoveryCount}..." });
+                    
+                    // Toggle chế độ máy bay để reset cọc sóng
+                    await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                    await Task.Delay(1000);
+                    await SendCommandAsync(portName, "AT+CFUN=1", 10000, silent: true);
+                    
+                    // Ép tự động quét lại trạm sóng mạng
+                    await SendCommandAsync(portName, "AT+COPS=0", 10000, silent: true);
+                }
+                else if (attempts > 10 && recoveryCount >= 2)
+                {
+                    // Đã thử khôi phục 2 lần mà vẫn không có sóng -> SIM chết hoặc thực sự không có sóng
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[NETWORK_FAILED] SIM bị nhà mạng từ chối (bị khóa) hoặc không có sóng." });
                     break;
                 }
             }

@@ -1845,7 +1845,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (port == null)
             {
-                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]"))
+                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]") || e.Data.StartsWith("[NETWORK_RECOVERY]") || e.Data.StartsWith("[NETWORK_FAILED]"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = SimStatus.Active, SignalStrength = 0 };
                     port.PhysicalIndex = _modemService.GetAvailablePorts().IndexOf(e.PortName);
@@ -1884,6 +1884,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.LastMessageContent = string.Empty;
                 port.Sender = string.Empty;
                 port.SignalStrength = 0;
+            }
+            else if (e.Data.StartsWith("[NETWORK_RECOVERY]"))
+            {
+                port.DeviceName = "Đang khôi phục sóng...";
+                port.Status = SimStatus.Connecting;
+            }
+            else if (e.Data.StartsWith("[NETWORK_FAILED]"))
+            {
+                port.DeviceName = "SIM hỏng hoặc không có sóng";
+                port.Status = SimStatus.NoResponse;
+                port.NetworkProvider = "MẤT SÓNG";
             }
             else if (e.Data.Contains("+CSQ:"))
             {

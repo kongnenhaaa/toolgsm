@@ -1966,6 +1966,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     var expiryMatch = Regex.Match(ussdContent, @"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b");
                     if (expiryMatch.Success) port.ExpiryDate = expiryMatch.Groups[1].Value;
 
+                    UpdateDashboard(); // Refresh online/offline count when Balance is updated
+
                     // SnackbarMessageQueue.Enqueue($"[{e.PortName}] USSD: {ussdContent}");
                 }
             }

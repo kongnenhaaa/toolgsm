@@ -390,7 +390,7 @@ public class GsmModemService : IGsmModemService
                 attempts++;
                 
                 // Khôi phục sóng nếu kẹt quá lâu (Khoảng 20 giây = 10 lần)
-                if (attempts > 10 && recoveryCount < 2)
+                if (attempts > 10)
                 {
                     attempts = 0;
                     recoveryCount++;
@@ -403,12 +403,6 @@ public class GsmModemService : IGsmModemService
                     
                     // Ép tự động quét lại trạm sóng mạng
                     await SendCommandAsync(portName, "AT+COPS=0", 10000, silent: true);
-                }
-                else if (attempts > 10 && recoveryCount >= 2)
-                {
-                    // Đã thử khôi phục 2 lần mà vẫn không có sóng -> SIM chết hoặc thực sự không có sóng
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[NETWORK_FAILED] SIM bị nhà mạng từ chối (bị khóa) hoặc không có sóng." });
-                    break;
                 }
             }
         });

@@ -32,6 +32,7 @@ public interface IGsmModemService
     event EventHandler<GsmDataEventArgs> PortDisconnected;
     event EventHandler<GsmDataEventArgs> CallIncoming;
     event EventHandler<GsmDataEventArgs> CallEnded;
+    event EventHandler<GsmDataEventArgs> DtmfReceived;
 }
 
 public class GsmDataEventArgs : EventArgs
@@ -58,10 +59,111 @@ public class GsmModemService : IGsmModemService
     public event EventHandler<GsmDataEventArgs>? PortDisconnected;
     public event EventHandler<GsmDataEventArgs>? CallIncoming;
     public event EventHandler<GsmDataEventArgs>? CallEnded;
+    public event EventHandler<GsmDataEventArgs>? DtmfReceived;
 
     public List<string> GetAvailablePorts()
     {
-        return new List<string>(SerialPort.GetPortNames());
+        var allSystemPorts = new HashSet<string>(SerialPort.GetPortNames());
+        var usbPorts = new List<string>();
+        var bluetoothPorts = new HashSet<string>();
+
+        // 1. Quét tìm các cổng COM thuộc USB
+        try
+        {
+            using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\USB"))
+            {
+                if (key != null)
+                {
+                    foreach (var vidPid in key.GetSubKeyNames())
+                    {
+                        using (var vidPidKey = key.OpenSubKey(vidPid))
+                        {
+                            if (vidPidKey == null) continue;
+                            foreach (var instance in vidPidKey.GetSubKeyNames())
+                            {
+                                using (var instanceKey = vidPidKey.OpenSubKey(instance))
+                                {
+                                    if (instanceKey == null) continue;
+                                    using (var paramsKey = instanceKey.OpenSubKey("Device Parameters"))
+                                    {
+                                        if (paramsKey != null)
+                                        {
+                                            var portName = paramsKey.GetValue("PortName") as string;
+                                            if (!string.IsNullOrEmpty(portName))
+                                            {
+                                                usbPorts.Add(portName);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        // 2. Quét tìm các cổng COM thuộc Bluetooth để loại trừ
+        try
+        {
+            using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\BTHENUM"))
+            {
+                if (key != null)
+                {
+                    foreach (var sub in key.GetSubKeyNames())
+                    {
+                        using (var subKey = key.OpenSubKey(sub))
+                        {
+                            if (subKey == null) continue;
+                            foreach (var instance in subKey.GetSubKeyNames())
+                            {
+                                using (var instanceKey = subKey.OpenSubKey(instance))
+                                {
+                                    if (instanceKey == null) continue;
+                                    using (var paramsKey = instanceKey.OpenSubKey("Device Parameters"))
+                                    {
+                                        if (paramsKey != null)
+                                        {
+                                            var portName = paramsKey.GetValue("PortName") as string;
+                                            if (!string.IsNullOrEmpty(portName))
+                                            {
+                                                bluetoothPorts.Add(portName);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        // Lọc các cổng COM thực sự đang hoạt động và là USB, đồng thời loại bỏ hoàn toàn Bluetooth
+        var filtered = new List<string>();
+        foreach (var p in usbPorts)
+        {
+            if (allSystemPorts.Contains(p) && !bluetoothPorts.Contains(p) && !filtered.Contains(p))
+            {
+                filtered.Add(p);
+            }
+        }
+
+        // Fallback nếu danh sách lọc trống
+        if (filtered.Count == 0)
+        {
+            foreach (var p in allSystemPorts)
+            {
+                if (!bluetoothPorts.Contains(p))
+                {
+                    filtered.Add(p);
+                }
+            }
+        }
+
+        return filtered;
     }
 
     public void ConnectAll(int baudRate = 115200)
@@ -70,7 +172,13 @@ public class GsmModemService : IGsmModemService
 
         lock (_connectLock)
         {
+            // Xóa cache ngủ và đếm lỗi để quét mới hoàn toàn
+            _sleepingPorts.Clear();
+            _connectionErrors.Clear();
+
             var ports = GetAvailablePorts();
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = "SYSTEM", Data = $"[HỆ THỐNG] Quét cổng COM: Phát hiện {ports.Count} cổng trong Windows ({string.Join(", ", ports)})" });
+
             foreach (var p in ports)
             {
                 if (!_serialPorts.ContainsKey(p))
@@ -113,9 +221,9 @@ public class GsmModemService : IGsmModemService
                         int errors = _connectionErrors.AddOrUpdate(p, 1, (key, old) => old + 1);
                         if (errors >= 3)
                         {
-                            _sleepingPorts[p] = DateTime.Now.AddMinutes(5); // Cho cổng ngủ 5 phút
+                            _sleepingPorts[p] = DateTime.Now.AddSeconds(30); // Cho cổng ngủ 30 giây
                             _connectionErrors.TryRemove(p, out _);
-                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p} quá 3 lần: {ex.Message}. Tạm ngưng kết nối cổng này trong 5 phút để tránh spam log." });
+                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p} quá 3 lần: {ex.Message}. Tạm ngưng kết nối cổng này trong 30 giây để tránh spam log." });
                         }
                         else
                         {
@@ -202,6 +310,7 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CMGF=1", 30000); // Set SMS to text mode
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
         await SendCommandAsync(portName, "AT+CLIP=1", 30000); // Hiển thị thông tin người gọi
+        await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
         
         // Bật xuất âm thanh cuộc gọi ra cổng USB (UAC) cho Quectel EC20
         await SendCommandAsync(portName, "AT+QPCMV=0,0", 30000); 
@@ -314,6 +423,7 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CLIP=1", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true); // Bật bộ phát hiện âm tần DTMF
         await SendCommandAsync(portName, "AT+QPCMV=0,0", 5000, silent: true);
         await SendCommandAsync(portName, "AT+QAUDMOD=0", 5000, silent: true); 
         await SendCommandAsync(portName, "AT+CMGD=1,4", 10000, silent: true); 
@@ -331,20 +441,32 @@ public class GsmModemService : IGsmModemService
         _ = Task.Run(async () =>
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Đang chờ cắm SIM (Hot-plug)..." });
+            
+            // Ép tắt sóng (Airplane mode) ngay khi bắt đầu vòng lặp chờ SIM
+            await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+            
+            int cfunCheckCounter = 0;
             while (true)
             {
-                await Task.Delay(1000); // Check faster
+                await Task.Delay(2000); // Tăng khoảng cách kiểm tra lên 2 giây để mạch rảnh xử lý
                 if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
                 
-                // [SECURITY] Liên tục ép tắt sóng (Airplane mode) trong lúc chờ SIM.
-                // Ngăn chặn modem tự động bật sóng (auto-CFUN=1) khi vừa cắm SIM gây rò rỉ IMEI phần cứng.
-                await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+                // Thỉnh thoảng kiểm tra lại CFUN (mỗi 5 chu kỳ = 10 giây) để tránh tự động bật sóng
+                cfunCheckCounter++;
+                if (cfunCheckCounter >= 5)
+                {
+                    cfunCheckCounter = 0;
+                    string cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
+                    if (!cfunStatus.Contains("+CFUN: 4") && !cfunStatus.Contains("+CFUN: 0"))
+                    {
+                        await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+                    }
+                }
                 
                 string pollResp = await SendCommandAsync(portName, "AT+CCID", 10000, silent: true);
                 if (!pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp))
                 {
-                    // [CRITICAL FIX] Ngay khi nhận diện CCID thành công, đè ngay lập tức 1 lệnh CFUN=4 nữa.
-                    // Đảm bảo triệt tiêu hoàn toàn trường hợp modem tự động bật sóng trong tích tắc.
+                    // Đè thêm 1 lệnh CFUN=4 nữa để triệt tiêu việc tự động đăng ký mạng trong lúc xử lý IMEI
                     await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
 
                     // Cập nhật IMEI hiện tại trước khi báo CCID
@@ -357,10 +479,7 @@ public class GsmModemService : IGsmModemService
                     string newCcid = pollResp;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {newCcid.Replace("OK", "").Trim()}" });
                     
-                    // Các lệnh đọc SĐT (CNUM), xóa tin nhắn (CMGD) được loại bỏ khỏi đây
-                    // vì đằng nào đổi IMEI xong modem cũng sẽ Reboot (CFUN=1,1) và chạy lại quy trình InitializeModemAsync.
-                    
-                    break; // Có SIM rồi thì thoát vòng lặp, việc bật sóng (CFUN=1) sẽ do ImeiManagementService lo sau khi đổi IMEI xong.
+                    break; // Có SIM rồi thì thoát vòng lặp
                 }
             }
         });
@@ -380,7 +499,7 @@ public class GsmModemService : IGsmModemService
                 if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
                 
                 string copsStr = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true);
-                if (copsStr.Contains("+COPS:") && Regex.IsMatch(copsStr, @"\+COPS:\s*\d+,\d+,""([^""]+)"""))
+                if (copsStr.Contains("+COPS:") && Regex.IsMatch(copsStr, @"\+COPS:\s*\d+\s*,\s*\d+\s*,\s*""([^""]+)"""))
                 {
                     // Lấy mạng thành công, nhả sự kiện ra để ViewModel bắt và tự động chạy USSD
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = copsStr.Trim() });
@@ -388,9 +507,9 @@ public class GsmModemService : IGsmModemService
                 }
 
                 attempts++;
-                
-                // Khôi phục sóng nếu kẹt quá lâu (Khoảng 20 giây = 10 lần)
-                if (attempts > 10)
+
+                // Khôi phục sóng nếu kẹt quá lâu (Khoảng 60 giây = 30 lần)
+                if (attempts > 30)
                 {
                     attempts = 0;
                     recoveryCount++;
@@ -692,6 +811,42 @@ public class GsmModemService : IGsmModemService
                 buffer.Replace("NO ANSWER", "");
                 currentData = buffer.ToString();
             }
+            
+            // ---------------------------------------------------------
+            // 1.3. BẮT TÍN HIỆU PHÍM BẤM DTMF (+QTONEDET)
+            // ---------------------------------------------------------
+            if (currentData.Contains("+QTONEDET:"))
+            {
+                var dtmfMatch = Regex.Match(currentData, @"\+QTONEDET:\s*(\d+)");
+                if (dtmfMatch.Success)
+                {
+                    string dtmfCode = dtmfMatch.Groups[1].Value;
+                    string dtmfChar = dtmfCode;
+                    if (int.TryParse(dtmfCode, out int asciiVal))
+                    {
+                        if (asciiVal >= 48 && asciiVal <= 57)
+                        {
+                            dtmfChar = ((char)asciiVal).ToString();
+                        }
+                        else if (asciiVal == 42)
+                        {
+                            dtmfChar = "*";
+                        }
+                        else if (asciiVal == 35)
+                        {
+                            dtmfChar = "#";
+                        }
+                        else if (asciiVal >= 65 && asciiVal <= 68)
+                        {
+                            dtmfChar = ((char)asciiVal).ToString();
+                        }
+                    }
+                    
+                    DtmfReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = dtmfChar });
+                    buffer.Replace(dtmfMatch.Value, "");
+                    currentData = buffer.ToString();
+                }
+            }
 
             // ---------------------------------------------------------
             // 1.4. BẮT RÚT SIM (HOT-UNPLUG)
@@ -989,28 +1144,28 @@ public class GsmModemService : IGsmModemService
 
         TaskCompletionSource<string>? tcs = null;
 
+        async Task SendInnerAsync(string cmd)
+        {
+            var innerTcs = new TaskCompletionSource<string>(cmd, TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_commandTcs.TryAdd(portName, innerTcs)) return;
+            try
+            {
+                if (_portBuffers.TryGetValue(portName, out var b)) b.Clear();
+                sp.DiscardInBuffer();
+                sp.DiscardOutBuffer();
+                sp.Write(cmd + "\r");
+                await Task.WhenAny(innerTcs.Task, Task.Delay(2000));
+            }
+            finally
+            {
+                if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, innerTcs))
+                    _commandTcs.TryRemove(portName, out _);
+            }
+        }
+
         try
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> AT+CMGS=\"{phoneNumber}\"" });
-            
-            async Task SendInnerAsync(string cmd)
-            {
-                var innerTcs = new TaskCompletionSource<string>(cmd, TaskCreationOptions.RunContinuationsAsynchronously);
-                if (!_commandTcs.TryAdd(portName, innerTcs)) return;
-                try
-                {
-                    if (_portBuffers.TryGetValue(portName, out var b)) b.Clear();
-                    sp.DiscardInBuffer();
-                    sp.DiscardOutBuffer();
-                    sp.Write(cmd + "\r");
-                    await Task.WhenAny(innerTcs.Task, Task.Delay(2000));
-                }
-                finally
-                {
-                    if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, innerTcs))
-                        _commandTcs.TryRemove(portName, out _);
-                }
-            }
 
             await SendInnerAsync("AT+CMGF=1");
             await SendInnerAsync("AT+CSMP=17,167,0,0");
@@ -1071,14 +1226,16 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
+            if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
+                _commandTcs.TryRemove(portName, out _);
+
             // Trả lại UCS2 charset để đọc tin nhắn tiếng Việt và DCS=8 cho UCS2
             if (_serialPorts.TryGetValue(portName, out var sp2) && sp2.IsOpen)
             {
-                sp2.Write("AT+CSCS=\"UCS2\"\rAT+CSMP=17,167,0,8\r");
+                await SendInnerAsync("AT+CSCS=\"UCS2\"");
+                await SendInnerAsync("AT+CSMP=17,167,0,8");
             }
 
-            if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
-                _commandTcs.TryRemove(portName, out _);
             semaphore.Release();
         }
     }

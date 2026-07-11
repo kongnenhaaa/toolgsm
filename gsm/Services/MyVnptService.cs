@@ -47,6 +47,7 @@ public static class MyVnptService
             if (string.IsNullOrWhiteSpace(phone) || phone == "Chưa lấy được số")
             {
                 addLogCallback?.Invoke($"[{portName}] Không có SĐT hợp lệ để đổi MK MyVNPT", "ERROR");
+                onComplete?.Invoke(false, "Không có SĐT");
                 return;
             }
 
@@ -132,19 +133,44 @@ public static class MyVnptService
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thành công ({modeStr})! Pass: {pwd}", "SUCCESS");
                 string logPath = AppPaths.ForRuntimeFile("myvnpt_passwords.txt");
                 System.IO.File.AppendAllText(logPath, $"{phone}|{pwd}\n");
-                onComplete?.Invoke(true, "Đặt pass thành công");
+                string successMsg = accountExists ? "Đặt lại pass thành công" : "Đăng ký thành công";
+                onComplete?.Invoke(true, successMsg);
             }
             else
             {
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {phone} thất bại ({modeStr}): {responseContent}", "ERROR");
-                onComplete?.Invoke(false, $"Lỗi đặt pass");
+                string errorMsg = "Lỗi đặt pass";
+                try
+                {
+                    var match = System.Text.RegularExpressions.Regex.Match(responseContent, @"""message""\s*:\s*""([^""]+)""");
+                    if (match.Success)
+                    {
+                        errorMsg = match.Groups[1].Value;
+                    }
+                }
+                catch { }
+                onComplete?.Invoke(false, errorMsg);
             }
         }
         catch (Exception ex)
         {
             addLogCallback?.Invoke($"[{portName}] Lỗi đặt mật khẩu MyVNPT: {ex.Message}", "ERROR");
-            onComplete?.Invoke(false, $"Lỗi đặt pass");
+            onComplete?.Invoke(false, GetFriendlyExceptionMessage(ex));
         }
+    }
+
+    public static string GetFriendlyExceptionMessage(Exception ex)
+    {
+        string msg = ex.Message;
+        if (msg.Contains("api-myvnpt.vnpt.vn") || msg.Contains("connection") || msg.Contains("respond") || msg.Contains("host") || msg.Contains("socket") || msg.Contains("timeout") || msg.Contains("closed"))
+        {
+            return "Lỗi kết nối VNPT";
+        }
+        if (msg.Length > 40)
+        {
+            return "Lỗi hệ thống";
+        }
+        return $"Lỗi: {msg}";
     }
 
     private static string CreateMD5(string input)

@@ -35,14 +35,52 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, bool> _activeRamRecordings = new();
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
     private readonly ConcurrentDictionary<string, bool> _pendingMyVnptPasswordPorts = new();
+    
+    private int _vnptTotalActiveCount = 0;
+    private int _vnptSuccessCount = 0;
+    private int _vnptFailCount = 0;
+    private readonly object _vnptLock = new object();
+
+    [ObservableProperty]
+    private string _vnptSummaryText = string.Empty;
+
+    private void DecrementVnptActiveCount(bool isSuccess)
+    {
+        lock (_vnptLock)
+        {
+            if (isSuccess) _vnptSuccessCount++;
+            else _vnptFailCount++;
+
+            _vnptTotalActiveCount--;
+            if (_vnptTotalActiveCount < 0) _vnptTotalActiveCount = 0;
+
+            int success = _vnptSuccessCount;
+            int fail = _vnptFailCount;
+            int remaining = _vnptTotalActiveCount;
+
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (remaining > 0)
+                {
+                    VnptSummaryText = $"MyVNPT: Đang chạy (Thành công: {success}, Thất bại: {fail}, Còn lại: {remaining})";
+                }
+                else
+                {
+                    VnptSummaryText = $"MyVNPT: Hoàn tất! (Thành công: {success}, Thất bại: {fail})";
+                    SnackbarMessageQueue.Enqueue($"Đã hoàn tất đặt pass MyVNPT! Thành công: {success}, Thất bại: {fail}");
+                }
+            });
+        }
+    }
+
     private readonly object _logFileLock = new();
     
     public event Action<string, string>? OtpReceivedEvent;
 
     private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan UssdMinIntervalGlobal = TimeSpan.FromMilliseconds(10);
+    private static readonly TimeSpan UssdMinIntervalGlobal = TimeSpan.FromMilliseconds(500);
     private readonly ConcurrentDictionary<string, DateTime> _lastUssdByPort = new();
-    private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(100, 100);
+    private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSendLocks = new();
     private readonly ConcurrentDictionary<string, DateTime> _portCooldownUntilUtc = new();
@@ -189,21 +227,64 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task SetMyVnptPassword(object obj)
     {
-        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        var targetPorts = new List<SimPort>();
         
-        // Nếu click từ ContextMenu của 1 dòng cụ thể mà chưa tick chọn
-        if (obj is SimPort clickedPort && !targetPorts.Contains(clickedPort))
+        if (obj is string param)
         {
-            targetPorts.Add(clickedPort);
+            if (param == "All")
+            {
+                targetPorts = Ports.ToList();
+            }
+            else if (param == "Selected")
+            {
+                targetPorts = Ports.Where(p => p.IsSelected).ToList();
+            }
+            else if (param == "Error")
+            {
+                targetPorts = Ports.Where(p => 
+                    (p.LastMessageContent?.Contains("lỗi", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastMessageContent?.Contains("thất bại", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastMessageContent?.Contains("không thành công", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastSmsResult?.Contains("lỗi", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastSmsResult?.Contains("thất bại", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastSmsResult?.Contains("không thành công", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastCommandResult?.Contains("lỗi", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastCommandResult?.Contains("thất bại", StringComparison.OrdinalIgnoreCase) == true) ||
+                    (p.LastCommandResult?.Contains("không thành công", StringComparison.OrdinalIgnoreCase) == true)
+                ).ToList();
+            }
+        }
+        else
+        {
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
+            if (obj is SimPort clickedPort && !targetPorts.Contains(clickedPort))
+            {
+                targetPorts.Add(clickedPort);
+            }
         }
 
         if (!targetPorts.Any())
         {
-            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng để đặt mật khẩu MyVNPT.");
+            SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (hoặc không có cổng nào thỏa mãn điều kiện) để đặt mật khẩu MyVNPT.");
             return;
         }
 
         int count = 0;
+        lock (_vnptLock)
+        {
+            _vnptSuccessCount = 0;
+            _vnptFailCount = 0;
+            _vnptTotalActiveCount = targetPorts.Count(p => !string.IsNullOrWhiteSpace(p.PhoneNumber) && p.PhoneNumber != "Chưa lấy được số");
+            if (_vnptTotalActiveCount > 0)
+            {
+                VnptSummaryText = $"MyVNPT: Đang chạy (Thành công: 0, Thất bại: 0, Còn lại: {_vnptTotalActiveCount})";
+            }
+            else
+            {
+                VnptSummaryText = string.Empty;
+            }
+        }
+
         foreach (var port in targetPorts)
         {
             if (string.IsNullOrWhiteSpace(port.PhoneNumber) || port.PhoneNumber == "Chưa lấy được số")
@@ -217,7 +298,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 try
                 {
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang kiểm tra trạng thái tài khoản số {port.PhoneNumber}..."));
+                    Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        port.VnptStatus = "Kiểm tra TK...";
+                        AddLog($"[{port.PortName}] Đang kiểm tra trạng thái tài khoản số {port.PhoneNumber}...");
+                    });
                     using var client = new System.Net.Http.HttpClient();
                     string phone = port.PhoneNumber.StartsWith("0") ? "84" + port.PhoneNumber.Substring(1) : port.PhoneNumber;
                     
@@ -238,7 +323,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     string otpService = accountExists ? "authen_miss_password" : "authen_register";
                     string modeStr = accountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
                     
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Trạng thái: {modeStr}. Đang yêu cầu OTP..."));
+                    // [RACE CONDITION FIX] Đăng ký pending TRƯỚC KHI gửi request để tránh SMS về nhanh hơn phản hồi HTTP API
+                    _pendingMyVnptPasswordPorts[port.PortName] = true;
+
+                    Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        port.VnptStatus = "Yêu cầu OTP...";
+                        AddLog($"[{port.PortName}] Trạng thái: {modeStr}. Đang yêu cầu OTP...");
+                    });
                     
                     var payload = new
                     {
@@ -260,17 +352,67 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     if (responseContent.Contains("\"error_code\":\"0\"") || responseContent.Contains("\"errorCode\":\"0\"") || responseContent.Contains("\"error_code\": \"0\""))
                     {
-                        Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO"));
-                        _pendingMyVnptPasswordPorts[port.PortName] = true;
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            // Chỉ cập nhật "Đợi tin nhắn..." nếu chưa bị ghi đè bởi kết quả set pass thành công trước đó (nếu tin nhắn về cực nhanh)
+                            if (port.VnptStatus == "Yêu cầu OTP...")
+                            {
+                                port.VnptStatus = "Đợi tin nhắn...";
+                            }
+                            AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO");
+                        });
+
+                        // Bắt đầu đếm ngược 60 giây chờ OTP
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(60000);
+                            if (_pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _))
+                            {
+                                Application.Current.Dispatcher.Invoke(() => 
+                                {
+                                    if (port.VnptStatus == "Đợi tin nhắn..." || port.VnptStatus == "Yêu cầu OTP...")
+                                    {
+                                        port.VnptStatus = "Hết hạn OTP (Timeout)";
+                                    }
+                                });
+                                DecrementVnptActiveCount(false); // Tính là thất bại do hết hạn
+                            }
+                        });
                     }
                     else
                     {
-                        Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Gửi yêu cầu OTP thất bại: {responseContent}", "ERROR"));
+                        // Hủy đăng ký pending do lỗi gửi
+                        _pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _);
+
+                        string errorMsg = "Lỗi gửi OTP";
+                        try
+                        {
+                            var match = System.Text.RegularExpressions.Regex.Match(responseContent, @"""message""\s*:\s*""([^""]+)""");
+                            if (match.Success)
+                            {
+                                errorMsg = match.Groups[1].Value;
+                            }
+                        }
+                        catch { }
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            port.VnptStatus = errorMsg;
+                            AddLog($"[{port.PortName}] Gửi yêu cầu OTP thất bại: {responseContent}", "ERROR");
+                        });
+                        DecrementVnptActiveCount(false);
                     }
                 }
                 catch (Exception ex)
                 {
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Lỗi gửi yêu cầu OTP: {ex.Message}", "ERROR"));
+                    // Hủy đăng ký pending do ngoại lệ
+                    _pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _);
+
+                    Application.Current.Dispatcher.Invoke(() => 
+                    {
+                        port.VnptStatus = Services.MyVnptService.GetFriendlyExceptionMessage(ex);
+                        AddLog($"[{port.PortName}] Lỗi gửi yêu cầu OTP: {ex.Message}", "ERROR");
+                    });
+                    DecrementVnptActiveCount(false);
                 }
             });
             await Task.Delay(500); // Tránh gửi request quá nhanh
@@ -830,6 +972,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _modemService.PortDisconnected += ModemService_PortDisconnected;
         _modemService.CallIncoming += ModemService_CallIncoming;
         _modemService.CallEnded += ModemService_CallEnded;
+        _modemService.DtmfReceived += ModemService_DtmfReceived;
         
         _speechToTextService = new SpeechToTextService();
         _speechToTextService.LogMessage += (s, msg) => AddLog(msg);
@@ -1855,7 +1998,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (port == null)
             {
-                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]") || e.Data.StartsWith("[NETWORK_RECOVERY]") || e.Data.StartsWith("[NETWORK_FAILED]"))
+                if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]") || e.Data.StartsWith("[NETWORK_RECOVERY]") || e.Data.StartsWith("[NETWORK_FAILED]") || e.Data.StartsWith("Lỗi kết nối"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = SimStatus.Active, SignalStrength = 0 };
                     port.PhysicalIndex = _modemService.GetAvailablePorts().IndexOf(e.PortName);
@@ -1894,6 +2037,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.LastMessageContent = string.Empty;
                 port.Sender = string.Empty;
                 port.SignalStrength = 0;
+                port.VnptStatus = string.Empty;
+                port.LastCommandResult = string.Empty;
+                port.LastUssdResult = string.Empty;
+                port.LastSmsResult = string.Empty;
+                port.LastCallResult = string.Empty;
+                port.LastMmsResult = string.Empty;
+                port.LastImeiResult = string.Empty;
+                port.LastDataResult = string.Empty;
+                port.LastDelayResult = string.Empty;
+            }
+            else if (e.Data.StartsWith("Lỗi kết nối"))
+            {
+                port.Status = SimStatus.NoResponse;
+                port.DeviceName = "Lỗi kết nối";
+                port.LastError = e.Data;
             }
             else if (e.Data.StartsWith("[NETWORK_RECOVERY]"))
             {
@@ -1996,10 +2154,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // Parse Network Provider from AT+COPS?
                 // Example: +COPS: 0,0,"VIETTEL"
-                var match = Regex.Match(e.Data, @"\+COPS:\s*\d+,\d+,""([^""]+)""");
+                var match = Regex.Match(e.Data, @"\+COPS:\s*\d+\s*,\s*\d+\s*,\s*""([^""]+)""");
                 if (match.Success)
                 {
-                    port.NetworkProvider = match.Groups[1].Value;
+                    string provider = match.Groups[1].Value.Trim();
+                    if (provider == "45204") provider = "VIETTEL";
+                    else if (provider == "45202") provider = "VINAPHONE";
+                    else if (provider == "45201") provider = "MOBIFONE";
+                    else if (provider == "45205") provider = "VIETNAMOBILE";
+                    else if (provider == "45207") provider = "GMOBILE";
+                    else if (provider == "45208") provider = "I-TELECOM";
+                    else if (provider == "45209") provider = "WINTEL";
+
+                    port.NetworkProvider = provider;
+                    port.Status = SimStatus.Active;
+                    port.DeviceName = Services.ImeiManagementService.GetDeviceNameFromImei(port.Imei);
 
                     string networkUpper = port.NetworkProvider.ToUpperInvariant();
                     
@@ -2019,18 +2188,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
                             if (!string.IsNullOrEmpty(randomFwd))
                             {
+                                string fwdDialType = randomFwd.StartsWith("+") ? "145" : "129";
                                 AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                                string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",129", timeoutMs: 8000);
+                                string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",{fwdDialType}", timeoutMs: 8000);
                                 if (ccfcResult.Contains("OK"))
                                 {
                                     Application.Current.Dispatcher.Invoke(() =>
                                     {
                                         port.ForwardCount++;
-                                        port.ForwardedTo = randomFwd; // #4: Lưu số đang chưa hướng để hiển thị lên bảng
+                                        port.ForwardedTo = randomFwd;
                                     });
                                     AddLog($"[{port.PortName}] Chuyển hướng thành công → {randomFwd} (Tổng: {port.ForwardCount})", "SUCCESS");
                                 }
+                                else
+                                {
+                                    AddLog($"[{port.PortName}] Thiết lập chuyển hướng đến {randomFwd} thất bại! (Lỗi từ mạng/SIM)", "ERROR");
+                                }
                             }
+                        }
+
+                        // Truy vấn trạng thái chuyển hướng thực tế từ nhà mạng để đồng bộ UI
+                        string ccfcStatus = await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,2", timeoutMs: 8000);
+                        var ccfcMatch = Regex.Match(ccfcStatus, @"\+CCFC:\s*1,\s*1,\s*""([^""]+)""");
+                        if (ccfcMatch.Success)
+                        {
+                            string activeFwd = ccfcMatch.Groups[1].Value;
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                port.ForwardedTo = activeFwd;
+                            });
+                        }
+                        else if (AppSettings == null || !AppSettings.EnableAutoCallForwarding)
+                        {
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                port.ForwardedTo = string.Empty;
+                            });
                         }
                     });
                 }
@@ -2240,6 +2433,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.SmsErrorCount = 0;
         port.ReconnectCount = 0;
         port.LastError = string.Empty;
+        
+        // Cập nhật tên thiết bị thực tế dựa trên IMEI
+        if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug)." || port.DeviceName == "Đã nhận SIM, đang khởi tạo..." || string.IsNullOrWhiteSpace(port.DeviceName))
+        {
+            port.DeviceName = Services.ImeiManagementService.GetDeviceNameFromImei(port.Imei);
+        }
+
         port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
         UpdateDashboard();
 
@@ -2670,11 +2870,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 {
                                     System.Windows.Application.Current.Dispatcher.Invoke(() =>
                                     {
-                                        port.LastMessageContent = message;
+                                        port.VnptStatus = message;
                                         port.LastSmsResult = message;
                                         port.UpdateDisplayResult(CommandPanelTab);
                                     });
                                 }
+                                DecrementVnptActiveCount(isSuccess);
                             });
                         }
                         else
@@ -3007,6 +3208,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         });
     }
+    private void ModemService_DtmfReceived(object? sender, GsmDataEventArgs e)
+    {
+        Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
+            string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
+            
+            AddLog($"[{e.PortName}] Nhận được phím DTMF: {e.Data}", "INFO");
+            
+            if (port != null)
+            {
+                port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+                port.LastMessageContent = $"[DTMF] Phím: {e.Data}";
+                UpdateDashboard();
+            }
+
+            // Gửi thông báo qua Telegram nếu có cấu hình
+            _ = TelegramService.SendMessageAsync(
+                $"🎹 <b>Phím DTMF [{e.PortName}]</b>\n" +
+                $"📱 SIM nhận: {receiverPhone}\n" +
+                $"Pressed: <b>{e.Data}</b>"
+            );
+        });
+    }
     private void ModemService_CallEnded(object? sender, GsmDataEventArgs e)
     {
         if (e.Data == "NO CARRIER" || e.Data == "BUSY" || e.Data == "NO ANSWER")
@@ -3295,6 +3520,68 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task FixEc20Async(string mode)
+    {
+        List<Models.SimPort> targetPorts;
+        
+        if (mode == "Selected")
+        {
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Vui lòng chọn ít nhất 1 cổng (đánh dấu ☑) để Fix EC20.");
+                return;
+            }
+        }
+        else
+        {
+            targetPorts = Ports.ToList();
+            if (!targetPorts.Any())
+            {
+                SnackbarMessageQueue.Enqueue("Không có cổng nào để Fix EC20.");
+                return;
+            }
+        }
+
+        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn chạy lệnh Fix EC20 cho {targetPorts.Count} modem?\nThao tác này sẽ thiết lập lại cấu hình mạng và khởi động lại modem.", "Fix EC20", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
+            return;
+
+        SnackbarMessageQueue.Enqueue($"Đang gửi lệnh Fix EC20 cho {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu Fix EC20 cho {targetPorts.Count} cổng...");
+
+        foreach (var port in targetPorts)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang gửi lệnh Fix EC20..."));
+                    var commands = new[]
+                    {
+                        "AT+QURCCFG=\"urcport\",\"uart1\"",
+                        "AT+QCFG=\"nwscanmode\",0,1",
+                        "AT+CUSD=1",
+                        "AT+QSIMDET=0,0",
+                        "AT+CFUN=1,1"
+                    };
+
+                    foreach (var cmd in commands)
+                    {
+                        await _modemService.SendCommandAsync(port.PortName, cmd, 1000);
+                        await Task.Delay(500);
+                    }
+                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Fix EC20 hoàn tất, modem đang khởi động lại...", "SUCCESS"));
+                }
+                catch (Exception ex)
+                {
+                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Lỗi Fix EC20: {ex.Message}", "ERROR"));
+                }
+            });
+            await Task.Delay(200); // Throttling
+        }
+    }
+
+    [RelayCommand]
     private async Task PrepareSwapSim(string mode)
     {
         List<Models.SimPort> targetPorts;
@@ -3393,7 +3680,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         for (int i = 0; i < maxAttempts; i++)
         {
-            if (IsPortCoolingDown(portName, out var remainingCooldown))
+            // Chỉ kiểm tra cooldown ở lần thử đầu tiên (i == 0)
+            if (i == 0 && IsPortCoolingDown(portName, out var remainingCooldown))
             {
                 result = $"ERROR: Port cooling down for {remainingCooldown.TotalSeconds:0}s";
                 AddLog($"[{portName}] Bỏ qua USSD vì cổng đang cooldown {remainingCooldown.TotalSeconds:0}s sau lỗi gần nhất.", "WARN");
@@ -3782,8 +4070,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
                     if (string.IsNullOrEmpty(randomFwd)) continue;
                     
+                    string fwdDialType = randomFwd.StartsWith("+") ? "145" : "129";
                     AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                    string res = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",129", timeoutMs: 5000);
+                    string res = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",{fwdDialType}", timeoutMs: 5000);
                     if (res.Contains("OK"))
                     {
                         Application.Current.Dispatcher.Invoke(() =>
@@ -4252,7 +4541,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 break;
             case "SetForwarding":
                 if (string.IsNullOrWhiteSpace(ForwardNumber)) return;
-                cmd = $"AT+CCFC=0,1,\"{ForwardNumber}\",129";
+                string fwType = ForwardNumber.StartsWith("+") ? "145" : "129";
+                cmd = $"AT+CCFC=0,1,\"{ForwardNumber}\",{fwType}";
                 break;
             case "Hold":
                 cmd = "AT+CHLD=2";
@@ -4272,6 +4562,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string result = await _modemService.SendCommandAsync(CallManagerSelectedPort, cmd, timeoutMs: 5000);
             CallManagerOutput += $"{result}\n";
+            
+            // Cập nhật hiển thị lên bảng Dashboard
+            if (action == "SetForwarding" && result.Contains("OK"))
+            {
+                var port = Ports.FirstOrDefault(p => p.PortName == CallManagerSelectedPort);
+                if (port != null)
+                {
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        port.ForwardedTo = ForwardNumber;
+                        port.ForwardCount++;
+                    });
+                }
+            }
         }
         catch (Exception ex)
         {

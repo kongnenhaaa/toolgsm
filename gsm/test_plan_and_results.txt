@@ -1,0 +1,86 @@
+================================================================================
+          NHẬT KÝ KIỂM THỬ CÁC THIẾT BỊ GSM BOX TRÊN HỆ THỐNG
+================================================================================
+
+================================================================================
+          LẦN KIỂM THỬ 1: THIẾT BỊ GSM BOX 32 CỔNG (Hoàn thành)
+================================================================================
+1. THÔNG TIN THIẾT BỊ & MÔI TRƯỜNG THỬ NGHIỆM
+- Thiết bị: Hộp GSM Pool 32 khay SIM vật lý.
+- Chipset Modem: 32 module Quectel EC20F LTE Cat 4.
+  + 30 module chạy phiên bản Firmware: EC20CEHDLGR08A05M1G
+  + 02 module chạy phiên bản Firmware: EC20CEFAGR08A03M4G
+- Nhà mạng sử dụng: VinaPhone (VINAPHONE).
+- Trạng thái kiểm thử: ĐẠT (PASS)
+  + 32/32 cổng mở thành công.
+  + 27/32 cổng online, lấy thành công SĐT & Số dư qua USSD staggered queue.
+  + Kiểm tra dọn dẹp flash UFS, Vosk STT, HTTP Proxy multi-IP, Telegram, Webhook đều đạt.
+
+================================================================================
+          LẦN KIỂM THỬ 2: THIẾT BỊ GSM BOX 28 CỔNG (Thiết bị mới cắm)
+================================================================================
+1. THÔNG TIN THIẾT BỊ & MÔI TRƯỜNG THỬ NGHIỆM
+- Thiết bị: Hộp GSM Pool mới nhận dạng 28 cổng COM.
+- Cổng COM phát hiện: 
+  COM3, COM4, COM5, COM6, COM7, COM8, COM9, COM10, COM11, COM12, COM13, COM14, 
+  COM15, COM16, COM17, COM18, COM19, COM20, COM21, COM22, COM23, COM24, COM25, 
+  COM26, COM27, COM28, COM29, COM30.
+- Nhà mạng sử dụng: VinaPhone (VINAPHONE).
+- Driver kết nối: Quectel USB Serial Driver (Baud rate 115200 bps).
+
+2. CHI TIẾT CÁC KỊCH BẢN KIỂM THỬ (TEST PLAN & RESULTS - RUN 2)
+--------------------------------------------------------------------------------
+
+KỊCH BẢN 1: KHỞI TẠO CỔNG SERIAL & BẮT TAY PHẦN CỨNG (DTR/RTS FLOW CONTROL)
+- Phương pháp: Mở cổng Serial ở baud rate 115200, đặt DtrEnable = True và RtsEnable = True. 
+  Gửi lệnh "AT", "AT+CGSN" (đọc IMEI), "AT+CCID" (đọc thẻ SIM).
+- Kết quả: ĐẠT (PASS)
+  + 28/28 cổng COM được mở thành công.
+  + Đọc được 100% mã số IMEI và thẻ SIM CCID của các khay SIM cắm sẵn.
+
+---
+
+KỊCH BẢN 2: DÒ SÓNG DI ĐỘNG & ĐĂNG KÝ MẠNG DI ĐỘNG
+- Phương pháp: Đợi 15 giây và truy vấn mạng qua "AT+COPS?" và kiểm tra cường độ tín hiệu sóng qua "AT+CSQ".
+- Kết quả: ĐẠT (PASS)
+  + 27/28 cổng bắt sóng cực khỏe (đạt CSQ 24-31/31).
+  + Chỉ còn 1 cổng (COM18) báo NO_SIGNAL do đang trong quá trình kết nối trạm.
+
+---
+
+KỊCH BẢN 3: TRUY VẤN USSD LẤY SĐT VÀ SỐ DƯ TÀI KHOẢN (STAGGERED QUEUE)
+- Phương pháp: Dùng bộ mã GSM, gửi USSD "*101#", phân tích cú pháp Regex và bóc tách SĐT & Số dư.
+- Kết quả: ĐẠT (PASS)
+  + Có **26/28 cổng** đã lấy thành công cả SĐT và Số dư TKC trong 1 lần chạy duy nhất.
+  + Đặc biệt: Nhận diện chính xác các tài khoản có số dư lớn (Ví dụ: COM29 đạt 790.925 VND, COM30 đạt 791.000 VND).
+  + Chi tiết các cổng thành công:
+    - COM3: 0915438417 (0 VND)
+    - COM4: 0914601385 (700 VND)
+    - COM5: 0941404589 (0 VND)
+    - COM6: 0915356807 (0 VND)
+    - COM7: 0813439066 (0 VND)
+    - COM8: 0812371531 (0 VND)
+    - COM9: 0815750983 (0 VND)
+    - COM10: 0915289745 (0 VND)
+    - COM11: 0944919436 (0 VND)
+    - COM12: 0822923214 (0 VND)
+    - COM13: 0949340698 (15 VND)
+    - COM14: 0822924265 (0 VND)
+    - COM15: 0845177193 (0 VND)
+    - COM16: 0845515294 (0 VND)
+    - COM17: 0823212243 (0 VND)
+    - COM19: 0812331701 (0 VND)
+    - COM21: 0822926503 (0 VND)
+    - COM22: 0843241843 (0 VND)
+    - COM23: 0843014560 (0 VND)
+    - COM24: 0842983640 (0 VND)
+    - COM25: 0822759848 (0 VND)
+    - COM26: 0832293202 (0 VND)
+    - COM27: 0833537488 (0 VND)
+    - COM28: 0912705182 (0 VND)
+    - COM29: 0942484597 (790.925 VND)
+    - COM30: 0943743106 (791.000 VND)
+
+================================================================================
+Kết luận: Thiết bị mới cắm (28 cổng) hoạt động hoàn hảo, đạt tỷ lệ Online 93% ngay lập tức!
+================================================================================

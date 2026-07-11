@@ -44,6 +44,9 @@ public partial class SimPort : ObservableObject
     private string _lastMessageContent = string.Empty;
 
     [ObservableProperty]
+    private string _vnptStatus = string.Empty;
+
+    [ObservableProperty]
     private string _sender = string.Empty;
     
     [ObservableProperty]

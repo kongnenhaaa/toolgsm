@@ -747,11 +747,24 @@ GET  /api/history
                                 </ContextMenu>
                             </Button.ContextMenu>
                         </Button>
-                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Command="{Binding SetMyVnptPasswordCommand}" ToolTip="Đặt pass MyVNPT cho các cổng đang chọn" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                        <Button Background="#FF9800" Style="{StaticResource ModernButtonStyle}" Click="OpenContextMenu_Click" ToolTip="Đặt pass MyVNPT" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="Key" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <TextBlock Text="Đặt pass MyVNPT" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
                             </StackPanel>
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Chạy TẤT CẢ các cổng" Command="{Binding SetMyVnptPasswordCommand}" CommandParameter="All">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="CheckAll"/></MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="Chạy CÁC CỔNG ĐÃ TÍCH (☑)" Command="{Binding SetMyVnptPasswordCommand}" CommandParameter="Selected">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="CheckboxMarkedOutline"/></MenuItem.Icon>
+                                    </MenuItem>
+                                    <MenuItem Header="Chạy CÁC CỔNG CÓ LỖI (OTP không trả về, đặt không thành công...)" Command="{Binding SetMyVnptPasswordCommand}" CommandParameter="Error">
+                                        <MenuItem.Icon><materialDesign:PackIcon Kind="AlertCircleOutline"/></MenuItem.Icon>
+                                    </MenuItem>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                         </Button>
                         <!-- Sidebar USSD Button removed -->
                         <Button Background="#424242" Command="{Binding OpenExportExcelDialogCommand}" Style="{StaticResource ModernButtonStyle}" ToolTip="Xuất danh sách cổng ra file Excel" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
@@ -789,6 +802,11 @@ GET  /api/history
                                     <MenuItem Header="⚡ Khởi động lại Modem CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding RebootModemCommand}" CommandParameter="Selected">
                                     </MenuItem>
                                     <MenuItem Header="⚡ Khởi động lại TẤT CẢ Modem" Command="{Binding RebootModemCommand}" CommandParameter="All">
+                                    </MenuItem>
+                                    <Separator Background="#444"/>
+                                    <MenuItem Header="🛠️ Fix Modem EC20 CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding FixEc20Command}" CommandParameter="Selected">
+                                    </MenuItem>
+                                    <MenuItem Header="🛠️ Fix Modem EC20 TẤT CẢ CỔNG" Command="{Binding FixEc20Command}" CommandParameter="All">
                                     </MenuItem>
                                     <Separator Background="#444"/>
                                     <MenuItem Header="🗑️ Xóa toàn bộ SMS rác trên CÁC CỔNG ĐÃ CHỌN (☑)" Command="{Binding ClearSmsCommand}" CommandParameter="Selected">
@@ -1097,7 +1115,7 @@ GET  /api/history
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
 
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="STT" Binding="{Binding Stt}" Width="50" IsReadOnly="True" />
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="STT" Binding="{Binding Stt}" Width="80" IsReadOnly="True" />
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thiết bị (Fake)" Binding="{Binding DeviceName}" Width="160" Foreground="#29B6F6"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
@@ -1133,11 +1151,9 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Quét vét" Binding="{Binding LastSweepTime}" Width="90" Foreground="#00E676"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Trạng thái" Binding="{Binding VnptStatus}" Width="120"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="License Suffix" Binding="{Binding LicenseKeySuffix}" Width="120"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lệch Key" Binding="{Binding KeyMismatch}" Width="100"/>
                             <DataGridTemplateColumn Header="Kết nối" Width="110" ClipboardContentBinding="{Binding Status}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -1314,6 +1330,7 @@ GET  /api/history
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="OTP" Binding="{Binding Otp}" Width="100" Foreground="#FF9800"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cuộc gọi" Binding="{Binding CallCount}" Width="100"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Chuyển lời" Binding="{Binding ForwardContent}" Width="100"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Trạng thái" Binding="{Binding Status}" Width="120"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding Content}" Width="800"/>
                         </DataGrid.Columns>
                     </DataGrid>
@@ -2355,6 +2372,9 @@ GET  /api/history
         <StatusBar Grid.Row="3" Background="#020617" Foreground="#94a3b8" Padding="10,5" BorderBrush="#334155" BorderThickness="0,1,0,0">
             <StatusBarItem>
                 <TextBlock Text="{Binding Ports.Count, StringFormat='Số lượng cổng: \{0\}'}"/>
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Center">
+                <TextBlock Text="{Binding VnptSummaryText}" Foreground="#FFC107" FontWeight="Bold"/>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Text="{Binding SmsMessages.Count, StringFormat='Mẹo: Giữ Ctrl và lăn chuột để phóng to/thu nhỏ bảng | Tổng SMS: \{0\}'}"/>

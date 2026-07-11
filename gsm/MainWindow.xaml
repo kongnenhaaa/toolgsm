@@ -1,4 +1,5 @@
 <Window x:Class="gsm.MainWindow"
+        x:Name="RootWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -8,7 +9,7 @@
         xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
         xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF"
         mc:Ignorable="d"
-        Title="API GSM Pro v1.2.38" Height="750" Width="1250"
+        Title="GSM Pro v1.2.38" Height="750" Width="1250"
         Background="{StaticResource AppBackground}" Foreground="White"
         TextElement.Foreground="{DynamicResource MaterialDesignBody}"
         TextElement.FontWeight="Regular"
@@ -25,6 +26,7 @@
     </Window.InputBindings>
 
     <Window.Resources>
+        <converters:BindingProxy x:Key="Proxy" Data="{Binding}"/>
         <converters:StatusToColorConverter x:Key="StatusToColorConverter"/>
         <converters:EqualityToBooleanConverter x:Key="EqualityToBooleanConverter"/>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
@@ -219,12 +221,12 @@
                             <Border Style="{StaticResource ProDialogSectionStyle}" Background="#252538" BorderBrush="#3D3D5C" CornerRadius="8">
                                 <StackPanel>
                                     <TextBlock Text="CẤU HÌNH NHẬN THÔNG BÁO" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
-                                    <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10"/>
+                                    <CheckBox Content="Bật gửi thông báo qua Web (Firebase)" IsChecked="{Binding AppSettings.EnableWebNotification}" Foreground="White" Margin="0,0,0,10" Visibility="Collapsed"/>
                                     <TextBox materialDesign:HintAssist.Hint="Nhập Link Web Firebase (Database URL)" 
                                              Text="{Binding AppSettings.FirebaseUrl}" 
                                              Style="{StaticResource MaterialDesignFloatingHintTextBox}" Foreground="White" Margin="0,0,0,10"/>
                                     
-                                    <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10"/>
+                                    <CheckBox Content="Bật gửi thông báo qua Telegram" IsChecked="{Binding AppSettings.EnableTelegramNotification}" Foreground="White" Margin="0,0,0,10" Visibility="Collapsed"/>
                                     
                                     <Separator Background="#3D3D5C" Margin="0,15,0,15"/>
                                     <TextBlock Text="CẤU HÌNH ÂM THANH &amp; TOAST" FontSize="12" FontWeight="Bold" Foreground="#29B6F6" Margin="0,0,0,15"/>
@@ -368,14 +370,17 @@ GET  /api/history
 
                                     <CheckBox Content="[1] Bật tự động phục hồi (Restore) IMEI đã lưu nếu thẻ SIM bị chuyển sang cổng khác" 
                                               IsChecked="{Binding AppSettings.EnableImeiRestore}" 
+                                              Visibility="Collapsed"
                                               Foreground="#FFB300" FontWeight="Medium" Margin="0,0,0,5"/>
                                               
                                     <CheckBox Content="[2] Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)" 
                                               IsChecked="{Binding AppSettings.BlockUnknownSims}" 
+                                              Visibility="Collapsed"
                                               Foreground="#90CAF9" FontWeight="Medium" Margin="0,0,0,5"/>
 
                                     <CheckBox Content="[3] Nạp SIM Mới (Tráng Fake IMEI cho cổng trống)" 
                                               IsChecked="{Binding AppSettings.EnableNewSimIntakeMode}" 
+                                              Visibility="Collapsed"
                                               Foreground="#FF5252" FontWeight="Bold" Margin="0,0,0,15"/>
 
                                 </StackPanel>
@@ -534,6 +539,58 @@ GET  /api/history
                         </Border>
                     </materialDesign:DialogHost.DialogContent>
                     
+                    <materialDesign:DialogHost IsOpen="{Binding IsDisplayColumnsDialogOpen}" CloseOnClickAway="True">
+                        <materialDesign:DialogHost.DialogContent>
+                            <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
+                                <Grid Width="600" Height="500">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,15">
+                                        <materialDesign:PackIcon Kind="ViewColumn" Width="28" Height="28" Foreground="#FF9800" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                        <TextBlock Text="QUẢN LÝ HIỂN THỊ CỘT DASHBOARD" FontSize="18" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                    </StackPanel>
+
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,0,15">
+                                        <WrapPanel Margin="5">
+                                            <CheckBox Content="STT" IsChecked="{Binding AppSettings.ShowColStt}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Cổng COM" IsChecked="{Binding AppSettings.ShowColPort}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Thiết bị (Fake)" IsChecked="{Binding AppSettings.ShowColDevice}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="IMEI" IsChecked="{Binding AppSettings.ShowColImei}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Serial" IsChecked="{Binding AppSettings.ShowColSerial}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Số điện thoại" IsChecked="{Binding AppSettings.ShowColPhone}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Tài khoản chính (TKC)" IsChecked="{Binding AppSettings.ShowColBalance}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Tin nhắn OTP" IsChecked="{Binding AppSettings.ShowColOtp}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Trạng thái SIM" IsChecked="{Binding AppSettings.ShowColStatus}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Nội dung SMS cuối" IsChecked="{Binding AppSettings.ShowColContent}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Ngày tạo" IsChecked="{Binding AppSettings.ShowColCreatedAt}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Trạng thái Kết nối" IsChecked="{Binding AppSettings.ShowColConnect}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Chỉ số Health" IsChecked="{Binding AppSettings.ShowColHealth}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Số lần Timeout" IsChecked="{Binding AppSettings.ShowColTimeout}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Số lỗi SMS" IsChecked="{Binding AppSettings.ShowColSmsError}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Số lần Reconnect" IsChecked="{Binding AppSettings.ShowColReconnect}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Thời gian SMS cuối" IsChecked="{Binding AppSettings.ShowColLastSms}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Nội dung lỗi cuối" IsChecked="{Binding AppSettings.ShowColLastError}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Cột sóng / Tín hiệu" IsChecked="{Binding AppSettings.ShowColSignal}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Nhà mạng" IsChecked="{Binding AppSettings.ShowColProvider}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Hạn sử dụng (HSD)" IsChecked="{Binding AppSettings.ShowColExpiry}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="SĐT chuyển hướng (Fwd)" IsChecked="{Binding AppSettings.ShowColForward}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Cập nhật lúc" IsChecked="{Binding AppSettings.ShowColUpdatedAt}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Người gửi cuối" IsChecked="{Binding AppSettings.ShowColSender}" Foreground="White" Width="170" Margin="5"/>
+                                            <CheckBox Content="Thời gian nhận cuối" IsChecked="{Binding AppSettings.ShowColLastReceived}" Foreground="White" Width="170" Margin="5"/>
+                                        </WrapPanel>
+                                    </ScrollViewer>
+                                    
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button Content="Hủy" Command="{x:Static materialDesign:DialogHost.CloseDialogCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Foreground="#CFD8DC" BorderBrush="#546E7A" Margin="0,0,12,0"/>
+                                        <Button Content="Lưu cài đặt" Command="{Binding CloseDisplayColumnsDialogCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Background="#2196F3" BorderBrush="#2196F3" materialDesign:ButtonAssist.CornerRadius="6"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </materialDesign:DialogHost.DialogContent>
                     <materialDesign:DialogHost IsOpen="{Binding IsCallManagerDialogOpen}" CloseOnClickAway="True">
                     <materialDesign:DialogHost.DialogContent>
                     <Border Background="#1E1E2E" CornerRadius="12" Padding="24">
@@ -667,7 +724,7 @@ GET  /api/history
                 <!-- Logo -->
                 <StackPanel Orientation="Horizontal" Margin="20,0" VerticalAlignment="Center">
                     <materialDesign:PackIcon Kind="ServerNetwork" Width="32" Height="32" Foreground="#38bdf8" VerticalAlignment="Center"/>
-                    <TextBlock Text="API GSM" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" Margin="10,0,0,0" Style="{StaticResource SidebarTextStyle}"/>
+                    <TextBlock Text="GSM" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center" Margin="10,0,0,0" Style="{StaticResource SidebarTextStyle}"/>
                 </StackPanel>
 
                 <!-- Navigation Menu & Tools -->
@@ -902,6 +959,9 @@ GET  /api/history
                         <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý IMEI" Height="40" Width="40" Margin="10,0" Command="{Binding OpenImeiManagerCommand}" Background="#1e293b" BorderThickness="0">
                             <materialDesign:PackIcon Kind="CellphoneSettings" Foreground="#e2e8f0" Width="20" Height="20"/>
                         </Button>
+                        <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Quản lý hiển thị (Ẩn/Hiện cột)" Height="40" Width="40" Margin="0,0,10,0" Command="{Binding OpenDisplayColumnsDialogCommand}" Background="#1e293b" BorderThickness="0">
+                            <materialDesign:PackIcon Kind="ViewColumn" Foreground="#FF9800" Width="20" Height="20"/>
+                        </Button>
                         <Button Style="{StaticResource MaterialDesignIconButton}" ToolTip="Cài đặt hệ thống" Height="40" Width="40" Command="{Binding OpenSettingsDialogCommand}" Background="#1e293b" BorderThickness="0">
                             <materialDesign:PackIcon Kind="Cog" Foreground="#e2e8f0" Width="20" Height="20"/>
                         </Button>
@@ -969,7 +1029,7 @@ GET  /api/history
                                     </StackPanel>
                                 </Border>
     
-                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
+                                <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8" Visibility="Collapsed">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <TextBlock Text="Tự nhấc máy" Foreground="White" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12"/>
                                         <ToggleButton IsChecked="{Binding IsAutoAnswerEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Tự động bắt máy (ATA) khi có cuộc gọi đến"/>
@@ -979,7 +1039,7 @@ GET  /api/history
                             </StackPanel>
 
                             <!-- 3 Ưu tiên IMEI -->
-                            <StackPanel Orientation="Horizontal">
+                            <StackPanel Orientation="Horizontal" Visibility="Collapsed">
                                 <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <TextBlock Text="[1] Phục hồi IMEI" Foreground="#FFB300" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
@@ -989,8 +1049,8 @@ GET  /api/history
 
                                 <Border Background="#2A2A40" CornerRadius="8" Padding="10,5" Margin="0,0,8,8">
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                        <TextBlock Text="[2] Chặn SIM lạ" Foreground="#90CAF9" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold"/>
-                                        <ToggleButton IsChecked="{Binding IsBlockUnknownSimsEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)"/>
+                                        <TextBlock Text="[2] Chặn SIM lạ" Foreground="#90CAF9" VerticalAlignment="Center" Margin="0,0,8,0" FontSize="12" FontWeight="Bold" Visibility="Collapsed"/>
+                                        <ToggleButton IsChecked="{Binding IsBlockUnknownSimsEnabled}" Style="{StaticResource MaterialDesignSwitchToggleButton}" ToolTip="Không ghi nhận SIM mới (Chặn SIM lạ, chờ chấp thuận)" Visibility="Collapsed"/>
                                     </StackPanel>
                                 </Border>
 
@@ -1115,13 +1175,13 @@ GET  /api/history
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
 
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="STT" Binding="{Binding Stt}" Width="80" IsReadOnly="True" />
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thiết bị (Fake)" Binding="{Binding DeviceName}" Width="160" Foreground="#29B6F6"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Serial" Binding="{Binding Serial}" Width="180" HeaderTemplate="{StaticResource SerialHeaderTemplate}"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}"/>
-                            <DataGridTemplateColumn Header="TKC" Width="110" ClipboardContentBinding="{Binding Balance}">
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="STT" Binding="{Binding Stt}" Width="80" IsReadOnly="True"  Visibility="{Binding Data.AppSettings.ShowColStt, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="160" HeaderTemplate="{StaticResource PortNameHeaderTemplate}" Visibility="{Binding Data.AppSettings.ShowColPort, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thiết bị (Fake)" Binding="{Binding DeviceName}" Width="160" Foreground="#29B6F6" Visibility="{Binding Data.AppSettings.ShowColDevice, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}" Visibility="{Binding Data.AppSettings.ShowColImei, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Serial" Binding="{Binding Serial}" Width="180" HeaderTemplate="{StaticResource SerialHeaderTemplate}" Visibility="{Binding Data.AppSettings.ShowColSerial, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SĐT" Binding="{Binding PhoneNumber}" Width="150" HeaderTemplate="{StaticResource PhoneHeaderTemplate}" Visibility="{Binding Data.AppSettings.ShowColPhone, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTemplateColumn Header="TKC" Width="110" ClipboardContentBinding="{Binding Balance}" Visibility="{Binding Data.AppSettings.ShowColBalance, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Balance}" TextWrapping="Wrap" Foreground="#4CAF50" FontWeight="SemiBold" VerticalAlignment="Center"/>
@@ -1129,7 +1189,7 @@ GET  /api/history
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
                             
-                            <DataGridTemplateColumn Header="OTP" Width="110" ClipboardContentBinding="{Binding Otp}">
+                            <DataGridTemplateColumn Header="OTP" Width="110" ClipboardContentBinding="{Binding Otp}" Visibility="{Binding Data.AppSettings.ShowColOtp, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border CornerRadius="6" Padding="6,2" HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -1151,10 +1211,10 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Trạng thái" Binding="{Binding VnptStatus}" Width="120"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150"/>
-                            <DataGridTemplateColumn Header="Kết nối" Width="110" ClipboardContentBinding="{Binding Status}">
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Trạng thái" Binding="{Binding VnptStatus}" Width="120" Visibility="{Binding Data.AppSettings.ShowColStatus, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nội dung" Binding="{Binding LastMessageContent}" Width="800" Visibility="{Binding Data.AppSettings.ShowColContent, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Ngày tạo" Binding="{Binding CreatedAt}" Width="150" Visibility="{Binding Data.AppSettings.ShowColCreatedAt, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTemplateColumn Header="Kết nối" Width="110" ClipboardContentBinding="{Binding Status}" Visibility="{Binding Data.AppSettings.ShowColConnect, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border CornerRadius="6" Padding="8,4" HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -1190,7 +1250,7 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Health" Width="150" ClipboardContentBinding="{Binding HealthSummary}">
+                            <DataGridTemplateColumn Header="Health" Width="150" ClipboardContentBinding="{Binding HealthSummary}" Visibility="{Binding Data.AppSettings.ShowColHealth, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Border Background="#263238" CornerRadius="10" Padding="8,3" ToolTip="{Binding LastError}">
@@ -1199,27 +1259,27 @@ GET  /api/history
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Timeout" Binding="{Binding TimeoutCount}" Width="75"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi SMS" Binding="{Binding SmsErrorCount}" Width="75"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Reconnect" Binding="{Binding ReconnectCount}" Width="85"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SMS cuối" Binding="{Binding LastSmsSentAt}" Width="90"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi cuối" Binding="{Binding LastError}" Width="180"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Timeout" Binding="{Binding TimeoutCount}" Width="75" Visibility="{Binding Data.AppSettings.ShowColTimeout, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi SMS" Binding="{Binding SmsErrorCount}" Width="75" Visibility="{Binding Data.AppSettings.ShowColSmsError, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Reconnect" Binding="{Binding ReconnectCount}" Width="85" Visibility="{Binding Data.AppSettings.ShowColReconnect, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="SMS cuối" Binding="{Binding LastSmsSentAt}" Width="90" Visibility="{Binding Data.AppSettings.ShowColLastSms, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lỗi cuối" Binding="{Binding LastError}" Width="180" Visibility="{Binding Data.AppSettings.ShowColLastError, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
                             
                             <!-- Tín hiệu Signal Bars -->
-                            <DataGridTemplateColumn Header="Tín hiệu" Width="100" ClipboardContentBinding="{Binding SignalStrength}">
+                            <DataGridTemplateColumn Header="Tín hiệu" Width="150" ClipboardContentBinding="{Binding SignalStrength}" Visibility="{Binding Data.AppSettings.ShowColSignal, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="5,0">
-                                            <ProgressBar Value="{Binding SignalStrength}" Maximum="100" Height="10" Width="40" Background="#444" Foreground="#4CAF50" materialDesign:TransitionAssist.DisableTransitions="True"/>
+                                            <ProgressBar Value="{Binding SignalStrength}" Maximum="100" Height="10" Width="60" Background="#444" Foreground="#4CAF50" materialDesign:TransitionAssist.DisableTransitions="True"/>
                                             <TextBlock Text="{Binding SignalStrength, StringFormat={}{0}%}" Margin="5,0,0,0" FontSize="11" Foreground="LightGray"/>
                                         </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Nhà mạng" Binding="{Binding NetworkProvider}" Width="120" Visibility="{Binding Data.AppSettings.ShowColProvider, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
                             
                             <!-- #8: Tô đỏ HSD nếu sắp hết hạn (dưới 7 ngày) -->
-                            <DataGridTemplateColumn Header="HSD" Width="120" ClipboardContentBinding="{Binding ExpiryDate}">
+                            <DataGridTemplateColumn Header="HSD" Width="120" ClipboardContentBinding="{Binding ExpiryDate}" Visibility="{Binding Data.AppSettings.ShowColExpiry, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding ExpiryDate}">
@@ -1240,11 +1300,11 @@ GET  /api/history
                             </DataGridTemplateColumn>
                             
                             <!-- #4: Cột số điện thoại nhận chuyển hướng -->
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Fwd→" Binding="{Binding ForwardedTo}" Width="130" Foreground="#03A9F4"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Fwd→" Binding="{Binding ForwardedTo}" Width="130" Foreground="#03A9F4" Visibility="{Binding Data.AppSettings.ShowColForward, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
                             
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Người gửi" Binding="{Binding Sender}" Width="120"/>
-                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cập nhật lúc" Binding="{Binding UpdatedAt}" Width="160" Visibility="{Binding Data.AppSettings.ShowColUpdatedAt, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Người gửi" Binding="{Binding Sender}" Width="120" Visibility="{Binding Data.AppSettings.ShowColSender, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Lúc" Binding="{Binding LastReceivedTime}" Width="150" Visibility="{Binding Data.AppSettings.ShowColLastReceived, Source={StaticResource Proxy}, Converter={StaticResource BoolToVisibility}}"/>
                         </DataGrid.Columns>
                     </DataGrid>
                         </ScrollViewer>
@@ -1354,11 +1414,11 @@ GET  /api/history
                         <Border Background="#1e293b" CornerRadius="10" Padding="20" BorderThickness="1" BorderBrush="#334155" Margin="0,0,0,20">
                             <StackPanel>
                                 <TextBlock Text="LUỒNG THIẾT LẬP SIẾT CHẶT NHẤT (CHỐNG LỘ IMEI GỐC 100%)" FontSize="18" FontWeight="Bold" Foreground="#E91E63" Margin="0,0,0,15"/>
-                                <TextBlock Text="Để đảm bảo an toàn tuyệt đối, KHÔNG BAO GIỜ bị lộ IMEI phần cứng thật lên nhà mạng (chống khóa SIM 100%), bạn hãy tích BẬT ĐỒNG THỜI CẢ 3 TÍNH NĂNG ở cột trái:"
+                                <TextBlock Text="Để đảm bảo an toàn tuyệt đối, KHÔNG BAO GIỜ bị lộ IMEI phần cứng thật lên nhà mạng (chống khóa SIM 100%), tính năng Chặn SIM lạ luôn được BẬT mặc định:"
                                            FontSize="15" Foreground="White" TextWrapping="Wrap" LineHeight="24" Margin="0,0,0,10"/>
                                 <TextBlock Text="[1] Bật Phục hồi IMEI: Đảm bảo SIM cũ cắm vào bất kỳ cổng nào cũng được ghi lại IMEI đã giả lập trước đó, rồi mới mở sóng."
                                            FontSize="14" Foreground="#4DD0E1" TextWrapping="Wrap" LineHeight="24" Margin="10,0,0,5"/>
-                                <TextBlock Text="[2] Chặn SIM lạ: Khi bạn cắm 1 SIM hoàn toàn mới vào, mạch sẽ CÚP SÓNG NGAY LẬP TỨC (đèn đỏ) để ngăn SIM tự động lên mạng bằng IMEI gốc."
+                                <TextBlock Text="[2] Chặn SIM lạ (Luôn Bật): Khi bạn cắm 1 SIM hoàn toàn mới vào, mạch sẽ CÚP SÓNG NGAY LẬP TỨC (đèn đỏ) để ngăn SIM tự động lên mạng bằng IMEI gốc."
                                            FontSize="14" Foreground="#4DD0E1" TextWrapping="Wrap" LineHeight="24" Margin="10,0,0,5"/>
                                 <TextBlock Text="[3] Nạp SIM Mới: Sau khi SIM lạ bị chặn, bạn click chuột phải chọn 'Chấp Thuận SIM Lạ', Tool sẽ lập tức bơm 1 IMEI giả mạo hoàn toàn mới vào mạch rồi mới MỞ SÓNG trở lại."
                                            FontSize="14" Foreground="#4DD0E1" TextWrapping="Wrap" LineHeight="24" Margin="10,0,0,15"/>
@@ -2392,5 +2452,6 @@ GET  /api/history
     </materialDesign:DialogHost>
     </materialDesign:DialogHost>
 </materialDesign:DialogHost>
+    </materialDesign:DialogHost>
 </Window>
 

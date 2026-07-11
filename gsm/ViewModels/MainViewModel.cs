@@ -583,6 +583,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _isAtCommandDialogOpen;
 
     [ObservableProperty]
+    private bool _isDisplayColumnsDialogOpen;
+
+    [ObservableProperty]
     private string _atCommandInput = "AT";
 
     public System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> PredefinedAtCommands { get; } = new()
@@ -3208,6 +3211,97 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         });
     }
+
+    private async Task MonitorAndPlayAudioDuringCallAsync(string portName, int durationSeconds)
+    {
+        bool audioPlayed = false;
+        string wavPath = AppSettings?.SoundCallOutPath ?? @"C:\Users\congn\Downloads\otp_947523_giong_nu\otp_947523_giong_nu.wav";
+
+        for (int i = 0; i < durationSeconds * 2; i++)
+        {
+            await Task.Delay(500);
+
+            // Nếu cuộc gọi đã bị dập hoặc lỗi
+            if (_callFailures.TryGetValue(portName, out string? failReason))
+            {
+                break;
+            }
+
+            if (!audioPlayed && File.Exists(wavPath))
+            {
+                // Kiểm tra trạng thái cuộc gọi
+                string clcc = await _modemService.SendCommandAsync(portName, "AT+CLCC", 2000, silent: true);
+                if (clcc.Contains("+CLCC:"))
+                {
+                    var lines = clcc.Split(new[] { "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var line in lines)
+                    {
+                        if (line.Contains("+CLCC:"))
+                        {
+                            var parts = line.Replace("+CLCC:", "").Trim().Split(',');
+                            if (parts.Length > 2)
+                            {
+                                string callState = parts[2].Trim();
+                                if (callState == "0") // 0 = Active (Người nghe nhấc máy)
+                                {
+                                    audioPlayed = true;
+                                    Application.Current.Dispatcher.Invoke(() => 
+                                    {
+                                        AddLog($"[{portName}] Đối phương đã nhấc máy! Chuẩn bị phát âm thanh...", "SUCCESS");
+                                    });
+
+                                    // Upload file lên modem nếu chưa có
+                                    string flst = await _modemService.SendCommandAsync(portName, "AT+QFLST", 3000, silent: true);
+                                    
+                                    bool exists = false;
+                                    if (flst.Contains("otp.wav"))
+                                    {
+                                        exists = true;
+                                    }
+
+                                    if (!exists)
+                                    {
+                                        Application.Current.Dispatcher.Invoke(() => 
+                                        {
+                                            AddLog($"[{portName}] Đang tải file âm thanh lên modem (lần đầu)...", "INFO");
+                                        });
+                                        bool uploadOk = await _modemService.UploadFileToModemAsync(portName, wavPath, "otp.wav");
+                                        if (uploadOk)
+                                        {
+                                            Application.Current.Dispatcher.Invoke(() => 
+                                            {
+                                                AddLog($"[{portName}] Tải file âm thanh lên modem thành công.", "SUCCESS");
+                                            });
+                                            exists = true;
+                                        }
+                                        else
+                                        {
+                                            Application.Current.Dispatcher.Invoke(() => 
+                                            {
+                                                AddLog($"[{portName}] Lỗi khi tải file âm thanh lên modem.", "ERROR");
+                                            });
+                                        }
+                                    }
+
+                                    if (exists)
+                                    {
+                                        Application.Current.Dispatcher.Invoke(() => 
+                                        {
+                                            AddLog($"[{portName}] Đang phát file âm thanh cuộc gọi...", "INFO");
+                                        });
+                                        // Phát file âm thanh cuộc gọi thông qua AT+QPSND
+                                        await _modemService.SendCommandAsync(portName, "AT+QPSND=1,\"ufs:otp.wav\",0", 5000);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private void ModemService_DtmfReceived(object? sender, GsmDataEventArgs e)
     {
         Application.Current.Dispatcher.InvokeAsync(() =>
@@ -3976,6 +4070,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private void OpenDisplayColumnsDialog()
+    {
+        IsDisplayColumnsDialogOpen = true;
+    }
+
+    [RelayCommand]
+    private void CloseDisplayColumnsDialog()
+    {
+        IsDisplayColumnsDialogOpen = false;
+        SettingsService.SaveSettings(AppSettings);
+        SnackbarMessageQueue.Enqueue("Đã lưu cấu hình hiển thị cột.");
+    }
+
+    [RelayCommand]
     private void OpenAtCommandDialog()
     {
         AtCommandSelectedPort = Ports.Count > 0 ? Ports.First().PortName : "Tất cả cổng";
@@ -4562,6 +4670,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string result = await _modemService.SendCommandAsync(CallManagerSelectedPort, cmd, timeoutMs: 5000);
             CallManagerOutput += $"{result}\n";
+            
+            // Bắt đầu giám sát cuộc gọi và phát âm thanh khi có người nhấc máy
+            if (action == "Dial" && result.Contains("OK"))
+            {
+                _callFailures.TryRemove(CallManagerSelectedPort, out _);
+                string portName = CallManagerSelectedPort;
+                _ = Task.Run(async () =>
+                {
+                    await MonitorAndPlayAudioDuringCallAsync(portName, 60);
+                });
+            }
             
             // Cập nhật hiển thị lên bảng Dashboard
             if (action == "SetForwarding" && result.Contains("OK"))
@@ -5594,23 +5713,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         port?.UpdateDisplayResult(CommandPanelTab);
                         
                         _callFailures.TryRemove(portName, out _);
-                        bool failed = false;
                         
-                        // Chờ đúng thời gian được cấu hình (kiểm tra mỗi 500ms xem cuộc gọi có bị từ chối sớm không)
-                        for (int i = 0; i < duration * 2; i++)
+                        // Chạy giám sát và phát âm thanh
+                        await MonitorAndPlayAudioDuringCallAsync(portName, duration);
+                        
+                        // Dập máy
+                        await _modemService.SendCommandAsync(portName, "ATH", timeoutMs: 5000);
+                        
+                        if (_callFailures.TryGetValue(portName, out string? failReason))
                         {
-                            await Task.Delay(500);
-                            if (_callFailures.TryGetValue(portName, out string? failReason))
-                            {
-                                finalResult = $"Cuộc gọi thất bại ({failReason})";
-                                failed = true;
-                                break;
-                            }
+                            finalResult = $"Cuộc gọi thất bại ({failReason})";
                         }
-                        
-                        if (!failed)
+                        else
                         {
-                            await _modemService.SendCommandAsync(portName, "ATH", timeoutMs: 5000);
                             finalResult = "Gọi thành công";
                         }
                     }

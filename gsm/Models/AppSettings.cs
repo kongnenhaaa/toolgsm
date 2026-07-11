@@ -7,8 +7,8 @@ public class AppSettings
     public string TelegramBotToken { get; set; } = "";
     public string TelegramChatIds { get; set; } = "";
     public bool ReceiveAllSms { get; set; } = true;
-    public bool EnableTelegramNotification { get; set; } = true;
-    public bool EnableWebNotification { get; set; } = true;
+    public bool EnableTelegramNotification { get => true; set { } }
+    public bool EnableWebNotification { get => true; set { } }
     public string FirebaseUrl { get; set; } = "";
     
     // Tự động chuyển hướng cuộc gọi
@@ -28,7 +28,7 @@ public class AppSettings
 
 
     // Tự động bắt máy
-    public bool EnableAutoAnswer { get; set; } = true;
+    public bool EnableAutoAnswer { get => true; set { } }
 
     // Tự động Watchdog (Khởi động lại modem khi lỗi)
     public bool EnableAutoWatchdog { get; set; } = true;
@@ -50,26 +50,44 @@ public class AppSettings
     /// <summary>Đường dẫn file .wav khi có cuộc gọi đến. Để trống = dùng âm hệ thống.</summary>
     public string SoundCallPath { get; set; } = "";
 
+    /// <summary>Đường dẫn file .wav phát đi khi đối phương nhận cuộc gọi.</summary>
+    public string SoundCallOutPath { get; set; } = @"C:\Users\congn\Downloads\otp_947523_giong_nu\otp_947523_giong_nu.wav";
+
     // ========== WEBHOOK RULES ==========
     /// <summary>Danh sách các quy tắc tự động forward OTP/SMS qua HTTP webhook.</summary>
     public System.Collections.Generic.List<WebhookRule> WebhookRules { get; set; } = new();
 
 
     // ========== IMEI BACKUP & RESTORE ==========
-    /// <summary>
-    /// Bật/tắt chặn SIM lạ. Nếu bật, SIM mới (chưa có trong kho) sẽ bị chặn và chờ chấp thuận thủ công.
-    /// Nếu tắt, ứng dụng sẽ tự động ghi nhớ (Backup) IMEI nguyên bản của thẻ SIM mới vào cơ sở dữ liệu.
-    /// </summary>
-    public bool BlockUnknownSims { get; set; } = true;
+    public bool BlockUnknownSims { get => true; set { } }
 
-    /// <summary>
-    /// Bật/tắt tự động phục hồi (Restore) IMEI đã sao lưu nếu thẻ SIM bị chuyển sang cổng khác.
-    /// </summary>
-    public bool EnableImeiRestore { get; set; } = true;
+    public bool EnableImeiRestore { get => true; set { } }
+    public bool EnableNewSimIntakeMode { get => true; set { } }
 
-    /// <summary>
-    /// Chế độ Nạp SIM Mới: Tự động tráng sẵn Fake IMEI cho cổng trống, 
-    /// và khi cắm SIM mới vào thì lưu luôn Fake IMEI đó làm gốc.
-    /// </summary>
-    public bool EnableNewSimIntakeMode { get; set; } = false;
+    // ========== COLUMN VISIBILITY SETTINGS ==========
+    public bool ShowColStt { get; set; } = true;
+    public bool ShowColPort { get; set; } = true;
+    public bool ShowColDevice { get; set; } = true;
+    public bool ShowColImei { get; set; } = true;
+    public bool ShowColSerial { get; set; } = true;
+    public bool ShowColPhone { get; set; } = true;
+    public bool ShowColBalance { get; set; } = true;
+    public bool ShowColOtp { get; set; } = true;
+    public bool ShowColStatus { get; set; } = true;
+    public bool ShowColContent { get; set; } = true;
+    public bool ShowColCreatedAt { get; set; } = true;
+    public bool ShowColConnect { get; set; } = true;
+    public bool ShowColHealth { get; set; } = true;
+    public bool ShowColTimeout { get; set; } = false;
+    public bool ShowColSmsError { get; set; } = false;
+    public bool ShowColReconnect { get; set; } = false;
+    public bool ShowColLastSms { get; set; } = false;
+    public bool ShowColLastError { get; set; } = false;
+    public bool ShowColSignal { get; set; } = true;
+    public bool ShowColProvider { get; set; } = true;
+    public bool ShowColExpiry { get; set; } = true;
+    public bool ShowColForward { get; set; } = true;
+    public bool ShowColUpdatedAt { get; set; } = false;
+    public bool ShowColSender { get; set; } = false;
+    public bool ShowColLastReceived { get; set; } = false;
 }

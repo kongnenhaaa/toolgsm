@@ -17,6 +17,7 @@ public interface IGsmModemService
     Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 15000);
     Task SweepUnreadSmsAsync(string portName);
     Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile);
+    Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile);
     void StartPollingNetwork(string portName);
     List<string> GetAvailablePorts();
     void ConnectAll(int baudRate = 115200);
@@ -617,6 +618,92 @@ public class GsmModemService : IGsmModemService
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi tải file {remoteFile}: {ex.Message}" });
             return string.Empty;
+        }
+        finally
+        {
+            _isDownloading[portName] = false;
+            if (_dataReceivedHandlers.TryGetValue(portName, out var handler))
+            {
+                sp.DataReceived += handler;
+            }
+            semaphore.Release();
+        }
+    }
+
+    public async Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile)
+    {
+        if (!File.Exists(localFile)) return false;
+        if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return false;
+        if (!_semaphores.TryGetValue(portName, out var semaphore)) return false;
+
+        FileInfo fi = new FileInfo(localFile);
+        long fileSize = fi.Length;
+
+        // Delete old file if exists
+        await SendCommandAsync(portName, $"AT+QFDEL=\"{remoteFile}\"", 3000, silent: true);
+
+        await semaphore.WaitAsync();
+        _isDownloading[portName] = true;
+        try
+        {
+            if (_dataReceivedHandlers.TryGetValue(portName, out var handler))
+            {
+                sp.DataReceived -= handler;
+            }
+
+            sp.DiscardInBuffer();
+            sp.Write($"AT+QFUPL=\"{remoteFile}\",{fileSize}\r");
+
+            // Read until "CONNECT" is received
+            string resp = "";
+            DateTime start = DateTime.Now;
+            while ((DateTime.Now - start).TotalSeconds < 5)
+            {
+                if (sp.BytesToRead > 0)
+                {
+                    resp += (char)sp.ReadChar();
+                    if (resp.Contains("CONNECT")) break;
+                }
+                else
+                {
+                    await Task.Delay(10);
+                }
+            }
+
+            // Write raw bytes
+            using (var fs = new FileStream(localFile, FileMode.Open, FileAccess.Read))
+            {
+                byte[] buffer = new byte[1024];
+                int bytesRead = 0;
+                while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    sp.Write(buffer, 0, bytesRead);
+                    await Task.Delay(15); // Short delay to prevent buffer overrun
+                }
+            }
+
+            // Read until "OK" or "+QFUPL" is received
+            string finalResp = "";
+            start = DateTime.Now;
+            while ((DateTime.Now - start).TotalSeconds < 5)
+            {
+                if (sp.BytesToRead > 0)
+                {
+                    finalResp += (char)sp.ReadChar();
+                    if (finalResp.Contains("OK")) break;
+                }
+                else
+                {
+                    await Task.Delay(10);
+                }
+            }
+
+            return finalResp.Contains("OK") || finalResp.Contains("+QFUPL:");
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi tải file lên modem {remoteFile}: {ex.Message}" });
+            return false;
         }
         finally
         {

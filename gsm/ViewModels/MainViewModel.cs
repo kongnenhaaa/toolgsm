@@ -2349,6 +2349,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (string.IsNullOrWhiteSpace(previous) || string.IsNullOrWhiteSpace(current))
             return false;
 
+        // Bỏ qua nếu đây là tin nhắn trùng lặp (ví dụ cùng 1 mẫu tin nhắn nhưng khác số OTP)
+        // chứ không phải là một tin nhắn dài bị cắt làm nhiều phần (multipart SMS)
+        string prevNoDigits = Regex.Replace(previous, @"[\d\s]+", "").ToLower();
+        string currNoDigits = Regex.Replace(current, @"[\d\s]+", "").ToLower();
+
+        if (currNoDigits.Length > 3 && prevNoDigits.Length > 3)
+        {
+            if (prevNoDigits.Contains(currNoDigits) || currNoDigits.Contains(prevNoDigits))
+                return false;
+        }
+
         // Xác định đúng thứ tự 2 phần tin nhắn (phần dài/phần đầu trước, phần ngắn/đuôi sau)
         string part1, part2;
         if ((char.IsDigit(current.LastOrDefault()) && char.IsDigit(previous.FirstOrDefault()) && current.Length < previous.Length) || (current.Length >= 120 && previous.Length < 120))

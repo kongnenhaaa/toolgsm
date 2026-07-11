@@ -674,6 +674,20 @@ public class GsmModemService : IGsmModemService
             }
 
             // ---------------------------------------------------------
+            // 1.4. BẮT RÚT SIM (HOT-UNPLUG)
+            // ---------------------------------------------------------
+            if (currentData.Contains("+CPIN: NOT READY") || currentData.Contains("+CPIN: NOT INSERTED"))
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra!" });
+                buffer.Replace("+CPIN: NOT READY", "");
+                buffer.Replace("+CPIN: NOT INSERTED", "");
+                currentData = buffer.ToString();
+                
+                // Khởi động lại luồng chờ SIM
+                StartHotplugWaitLoop(portName);
+            }
+
+            // ---------------------------------------------------------
             // 1.5. BẮT KẾT QUẢ USSD (+CUSD)
             // ---------------------------------------------------------
             if (currentData.Contains("+CUSD:") && !currentData.StartsWith("AT+CUSD"))

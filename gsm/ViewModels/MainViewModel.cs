@@ -621,7 +621,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             MatchesFilter(s.Sender, SmsSenderFilter));
 
     public int TotalPortCount => Ports.Count;
-    public int OnlinePortCount => Ports.Count(IsActive);
+    public int OnlinePortCount => Ports.Count(p => IsActive(p) && !string.IsNullOrWhiteSpace(p.Balance));
     public int OfflinePortCount => Ports.Count - OnlinePortCount;
     public int SmsReceivedCount => SmsMessages.Count;
     public int SmsFailedCount => Ports.Sum(p => p.SmsErrorCount);
@@ -805,10 +805,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return false;
         };
         
-        FilteredPortsView.SortDescriptions.Add(new System.ComponentModel.SortDescription("HasData", System.ComponentModel.ListSortDirection.Descending));
-        FilteredPortsView.SortDescriptions.Add(new System.ComponentModel.SortDescription("PortNumber", System.ComponentModel.ListSortDirection.Ascending));
-        ((System.ComponentModel.ICollectionViewLiveShaping)FilteredPortsView).IsLiveSorting = true;
-        ((System.ComponentModel.ICollectionViewLiveShaping)FilteredPortsView).LiveSortingProperties.Add("HasData");
+        ((System.ComponentModel.ICollectionViewLiveShaping)FilteredPortsView).IsLiveSorting = false;
 
         LoadSimCache();
         LoadImeiCache();
@@ -1050,7 +1047,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void UpdateDashboard()
     {
-        int activeCount = Ports.Count(IsActive);
+        int activeCount = Ports.Count(p => IsActive(p) && !string.IsNullOrWhiteSpace(p.Balance));
         int disconnectedCount = Ports.Count - activeCount;
 
         ConnectionSeries = new ISeries[]
@@ -1882,6 +1879,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.Serial = string.Empty;
                 port.NetworkProvider = string.Empty;
                 port.Balance = string.Empty;
+                port.ExpiryDate = string.Empty;
+                port.Otp = string.Empty;
+                port.LastMessageContent = string.Empty;
+                port.Sender = string.Empty;
+                port.SignalStrength = 0;
             }
             else if (e.Data.Contains("+CSQ:"))
             {
@@ -1995,7 +1997,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             if (!string.IsNullOrEmpty(randomFwd))
                             {
                                 AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                                string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 8000);
+                                string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",129", timeoutMs: 8000);
                                 if (ccfcResult.Contains("OK"))
                                 {
                                     Application.Current.Dispatcher.Invoke(() =>
@@ -3758,7 +3760,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (string.IsNullOrEmpty(randomFwd)) continue;
                     
                     AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                    string res = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,3,\"{randomFwd}\"", timeoutMs: 5000);
+                    string res = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",129", timeoutMs: 5000);
                     if (res.Contains("OK"))
                     {
                         Application.Current.Dispatcher.Invoke(() =>
@@ -3771,9 +3773,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             });
         }
-        else if (AppSettings != null && !AppSettings.EnableAutoCallForwarding)
+        else if (AppSettings != null)
         {
-            // Hủy chuyển hướng nếu người dùng tắt tính năng
+            // Hủy chuyển hướng nếu người dùng tắt tính năng hoặc để trống số điện thoại
             Task.Run(async () =>
             {
                 var activePorts = GetPortsSnapshot();
@@ -4227,7 +4229,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 break;
             case "SetForwarding":
                 if (string.IsNullOrWhiteSpace(ForwardNumber)) return;
-                cmd = $"AT+CCFC=0,3,\"{ForwardNumber}\"";
+                cmd = $"AT+CCFC=0,1,\"{ForwardNumber}\",129";
                 break;
             case "Hold":
                 cmd = "AT+CHLD=2";

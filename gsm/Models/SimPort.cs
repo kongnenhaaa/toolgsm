@@ -6,6 +6,8 @@ public partial class SimPort : ObservableObject
 {
     public string PortName { get; set; } = string.Empty;
     
+    public int PhysicalIndex { get; set; } = int.MaxValue;
+    
     public int PortNumber
     {
         get
@@ -15,6 +17,9 @@ public partial class SimPort : ObservableObject
             return match.Success ? int.Parse(match.Value) : int.MaxValue;
         }
     }
+
+    [ObservableProperty]
+    private int _stt;
 
     [ObservableProperty]
     private bool _isSelected;

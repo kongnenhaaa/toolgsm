@@ -24,6 +24,28 @@ namespace gsm
             InitializeComponent();
             _viewModel = new MainViewModel();
             DataContext = _viewModel;
+            
+            EventManager.RegisterClassHandler(typeof(DataGrid), CommandManager.ExecutedEvent, new ExecutedRoutedEventHandler(OnDataGridCopy), true);
+        }
+
+        private void OnDataGridCopy(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (e.Command == ApplicationCommands.Copy)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (Clipboard.ContainsText(TextDataFormat.Text))
+                        {
+                            string text = Clipboard.GetText(TextDataFormat.Text);
+                            Clipboard.Clear();
+                            Clipboard.SetText(text, TextDataFormat.UnicodeText);
+                        }
+                    }
+                    catch { }
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            }
         }
 
         protected override void OnClosed(EventArgs e)

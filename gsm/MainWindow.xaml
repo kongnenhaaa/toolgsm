@@ -345,7 +345,7 @@ GET  /api/history
                                             <DataGridTextColumn Header="Lọc Sender" Binding="{Binding SenderFilter}" Width="100" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
                                             <DataGridCheckBoxColumn Header="OTP Only" Binding="{Binding OtpOnly}" Width="70"/>
                                             <DataGridTextColumn Header="URL Webhook" Binding="{Binding WebhookUrl}" Width="*" ElementStyle="{StaticResource ProDataGridTextElementStyle}"/>
-                                            <DataGridTemplateColumn Width="140">
+                                            <DataGridTemplateColumn Width="140" ClipboardContentBinding="{x:Null}">
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
                                                         <StackPanel Orientation="Horizontal">
@@ -1077,7 +1077,7 @@ GET  /api/history
                         </DataGrid.ContextMenu>
                         
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Width="60">
+                            <DataGridTemplateColumn Width="60" ClipboardContentBinding="{Binding IsSelected}">
                                 <DataGridTemplateColumn.HeaderTemplate>
                                     <DataTemplate>
                                         <CheckBox IsChecked="{Binding DataContext.IsAllPortsSelected, RelativeSource={RelativeSource AncestorType=DataGrid}, UpdateSourceTrigger=PropertyChanged}" ToolTip="Chọn / Bỏ chọn tất cả" HorizontalAlignment="Center"/>
@@ -1090,6 +1090,7 @@ GET  /api/history
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
 
+                            <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="STT" Binding="{Binding Stt}" Width="50" IsReadOnly="True" />
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Cổng" Binding="{Binding PortName}" SortMemberPath="PortNumber" Width="120" HeaderTemplate="{StaticResource PortNameHeaderTemplate}"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="Thiết bị (Fake)" Binding="{Binding DeviceName}" Width="160" Foreground="#29B6F6"/>
                             <DataGridTextColumn ElementStyle="{StaticResource ProDataGridTextElementStyle}" Header="IMEI" Binding="{Binding Imei}" Width="160" HeaderTemplate="{StaticResource ImeiHeaderTemplate}"/>
@@ -1291,7 +1292,7 @@ GET  /api/history
                             </ContextMenu>
                         </DataGrid.ContextMenu>
                         <DataGrid.Columns>
-                            <DataGridTemplateColumn Width="40">
+                            <DataGridTemplateColumn Width="40" ClipboardContentBinding="{Binding Status}">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Ellipse Width="8" Height="8" Fill="{Binding Status, Converter={StaticResource StatusToColorConverter}}" Margin="10,0"/>

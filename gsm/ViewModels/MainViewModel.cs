@@ -813,6 +813,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LoadSimCache();
         LoadImeiCache();
         ImportCsvToImeiCache();
+        ExportColumns.Add(new ExportColumnItem("STT", "Stt"));
         ExportColumns.Add(new ExportColumnItem("Cổng", "PortName"));
         ExportColumns.Add(new ExportColumnItem("IMEI", "Imei"));
         ExportColumns.Add(new ExportColumnItem("Serial", "Serial"));
@@ -906,7 +907,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }, lifetimeToken);
 
+        // Tự động đo cường độ sóng (CSQ) mỗi 15 giây
+        _ = Task.Run(async () =>
+        {
+            while (!lifetimeToken.IsCancellationRequested)
+            {
+                try { await Task.Delay(TimeSpan.FromSeconds(15), lifetimeToken); }
+                catch (OperationCanceledException) { break; }
 
+                var activePorts = GetPortsSnapshot().Where(IsActive).ToList();
+                foreach (var p in activePorts)
+                {
+                    if (lifetimeToken.IsCancellationRequested) break;
+                    
+                    string result = await _modemService.SendCommandAsync(p.PortName, "AT+CSQ", 5000, silent: true);
+                    var match = Regex.Match(result, @"\+CSQ:\s*(\d+)");
+                    if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
+                    {
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            p.SignalStrength = csq >= 99 ? 0 : (int)((csq / 31.0) * 100);
+                        });
+                    }
+                }
+            }
+        }, lifetimeToken);
 
         // Tự động quét vét SMS (Periodic SMS Sweep)
         _ = Task.Run(async () =>
@@ -1826,8 +1851,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = SimStatus.Active, SignalStrength = 0 };
+                    port.PhysicalIndex = _modemService.GetAvailablePorts().IndexOf(e.PortName);
+                    if (port.PhysicalIndex < 0) port.PhysicalIndex = int.MaxValue;
                     port.ReconnectCount++;
-                    Ports.Add(port);
+                    
+                    int insertIndex = 0;
+                    while (insertIndex < Ports.Count && Ports[insertIndex].PhysicalIndex < port.PhysicalIndex)
+                    {
+                        insertIndex++;
+                    }
+                    Ports.Insert(insertIndex, port);
+                    
+                    for (int i = 0; i < Ports.Count; i++)
+                    {
+                        Ports[i].Stt = i + 1;
+                    }
                 }
                 else
                 {
@@ -3595,12 +3633,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var match = System.Text.RegularExpressions.Regex.Match(p.Balance, @"\d+");
                 return match.Success ? double.Parse(match.Value) : 0d;
             }).ThenBy(p => p.PortNumber).ToList(),
-            "COM" or _ => Ports.OrderBy(p => p.PortNumber).ToList()
+            "COM" or _ => Ports.OrderBy(p => p.PhysicalIndex).ToList()
         };
         
         Ports.Clear();
-        foreach (var port in sorted)
+        for (int i = 0; i < sorted.Count; i++)
         {
+            var port = sorted[i];
+            port.Stt = i + 1;
             Ports.Add(port);
         }
         

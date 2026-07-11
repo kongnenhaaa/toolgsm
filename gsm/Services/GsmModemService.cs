@@ -856,7 +856,7 @@ public class GsmModemService : IGsmModemService
             }
             
             string finalResp = await tcs.Task;
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"< {finalResp.Trim()}" });
+            if (!silent) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"< {finalResp.Trim()}" });
             return finalResp.Trim();
         }
         catch (IOException ex)
@@ -945,7 +945,7 @@ public class GsmModemService : IGsmModemService
         }
     }
 
-    public async Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 15000)
+    public async Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 30000)
     {
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return "ERROR: Port not open";
         if (!_semaphores.TryGetValue(portName, out var semaphore)) return "ERROR: Semaphore missing";
@@ -958,14 +958,29 @@ public class GsmModemService : IGsmModemService
         try
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> AT+CMGS=\"{phoneNumber}\"" });
-            if (_portBuffers.TryGetValue(portName, out var buffer)) buffer.Clear();
-            sp.DiscardInBuffer();
-            sp.DiscardOutBuffer();
+            
+            async Task SendInnerAsync(string cmd)
+            {
+                var innerTcs = new TaskCompletionSource<string>(cmd, TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!_commandTcs.TryAdd(portName, innerTcs)) return;
+                try
+                {
+                    if (_portBuffers.TryGetValue(portName, out var b)) b.Clear();
+                    sp.DiscardInBuffer();
+                    sp.DiscardOutBuffer();
+                    sp.Write(cmd + "\r");
+                    await Task.WhenAny(innerTcs.Task, Task.Delay(2000));
+                }
+                finally
+                {
+                    if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, innerTcs))
+                        _commandTcs.TryRemove(portName, out _);
+                }
+            }
 
-            // Chuyển sang GSM charset để gửi tin nhắn văn bản thông thường (tránh lỗi 350 do UCS2)
-            sp.Write("AT+CSCS=\"GSM\"\r");
-            await Task.Delay(400); // Đợi đủ lâu để AT+CSCS trả về OK
-            sp.DiscardInBuffer();  // Vứt bỏ chữ OK của AT+CSCS để không làm loạn kết quả AT+CMGS
+            await SendInnerAsync("AT+CMGF=1");
+            await SendInnerAsync("AT+CSMP=17,167,0,0");
+            await SendInnerAsync("AT+CSCS=\"GSM\"");
 
             tcs = new TaskCompletionSource<string>("AT+CMGS", TaskCreationOptions.RunContinuationsAsynchronously);
             if (!_commandTcs.TryAdd(portName, tcs))
@@ -1022,10 +1037,10 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
-            // Trả lại UCS2 charset để đọc tin nhắn tiếng Việt
+            // Trả lại UCS2 charset để đọc tin nhắn tiếng Việt và DCS=8 cho UCS2
             if (_serialPorts.TryGetValue(portName, out var sp2) && sp2.IsOpen)
             {
-                sp2.Write("AT+CSCS=\"UCS2\"\r");
+                sp2.Write("AT+CSCS=\"UCS2\"\rAT+CSMP=17,167,0,8\r");
             }
 
             if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))

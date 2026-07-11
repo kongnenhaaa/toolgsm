@@ -820,6 +820,13 @@ GET  /api/history
                             </Button.ContextMenu>
                         </Button>
 
+                        <Button Background="#9C27B0" Style="{StaticResource ModernButtonStyle}" Command="{Binding ApproveUnknownSimCommand}" CommandParameter="AllBlocked" ToolTip="Duyệt tất cả SIM lạ đang bị chặn" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="CheckDecagram" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="Duyệt tất cả SIM lạ" VerticalAlignment="Center" Style="{StaticResource SidebarTextStyle}"/>
+                            </StackPanel>
+                        </Button>
+
                         <Button Background="#26C6DA" Command="{Binding OpenTopUpDialogCommand}" CommandParameter="All" Style="{StaticResource ModernButtonStyle}" ToolTip="Nạp thẻ cào điện thoại" HorizontalAlignment="Stretch" Height="40" HorizontalContentAlignment="Left" Margin="0,4" Padding="15,0">
                             <StackPanel Orientation="Horizontal">
                                 <materialDesign:PackIcon Kind="CreditCardPlus" VerticalAlignment="Center" Margin="0,0,10,0"/>

@@ -1610,11 +1610,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void ApproveUnknownSim(object obj)
     {
-        var targetPorts = Ports.Where(p => p.IsSelected).ToList();
+        List<SimPort> targetPorts;
         
-        if (obj is SimPort clickedPort && !targetPorts.Contains(clickedPort))
+        if (obj?.ToString() == "AllBlocked")
         {
-            targetPorts.Add(clickedPort);
+            targetPorts = Ports.Where(p => p.Status == SimStatus.SecurityBlocked).ToList();
+        }
+        else if (obj is SimPort clickedPort)
+        {
+            // Bấm nút "Chấp nhận" trên 1 dòng đơn lẻ -> Chỉ duyệt dòng đó, phớt lờ Checkbox
+            targetPorts = new List<SimPort> { clickedPort };
+        }
+        else
+        {
+            // Bấm nút "Chấp nhận" tổng (Global) -> Duyệt các dòng đang tích Checkbox
+            targetPorts = Ports.Where(p => p.IsSelected).ToList();
         }
 
         if (!targetPorts.Any())

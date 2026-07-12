@@ -6,7 +6,7 @@
 
 <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Đặt mật khẩu My VNPT</MudText>
 <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Gửi lệnh đặt / đổi mật khẩu My VNPT cho thuê bao Vinaphone (thường qua USSD hoặc SMS).
+    Gửi lệnh đặt / đổi mật khẩu My VNPT cho thuê bao Vinaphone.
 </MudText>
 
 <MudGrid>
@@ -30,9 +30,6 @@
                           Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
                           InputType="InputType.Password" />
 
-            <MudTextField @bind-Value="_vnptUssd" Label="Lệnh USSD / SMS" 
-                          Placeholder="*111# hoặc nội dung SMS" 
-                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
 
             <MudStack Row="true" Spacing="2">
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" 
@@ -62,7 +59,6 @@
     private string _vnptPort = "";
     private string _vnptPassword = "";
     private string _vnptConfirm = "";
-    private string _vnptUssd = "";
     private string _vnptResult = "";
 
     private IEnumerable<SimPort> ActivePorts => 

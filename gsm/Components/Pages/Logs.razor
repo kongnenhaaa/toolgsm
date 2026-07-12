@@ -5,6 +5,7 @@
 @inject IDialogService DialogService
 @using gsm.ViewModels
 @using gsm.Models
+@using System.IO
 @implements IDisposable
 
 <div class="px-3 pt-2">
@@ -153,27 +154,24 @@
 </div>
 
 @code {
-    private int _activeTab = 0;
+    // ========== BINDINGS ==========
     private string _search = "";
     private string _filterLevel = "all";
     private bool _autoScroll = true;
+    private int _activeTab = 0;
+
+    private List<LogItem> _logs = new();
     private ElementReference _logContainer;
 
-    // Stats
+    // Stats counters (cập nhật realtime)
+    private int _smsSuccess, _smsError, _ussdSuccess, _ussdError;
+    private int _callSuccess, _callError, _acceptSuccess, _acceptError;
+
     private int _totalLogs => _logs.Count;
     private int _successCount => _logs.Count(x => x.Level == "success");
     private int _errorCount => _logs.Count(x => x.Level == "error");
     private int _successRate => _totalLogs == 0 ? 0 : (int)(_successCount * 100.0 / _totalLogs);
     private int _totalOps => _smsSuccess + _smsError + _ussdSuccess + _ussdError + _callSuccess + _callError + _acceptSuccess + _acceptError;
-
-    private int _smsSuccess, _smsError, _ussdSuccess, _ussdError, _callSuccess, _callError;
-    private int _acceptSuccess, _acceptError;
-
-    // Log list
-    private List<LogItem> _logs = new();
-
-    private IEnumerable<SimPort> ActivePorts => 
-        Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
 
     private IEnumerable<LogItem> FilteredLogs
     {
@@ -183,10 +181,10 @@
             if (_filterLevel != "all")
                 list = list.Where(x => x.Level == _filterLevel);
             if (!string.IsNullOrWhiteSpace(_search))
-                list = list.Where(x => 
+                list = list.Where(x =>
                     x.Message.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
                     x.Port.Contains(_search, StringComparison.OrdinalIgnoreCase));
-            return list.OrderByDescending(x => x.Time).Take(500);
+            return list.OrderByDescending(x => x.Time).Take(800);
         }
     }
 
@@ -194,14 +192,48 @@
 
     protected override void OnInitialized()
     {
-        // Subscribe log từ ModemService / MainViewModel nếu có
-        // ModemService.LogMessage += OnLogReceived;
+        // ========== SUBSCRIBE LOG TỪ BACKEND (QUAN TRỌNG) ==========
+        try
+        {
+            if (ModemService != null)
+            {
+                ModemService.LogMessage += OnModemLog;
+            }
+        }
+        catch { }
 
-        // Demo logs
+        // Log khởi động
         AddLog("system", "info", "Tool GSM đã khởi động");
         AddLog("system", "info", "Sẵn sàng kết nối thiết bị");
 
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+    }
+
+    // =====================================================
+    // NHẬN LOG TỪ BACKEND
+    // =====================================================
+    private void OnModemLog(object? sender, GsmDataEventArgs e)
+    {
+        // e.PortName, e.Data
+        var level = "info";
+        var msg = e.Data ?? "";
+
+        if (msg.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("Lỗi", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("FAIL", StringComparison.OrdinalIgnoreCase))
+            level = "error";
+        else if (msg.Contains("OK", StringComparison.OrdinalIgnoreCase) ||
+                 msg.Contains("thành công", StringComparison.OrdinalIgnoreCase) ||
+                 msg.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase))
+            level = "success";
+        else if (msg.Contains("WARN", StringComparison.OrdinalIgnoreCase))
+            level = "warning";
+
+        InvokeAsync(() =>
+        {
+            AddLog(e.PortName ?? "system", level, msg);
+            StateHasChanged();
+        });
     }
 
     void AddLog(string port, string level, string message)
@@ -213,44 +245,106 @@
             Level = level,
             Message = message
         });
-        if (_logs.Count > 2000) _logs.RemoveRange(2000, _logs.Count - 2000);
+
+        // Giữ tối đa 3000 dòng trong memory
+        if (_logs.Count > 3000)
+            _logs.RemoveRange(3000, _logs.Count - 3000);
+
+        // Cập nhật counter theo loại
+        if (message.Contains("SMS", StringComparison.OrdinalIgnoreCase))
+        {
+            if (level == "success") _smsSuccess++; else if (level == "error") _smsError++;
+        }
+        else if (message.Contains("USSD", StringComparison.OrdinalIgnoreCase) || message.Contains("*101#"))
+        {
+            if (level == "success") _ussdSuccess++; else if (level == "error") _ussdError++;
+        }
+        else if (message.Contains("Call", StringComparison.OrdinalIgnoreCase) || message.Contains("ATD"))
+        {
+            if (level == "success") _callSuccess++; else if (level == "error") _callError++;
+        }
+        else if (message.Contains("Accept", StringComparison.OrdinalIgnoreCase) || message.Contains("IMEI"))
+        {
+            if (level == "success") _acceptSuccess++; else if (level == "error") _acceptError++;
+        }
     }
 
     string GetLevelColor(string level) => level switch
     {
         "success" => "#4ADE80",
-        "error" => "#F87171",
+        "error"   => "#F87171",
         "warning" => "#FBBF24",
-        "info" => "#60A5FA",
-        _ => "#94A3B8"
+        "info"    => "#60A5FA",
+        _         => "#94A3B8"
     };
 
-
+    // =====================================================
+    // CLEAR LOG
+    // =====================================================
     async Task ClearLogs()
     {
-        var ok = await DialogService.ShowMessageBox("Xóa log", "Xóa toàn bộ nhật ký?", yesText: "Xóa", cancelText: "Hủy");
+        var ok = await DialogService.ShowMessageBox("Xóa log",
+            "Xóa toàn bộ nhật ký trong bộ nhớ?", yesText: "Xóa", cancelText: "Hủy");
         if (ok == true)
         {
             _logs.Clear();
+            _smsSuccess = _smsError = _ussdSuccess = _ussdError = 0;
+            _callSuccess = _callError = _acceptSuccess = _acceptError = 0;
             Snackbar.Add("Đã xóa log", Severity.Success);
         }
     }
 
+    // =====================================================
+    // EXPORT LOG THẬT (ghi file .txt + .csv)
+    // =====================================================
     async Task ExportLogs()
     {
-        Snackbar.Add("Đang export log...", Severity.Info);
-        // TODO: ghi file .txt / .csv
+        try
+        {
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ToolGSM_Logs");
+            Directory.CreateDirectory(folder);
+
+            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var txtPath = Path.Combine(folder, $"log_{stamp}.txt");
+            var csvPath = Path.Combine(folder, $"log_{stamp}.csv");
+
+            // TXT
+            var txtLines = _logs.OrderBy(x => x.Time)
+                .Select(x => $"{x.Time:yyyy-MM-dd HH:mm:ss}\t[{x.Level.ToUpper()}]\t{x.Port}\t{x.Message}");
+            await File.WriteAllLinesAsync(txtPath, txtLines);
+
+            // CSV
+            var csvLines = new List<string> { "Time,Level,Port,Message" };
+            csvLines.AddRange(_logs.OrderBy(x => x.Time)
+                .Select(x => $"\"{x.Time:yyyy-MM-dd HH:mm:ss}\",\"{x.Level}\",\"{x.Port}\",\"{x.Message.Replace("\"", "\"\"")}\""));
+            await File.WriteAllLinesAsync(csvPath, csvLines);
+
+            Snackbar.Add($"Đã export:\n{txtPath}\n{csvPath}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Export lỗi: " + ex.Message, Severity.Error);
+        }
     }
 
     void ToggleAutoScroll() => _autoScroll = !_autoScroll;
 
-    public void Dispose() => _timer?.Dispose();
+    public void Dispose()
+    {
+        try
+        {
+            if (ModemService != null)
+                ModemService.LogMessage -= OnModemLog;
+        }
+        catch { }
+        _timer?.Dispose();
+    }
 
     public class LogItem
     {
         public DateTime Time { get; set; }
         public string Port { get; set; } = "";
-        public string Level { get; set; } = "info"; // info, success, warning, error
+        public string Level { get; set; } = "info";
         public string Message { get; set; } = "";
     }
 }

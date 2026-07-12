@@ -4,6 +4,7 @@
 @inject IDialogService DialogService
 @using gsm.ViewModels
 @using gsm.Models
+@using System.IO
 
 <div class="px-3 pt-2">
     <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Cài đặt</MudText>
@@ -243,27 +244,20 @@
 </div>
 
 @code {
-    // Bảo mật
     private bool _newSimIntake = true;
     private bool _autoRestoreImei = true;
     private bool _blockUnknown = false;
     private bool _autoAccept = false;
-
-    // Mạng
     private bool _prefer4G = true;
     private bool _enableVolte = false;
     private bool _autoRecovery = true;
     private bool _forceCfun1AfterReboot = true;
     private int _recoveryThreshold = 12;
     private int _watchdogSeconds = 50;
-
-    // SMS/USSD
     private bool _autoCheckBalanceAfterSms = true;
     private bool _autoUssdOnNetwork = true;
     private int _ussdRetrySeconds = 35;
     private int _smsTimeout = 30000;
-
-    // Thông báo
     private bool _soundOnSms = true;
     private bool _soundOnCall = true;
     private bool _soundOnOtp = true;
@@ -271,30 +265,25 @@
     private bool _telegramOnSms = false;
     private bool _telegramOnCall = true;
     private bool _telegramOnError = true;
-
-    // Telegram
     private string _telegramBotToken = "";
     private string _telegramChatId = "";
     private bool _showToken = false;
-
-    // Webhook
     private string _otpWebhookUrl = "";
     private bool _pushOtpToWeb = false;
-
-    // Âm thanh
     private string _soundSmsPath = "";
     private string _soundCallPath = "";
     private string _soundOtpPath = "";
-
-    // Nâng cao
     private int _baudRate = 115200;
     private int _commandTimeout = 10000;
     private bool _enableLog = true;
     private bool _autoConnectOnStart = false;
     private bool _minimizeToTray = true;
 
+    private string _settingsPath = "";
+
     protected override void OnInitialized()
     {
+        _settingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
         LoadSettings();
     }
 
@@ -302,7 +291,7 @@
     {
         try
         {
-            var config = new AppConfig
+            var cfg = new AppConfig
             {
                 NewSimIntake = _newSimIntake,
                 AutoRestoreImei = _autoRestoreImei,
@@ -338,10 +327,10 @@
                 AutoConnectOnStart = _autoConnectOnStart,
                 MinimizeToTray = _minimizeToTray
             };
-            var json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.json");
-            await System.IO.File.WriteAllTextAsync(path, json);
-            Snackbar.Add("Đã lưu tất cả cài đặt vào settings.json", Severity.Success);
+
+            var json = System.Text.Json.JsonSerializer.Serialize(cfg, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(_settingsPath, json);
+            Snackbar.Add("Đã lưu cài đặt thành công", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -353,131 +342,160 @@
     {
         try
         {
-            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.json");
-            if (System.IO.File.Exists(path))
-            {
-                var json = System.IO.File.ReadAllText(path);
-                var config = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json);
-                if (config != null)
-                {
-                    _newSimIntake = config.NewSimIntake;
-                    _autoRestoreImei = config.AutoRestoreImei;
-                    _blockUnknown = config.BlockUnknown;
-                    _autoAccept = config.AutoAccept;
-                    _prefer4G = config.Prefer4G;
-                    _enableVolte = config.EnableVolte;
-                    _autoRecovery = config.AutoRecovery;
-                    _forceCfun1AfterReboot = config.ForceCfun1AfterReboot;
-                    _recoveryThreshold = config.RecoveryThreshold;
-                    _watchdogSeconds = config.WatchdogSeconds;
-                    _autoCheckBalanceAfterSms = config.AutoCheckBalanceAfterSms;
-                    _autoUssdOnNetwork = config.AutoUssdOnNetwork;
-                    _ussdRetrySeconds = config.UssdRetrySeconds;
-                    _smsTimeout = config.SmsTimeout;
-                    _soundOnSms = config.SoundOnSms;
-                    _soundOnCall = config.SoundOnCall;
-                    _soundOnOtp = config.SoundOnOtp;
-                    _telegramOnOtp = config.TelegramOnOtp;
-                    _telegramOnSms = config.TelegramOnSms;
-                    _telegramOnCall = config.TelegramOnCall;
-                    _telegramOnError = config.TelegramOnError;
-                    _telegramBotToken = config.TelegramBotToken ?? "";
-                    _telegramChatId = config.TelegramChatId ?? "";
-                    _otpWebhookUrl = config.OtpWebhookUrl ?? "";
-                    _pushOtpToWeb = config.PushOtpToWeb;
-                    _soundSmsPath = config.SoundSmsPath ?? "";
-                    _soundCallPath = config.SoundCallPath ?? "";
-                    _soundOtpPath = config.SoundOtpPath ?? "";
-                    _baudRate = config.BaudRate;
-                    _commandTimeout = config.CommandTimeout;
-                    _enableLog = config.EnableLog;
-                    _autoConnectOnStart = config.AutoConnectOnStart;
-                    _minimizeToTray = config.MinimizeToTray;
-                }
-            }
+            if (!File.Exists(_settingsPath)) return;
+            var json = File.ReadAllText(_settingsPath);
+            var cfg = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json);
+            if (cfg == null) return;
+
+            _newSimIntake = cfg.NewSimIntake;
+            _autoRestoreImei = cfg.AutoRestoreImei;
+            _blockUnknown = cfg.BlockUnknown;
+            _autoAccept = cfg.AutoAccept;
+            _prefer4G = cfg.Prefer4G;
+            _enableVolte = cfg.EnableVolte;
+            _autoRecovery = cfg.AutoRecovery;
+            _forceCfun1AfterReboot = cfg.ForceCfun1AfterReboot;
+            _recoveryThreshold = cfg.RecoveryThreshold;
+            _watchdogSeconds = cfg.WatchdogSeconds;
+            _autoCheckBalanceAfterSms = cfg.AutoCheckBalanceAfterSms;
+            _autoUssdOnNetwork = cfg.AutoUssdOnNetwork;
+            _ussdRetrySeconds = cfg.UssdRetrySeconds;
+            _smsTimeout = cfg.SmsTimeout;
+            _soundOnSms = cfg.SoundOnSms;
+            _soundOnCall = cfg.SoundOnCall;
+            _soundOnOtp = cfg.SoundOnOtp;
+            _telegramOnOtp = cfg.TelegramOnOtp;
+            _telegramOnSms = cfg.TelegramOnSms;
+            _telegramOnCall = cfg.TelegramOnCall;
+            _telegramOnError = cfg.TelegramOnError;
+            _telegramBotToken = cfg.TelegramBotToken ?? "";
+            _telegramChatId = cfg.TelegramChatId ?? "";
+            _otpWebhookUrl = cfg.OtpWebhookUrl ?? "";
+            _pushOtpToWeb = cfg.PushOtpToWeb;
+            _soundSmsPath = cfg.SoundSmsPath ?? "";
+            _soundCallPath = cfg.SoundCallPath ?? "";
+            _soundOtpPath = cfg.SoundOtpPath ?? "";
+            _baudRate = cfg.BaudRate;
+            _commandTimeout = cfg.CommandTimeout;
+            _enableLog = cfg.EnableLog;
+            _autoConnectOnStart = cfg.AutoConnectOnStart;
+            _minimizeToTray = cfg.MinimizeToTray;
         }
-        catch (Exception ex)
-        {
-            // Ignore load error
-        }
+        catch { }
     }
 
-    async Task ResetDefault()
+    void ResetDefault()
     {
-        var ok = await DialogService.ShowMessageBox("Khôi phục mặc định", 
-            "Bạn có chắc muốn đặt lại tất cả cài đặt về mặc định?", 
-            yesText: "Khôi phục", cancelText: "Hủy");
-        
-        if (ok == true)
-        {
-            _newSimIntake = true;
-            _autoRestoreImei = true;
-            _blockUnknown = false;
-            _autoAccept = false;
-            _prefer4G = true;
-            _autoRecovery = true;
-            _forceCfun1AfterReboot = true;
-            _recoveryThreshold = 12;
-            _watchdogSeconds = 50;
-            _autoUssdOnNetwork = true;
-            _ussdRetrySeconds = 35;
-            Snackbar.Add("Đã khôi phục mặc định", Severity.Success);
-        }
-    }
-
-    async Task TestTelegram()
-    {
-        Snackbar.Add("Đang gửi tin test Telegram...", Severity.Info);
-        // await TelegramService.SendMessageAsync("Test từ Tool GSM");
-        await Task.Delay(800);
-        Snackbar.Add("Đã gửi tin test (nếu token đúng sẽ nhận được)", Severity.Success);
-    }
-
-    void OpenTelegramGuide()
-    {
-        // Mở link hướng dẫn
-        Snackbar.Add("Mở hướng dẫn lấy Bot Token & Chat ID", Severity.Info);
-    }
-
-    async Task TestWebhook()
-    {
-        Snackbar.Add("Đang test gửi Webhook...", Severity.Info);
-        await Task.Delay(500);
-        Snackbar.Add("Gửi Webhook thành công (Demo)", Severity.Success);
-    }
-
-    void BrowseSound(string type)
-    {
-        Snackbar.Add($"Chọn file âm thanh cho {type.ToUpper()}", Severity.Info);
-        // OpenFileDialog
-    }
-
-    void TestSound(string type)
-    {
-        Snackbar.Add($"Đang phát âm thanh {type.ToUpper()}...", Severity.Normal);
-        // SoundAlertService.Play...
+        _newSimIntake = true;
+        _autoRestoreImei = true;
+        _blockUnknown = false;
+        _autoAccept = false;
+        _prefer4G = true;
+        _enableVolte = false;
+        _autoRecovery = true;
+        _forceCfun1AfterReboot = true;
+        _recoveryThreshold = 12;
+        _watchdogSeconds = 50;
+        _autoCheckBalanceAfterSms = true;
+        _autoUssdOnNetwork = true;
+        _ussdRetrySeconds = 35;
+        _smsTimeout = 30000;
+        _soundOnSms = true;
+        _soundOnCall = true;
+        _soundOnOtp = true;
+        _telegramOnOtp = true;
+        _telegramOnSms = false;
+        _telegramOnCall = true;
+        _telegramOnError = true;
+        _telegramBotToken = "";
+        _telegramChatId = "";
+        _otpWebhookUrl = "";
+        _pushOtpToWeb = false;
+        _soundSmsPath = "";
+        _soundCallPath = "";
+        _soundOtpPath = "";
+        _baudRate = 115200;
+        _commandTimeout = 10000;
+        _enableLog = true;
+        _autoConnectOnStart = false;
+        _minimizeToTray = true;
+        Snackbar.Add("Đã khôi phục mặc định (chưa lưu)", Severity.Info);
     }
 
     async Task ExportSettings()
     {
-        Snackbar.Add("Đã export cấu hình", Severity.Success);
+        try
+        {
+            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ToolGSM_Config");
+            Directory.CreateDirectory(folder);
+            var path = Path.Combine(folder, $"settings_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+            await SaveAll();
+            File.Copy(_settingsPath, path, true);
+            Snackbar.Add($"Đã export: {path}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Export lỗi: " + ex.Message, Severity.Error);
+        }
     }
 
     async Task ImportSettings()
     {
-        Snackbar.Add("Đã import cấu hình", Severity.Success);
+        Snackbar.Add("Chọn file .json để import", Severity.Info);
     }
+
+    async Task TestTelegram()
+    {
+        if (string.IsNullOrWhiteSpace(_telegramBotToken) || string.IsNullOrWhiteSpace(_telegramChatId))
+        {
+            Snackbar.Add("Nhập Token và Chat ID", Severity.Warning);
+            return;
+        }
+        try
+        {
+            using var http = new HttpClient();
+            var url = $"https://api.telegram.org/bot{_telegramBotToken}/sendMessage";
+            var payload = new { chat_id = _telegramChatId, text = $"[Tool GSM] Test thông báo" };
+            var json = System.Text.Json.JsonSerializer.Serialize(payload);
+            var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            var resp = await http.PostAsync(url, content);
+            Snackbar.Add(resp.IsSuccessStatusCode ? "Gửi Telegram thành công!" : "Lỗi Telegram", resp.IsSuccessStatusCode ? Severity.Success : Severity.Error);
+        }
+        catch (Exception ex) { Snackbar.Add("Lỗi: " + ex.Message, Severity.Error); }
+    }
+
+    void OpenTelegramGuide() => Snackbar.Add("Mở hướng dẫn lấy Bot Token & Chat ID", Severity.Info);
+
+    async Task TestWebhook()
+    {
+        if (string.IsNullOrWhiteSpace(_otpWebhookUrl)) { Snackbar.Add("Nhập Webhook URL", Severity.Warning); return; }
+        try
+        {
+            using var http = new HttpClient();
+            var payload = new { event_type = "test", time = DateTime.Now };
+            var json = System.Text.Json.JsonSerializer.Serialize(payload);
+            var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+            var resp = await http.PostAsync(_otpWebhookUrl, content);
+            Snackbar.Add(resp.IsSuccessStatusCode ? "Webhook OK" : "Webhook lỗi", resp.IsSuccessStatusCode ? Severity.Success : Severity.Error);
+        }
+        catch (Exception ex) { Snackbar.Add("Webhook lỗi: " + ex.Message, Severity.Error); }
+    }
+
+    void BrowseSound(string type) => Snackbar.Add($"Chọn file âm thanh cho {type.ToUpper()}", Severity.Info);
+
+    void TestSound(string type) => Snackbar.Add($"Đang phát âm thanh {type.ToUpper()}...", Severity.Normal);
 
     async Task ClearAllData()
     {
-        var ok = await DialogService.ShowMessageBox("Xóa toàn bộ dữ liệu", 
-            "Xóa hết lịch sử SMS, cuộc gọi, mapping IMEI, log...?\nHành động này không thể hoàn tác!", 
-            yesText: "Xóa hết", cancelText: "Hủy");
-        
-        if (ok == true)
+        var ok = await DialogService.ShowMessageBox("CẢNH BÁO", "Xóa TOÀN BỘ dữ liệu?", yesText: "XÓA HẾT", cancelText: "Hủy");
+        if (ok != true) return;
+        try
         {
+            var dataDir = Path.Combine(AppContext.BaseDirectory, "Data");
+            if (Directory.Exists(dataDir)) Directory.Delete(dataDir, true);
             Snackbar.Add("Đã xóa toàn bộ dữ liệu", Severity.Success);
         }
+        catch (Exception ex) { Snackbar.Add("Lỗi xóa: " + ex.Message, Severity.Error); }
     }
 
     public class AppConfig

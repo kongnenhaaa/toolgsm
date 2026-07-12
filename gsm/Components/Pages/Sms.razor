@@ -8,21 +8,21 @@
 
 <!-- ========== ACTION FORM ========== -->
 <MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
-          Style="background:#0F172A; border:1px solid #1E293B; border-radius:8px;">
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; min-width:80px;">Người nhận</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; min-width:80px;">Người nhận</MudText>
         <MudTextField @bind-Value="_phone" Placeholder="09xxxxxxxx" 
                       Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="max-width:140px; background:#1E293B;" Immediate="true" />
+                      Style="max-width:140px; background:#F8FAFC;" Immediate="true" />
 
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Nội dung</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Nội dung</MudText>
         <MudTextField @bind-Value="_message" Placeholder="Nhập tin nhắn..." 
                       Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="min-width:250px; flex:1; background:#1E293B;" Immediate="true" />
+                      Style="min-width:250px; flex:1; background:#F8FAFC;" Immediate="true" />
 
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Chế độ</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Chế độ</MudText>
         <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined" 
-                   Margin="Margin.Dense" Style="width:130px; background:#1E293B;">
+                   Margin="Margin.Dense" Style="width:130px; background:#F8FAFC;">
             <MudSelectItem Value="@("Selected")">Cổng đã chọn</MudSelectItem>
             <MudSelectItem Value="@("All")">Tất cả Active</MudSelectItem>
         </MudSelect>
@@ -61,15 +61,15 @@
     else if (_subTab == 1)
     {
         <!-- Tin nhắn tới -->
-        <MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A; min-height:400px; padding:16px;">
-            <MudText Typo="Typo.h6" Style="color:#E2E8F0;">Danh sách SMS nhận được</MudText>
-            <MudText Typo="Typo.body2" Style="color:#94A3B8;">@Vm.SmsMessages.Count tin nhắn</MudText>
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
+            <MudText Typo="Typo.h6" Style="color:#1E293B;">Danh sách SMS nhận được</MudText>
+            <MudText Typo="Typo.body2" Style="color:#64748B;">@Vm.SmsMessages.Count tin nhắn</MudText>
             <MudList T="string" Dense="true">
                 @foreach(var sms in Vm.SmsMessages.OrderByDescending(x => x.ReceivedTime).Take(50))
                 {
                     <MudListItem>
-                        <MudText Style="color:#E2E8F0; font-size:13px;">
-                            <b>[@sms.PortName]</b> <span style="color:#60A5FA;">@sms.Sender</span>: @sms.Content <span style="color:#64748B; font-size:11px;">(@sms.ReceivedTime)</span>
+                        <MudText Style="color:#1E293B; font-size:13px;">
+                            <b>[@sms.PortName]</b> <span style="color:#2563EB;">@sms.Sender</span>: @sms.Content <span style="color:#94A3B8; font-size:11px;">(@sms.ReceivedTime)</span>
                         </MudText>
                     </MudListItem>
                 }
@@ -79,33 +79,36 @@
     else if (_subTab == 2)
     {
         <!-- Hàng đợi Gửi -->
-        <MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A; min-height:400px; padding:16px;">
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
             <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
-                <MudText Typo="Typo.h6" Style="color:#E2E8F0;">Hàng đợi lệnh SMS</MudText>
+                <MudText Typo="Typo.h6" Style="color:#1E293B;">Hàng đợi lệnh SMS</MudText>
                 <MudSpacer/>
                 <MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" OnClick="() => Vm.CommandQueue.Clear()">Xóa hàng đợi</MudButton>
             </MudStack>
             
-            <MudTable Items="@(Vm.CommandQueue.Where(x => x.Type == "SMS"))" Dense="true" Hover="true" Elevation="0" Style="background:#0F172A; color:#E2E8F0;">
+            <MudTable Items="@(Vm.CommandQueue.Where(x => x.Type == "SMS"))" Dense="true" Hover="true" Elevation="0" Style="background:#FFFFFF; color:#1E293B;">
                 <HeaderContent>
-                    <MudTh Style="background:#1E293B; color:#94A3B8;">Cổng</MudTh>
-                    <MudTh Style="background:#1E293B; color:#94A3B8;">Người nhận</MudTh>
-                    <MudTh Style="background:#1E293B; color:#94A3B8;">Nội dung</MudTh>
-                    <MudTh Style="background:#1E293B; color:#94A3B8;">Trạng thái</MudTh>
+                    <MudTh Style="background:#F8FAFC; color:#64748B;">Cổng</MudTh>
+                    <MudTh Style="background:#F8FAFC; color:#64748B;">Người nhận</MudTh>
+                    <MudTh Style="background:#F8FAFC; color:#64748B;">Nội dung</MudTh>
+                    <MudTh Style="background:#F8FAFC; color:#64748B;">Trạng thái</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="color:#E2E8F0;">@context.PortId</MudTd>
-                    <MudTd Style="color:#E2E8F0;">@context.Recipient</MudTd>
-                    <MudTd Style="color:#E2E8F0;">@context.Content</MudTd>
-                    <MudTd Style="color:#E2E8F0;">@context.Status</MudTd>
+                    <MudTd Style="color:#1E293B; border-bottom:1px solid #F1F5F9;">@context.PortId</MudTd>
+                    <MudTd Style="color:#1E293B; border-bottom:1px solid #F1F5F9;">@context.Recipient</MudTd>
+                    <MudTd Style="color:#1E293B; border-bottom:1px solid #F1F5F9;">@context.Content</MudTd>
+                    <MudTd Style="color:#1E293B; border-bottom:1px solid #F1F5F9;">@context.Status</MudTd>
                 </RowTemplate>
+                <NoRecordsContent>
+                    <div class="pa-4 text-center" style="color:#94A3B8;">Hàng đợi trống</div>
+                </NoRecordsContent>
             </MudTable>
         </MudPaper>
     }
     else if (_subTab == 3)
     {
-        <MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A; min-height:400px; padding:16px;">
-            <MudText Typo="Typo.h6" Style="color:#E2E8F0;">Mẫu tin nhắn đang được xây dựng</MudText>
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
+            <MudText Typo="Typo.h6" Style="color:#1E293B;">Mẫu tin nhắn đang được xây dựng</MudText>
         </MudPaper>
     }
 </div>

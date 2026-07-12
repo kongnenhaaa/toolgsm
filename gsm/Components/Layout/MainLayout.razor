@@ -2,11 +2,11 @@
 @inject NavigationManager Nav
 @inject gsm.ViewModels.MainViewModel Vm
 
-<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudThemeProvider Theme="_theme" IsDarkMode="false" />
 
 <MudLayout>
     <!-- TOP APP BAR -->
-    <MudAppBar Elevation="0" Dense="true" Style="background:#0F172A; border-bottom:1px solid #1E293B; height:52px;">
+    <MudAppBar Elevation="0" Dense="true" Style="background:#FFFFFF; border-bottom:1px solid #E2E8F0; height:52px;">
         <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="ml-2">
             <MudButton Variant="@GetTabVariant("ussd")" Color="Color.Primary" Size="Size.Small"
                        OnClick="@(() => Navigate("ussd"))" Style="@GetTabStyle("ussd")">
@@ -39,12 +39,12 @@
         <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="mr-3">
             @ActiveComCount COM Active
         </MudChip>
-        <MudText Typo="Typo.subtitle2" Style="color:#94A3B8; margin-right:16px;">
+        <MudText Typo="Typo.subtitle2" Style="color:#64748B; margin-right:16px;">
             ♥ Tool GSM Professional
         </MudText>
     </MudAppBar>
 
-    <MudMainContent Style="background:#0B1220; min-height:100vh; padding-top:8px;">
+    <MudMainContent Style="background:#F8FAFC; min-height:100vh; padding-top: 60px;">
         @Body
     </MudMainContent>
 </MudLayout>
@@ -55,19 +55,19 @@
 
     private MudTheme _theme = new()
     {
-        PaletteDark = new PaletteDark
+        PaletteLight = new PaletteLight
         {
-            Primary = "#22C55E",
-            Secondary = "#3B82F6",
-            Background = "#0B1220",
-            Surface = "#0F172A",
-            AppbarBackground = "#0F172A",
-            DrawerBackground = "#0F172A",
-            TextPrimary = "#E2E8F0",
-            TextSecondary = "#94A3B8",
-            ActionDefault = "#94A3B8",
-            Divider = "#1E293B",
-            TableLines = "#1E293B"
+            Primary = "#2563EB",
+            Secondary = "#0D9488",
+            Background = "#F8FAFC",
+            Surface = "#FFFFFF",
+            AppbarBackground = "#FFFFFF",
+            DrawerBackground = "#FFFFFF",
+            TextPrimary = "#1E293B",
+            TextSecondary = "#64748B",
+            ActionDefault = "#64748B",
+            Divider = "#E2E8F0",
+            TableLines = "#E2E8F0"
         }
     };
 
@@ -95,8 +95,8 @@
 
     Variant GetTabVariant(string tab) => _current == tab ? Variant.Filled : Variant.Text;
     string GetTabStyle(string tab) => _current == tab 
-        ? "background:#166534; color:white; font-weight:600;" 
-        : "color:#94A3B8;";
+        ? "background:#DBEAFE; color:#1D4ED8; font-weight:600;" 
+        : "color:#64748B;";
 
     public void Dispose() => _timer?.Dispose();
 }

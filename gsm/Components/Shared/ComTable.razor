@@ -1,50 +1,53 @@
 @using gsm.Models
 @using gsm.Components.Shared
 
-<MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A;">
+<MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF;">
     <MudTable Items="@Ports" Hover="true" Dense="true" Elevation="0"
               MultiSelection="true" @bind-SelectedItems="SelectedItems"
-              Style="background:#0F172A; color:#E2E8F0;"
+              Style="background:#FFFFFF; color:#1E293B;"
               Breakpoint="Breakpoint.None">
         <HeaderContent>
-            <MudTh Style="width:40px; background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;"></MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">Cổng</MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">Trạng thái</MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">Nhà mạng</MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">Số dư</MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">Số điện thoại</MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">CCID</MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">HSD</MudTh>
-            <MudTh Style="background:#1E293B; border-bottom:1px solid #334155; color:#94A3B8;">OTP / Nội dung</MudTh>
+            <MudTh Style="width:40px; background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;"></MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Cổng</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Trạng thái</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Nhà mạng</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Số dư</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Số điện thoại</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">CCID</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">HSD</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">OTP</MudTh>
+            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Nội dung</MudTh>
         </HeaderContent>
         <RowTemplate>
-            <MudTd Style="border-bottom:1px solid #1E293B;">
+            <MudTd Style="border-bottom:1px solid #F1F5F9;">
                 <MudCheckBox T="bool" Value="@context.IsSelected"
                              ValueChanged="@(v => { context.IsSelected = v; SelectedItemsChanged.InvokeAsync(SelectedItems); })"
                              Dense="true" Color="Color.Primary" />
             </MudTd>
-            <MudTd Style="font-weight:600; border-bottom:1px solid #1E293B; color:#E2E8F0;">@context.PortName</MudTd>
-            <MudTd Style="border-bottom:1px solid #1E293B;">
+            <MudTd Style="font-weight:600; border-bottom:1px solid #F1F5F9; color:#1E293B;">@context.PortName</MudTd>
+            <MudTd Style="border-bottom:1px solid #F1F5F9;">
                 <StatusBadge Status="@context.Status" />
             </MudTd>
-            <MudTd Style="border-bottom:1px solid #1E293B; color:#CBD5E1;">@(context.NetworkProvider ?? "—")</MudTd>
-            <MudTd Style="color:#4ADE80; font-weight:600; border-bottom:1px solid #1E293B;">
+            <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569;">@(context.NetworkProvider ?? "—")</MudTd>
+            <MudTd Style="color:#16A34A; font-weight:600; border-bottom:1px solid #F1F5F9;">
                 @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
             </MudTd>
-            <MudTd Style="border-bottom:1px solid #1E293B; color:#CBD5E1;">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
-            <MudTd Style="font-family:monospace; font-size:11px; max-width:120px; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid #1E293B; color:#94A3B8;" Title="@context.Serial">
+            <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569;">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
+            <MudTd Style="font-family:monospace; font-size:11px; max-width:120px; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid #F1F5F9; color:#64748B;" Title="@context.Serial">
                 @(context.Serial ?? "—")
             </MudTd>
-            <MudTd Style="font-size:12px; border-bottom:1px solid #1E293B; color:#94A3B8;">@(context.ExpiryDate ?? "—")</MudTd>
-            <MudTd Style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; border-bottom:1px solid #1E293B; color:#CBD5E1;" Title="@context.LastMessageContent">
-                <span style="color:#60A5FA; font-weight:600; margin-right:6px;">@(string.IsNullOrEmpty(context.Otp) ? "" : $"[{context.Otp}]")</span>
+            <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B;">@(context.ExpiryDate ?? "—")</MudTd>
+            <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#2563EB;">
+                @(string.IsNullOrEmpty(context.Otp) ? "—" : context.Otp)
+            </MudTd>
+            <MudTd Style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; border-bottom:1px solid #F1F5F9; color:#475569;" Title="@context.LastMessageContent">
                 @(context.LastMessageContent ?? "—")
             </MudTd>
         </RowTemplate>
         <NoRecordsContent>
             <div class="pa-16 text-center" style="color:#64748B;">
                 <MudIcon Icon="@Icons.Material.Outlined.Inbox" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
-                <div>Chưa có thiết bị kết nối</div>
+                <div>No Data</div>
             </div>
         </NoRecordsContent>
     </MudTable>

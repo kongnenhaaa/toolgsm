@@ -9,12 +9,12 @@
 
 <!-- ========== ACTION FORM ========== -->
 <MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
-          Style="background:#0F172A; border:1px solid #1E293B; border-radius:8px;">
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; min-width:70px;">Mã USSD</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; min-width:70px;">Mã USSD</MudText>
         <MudTextField @bind-Value="_ussdCode" Placeholder="*101#" 
                       Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="max-width:160px; background:#1E293B;" Immediate="true" />
+                      Style="max-width:160px; background:#F8FAFC;" Immediate="true" />
 
         <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
                    StartIcon="@Icons.Material.Filled.PlayArrow"
@@ -22,9 +22,9 @@
             Thực hiện
         </MudButton>
 
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Mức sóng</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Mức sóng</MudText>
         <MudSelect T="string" @bind-Value="_scanMode" Dense="true" Variant="Variant.Outlined" 
-                   Margin="Margin.Dense" Style="width:100px; background:#1E293B;">
+                   Margin="Margin.Dense" Style="width:100px; background:#F8FAFC;">
             <MudSelectItem Value="@("Auto")">Auto</MudSelectItem>
             <MudSelectItem Value="@("4G")">4G</MudSelectItem>
             <MudSelectItem Value="@("3G")">3G</MudSelectItem>
@@ -64,9 +64,23 @@
     <MudTabPanel Text="Thông báo" />
 </MudTabs>
 
-<!-- ========== BẢNG COM LUÔN HIỆN ========== -->
+<!-- ========== CONTENT THEO SUB-TAB ========== -->
 <div class="mx-3 mt-1">
-    <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+    @if (_subTab == 0)
+    {
+        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+    }
+    else
+    {
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
+            <MudText Typo="Typo.h6" Style="color:#1E293B;">
+                @GetSubTabTitle()
+            </MudText>
+            <MudText Typo="Typo.body2" Style="color:#64748B; margin-top:8px;">
+                Dữ liệu chưa có sẵn hoặc tính năng đang được phát triển...
+            </MudText>
+        </MudPaper>
+    }
 </div>
 
 @code {
@@ -79,6 +93,19 @@
     private List<SimPort> FilteredPorts => Ports; // sau này filter theo sub-tab
 
     void OnSubTabChanged(int index) => _subTab = index;
+
+    string GetSubTabTitle()
+    {
+        return _subTab switch
+        {
+            1 => "Tin nhắn tới",
+            2 => "Lịch sử Spam SMS",
+            3 => "Spam / Check Gọi",
+            4 => "Lịch sử DTMF",
+            5 => "Thông báo hệ thống",
+            _ => "Dữ liệu"
+        };
+    }
 
     async Task SendSelectedOrAll()
     {

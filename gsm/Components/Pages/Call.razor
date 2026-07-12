@@ -8,26 +8,26 @@
 
 <!-- ========== ACTION FORM ========== -->
 <MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
-          Style="background:#0F172A; border:1px solid #1E293B; border-radius:8px;">
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; min-width:80px;">Người nhận</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; min-width:80px;">Người nhận</MudText>
         <MudTextField @bind-Value="_phone" Placeholder="09xxxxxxxx" 
                       Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="max-width:140px; background:#1E293B;" Immediate="true" />
+                      Style="max-width:140px; background:#F8FAFC;" Immediate="true" />
 
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Nhấn phím (DTMF)</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Nhấn phím (DTMF)</MudText>
         <MudTextField @bind-Value="_dtmf" Placeholder="1,2,3" 
                       Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="max-width:100px; background:#1E293B;" Immediate="true" />
+                      Style="max-width:100px; background:#F8FAFC;" Immediate="true" />
 
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Thời gian (s)</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Thời gian (s)</MudText>
         <MudNumericField @bind-Value="_duration" Min="1" Max="300"
                          Variant="Variant.Outlined" Margin="Margin.Dense" 
-                         Style="max-width:80px; background:#1E293B;" />
+                         Style="max-width:80px; background:#F8FAFC;" />
 
-        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Chế độ</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Chế độ</MudText>
         <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined" 
-                   Margin="Margin.Dense" Style="width:130px; background:#1E293B;">
+                   Margin="Margin.Dense" Style="width:130px; background:#F8FAFC;">
             <MudSelectItem Value="@("Selected")">Cổng đã chọn</MudSelectItem>
             <MudSelectItem Value="@("All")">Tất cả Active</MudSelectItem>
         </MudSelect>
@@ -65,9 +65,9 @@
     else if (_subTab == 1)
     {
         <!-- Lịch sử Cuộc gọi -->
-        <MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A; min-height:400px; padding:16px;">
-            <MudText Typo="Typo.h6" Style="color:#E2E8F0;">Danh sách cuộc gọi</MudText>
-            <MudText Typo="Typo.body2" Style="color:#94A3B8;">Tính năng đang được phát triển...</MudText>
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
+            <MudText Typo="Typo.h6" Style="color:#1E293B;">Danh sách cuộc gọi</MudText>
+            <MudText Typo="Typo.body2" Style="color:#64748B;">Tính năng đang được phát triển...</MudText>
         </MudPaper>
     }
 </div>

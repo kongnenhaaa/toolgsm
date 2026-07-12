@@ -24,6 +24,14 @@
                        OnClick="@(() => Navigate("imei"))" Style="@GetTabStyle("imei")">
                 IMEI
             </MudButton>
+            <MudButton Variant="@GetTabVariant("ezcom")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("ezcom"))" Style="@GetTabStyle("ezcom")">
+                EZ COM
+            </MudButton>
+            <MudButton Variant="@GetTabVariant("vnptpass")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("vnpt-pass"))" Style="@GetTabStyle("vnptpass")">
+                Pass VNPT
+            </MudButton>
             <MudButton Variant="@GetTabVariant("logs")" Color="Color.Primary" Size="Size.Small"
                        OnClick="@(() => Navigate("logs"))" Style="@GetTabStyle("logs")">
                 Log & Vận hành
@@ -79,6 +87,8 @@
         if (path.Contains("sms")) _current = "sms";
         else if (path.Contains("call")) _current = "call";
         else if (path.Contains("imei")) _current = "imei";
+        else if (path.Contains("ezcom")) _current = "ezcom";
+        else if (path.Contains("vnpt-pass")) _current = "vnptpass";
         else if (path.Contains("logs")) _current = "logs";
         else if (path.Contains("settings")) _current = "settings";
         else _current = "ussd";
@@ -88,7 +98,9 @@
 
     void Navigate(string tab)
     {
-        _current = tab;
+        if (tab == "vnpt-pass") _current = "vnptpass";
+        else _current = tab;
+        
         if (tab == "ussd") Nav.NavigateTo($"/");
         else Nav.NavigateTo($"/{tab}");
     }

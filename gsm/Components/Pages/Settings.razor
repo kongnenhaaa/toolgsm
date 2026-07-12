@@ -5,13 +5,16 @@
 @using gsm.ViewModels
 @using gsm.Models
 
-<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Cài đặt</MudText>
-<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Cấu hình tool • New SIM Intake • IMEI Restore • Thông báo • Nâng cao
-</MudText>
+<div class="px-3 pt-2">
+    <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Cài đặt</MudText>
+    <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+        Cấu hình tool • New SIM Intake • IMEI Restore • Thông báo • Nâng cao
+    </MudText>
+</div>
 
-<!-- ========== TOOLBAR ========== -->
-<MudStack Row="true" Class="mb-4" Spacing="2">
+<!-- ========== ACTION FORM / TOOLBAR ========== -->
+<MudPaper Class="pa-3 mx-3 mb-4" Elevation="0" Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
+    <MudStack Row="true" Spacing="2">
     <MudButton Variant="Variant.Filled" Color="Color.Primary" 
                StartIcon="@Icons.Material.Filled.Save"
                OnClick="SaveAll" Size="Size.Small">
@@ -32,9 +35,11 @@
                OnClick="ImportSettings" Size="Size.Small">
         Import cấu hình
     </MudButton>
-</MudStack>
+    </MudStack>
+</MudPaper>
 
-<MudGrid>
+<div class="mx-3">
+    <MudGrid>
     <!-- ========== CỘT TRÁI ========== -->
     <MudItem xs="12" md="6">
 
@@ -234,7 +239,8 @@
             </MudButton>
         </MudPaper>
     </MudItem>
-</MudGrid>
+    </MudGrid>
+</div>
 
 @code {
     // Bảo mật

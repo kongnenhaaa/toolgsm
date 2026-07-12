@@ -3,94 +3,115 @@
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
 @using gsm.Models
+@using gsm.Components.Shared
+@implements IDisposable
 
-<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Đăng ký EZ COM</MudText>
-<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Gửi lệnh đăng ký EZ COM cho các cổng đang Active (thường là gửi SMS “DK EZ” đến 888 hoặc USSD tương ứng).
-</MudText>
+<!-- ========== ACTION FORM ========== -->
+<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.caption" Style="color:#64748B; min-width:80px;">Lệnh</MudText>
+        <MudTextField @bind-Value="_ezCommand" Placeholder="DK EZ" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" 
+                      Style="max-width:140px; background:#F8FAFC;" Immediate="true" />
 
-<MudGrid>
-    <MudItem xs="12" md="5">
-        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudSelect T="string" Label="Chọn cổng" @bind-Value="_ezPort" 
-                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
-                @foreach (var p in ActivePorts)
-                {
-                    <MudSelectItem Value="@p.PortName">
-                        @p.PortName — @(p.PhoneNumber ?? "—") (@(p.NetworkProvider ?? "—"))
-                    </MudSelectItem>
-                }
-            </MudSelect>
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Số nhận</MudText>
+        <MudTextField @bind-Value="_ezNumber" Placeholder="888" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" 
+                      Style="max-width:100px; background:#F8FAFC;" Immediate="true" />
 
-            <MudTextField @bind-Value="_ezCommand" Label="Lệnh / Nội dung" 
-                          Placeholder="DK EZ" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Chế độ</MudText>
+        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined" 
+                   Margin="Margin.Dense" Style="width:130px; background:#F8FAFC;">
+            <MudSelectItem Value="@("Selected")">Cổng đã chọn</MudSelectItem>
+            <MudSelectItem Value="@("All")">Tất cả Active</MudSelectItem>
+        </MudSelect>
 
-            <MudTextField @bind-Value="_ezNumber" Label="Số nhận (mặc định 888)" 
-                          Placeholder="888" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Send"
+                   OnClick="RegisterEzCom" Disabled="@(string.IsNullOrEmpty(_ezCommand) || string.IsNullOrEmpty(_ezNumber))">
+            Đăng ký
+        </MudButton>
+    </MudStack>
+</MudPaper>
 
-            <MudStack Row="true" Spacing="2">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                           StartIcon="@Icons.Material.Filled.Send"
-                           OnClick="RegisterEzCom" Disabled="@(string.IsNullOrEmpty(_ezPort))">
-                    Đăng ký 1 cổng
-                </MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Success" 
-                           StartIcon="@Icons.Material.Filled.DoneAll"
-                           OnClick="RegisterEzComAll">
-                    Đăng ký tất cả Active
-                </MudButton>
-            </MudStack>
+<!-- ========== SUB TABS ========== -->
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
+         PanelClass="pa-0" Class="mx-3"
+         Style="background:transparent;"
+         ActivePanelIndexChanged="OnSubTabChanged">
+    <MudTabPanel Text="Danh sách Cổng" />
+    <MudTabPanel Text="Kết quả Đăng ký" />
+</MudTabs>
+
+<!-- ========== CONTENT THEO SUB-TAB ========== -->
+<div class="mx-3 mt-1">
+    @if (_subTab == 0)
+    {
+        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+    }
+    else
+    {
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
+            <MudText Typo="Typo.h6" Style="color:#1E293B;" Class="mb-3">Kết quả gần đây</MudText>
+            <pre style="font-size:12px; white-space:pre-wrap; margin:0; color:#475569;">@_ezResult</pre>
         </MudPaper>
-    </MudItem>
-
-    <MudItem xs="12" md="7">
-        <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:180px;">
-            <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Kết quả gần đây</MudText>
-            <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_ezResult</pre>
-        </MudPaper>
-    </MudItem>
-</MudGrid>
+    }
+</div>
 
 @code {
-    private string _ezPort = "";
     private string _ezCommand = "DK EZ";
     private string _ezNumber = "888";
+    private string _sendMode = "Selected";
+    private HashSet<SimPort> _selectedPorts = new();
+    private int _subTab = 0;
     private string _ezResult = "";
 
-    private IEnumerable<SimPort> ActivePorts => 
-        Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+    private List<SimPort> FilteredPorts => Ports;
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+    }
+
+    void OnSubTabChanged(int index) => _subTab = index;
 
     async Task RegisterEzCom()
     {
-        if (string.IsNullOrEmpty(_ezPort)) return;
-        try
-        {
-            await ModemService.SendSmsAsync(_ezPort, _ezNumber, _ezCommand);
-            _ezResult = $"[{DateTime.Now:HH:mm:ss}] {_ezPort} → Gửi thành công\n{_ezCommand} đến {_ezNumber}\n\n" + _ezResult;
-            Snackbar.Add("Đăng ký EZ COM thành công", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            _ezResult = $"[{DateTime.Now:HH:mm:ss}] Lỗi {_ezPort}: {ex.Message}\n\n" + _ezResult;
-            Snackbar.Add(ex.Message, Severity.Error);
-        }
-    }
+        var targets = _sendMode == "Selected" 
+            ? _selectedPorts.Select(p => p.PortName).ToList() 
+            : Ports.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
 
-    async Task RegisterEzComAll()
-    {
-        var ports = ActivePorts.ToList();
-        if (!ports.Any())
+        if (!targets.Any())
         {
-            Snackbar.Add("Không có cổng Active", Severity.Warning);
+            Snackbar.Add("Không có cổng nào được chọn", Severity.Warning);
             return;
         }
-        Snackbar.Add($"Đang đăng ký EZ COM cho {ports.Count} cổng...", Severity.Info);
-        foreach (var p in ports)
+
+        Snackbar.Add($"Đang gửi đăng ký EZ COM tới {targets.Count} cổng...", Severity.Info);
+        
+        foreach (var port in targets)
         {
-            _ezPort = p.PortName;
-            await RegisterEzCom();
-            await Task.Delay(1200);
+            try
+            {
+                await ModemService.SendSmsAsync(port, _ezNumber, _ezCommand);
+                _ezResult = $"[{DateTime.Now:HH:mm:ss}] {port} → Gửi thành công ({_ezCommand} đến {_ezNumber})\n" + _ezResult;
+            }
+            catch (Exception ex)
+            {
+                _ezResult = $"[{DateTime.Now:HH:mm:ss}] Lỗi {port}: {ex.Message}\n" + _ezResult;
+            }
+            await Task.Delay(1000);
         }
-        Snackbar.Add("Hoàn tất đăng ký EZ COM", Severity.Success);
+        
+        Snackbar.Add("Hoàn tất gửi lệnh đăng ký EZ COM", Severity.Success);
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
     }
 }

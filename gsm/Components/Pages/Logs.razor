@@ -7,13 +7,15 @@
 @using gsm.Models
 @implements IDisposable
 
-<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Log & Vận hành</MudText>
-<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Nhật ký realtime • Thống kê • Đăng ký EZ COM • Đặt mật khẩu My VNPT
-</MudText>
+<div class="px-3 pt-2">
+    <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Log & Vận hành</MudText>
+    <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+        Nhật ký realtime • Thống kê
+    </MudText>
+</div>
 
 <!-- ========== STATS ========== -->
-<MudGrid Class="mb-4">
+<MudGrid Class="mb-4 px-3">
     <MudItem xs="6" sm="3">
         <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.caption" Style="color:#64748B;">Tổng log</MudText>
@@ -40,8 +42,9 @@
     </MudItem>
 </MudGrid>
 
-<!-- ========== TOOLBAR ========== -->
-<MudStack Row="true" Class="mb-3" Spacing="2" AlignItems="AlignItems.Center">
+<!-- ========== ACTION FORM / TOOLBAR ========== -->
+<MudPaper Class="pa-3 mx-3 mb-4" Elevation="0" Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
                StartIcon="@Icons.Material.Filled.DeleteSweep" OnClick="ClearLogs">
         Xóa log
@@ -67,16 +70,18 @@
         <MudSelectItem Value="@("error")">Error</MudSelectItem>
     </MudSelect>
 
-    <MudTextField @bind-Value="_search" Placeholder="Tìm trong log..." 
-                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-                  Immediate="true" Style="max-width:240px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
-</MudStack>
+        <MudTextField @bind-Value="_search" Placeholder="Tìm trong log..." 
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true" Style="max-width:240px; background:#F8FAFC;" Variant="Variant.Outlined" Margin="Margin.Dense" />
+    </MudStack>
+</MudPaper>
 
-<!-- ========== TABS ========== -->
-<MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" @bind-ActivePanelIndex="_activeTab">
+<div class="mx-3 mt-1">
+    <!-- ========== TABS ========== -->
+    <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" @bind-ActivePanelIndex="_activeTab" PanelClass="pa-0" Style="background:transparent;">
 
-    <!-- TAB 1: LOG REALTIME -->
-    <MudTabPanel Text="Log realtime" Icon="@Icons.Material.Filled.Terminal">
+        <!-- TAB 1: LOG REALTIME -->
+        <MudTabPanel Text="Log realtime">
         <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
             <div style="height:480px; overflow-y:auto; background:#0F172A; color:#E2E8F0; font-family:Consolas,monospace; font-size:12.5px; padding:12px;" 
                  id="log-container" @ref="_logContainer">
@@ -97,8 +102,8 @@
         </MudPaper>
     </MudTabPanel>
 
-    <!-- TAB 2: THỐNG KÊ CHI TIẾT -->
-    <MudTabPanel Text="Thống kê" Icon="@Icons.Material.Filled.BarChart">
+        <!-- TAB 2: THỐNG KÊ CHI TIẾT -->
+        <MudTabPanel Text="Thống kê chi tiết">
         <MudGrid Class="mt-3">
             <MudItem xs="12" md="6">
                 <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
@@ -144,7 +149,8 @@
             </MudItem>
         </MudGrid>
     </MudTabPanel>
-</MudTabs>
+    </MudTabs>
+</div>
 
 @code {
     private int _activeTab = 0;

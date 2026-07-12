@@ -1,10 +1,31 @@
 @using gsm.Models
 @using gsm.Components.Shared
+@inject gsm.Services.IGsmModemService ModemService
+@inject ISnackbar Snackbar
 
 <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF;">
-    <MudTable Items="@Ports" Hover="true" Dense="true" Elevation="0"
+    @if (SelectedItems.Any())
+    {
+        <MudToolBar Dense="true" Style="background:#F1F5F9; border-bottom:1px solid #E2E8F0;">
+            <MudText Typo="Typo.subtitle2" Style="color:#1D4ED8; font-weight:600;" Class="mr-4">
+                Đã chọn @SelectedItems.Count cổng
+            </MudText>
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh" Class="mr-2"
+                       Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.CreditCard" Class="mr-2"
+                       Variant="Variant.Outlined" Color="Color.Success" OnClick="CheckTkcSelected">Check TKC</MudButton>
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Dialpad" Class="mr-2"
+                       Variant="Variant.Outlined" Color="Color.Warning" OnClick="Ussd101Selected">USSD *101#</MudButton>
+            <MudSpacer />
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
+                       Variant="Variant.Text" Color="Color.Default" OnClick="() => SelectedItems.Clear()">Bỏ chọn</MudButton>
+        </MudToolBar>
+    }
+
+    <MudTable Items="@Ports" Hover="true" Dense="true" Elevation="0" Striped="true"
               MultiSelection="true" @bind-SelectedItems="SelectedItems"
               Style="background:#FFFFFF; color:#1E293B;"
+              FixedHeader="true" Height="calc(100vh - 280px)"
               Breakpoint="Breakpoint.None">
         <HeaderContent>
             <MudTh Style="width:40px; background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;"></MudTh>
@@ -47,7 +68,11 @@
         <NoRecordsContent>
             <div class="pa-16 text-center" style="color:#64748B;">
                 <MudIcon Icon="@Icons.Material.Outlined.Inbox" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
-                <div>No Data</div>
+                <div class="mb-4">Chưa có dữ liệu. Hãy kết nối thiết bị.</div>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                           StartIcon="@Icons.Material.Filled.Link" OnClick="ConnectAll">
+                    Quét kết nối (Connect All)
+                </MudButton>
             </div>
         </NoRecordsContent>
     </MudTable>
@@ -75,4 +100,40 @@
 
     [Parameter]
     public EventCallback<HashSet<SimPort>> SelectedItemsChanged { get; set; }
+
+    async Task RefreshSelected()
+    {
+        var ports = SelectedItems.ToList();
+        Snackbar.Add($"Đang làm mới {ports.Count} cổng...", Severity.Info);
+        foreach (var p in ports)
+        {
+            try { ModemService.Disconnect(p.PortName); } catch {}
+            await Task.Delay(500);
+        }
+        ModemService.ConnectAll(115200);
+        SelectedItems.Clear();
+        SelectedItemsChanged.InvokeAsync(SelectedItems);
+    }
+
+    async Task CheckTkcSelected()
+    {
+        var ports = SelectedItems.ToList();
+        Snackbar.Add($"Đang kiểm tra tài khoản {ports.Count} cổng...", Severity.Info);
+        foreach (var p in ports)
+        {
+            try { await ModemService.SendCommandAsync(p.PortName, "AT+CUSD=1,\"*101#\",15", 20000); } catch {}
+            await Task.Delay(500);
+        }
+        SelectedItems.Clear();
+        SelectedItemsChanged.InvokeAsync(SelectedItems);
+    }
+
+    async Task Ussd101Selected() => await CheckTkcSelected();
+
+    void ConnectAll()
+    {
+        Snackbar.Add("Đang quét kết nối...", Severity.Info);
+        string result = ModemService.ConnectAll(115200);
+        Snackbar.Add(result, result.Contains("Lỗi") ? Severity.Warning : Severity.Success);
+    }
 }

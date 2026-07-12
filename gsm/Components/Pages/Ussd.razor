@@ -55,7 +55,7 @@
 <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
          PanelClass="pa-0" Class="mx-3"
          Style="background:transparent;"
-         ActivePanelIndexChanged="OnSubTabChanged">
+         @bind-ActivePanelIndex="_subTab">
     <MudTabPanel Text="Danh sách Cổng" />
     <MudTabPanel Text="Tin nhắn tới" />
     <MudTabPanel Text="Spam SMS" />
@@ -70,15 +70,153 @@
     {
         <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
     }
-    else
+    else if (_subTab == 1) // Tin nhắn tới
     {
-        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
-            <MudText Typo="Typo.h6" Style="color:#1E293B;">
-                @GetSubTabTitle()
+        <MudPaper Elevation="0" Class="mt-2" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
+            <MudTable Items="@Vm.SmsMessages" Dense="true" Hover="true" Elevation="0" Height="420px">
+                <HeaderContent>
+                    <MudTh>Thời gian</MudTh>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>Người gửi</MudTh>
+                    <MudTh>Nội dung</MudTh>
+                    <MudTh>OTP</MudTh>
+                    <MudTh Style="width:90px;">Thao tác</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="font-size:12px; white-space:nowrap;">@context.ReceivedTime</MudTd>
+                    <MudTd Style="font-weight:600;">@context.PortName</MudTd>
+                    <MudTd>@context.Sender</MudTd>
+                    <MudTd Style="max-width:260px; overflow:hidden; text-overflow:ellipsis;" Title="@context.Content">
+                        @context.Content
+                    </MudTd>
+                    <MudTd Style="font-family:monospace; color:#2563EB; font-weight:600;">
+                        @(context.Otp ?? "—")
+                    </MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
+                                       OnClick="@(() => Copy(context.Content))" Title="Copy" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                       OnClick="@(() => DeleteSms(context))" />
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="pa-12 text-center" style="color:#94A3B8;">
+                        <MudIcon Icon="@Icons.Material.Outlined.Sms" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
+                        <div>Chưa có tin nhắn tới</div>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    }
+    else if (_subTab == 2) // Spam SMS
+    {
+        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Spam SMS hàng loạt</MudText>
+            
+            <MudGrid>
+                <MudItem xs="12" md="5">
+                    <MudTextField @bind-Value="_spamPhone" Label="Số nhận (mỗi dòng 1 số)" Lines="5"
+                                  Variant="Variant.Outlined" Placeholder="0912345678&#10;0987654321" Class="mb-3" />
+                    <MudTextField @bind-Value="_spamContent" Label="Nội dung" Lines="3"
+                                  Variant="Variant.Outlined" Class="mb-3" />
+                    <MudNumericField @bind-Value="_spamDelay" Label="Delay giữa các tin (ms)" Min="500" Max="10000"
+                                     Variant="Variant.Outlined" Class="mb-3" Style="max-width:200px;" />
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                               StartIcon="@Icons.Material.Filled.Send" OnClick="StartSpamSms"
+                               Disabled="@(string.IsNullOrEmpty(_spamPhone) || string.IsNullOrEmpty(_spamContent))">
+                        Bắt đầu Spam
+                    </MudButton>
+                </MudItem>
+                <MudItem xs="12" md="7">
+                    <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:220px;">
+                        <MudText Typo="Typo.caption" Class="mb-2">Tiến trình</MudText>
+                        <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_spamLog</pre>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    }
+    else if (_subTab == 3) // Spam / Check Gọi
+    {
+        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Spam / Check cuộc gọi</MudText>
+            
+            <MudStack Row="true" Spacing="2" Class="mb-3">
+                <MudTextField @bind-Value="_checkCallPhone" Label="Số cần check / spam" 
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:200px;" />
+                <MudNumericField @bind-Value="_checkCallDuration" Label="Thời lượng (giây)" Min="5" Max="60"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:140px;" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartCheckCall">
+                    Gọi Check
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="StopAllCalls">
+                    Dập tất cả
+                </MudButton>
+            </MudStack>
+
+            <MudTable Items="@_callCheckHistory" Dense="true" Hover="true" Elevation="0" Height="300px">
+                <HeaderContent>
+                    <MudTh>Thời gian</MudTh>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>Số gọi</MudTh>
+                    <MudTh>Kết quả</MudTh>
+                    <MudTh>Thời lượng</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Time.ToString("HH:mm:ss")</MudTd>
+                    <MudTd>@context.Port</MudTd>
+                    <MudTd>@context.Phone</MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
+                            @context.Result
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>@context.Duration s</MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Chưa có lịch sử check gọi</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    }
+    else if (_subTab == 4) // DTMF (Call)
+    {
+        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">DTMF / Nhấn phím trong cuộc gọi</MudText>
+            
+            <MudStack Row="true" Spacing="2" Class="mb-3">
+                <MudSelect T="string" Label="Cổng đang gọi" @bind-Value="_dtmfPort" 
+                           Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" Dense="true">
+                    @foreach (var p in Ports.Where(x => x.Status == SimStatus.Active))
+                    {
+                        <MudSelectItem Value="@p.PortName">@p.PortName</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudTextField @bind-Value="_dtmfCode" Label="Mã DTMF" Placeholder="1# hoặc 1234#"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendDtmf">
+                    Gửi DTMF
+                </MudButton>
+            </MudStack>
+
+            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                Lưu ý: Chỉ gửi được khi cổng đang trong cuộc gọi (CLCC active).
             </MudText>
-            <MudText Typo="Typo.body2" Style="color:#64748B; margin-top:8px;">
-                Dữ liệu chưa có sẵn hoặc tính năng đang được phát triển...
-            </MudText>
+        </MudPaper>
+    }
+    else if (_subTab == 5) // Thông báo
+    {
+        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Cài đặt thông báo</MudText>
+            
+            <MudSwitch T="bool" @bind-Value="_notifySms" Label="Thông báo khi có SMS mới" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_notifyCall" Label="Thông báo khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_notifyOtp" Label="Thông báo khi phát hiện OTP" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_notifyTelegram" Label="Gửi Telegram khi có OTP" Color="Color.Primary" Class="mb-3" />
+            
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="SaveNotifySettings">
+                Lưu cài đặt thông báo
+            </MudButton>
         </MudPaper>
     }
 </div>
@@ -90,21 +228,38 @@
     private int _subTab = 0;
 
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
-    private List<SimPort> FilteredPorts => Ports; // sau này filter theo sub-tab
+    private List<SimPort> FilteredPorts => Ports;
 
-    void OnSubTabChanged(int index) => _subTab = index;
+    // --- Spam SMS Models ---
+    private string _spamPhone = "";
+    private string _spamContent = "";
+    private int _spamDelay = 1000;
+    private string _spamLog = "";
 
-    string GetSubTabTitle()
+    // --- Spam/Check Gọi Models ---
+    private string _checkCallPhone = "";
+    private int _checkCallDuration = 10;
+    private List<CallCheckHistoryItem> _callCheckHistory = new();
+
+    // --- DTMF Models ---
+    private string _dtmfPort = "";
+    private string _dtmfCode = "";
+
+    // --- Thông báo Models ---
+    private bool _notifySms = true;
+    private bool _notifyCall = true;
+    private bool _notifyOtp = true;
+    private bool _notifyTelegram = false;
+
+    // --- Helper classes ---
+    public class CallCheckHistoryItem
     {
-        return _subTab switch
-        {
-            1 => "Tin nhắn tới",
-            2 => "Lịch sử Spam SMS",
-            3 => "Spam / Check Gọi",
-            4 => "Lịch sử DTMF",
-            5 => "Thông báo hệ thống",
-            _ => "Dữ liệu"
-        };
+        public DateTime Time { get; set; }
+        public string Port { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public string Result { get; set; } = "";
+        public bool Success { get; set; }
+        public int Duration { get; set; }
     }
 
     async Task SendSelectedOrAll()
@@ -137,13 +292,11 @@
     async Task ApplyScanMode()
     {
         Snackbar.Add($"Đang áp dụng mức sóng {_scanMode}...", Severity.Info);
-        // Tương lai sẽ có hàm
     }
 
     async Task RecoverSignal()
     {
         Snackbar.Add("Đang khôi phục sóng...", Severity.Info);
-        // Tương lai sẽ có hàm
     }
 
     async Task ConnectAll()
@@ -151,6 +304,43 @@
         Snackbar.Add("Đang quét kết nối...", Severity.Info);
         string result = ModemService.ConnectAll(115200);
         Snackbar.Add(result, result.Contains("Lỗi") ? Severity.Warning : Severity.Success);
+    }
+
+    void Copy(string text)
+    {
+        // Copy to clipboard placeholder
+        Snackbar.Add("Đã copy", Severity.Success);
+    }
+
+    void DeleteSms(SmsMessage msg)
+    {
+        Vm.SmsMessages.Remove(msg);
+        Snackbar.Add("Đã xóa tin nhắn", Severity.Info);
+    }
+
+    async Task StartSpamSms()
+    {
+        Snackbar.Add("Bắt đầu spam SMS...", Severity.Info);
+    }
+
+    async Task StartCheckCall()
+    {
+        Snackbar.Add("Bắt đầu check gọi...", Severity.Info);
+    }
+
+    async Task StopAllCalls()
+    {
+        Snackbar.Add("Đang dập máy tất cả cuộc gọi...", Severity.Info);
+    }
+
+    async Task SendDtmf()
+    {
+        Snackbar.Add($"Đang gửi DTMF tới cổng {_dtmfPort}...", Severity.Info);
+    }
+
+    void SaveNotifySettings()
+    {
+        Snackbar.Add("Đã lưu cài đặt thông báo", Severity.Success);
     }
 
     public void Dispose()

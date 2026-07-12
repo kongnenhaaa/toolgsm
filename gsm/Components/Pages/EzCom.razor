@@ -37,27 +37,52 @@
 
 <!-- ========== SUB TABS ========== -->
 <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
-         PanelClass="pa-0" Class="mx-3"
+         PanelClass="pa-0" Class="mx-3 mt-2"
          Style="background:transparent;"
-         ActivePanelIndexChanged="OnSubTabChanged">
-    <MudTabPanel Text="Danh sách Cổng" />
-    <MudTabPanel Text="Kết quả Đăng ký" />
-</MudTabs>
-
-<!-- ========== CONTENT THEO SUB-TAB ========== -->
-<div class="mx-3 mt-1">
-    @if (_subTab == 0)
-    {
+         @bind-ActivePanelIndex="_subTab">
+    <MudTabPanel Text="Danh sách Cổng">
         <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
-    }
-    else
-    {
-        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
-            <MudText Typo="Typo.h6" Style="color:#1E293B;" Class="mb-3">Kết quả gần đây</MudText>
-            <pre style="font-size:12px; white-space:pre-wrap; margin:0; color:#475569;">@_ezResult</pre>
+    </MudTabPanel>
+
+    <MudTabPanel Text="Kết quả Đăng ký">
+        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-3">
+                <MudText Typo="Typo.subtitle1" Style="font-weight:600;">Kết quả đăng ký EZ COM</MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="ClearEzResult">
+                    Xóa kết quả
+                </MudButton>
+            </MudStack>
+
+            <MudTable Items="@_ezResults" Dense="true" Hover="true" Elevation="0" Height="380px">
+                <HeaderContent>
+                    <MudTh>Thời gian</MudTh>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>SĐT</MudTh>
+                    <MudTh>Lệnh</MudTh>
+                    <MudTh>Trạng thái</MudTh>
+                    <MudTh>Phản hồi</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="font-size:12px;">@context.Time.ToString("HH:mm:ss")</MudTd>
+                    <MudTd Style="font-weight:600;">@context.Port</MudTd>
+                    <MudTd>@context.Phone</MudTd>
+                    <MudTd Style="font-family:monospace;">@context.Command</MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
+                            @(context.Success ? "Thành công" : "Lỗi")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd Style="max-width:220px; overflow:hidden; text-overflow:ellipsis; font-size:12px;" Title="@context.Response">
+                        @context.Response
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Class="pa-10 text-center" Style="color:#94A3B8;">Chưa có kết quả đăng ký</MudText>
+                </NoRecordsContent>
+            </MudTable>
         </MudPaper>
-    }
-</div>
+    </MudTabPanel>
+</MudTabs>
 
 @code {
     private string _ezCommand = "DK EZ";
@@ -65,7 +90,17 @@
     private string _sendMode = "Selected";
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
-    private string _ezResult = "";
+
+    public class EzResultItem
+    {
+        public DateTime Time { get; set; }
+        public string Port { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public string Command { get; set; } = "";
+        public bool Success { get; set; }
+        public string Response { get; set; } = "";
+    }
+    private List<EzResultItem> _ezResults = new();
 
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private List<SimPort> FilteredPorts => Ports;
@@ -76,8 +111,6 @@
     {
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
     }
-
-    void OnSubTabChanged(int index) => _subTab = index;
 
     async Task RegisterEzCom()
     {
@@ -98,16 +131,35 @@
             try
             {
                 await ModemService.SendSmsAsync(port, _ezNumber, _ezCommand);
-                _ezResult = $"[{DateTime.Now:HH:mm:ss}] {port} → Gửi thành công ({_ezCommand} đến {_ezNumber})\n" + _ezResult;
+                _ezResults.Insert(0, new EzResultItem
+                {
+                    Time = DateTime.Now,
+                    Port = port,
+                    Phone = _ezNumber,
+                    Command = _ezCommand,
+                    Success = true,
+                    Response = "Đã gửi lệnh SMS..."
+                });
             }
             catch (Exception ex)
             {
-                _ezResult = $"[{DateTime.Now:HH:mm:ss}] Lỗi {port}: {ex.Message}\n" + _ezResult;
+                _ezResults.Insert(0, new EzResultItem
+                {
+                    Time = DateTime.Now,
+                    Port = port,
+                    Phone = _ezNumber,
+                    Command = _ezCommand,
+                    Success = false,
+                    Response = $"Lỗi: {ex.Message}"
+                });
             }
-            await Task.Delay(1000);
+            await Task.Delay(500);
         }
-        
-        Snackbar.Add("Hoàn tất gửi lệnh đăng ký EZ COM", Severity.Success);
+    }
+
+    void ClearEzResult()
+    {
+        _ezResults.Clear();
     }
 
     public void Dispose()

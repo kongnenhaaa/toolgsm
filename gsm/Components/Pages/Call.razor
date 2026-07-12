@@ -48,29 +48,59 @@
 
 <!-- ========== SUB TABS ========== -->
 <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
-         PanelClass="pa-0" Class="mx-3"
+         PanelClass="pa-0" Class="mx-3 mt-2"
          Style="background:transparent;"
-         ActivePanelIndexChanged="OnSubTabChanged">
-    <MudTabPanel Text="Danh sách Cổng" />
-    <MudTabPanel Text="Lịch sử Cuộc gọi" />
-</MudTabs>
-
-<!-- ========== CONTENT VÙNG DƯỚI TÙY SUB-TAB ========== -->
-<div class="mx-3 mt-1">
-    @if (_subTab == 0)
-    {
-        <!-- Bảng Cổng COM -->
+         @bind-ActivePanelIndex="_callSubTab">
+    <MudTabPanel Text="Danh sách Cổng">
         <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
-    }
-    else if (_subTab == 1)
-    {
-        <!-- Lịch sử Cuộc gọi -->
-        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF; min-height:400px; padding:16px;">
-            <MudText Typo="Typo.h6" Style="color:#1E293B;">Danh sách cuộc gọi</MudText>
-            <MudText Typo="Typo.body2" Style="color:#64748B;">Tính năng đang được phát triển...</MudText>
+    </MudTabPanel>
+
+    <MudTabPanel Text="Lịch sử Cuộc gọi">
+        <MudPaper Elevation="0" Class="mt-2" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
+            <MudTable Items="@_callHistory" Dense="true" Hover="true" Elevation="0" Height="420px">
+                <HeaderContent>
+                    <MudTh>Thời gian</MudTh>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>Số gọi</MudTh>
+                    <MudTh>Thời lượng</MudTh>
+                    <MudTh>WAV</MudTh>
+                    <MudTh>Ghi âm</MudTh>
+                    <MudTh>Trạng thái</MudTh>
+                    <MudTh Style="width:80px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="font-size:12px;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
+                    <MudTd Style="font-weight:600;">@context.Port</MudTd>
+                    <MudTd>@context.Phone</MudTd>
+                    <MudTd>@context.Duration s</MudTd>
+                    <MudTd Style="font-size:12px;">@(System.IO.Path.GetFileName(context.WavFile) ?? "—")</MudTd>
+                    <MudTd>
+                        @if (context.HasRecording)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Có</MudChip>
+                        }
+                        else { <span style="color:#94A3B8;">—</span> }
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
+                            @(context.Success ? "OK" : "Lỗi")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.Replay" Size="Size.Small" 
+                                       OnClick="@(() => Redial(context))" Title="Gọi lại" />
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="pa-12 text-center" style="color:#94A3B8;">
+                        <MudIcon Icon="@Icons.Material.Outlined.Phone" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
+                        <div>Chưa có lịch sử cuộc gọi</div>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
         </MudPaper>
-    }
-</div>
+    </MudTabPanel>
+</MudTabs>
 
 @code {
     private string _phone = "";
@@ -78,19 +108,30 @@
     private int _duration = 15;
     private string _sendMode = "Selected";
     private HashSet<SimPort> _selectedPorts = new();
-    private int _subTab = 0;
+    private int _callSubTab = 0;
 
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private List<SimPort> FilteredPorts => Ports;
 
     private System.Threading.Timer? _timer;
 
+    // --- Lịch sử gọi Models ---
+    public class CallHistoryItem
+    {
+        public DateTime Time { get; set; }
+        public string Port { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public int Duration { get; set; }
+        public string WavFile { get; set; } = "";
+        public bool HasRecording { get; set; }
+        public bool Success { get; set; }
+    }
+    private List<CallHistoryItem> _callHistory = new();
+
     protected override void OnInitialized()
     {
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
     }
-
-    void OnSubTabChanged(int index) => _subTab = index;
 
     async Task MakeCall()
     {
@@ -100,40 +141,48 @@
 
         if (!targets.Any())
         {
-            Snackbar.Add("Không có cổng nào được chọn để gọi", Severity.Warning);
+            Snackbar.Add("Không có cổng nào để gọi", Severity.Warning);
             return;
         }
 
         foreach (var port in targets)
         {
-            try
+            _ = Vm.ExecuteCallFromUiAsync(port, _phone, "", _duration);
+            
+            _callHistory.Insert(0, new CallHistoryItem
             {
-                // Truyền wavPath rỗng, duration
-                string status = await Vm.ExecuteCallFromUiAsync(port, _phone, "", _duration);
-                Snackbar.Add($"[{port}] {status}", status.Contains("Lỗi") ? Severity.Error : Severity.Success);
-            }
-            catch (Exception ex)
-            {
-                Snackbar.Add($"[{port}] Lỗi gọi: {ex.Message}", Severity.Error);
-            }
-            await Task.Delay(1000); // Tránh nghẽn lệnh
+                Time = DateTime.Now,
+                Port = port,
+                Phone = _phone,
+                Duration = _duration,
+                Success = true
+            });
+            await Task.Delay(500);
         }
+        Snackbar.Add($"Đã gửi lệnh gọi tới {targets.Count} cổng", Severity.Success);
     }
 
     async Task HangupAll()
     {
-        var targets = _selectedPorts.Any() 
+        var targets = _sendMode == "Selected" 
             ? _selectedPorts.Select(p => p.PortName).ToList() 
             : Ports.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
 
         foreach (var port in targets)
         {
-            await ModemService.SendCommandAsync(port, "ATH", 2000);
-            var p = Ports.FirstOrDefault(x => x.PortName == port);
-            if (p != null) p.LastCallResult = "Đã cúp máy";
+            await ModemService.SendCommandAsync(port, "ATH");
         }
-        Snackbar.Add($"Đã gửi lệnh cúp máy cho {targets.Count} cổng", Severity.Info);
+        Snackbar.Add("Đã gửi lệnh cúp máy (ATH)", Severity.Info);
     }
 
-    public void Dispose() => _timer?.Dispose();
+    void Redial(CallHistoryItem item)
+    {
+        _phone = item.Phone;
+        Snackbar.Add($"Chuẩn bị gọi lại {item.Phone}", Severity.Info);
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
 }

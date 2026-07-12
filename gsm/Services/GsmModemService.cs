@@ -458,7 +458,16 @@ public class GsmModemService : IGsmModemService
             await SendCommandAsync(portName, "AT+QAUDMOD=0", 5000, silent: true); 
         } 
         await SendCommandAsync(portName, "AT+CMGD=1,4", 10000, silent: true); 
-        await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 5000, silent: true);
+        
+        string cnmi = await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 5000, silent: true);
+        if (cnmi.Contains("ERROR")) 
+        {
+            cnmi = await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 5000, silent: true);
+            if (cnmi.Contains("ERROR"))
+            {
+                await SendCommandAsync(portName, "AT+CNMI=2,2,0,0,0", 5000, silent: true);
+            }
+        }
         
         StartPollingNetwork(portName);
     }
@@ -1103,6 +1112,7 @@ public class GsmModemService : IGsmModemService
         _commandTcs.Clear();
         _connectionErrors.Clear();
         _sleepingPorts.Clear();
+        _portVendors.Clear();
     }
 
     public void Disconnect(string portName)
@@ -1128,6 +1138,7 @@ public class GsmModemService : IGsmModemService
             _dataReceivedHandlers.TryRemove(portName, out _);
             _isDownloading.TryRemove(portName, out _);
             _sleepingPorts.TryRemove(portName, out _);
+            _portVendors.TryRemove(portName, out _);
         }
     }
 

@@ -2501,52 +2501,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     return;
                 }
 
-                // 1. Tìm người gửi (Sender)
-                var pduMatch = Regex.Match(e.Data, @"\+CMGR:\s*\d+,,(\d+)\r?\n([0-9A-Fa-f]+)");
-                var senderMatch = Regex.Match(e.Data, @"\+CMGR:\s*""[^""]+"",""([^""]+)""");
-                int concatRef = 0, concatTotal = 0, concatSeq = 0;
-                if (pduMatch.Success)
+                // 1. Lấy thông tin từ sự kiện (Đã được xử lý 100% bên GsmModemService)
+                if (!string.IsNullOrEmpty(e.Sender))
                 {
-                    string pduHex = pduMatch.Groups[2].Value.Trim();
-                    cleanContent = DecodePdu(pduHex, out senderPhone, out concatRef, out concatTotal, out concatSeq);
-                    // Loại bỏ các ký tự thừa
+                    senderPhone = e.Sender;
+                    extractedOtp = string.IsNullOrEmpty(e.Otp) ? "N/A" : e.Otp;
+                    // cleanContent đã là nội dung text sạch (fullContent)
+                }
+                else
+                {
+                    // Fallback an toàn (nếu có message nào chưa qua xử lý)
+                    var pduMatch = Regex.Match(e.Data, @"\+CMGR:\s*\d+,,(\d+)\r?\n([0-9A-Fa-f]+)");
+                    var senderMatch = Regex.Match(e.Data, @"\+(?:CMGR|CMGL):\s*""[^""]*"",""([^""]+)""");
+                    if (pduMatch.Success)
+                    {
+                        string pduHex = pduMatch.Groups[2].Value.Trim();
+                        cleanContent = DecodePdu(pduHex, out senderPhone, out int _, out int _, out int _);
+                    }
+                    else if (senderMatch.Success)
+                    {
+                        senderPhone = DecodeUcs2(senderMatch.Groups[1].Value);
+                        cleanContent = Regex.Replace(e.Data, @"\+(?:CMGR|CMGL):.*?\r\n", "").Trim();
+                        cleanContent = Regex.Replace(cleanContent, @"\r?\nOK\r?\n?$", "").Trim();
+                        cleanContent = DecodeUcs2(cleanContent);
+                    }
                     cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
-                }
-                else if (senderMatch.Success)
-                {
-                    senderPhone = DecodeUcs2(senderMatch.Groups[1].Value); // Giải mã HEX nếu có
-
-                    // Xóa dòng header +CMGR đi để lấy nội dung text sạch
-                    cleanContent = Regex.Replace(e.Data, @"\+CMGR:.*?\r\n", "").Trim();
-                    cleanContent = Regex.Replace(cleanContent, @"\r?\nOK\r?\n?$", "").Trim();
-                    cleanContent = DecodeUcs2(cleanContent); // Giải mã Tiếng Việt
-
-                    // Gộp nội dung thành 1 dòng để tránh lỗi hiển thị trên UI bị mất chữ (do rớt dòng)
-                    cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
-                    // Thay thế khoảng trắng kép
-                    cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
-                }
-
-                // 1b. Tin nhắn dài bị chia phần (concatenated SMS, theo UDH chuẩn 3GPP).
-                // Chỉ xử lý tiếp khi đã gom ĐỦ tất cả các phần; nếu thiếu phần thì lưu vào buffer,
-                // xóa tin ở SIM (đã đọc xong, tránh đầy bộ nhớ) và dừng lại chờ phần tiếp theo.
-                if (concatTotal > 1)
-                {
-                    bool isComplete = TryBufferConcatenatedSms(e.PortName, senderPhone, concatRef, concatTotal, concatSeq, cleanContent, out string assembledContent);
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
-
-                    if (!isComplete)
-                    {
-                        AddLog($"[{e.PortName}] Đã nhận phần {concatSeq}/{concatTotal} của tin nhắn dài từ {senderPhone}, đang chờ ghép đủ...", "INFO");
-                        return;
-                    }
-
-                    AddLog($"[{e.PortName}] Đã ghép đủ {concatTotal} phần tin nhắn dài từ {senderPhone}.", "INFO");
-                    cleanContent = assembledContent;
+                    extractedOtp = gsm.Services.GsmModemService.ExtractOtp(cleanContent) ?? "N/A";
                 }
 
                 // Tự động kiểm tra TKC khi nhận thông báo trừ tiền từ tổng đài:

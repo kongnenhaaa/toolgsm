@@ -42,6 +42,8 @@ public class GsmDataEventArgs : EventArgs
     public string PortName { get; set; } = string.Empty;
     public string Data { get; set; } = string.Empty;
     public string MsgIndex { get; set; } = string.Empty;
+    public string Sender { get; set; } = string.Empty;
+    public string Otp { get; set; } = string.Empty;
 }
 
 public class GsmModemService : IGsmModemService
@@ -57,6 +59,128 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, bool> _isDownloading = new();
     private readonly ConcurrentDictionary<string, bool> _activeCalls = new();
     private readonly object _connectLock = new object();
+
+    // ===================== SMS DECODE + MULTIPART =====================
+    static readonly Regex OtpRegex = new(
+        @"(?:otp|mã\s*otp|ma\s*otp|mã\s*xác\s*thực|ma\s*xac\s*thuc|verification\s*code|auth(?:entication)?\s*code|mã\s*pin|code\s*is|la\s*:?\s*)[^\d]{0,12}(\d{4,8})\b" +
+        @"|(?<!\d)(\d{4,8})(?!\d)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    public static string? ExtractOtp(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return null;
+        var m = OtpRegex.Match(content.Trim());
+        if (!m.Success) return null;
+        if (m.Groups[1].Success) return m.Groups[1].Value;
+        if (m.Groups[2].Success)
+        {
+            var num = m.Groups[2].Value;
+            if (num.Length == 4 && (num.StartsWith("19") || num.StartsWith("20"))) return null;
+            return num;
+        }
+        return null;
+    }
+
+    public static string DecodeSmsBody(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        raw = raw.Trim();
+        var lines = raw.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
+                       .Select(l => l.Trim())
+                       .Where(l => !string.IsNullOrEmpty(l) &&
+                                   !l.StartsWith("+CMGR:", StringComparison.OrdinalIgnoreCase) &&
+                                   !l.Equals("OK", StringComparison.OrdinalIgnoreCase) &&
+                                   !l.Equals("ERROR", StringComparison.OrdinalIgnoreCase))
+                       .ToList();
+
+        if (lines.Count == 0) return raw;
+        var body = lines.OrderByDescending(l => l.Length).First();
+
+        if (IsHexString(body) && body.Length >= 4 && body.Length % 2 == 0)
+        {
+            try { return DecodeUcs2Hex(body); } catch { }
+        }
+        return body;
+    }
+
+    static bool IsHexString(string s)
+    {
+        if (string.IsNullOrEmpty(s) || s.Length % 2 != 0) return false;
+        foreach (char c in s) if (!Uri.IsHexDigit(c)) return false;
+        return s.Length >= 4;
+    }
+
+    static string DecodeUcs2Hex(string hex)
+    {
+        var bytes = new byte[hex.Length / 2];
+        for (int i = 0; i < bytes.Length; i++)
+            bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+        return Encoding.BigEndianUnicode.GetString(bytes).Trim('\0');
+    }
+
+    private class PendingMultipart
+    {
+        public string Port { get; set; } = "";
+        public string Sender { get; set; } = "";
+        public List<string> Parts { get; set; } = new();
+        public DateTime LastAt { get; set; } = DateTime.Now;
+        public string? Combined => Parts.Count == 0 ? null : string.Join("", Parts);
+    }
+
+    private readonly ConcurrentDictionary<string, PendingMultipart> _multipartBuffer = new();
+    private static readonly TimeSpan MultipartTimeout = TimeSpan.FromSeconds(45);
+    string MultipartKey(string port, string sender) => $"{port}|{sender}";
+
+    string? TryAssembleMultipart(string port, string sender, string partContent)
+    {
+        var key = MultipartKey(port, sender);
+        var now = DateTime.Now;
+
+        foreach (var kv in _multipartBuffer.ToArray())
+        {
+            if (now - kv.Value.LastAt > MultipartTimeout)
+                _multipartBuffer.TryRemove(kv.Key, out _);
+        }
+
+        bool looksLikePart = partContent.Length < 140 &&
+                             (partContent.EndsWith("...") ||
+                              partContent.EndsWith("…") ||
+                              (!partContent.EndsWith(".") && !partContent.EndsWith("!") && !partContent.EndsWith("?") && partContent.Length > 50));
+
+        if (!_multipartBuffer.TryGetValue(key, out var pending))
+        {
+            if (!looksLikePart) return partContent;
+            pending = new PendingMultipart { Port = port, Sender = sender };
+            _multipartBuffer[key] = pending;
+        }
+
+        pending.Parts.Add(partContent);
+        pending.LastAt = now;
+
+        bool looksComplete = partContent.EndsWith(".") || partContent.EndsWith("!") ||
+                             partContent.EndsWith("?") || partContent.Length < 40 ||
+                             ExtractOtp(partContent) != null;
+
+        if (looksComplete || pending.Parts.Count >= 5)
+        {
+            _multipartBuffer.TryRemove(key, out _);
+            return string.Join("", pending.Parts);
+        }
+
+        return null;
+    }
+
+    static readonly Regex CmgrHeaderRegex = new(
+        @"\+CMGR:\s*""[^""]*"",\s*""([^""]+)""",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    string ParseSenderFromCmgr(string raw)
+    {
+        var m = CmgrHeaderRegex.Match(raw);
+        if (m.Success) return m.Groups[1].Value.Trim();
+        return "Unknown";
+    }
+    // ==================================================================
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
@@ -1064,7 +1188,28 @@ public class GsmModemService : IGsmModemService
                             
                             if (success)
                             {
-                                SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent, MsgIndex = msgIndex });
+                                string body = DecodeSmsBody(smsContent);
+                                string senderInfo = ParseSenderFromCmgr(smsContent);
+                                
+                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body);
+                                if (fullContent == null)
+                                {
+                                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
+                                    continue;
+                                }
+                                
+                                string? otp = ExtractOtp(fullContent);
+                                
+                                _ = SendCommandAsync(portName, $"AT+CMGD={msgIndex}", 3000, silent: true);
+
+                                SmsReceived?.Invoke(this, new GsmDataEventArgs 
+                                { 
+                                    PortName = portName, 
+                                    Data = fullContent, 
+                                    MsgIndex = msgIndex,
+                                    Sender = senderInfo,
+                                    Otp = otp ?? ""
+                                });
                             }
                             else
                             {
@@ -1121,7 +1266,28 @@ public class GsmModemService : IGsmModemService
                             
                             if (success)
                             {
-                                SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = smsContent, MsgIndex = msgIndex });
+                                string body = DecodeSmsBody(smsContent);
+                                string senderInfo = ParseSenderFromCmgr(smsContent);
+                                
+                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body);
+                                if (fullContent == null)
+                                {
+                                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
+                                    continue;
+                                }
+                                
+                                string? otp = ExtractOtp(fullContent);
+                                
+                                _ = SendCommandAsync(portName, $"AT+CMGD={msgIndex}", 3000, silent: true);
+
+                                SmsReceived?.Invoke(this, new GsmDataEventArgs 
+                                { 
+                                    PortName = portName, 
+                                    Data = fullContent, 
+                                    MsgIndex = msgIndex,
+                                    Sender = senderInfo,
+                                    Otp = otp ?? ""
+                                });
                             }
                             else
                             {

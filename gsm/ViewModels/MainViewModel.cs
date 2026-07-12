@@ -1328,6 +1328,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return dispatcher.Invoke(() => Ports.ToList());
     }
 
+    public event Action<LogMessage>? LogAdded;
+
     public void AddLog(string message, string level = "INFO")
     {
         try 
@@ -1364,7 +1366,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            SystemLogs.Insert(0, new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = level, Message = message });
+            var newLog = new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = level, Message = message };
+            SystemLogs.Insert(0, newLog);
             if (SystemLogs.Count > 500)
             {
                 SystemLogs.RemoveAt(SystemLogs.Count - 1);
@@ -1372,6 +1375,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Cập nhật bộ lọc log sau mỗi lần thêm dòng mới
             OnPropertyChanged(nameof(FilteredLogs));
             OnPropertyChanged(nameof(FilteredLogCount));
+            LogAdded?.Invoke(newLog);
         });
     }
 

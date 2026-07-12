@@ -195,16 +195,22 @@
         // ========== SUBSCRIBE LOG TỪ BACKEND (QUAN TRỌNG) ==========
         try
         {
-            if (ModemService != null)
+            Vm.LogAdded += OnVmLogAdded;
+            
+            // Lấy 500 log cũ đã có trong Vm (nếu có)
+            foreach (var log in Vm.SystemLogs.Reverse())
             {
-                ModemService.LogMessage += OnModemLog;
+                OnVmLogAdded(log);
             }
         }
         catch { }
 
         // Log khởi động
-        AddLog("system", "info", "Tool GSM đã khởi động");
-        AddLog("system", "info", "Sẵn sàng kết nối thiết bị");
+        if (_logs.Count == 0)
+        {
+            AddLog("system", "info", "Tool GSM đã khởi động");
+            AddLog("system", "info", "Sẵn sàng kết nối thiết bị");
+        }
 
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
     }
@@ -212,11 +218,19 @@
     // =====================================================
     // NHẬN LOG TỪ BACKEND
     // =====================================================
-    private void OnModemLog(object? sender, GsmDataEventArgs e)
+    private void OnVmLogAdded(LogMessage logMsg)
     {
-        // e.PortName, e.Data
-        var level = "info";
-        var msg = e.Data ?? "";
+        var level = logMsg.Level?.ToLowerInvariant() ?? "info";
+        var msg = logMsg.Message ?? "";
+        string port = "system";
+
+        // Thử tách [COMX] từ Message nếu có
+        var match = System.Text.RegularExpressions.Regex.Match(msg, @"^\[(.*?)\]\s*(.*)");
+        if (match.Success)
+        {
+            port = match.Groups[1].Value;
+            msg = match.Groups[2].Value;
+        }
 
         if (msg.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
             msg.Contains("Lỗi", StringComparison.OrdinalIgnoreCase) ||
@@ -231,7 +245,7 @@
 
         InvokeAsync(() =>
         {
-            AddLog(e.PortName ?? "system", level, msg);
+            AddLog(port, level, msg);
             StateHasChanged();
         });
     }
@@ -333,8 +347,7 @@
     {
         try
         {
-            if (ModemService != null)
-                ModemService.LogMessage -= OnModemLog;
+            Vm.LogAdded -= OnVmLogAdded;
         }
         catch { }
         _timer?.Dispose();

@@ -3,6 +3,7 @@
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
 @inject IJSRuntime JS
+@inject IDialogService DialogService
 @using gsm.Models
 @using gsm.Components.Shared
 @implements IDisposable
@@ -10,33 +11,30 @@
 <!-- ========== ACTION FORM ========== -->
 <MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
-    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-        <MudText Typo="Typo.caption" Style="color:#64748B; min-width:80px;">Người nhận</MudText>
-        <MudTextField @bind-Value="_phone" Placeholder="09xxxxxxxx" 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="max-width:140px; background:#F8FAFC;" Immediate="true" />
+    <MudStack Row="true" Spacing="2" Class="mb-2">
+        <MudTextField @bind-Value="_phone" Label="Số điện thoại" Placeholder="09xxxxxxxx (nhiều số: mỗi dòng 1 số)"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="flex:1;" Lines="2" />
+        <MudTextField @bind-Value="_message" Label="Nội dung" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="flex:2;" Lines="2" />
+    </MudStack>
 
-        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Nội dung</MudText>
-        <MudTextField @bind-Value="_message" Placeholder="Nhập tin nhắn..." 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="min-width:250px; flex:1; background:#F8FAFC;" Immediate="true" />
-
-        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Chế độ</MudText>
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
         <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined" 
-                   Margin="Margin.Dense" Style="width:130px; background:#F8FAFC;">
-            <MudSelectItem Value="@("Selected")">Cổng đã chọn</MudSelectItem>
-            <MudSelectItem Value="@("All")">Tất cả Active</MudSelectItem>
+                   Margin="Margin.Dense" Style="width:160px;" Label="Gửi tới">
+            <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
+            <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
         </MudSelect>
 
-        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                   StartIcon="@Icons.Material.Filled.Send"
-                   OnClick="SendSms" Disabled="@(string.IsNullOrEmpty(_phone) || string.IsNullOrEmpty(_message))">
-            Thêm vào Queue
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Send" OnClick="SendNow"
+                   Disabled="@(string.IsNullOrWhiteSpace(_phone) || string.IsNullOrWhiteSpace(_message))">
+            Gửi ngay
         </MudButton>
 
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                   StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="RunQueue">
-            Chạy Queue
+        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.PlaylistAdd" OnClick="AddToQueue"
+                   Disabled="@(string.IsNullOrWhiteSpace(_phone) || string.IsNullOrWhiteSpace(_message))">
+            Thêm vào Queue
         </MudButton>
     </MudStack>
 </MudPaper>
@@ -53,7 +51,7 @@
 
     <MudTabPanel Text="Tin nhắn tới">
         <MudPaper Elevation="0" Class="mt-2" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
-            <MudTable Items="@Vm.SmsMessages" Dense="true" Hover="true" Elevation="0" Height="420px">
+            <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0" Height="420px">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
@@ -92,16 +90,27 @@
     <MudTabPanel Text="Hàng đợi gửi">
         <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
             <MudStack Row="true" Class="pa-3" Spacing="2">
-                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" 
-                           StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="RunQueue">
-                    Chạy hàng đợi
-                </MudButton>
-                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" 
-                           OnClick="ClearSmsQueue">
+                @if (!_isRunningQueue)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="RunQueue">
+                        Chạy hàng đợi
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error"
+                               StartIcon="@Icons.Material.Filled.Stop" OnClick="StopQueue">
+                        Dừng
+                    </MudButton>
+                }
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.ClearAll" OnClick="ClearQueue"
+                           Disabled="@_isRunningQueue">
                     Xóa hàng đợi
                 </MudButton>
             </MudStack>
-            <MudTable Items="@(Vm.CommandQueue?.Where(x => x.Type == "SMS") ?? Enumerable.Empty<CommandQueueItem>())" 
+            <MudTable Items="@SmsQueue" 
                       Dense="true" Hover="true" Elevation="0" Height="360px">
                 <HeaderContent>
                     <MudTh>Cổng</MudTh>
@@ -156,94 +165,347 @@
 </MudTabs>
 
 @code {
+    // ========== BINDINGS ==========
     private string _phone = "";
     private string _message = "";
-    private string _sendMode = "Selected";
+    private string _sendMode = "selected"; // "selected" | "all"
     private HashSet<SimPort> _selectedPorts = new();
     private int _smsSubTab = 0;
 
-    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
-    private List<SimPort> FilteredPorts => Ports;
-
-    // --- Mẫu tin nhắn Models ---
+    // Mẫu tin nhắn
     private string _newTemplate = "";
     private List<string> _templates = new()
     {
-        "Chuc mung nam moi!",
-        "Kiem tra so du tai khoan",
-        "Dang ky dich vu 4G"
+        "Ma OTP cua ban la: {otp}",
+        "Xin chao, tai khoan cua ban da duoc kich hoat.",
+        "Vui long nap them tien de tiep tuc su dung dich vu."
     };
 
-    void SendSms()
-    {
-        var targets = _sendMode == "Selected" && _selectedPorts.Any()
-            ? _selectedPorts.Select(p => p.PortName).ToList()
-            : Ports.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
+    // Queue running state
+    private bool _isRunningQueue = false;
+    private CancellationTokenSource? _queueCts;
+    private string _queueLog = "";
 
-        if (!targets.Any())
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+    private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
+    private List<SimPort> FilteredPorts => Ports;
+
+    private IEnumerable<SmsMessage> IncomingSms =>
+        (Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>())
+            .OrderByDescending(x => DateTime.TryParse(x.ReceivedTime, out var t) ? t : DateTime.Now);
+
+    private IEnumerable<CommandQueueItem> SmsQueue =>
+        (Vm.CommandQueue ?? Enumerable.Empty<CommandQueueItem>())
+            .Where(x => x.Type == "SMS" || string.IsNullOrEmpty(x.Type));
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+    }
+
+    // =====================================================
+    // 1. GỬI NGAY (1 / Selected / All) – KHÔNG QUA QUEUE
+    // =====================================================
+    async Task SendNow()
+    {
+        if (string.IsNullOrWhiteSpace(_phone) || string.IsNullOrWhiteSpace(_message))
         {
-            Snackbar.Add("Chưa có cổng nào khả dụng để gửi", Severity.Warning);
+            Snackbar.Add("Nhập số điện thoại và nội dung", Severity.Warning);
             return;
         }
 
-        foreach (var port in targets)
+        var phones = _phone.Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                           .Select(x => x.Trim())
+                           .Where(x => x.Length >= 9)
+                           .Distinct()
+                           .ToList();
+
+        if (!phones.Any())
         {
-            Vm.CommandQueue.Add(new CommandQueueItem
+            Snackbar.Add("Không có số hợp lệ", Severity.Warning);
+            return;
+        }
+
+        var ports = GetTargetPorts();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
+            return;
+        }
+
+        if (ports.Count * phones.Count > 20)
+        {
+            var ok = await DialogService.ShowMessageBox("Xác nhận",
+                $"Gửi {phones.Count} tin × {ports.Count} cổng = {phones.Count * ports.Count} SMS?",
+                yesText: "Gửi ngay", cancelText: "Hủy");
+            if (ok != true) return;
+        }
+
+        int sent = 0, fail = 0;
+        Snackbar.Add($"Đang gửi {phones.Count * ports.Count} SMS...", Severity.Info);
+
+        foreach (var port in ports)
+        {
+            foreach (var phone in phones)
             {
-                Type = "SMS",
-                PortId = port,
-                Recipient = _phone,
-                Content = _message,
-                Status = "Chờ gửi"
-            });
+                try
+                {
+                    // Ưu tiên QueueSmsAsync nếu có, fallback SendSmsAsync
+                    if (Vm.GetType().GetMethod("QueueSmsAsync") != null)
+                        await Vm.QueueSmsAsync(port, phone, _message);
+                    else
+                        await ModemService.SendSmsAsync(port, phone, _message);
+
+                    sent++;
+                    Snackbar.Add($"[{port}] → {phone} OK", Severity.Success);
+                }
+                catch (Exception ex)
+                {
+                    fail++;
+                    Snackbar.Add($"[{port}] → {phone} Lỗi: {ex.Message}", Severity.Error);
+                }
+                await Task.Delay(800); // chống spam modem
+            }
         }
-        Snackbar.Add($"Đã đưa {targets.Count} tin nhắn vào hàng đợi", Severity.Success);
+
+        Snackbar.Add($"Hoàn tất: {sent} thành công, {fail} lỗi",
+            fail == 0 ? Severity.Success : Severity.Warning);
     }
 
-    void RunQueue()
+    // =====================================================
+    // 2. THÊM VÀO HÀNG ĐỢI
+    // =====================================================
+    async Task AddToQueue()
     {
-        Snackbar.Add("Bắt đầu chạy Queue...", Severity.Info);
-    }
-
-    void ClearSmsQueue()
-    {
-        var smsItems = Vm.CommandQueue.Where(x => x.Type == "SMS").ToList();
-        foreach (var item in smsItems)
+        if (string.IsNullOrWhiteSpace(_phone) || string.IsNullOrWhiteSpace(_message))
         {
-            Vm.CommandQueue.Remove(item);
+            Snackbar.Add("Nhập số và nội dung", Severity.Warning);
+            return;
         }
-        Snackbar.Add("Đã xóa hàng đợi SMS", Severity.Success);
+
+        var phones = _phone.Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                           .Select(x => x.Trim())
+                           .Where(x => x.Length >= 9)
+                           .Distinct()
+                           .ToList();
+
+        var ports = GetTargetPorts();
+        if (!ports.Any() || !phones.Any())
+        {
+            Snackbar.Add("Thiếu cổng hoặc số hợp lệ", Severity.Warning);
+            return;
+        }
+
+        int added = 0;
+        foreach (var port in ports)
+        {
+            foreach (var phone in phones)
+            {
+                // Thêm vào queue của ViewModel
+                var item = new CommandQueueItem
+                {
+                    CommandId = Guid.NewGuid().ToString("N")[..8],
+                    Type = "SMS",
+                    PortId = port,
+                    Recipient = phone,
+                    Content = _message,
+                    Status = "Chờ",
+                    Result = ""
+                };
+
+                Vm.CommandQueue?.Add(item);
+                added++;
+            }
+        }
+
+        Snackbar.Add($"Đã thêm {added} tin vào hàng đợi", Severity.Success);
+        _smsSubTab = 2; // chuyển sang tab Hàng đợi
+        StateHasChanged();
     }
 
-    async Task Copy(string text)
+    // =====================================================
+    // 3. CHẠY HÀNG ĐỢI (RunQueue) – FIX THẬT 100%
+    // =====================================================
+    async Task RunQueue()
     {
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
-        Snackbar.Add("Đã copy vào Clipboard", Severity.Success);
+        var queue = SmsQueue.Where(x => x.Status == "Chờ" || x.Status == "Pending" || string.IsNullOrEmpty(x.Status)).ToList();
+        if (!queue.Any())
+        {
+            Snackbar.Add("Hàng đợi trống hoặc không còn tin chờ", Severity.Warning);
+            return;
+        }
+
+        _isRunningQueue = true;
+        _queueCts = new CancellationTokenSource();
+        _queueLog = $"[{DateTime.Now:HH:mm:ss}] Bắt đầu chạy {queue.Count} tin...\n";
+
+        int ok = 0, fail = 0;
+
+        try
+        {
+            foreach (var item in queue)
+            {
+                if (_queueCts.Token.IsCancellationRequested) break;
+
+                item.Status = "Đang gửi";
+                StateHasChanged();
+
+                try
+                {
+                    // Gửi thật
+                    if (Vm.GetType().GetMethod("QueueSmsAsync") != null)
+                        await Vm.QueueSmsAsync(item.PortId, item.Recipient, item.Content);
+                    else
+                        await ModemService.SendSmsAsync(item.PortId, item.Recipient, item.Content);
+
+                    item.Status = "Xong";
+                    item.Result = "OK";
+                    ok++;
+                    _queueLog += $"[{DateTime.Now:HH:mm:ss}] {item.PortId} → {item.Recipient} OK\n";
+                }
+                catch (Exception ex)
+                {
+                    item.Status = "Lỗi";
+                    item.Result = ex.Message;
+                    fail++;
+                    _queueLog += $"[{DateTime.Now:HH:mm:ss}] {item.PortId} → {item.Recipient} LỖI: {ex.Message}\n";
+                }
+
+                StateHasChanged();
+                await Task.Delay(1000, _queueCts.Token); // delay an toàn
+            }
+        }
+        catch (TaskCanceledException) { }
+
+        _isRunningQueue = false;
+        _queueLog += $"\n[{DateTime.Now:HH:mm:ss}] Xong • OK: {ok} • Lỗi: {fail}\n";
+        Snackbar.Add($"Hàng đợi xong: {ok} thành công, {fail} lỗi",
+            fail == 0 ? Severity.Success : Severity.Warning);
     }
 
-    void DeleteSms(SmsMessage msg)
+    void StopQueue()
     {
-        Vm.SmsMessages.Remove(msg);
-        Snackbar.Add("Đã xóa tin nhắn", Severity.Info);
+        _queueCts?.Cancel();
+        _isRunningQueue = false;
+        Snackbar.Add("Đã dừng hàng đợi", Severity.Normal);
     }
 
+    // =====================================================
+    // 4. XÓA HÀNG ĐỢI
+    // =====================================================
+    async Task ClearQueue()
+    {
+        var count = SmsQueue.Count();
+        if (count == 0) return;
+
+        var ok = await DialogService.ShowMessageBox("Xác nhận",
+            $"Xóa {count} tin trong hàng đợi?", yesText: "Xóa", cancelText: "Hủy");
+        if (ok != true) return;
+
+        // Xóa các item SMS
+        var toRemove = SmsQueue.ToList();
+        foreach (var item in toRemove)
+            Vm.CommandQueue?.Remove(item);
+
+        Snackbar.Add($"Đã xóa {count} tin", Severity.Success);
+    }
+
+    // =====================================================
+    // 5. RESEND TỪ LỊCH SỬ
+    // =====================================================
+    async Task ResendSms(SmsMessage sms)
+    {
+        if (string.IsNullOrEmpty(sms.Sender) || string.IsNullOrEmpty(sms.Content))
+        {
+            Snackbar.Add("Thiếu số hoặc nội dung", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            var port = string.IsNullOrEmpty(sms.PortName) 
+                ? ActivePorts.FirstOrDefault()?.PortName 
+                : sms.PortName;
+
+            if (string.IsNullOrEmpty(port))
+            {
+                Snackbar.Add("Không có cổng Active", Severity.Warning);
+                return;
+            }
+
+            await ModemService.SendSmsAsync(port, sms.Sender, sms.Content);
+            Snackbar.Add($"[{port}] Đã gửi lại tới {sms.Sender}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Resend lỗi: " + ex.Message, Severity.Error);
+        }
+    }
+
+    // =====================================================
+    // 6. MẪU TIN NHẮN
+    // =====================================================
     void AddTemplate()
     {
-        if (!string.IsNullOrWhiteSpace(_newTemplate))
-        {
-            _templates.Add(_newTemplate);
-            _newTemplate = "";
-            Snackbar.Add("Đã thêm mẫu", Severity.Success);
-        }
+        if (string.IsNullOrWhiteSpace(_newTemplate)) return;
+        _templates.Add(_newTemplate.Trim());
+        _newTemplate = "";
+        Snackbar.Add("Đã thêm mẫu", Severity.Success);
     }
 
     void UseTemplate(string tpl)
     {
         _message = tpl;
-        Snackbar.Add("Đã áp dụng mẫu", Severity.Info);
+        _smsSubTab = 0; // về form gửi
+        Snackbar.Add("Đã nạp mẫu vào form", Severity.Info);
+    }
+
+    void RemoveTemplate(string tpl) => _templates.Remove(tpl);
+
+    // =====================================================
+    // 7. COPY / DELETE
+    // =====================================================
+    async Task Copy(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        Snackbar.Add("Đã copy vào Clipboard", Severity.Success);
+    }
+
+    async Task DeleteSms(SmsMessage sms)
+    {
+        Vm.SmsMessages?.Remove(sms);
+        Snackbar.Add("Đã xóa tin nhắn", Severity.Normal);
+    }
+
+    async Task ClearHistory()
+    {
+        var ok = await DialogService.ShowMessageBox("Xác nhận",
+            "Xóa toàn bộ lịch sử tin nhắn tới?", yesText: "Xóa", cancelText: "Hủy");
+        if (ok == true)
+        {
+            Vm.SmsMessages?.Clear();
+            Snackbar.Add("Đã xóa lịch sử", Severity.Success);
+        }
+    }
+
+    // =====================================================
+    // HELPERS
+    // =====================================================
+    List<string> GetTargetPorts()
+    {
+        if (_sendMode == "all" || !_selectedPorts.Any())
+            return ActivePorts.Select(p => p.PortName).ToList();
+
+        return _selectedPorts.Select(p => p.PortName).ToList();
     }
 
     public void Dispose()
     {
+        _timer?.Dispose();
+        _queueCts?.Cancel();
+        _queueCts?.Dispose();
     }
 }

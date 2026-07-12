@@ -2939,7 +2939,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // Bộ nhớ đệm ghép các phần SMS dài (concatenated SMS) đang chờ đủ theo ConcatRef+Sender+Port.
     private readonly List<MultipartSmsBuffer> _multipartSmsBuffers = new();
-    private static readonly TimeSpan MultipartSmsBufferTimeout = TimeSpan.FromMinutes(3);
+    private static readonly TimeSpan MultipartSmsBufferTimeout = TimeSpan.FromMinutes(10);
 
     // Gom một phần (part) của tin nhắn dài vào buffer theo đúng số thứ tự (seq) khai báo trong UDH.
     // Trả về true và xuất nội dung đã ghép đủ khi đã nhận được toàn bộ concatTotal phần.

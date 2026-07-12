@@ -340,6 +340,14 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
         await SendCommandAsync(portName, "AT+CLIP=1", 30000); // Hiển thị thông tin người gọi
         
+        // Cấu hình nâng cao
+        await SendCommandAsync(portName, "AT+CMEE=2", 10000, silent: true); 
+        await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 10000, silent: true);
+        await SendCommandAsync(portName, "AT+CREG=2", 10000, silent: true);
+        await SendCommandAsync(portName, "AT+CGREG=2", 10000, silent: true);
+        await SendCommandAsync(portName, "AT+CEREG=2", 10000, silent: true);
+        await SendCommandAsync(portName, "AT+CRC=1", 10000, silent: true);
+        
         // Lấy hãng sản xuất (Vendor)
         string cgmi = await SendCommandAsync(portName, "AT+CGMI", 10000, silent: true);
         string vendor = cgmi.ToUpper();
@@ -347,7 +355,10 @@ public class GsmModemService : IGsmModemService
 
         if (vendor.Contains("QUECTEL"))
         {
+            await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"usbat\"", 10000, silent: true); // Định tuyến URC đúng cổng
             await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true); // 0 = Auto (2G/3G/4G)
+            await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 10000, silent: true); // Ưu tiên 4G -> 3G -> 2G
+            await SendCommandAsync(portName, "AT+QCFG=\"ims\",1", 10000, silent: true); // Bật VoLTE/IMS
             await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
             // Bật xuất âm thanh cuộc gọi ra cổng USB (UAC) cho Quectel EC20
             await SendCommandAsync(portName, "AT+QPCMV=0,0", 30000); 
@@ -477,10 +488,17 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CLIP=1", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CMEE=2", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CREG=2", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CGREG=2", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CEREG=2", 5000, silent: true);
+        await SendCommandAsync(portName, "AT+CRC=1", 5000, silent: true);
         
         string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
         if (vendor.Contains("QUECTEL"))
         {
+            await SendCommandAsync(portName, "AT+QCFG=\"ims\",1", 5000, silent: true); // Bật VoLTE
             await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true); // Bật bộ phát hiện âm tần DTMF
             await SendCommandAsync(portName, "AT+QPCMV=0,0", 5000, silent: true);
             await SendCommandAsync(portName, "AT+QAUDMOD=0", 5000, silent: true); 
@@ -582,24 +600,19 @@ public class GsmModemService : IGsmModemService
                     
                     // Lấy mạng thành công, nhả sự kiện ra để ViewModel bắt và tự động chạy USSD
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = copsStr.Trim() });
+                    StartKeepAliveLoop(portName);
                     break;
                 }
 
                 attempts++;
 
-                // Khôi phục sóng nếu kẹt quá lâu (Khoảng 60 giây = 30 lần)
-                if (attempts > 30)
+                // Khôi phục sóng nếu kẹt quá lâu (Khoảng 40 giây = 20 lần)
+                if (attempts > 20)
                 {
                     attempts = 0;
                     recoveryCount++;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_RECOVERY] Không tìm thấy sóng, đang thử khôi phục mạng lần {recoveryCount}..." });
                     
-                    string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
-                    if (vendor.Contains("QUECTEL"))
-                    {
-                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true);
-                    }
-
                     // Toggle chế độ máy bay để reset cọc sóng
                     await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
                     await Task.Delay(1000);
@@ -607,6 +620,43 @@ public class GsmModemService : IGsmModemService
                     
                     // Ép tự động quét lại trạm sóng mạng
                     await SendCommandAsync(portName, "AT+COPS=0", 10000, silent: true);
+                    
+                    string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
+                    if (vendor.Contains("QUECTEL"))
+                    {
+                        // Đặt lại chuẩn ưu tiên sau khi AT+COPS=0 vì một số FW Qualcomm reset giá trị này
+                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true);
+                    }
+                }
+            }
+        });
+    }
+
+    public void StartKeepAliveLoop(string portName)
+    {
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                await Task.Delay(90000); // 90 giây
+                if (!_serialPorts.ContainsKey(portName)) break;
+                
+                string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
+                if (vendor.Contains("QUECTEL"))
+                {
+                    await SendCommandAsync(portName, "AT+CREG?;+QCSQ", 10000, silent: true);
+                }
+                else
+                {
+                    await SendCommandAsync(portName, "AT+CREG?;+CSQ", 10000, silent: true);
+                }
+                
+                // Sweep bù (quét tin nhắn kẹt định kỳ)
+                string cmgl = await SendCommandAsync(portName, "AT+CMGL=\"REC UNREAD\"", 25000, silent: true);
+                if (!string.IsNullOrWhiteSpace(cmgl) && !cmgl.Contains("ERROR") && cmgl.Contains("+CMGL:"))
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[SWEEP] Vét được tin nhắn chưa đọc từ SIM!" });
+                    SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = cmgl });
                 }
             }
         });
@@ -847,6 +897,45 @@ public class GsmModemService : IGsmModemService
             buffer.Append(chunk);
             
             string currentData = buffer.ToString();
+            
+            if (buffer.Length > 2000)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[WARNING] Buffer overflow ({buffer.Length} chars). Cleaning up..." });
+                buffer.Clear();
+                currentData = "";
+            }
+
+            if (currentData.Contains("+CMS ERROR: 302") || currentData.Contains("memory full"))
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Lỗi đầy bộ nhớ SIM (+CMS ERROR: 302). Tự động xóa rác..." });
+                _ = SendCommandAsync(portName, "AT+CMGD=1,4", 10000, true);
+                buffer.Replace("+CMS ERROR: 302", "");
+                buffer.Replace("memory full", "");
+                currentData = buffer.ToString();
+            }
+            
+            // Bắt trạng thái mạng URC
+            var regMatches = Regex.Matches(currentData, @"\+(C(?:G|E)?REG):\s*([0-9])(?:[^\r\n]*)");
+            if (regMatches.Count > 0)
+            {
+                foreach (Match match in regMatches)
+                {
+                    string regType = match.Groups[1].Value;
+                    string stat = match.Groups[2].Value;
+                    if (stat == "1" || stat == "5")
+                    {
+                        string netName = regType switch
+                        {
+                            "CGREG" => "PS (Data 3G)",
+                            "CEREG" => "EPS (Data 4G LTE)",
+                            _ => "CS (Thoại/2G)"
+                        };
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_REG] Đã đăng ký mạng {netName}" });
+                    }
+                    buffer.Replace(match.Value, "");
+                }
+                currentData = buffer.ToString();
+            }
 
             // ---------------------------------------------------------
             // 1. ƯU TIÊN SỐ 1: BẮT TIN NHẮN XEN NGANG (URC)
@@ -968,6 +1057,19 @@ public class GsmModemService : IGsmModemService
                 {
                     string callerNumber = clipMatch.Groups[1].Value;
                     CallIncoming?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = callerNumber });
+                    
+                    // Lấy chi tiết thông tin cuộc gọi đang diễn ra
+                    _ = SendCommandAsync(portName, "AT+CLCC", 5000, silent: true);
+                    
+                    // Đếm ngược 60s để tự động dập máy tránh ngâm port
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(60000);
+                        if (_serialPorts.ContainsKey(portName))
+                        {
+                            await SendCommandAsync(portName, "ATH", 5000, silent: true);
+                        }
+                    });
                     
                     // Cắt bỏ khỏi buffer
                     buffer.Replace(clipMatch.Value, "");
@@ -1191,7 +1293,7 @@ public class GsmModemService : IGsmModemService
     {
         // Kéo dài thời gian chờ cho các lệnh đặc biệt
         if (command.StartsWith("AT+CUSD")) timeoutMs = 45000;
-        else if (command.StartsWith("AT+CMGR")) timeoutMs = 20000;
+        else if (command.StartsWith("AT+CMGR")) timeoutMs = 25000;
 
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen)
         {
@@ -1354,7 +1456,7 @@ public class GsmModemService : IGsmModemService
             }
 
             // Chờ giữa các đoạn để tránh nhà mạng xáo trộn thứ tự nhận
-            if (i < total - 1) await Task.Delay(2000);
+            if (i < total - 1) await Task.Delay(3000);
         }
 
         return $"OK (Đã gửi {total} đoạn thành công)";

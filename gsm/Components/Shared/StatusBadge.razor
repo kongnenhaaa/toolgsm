@@ -1,21 +1,18 @@
-@using gsm.MockModels
-
 @{
     var (text, color, bg) = Status switch
     {
-        SimStatus.Active => ("Active", Color.Success, "#DCFCE7"),
-        SimStatus.SecurityBlocked => ("Chờ Accept", Color.Warning, "#FEF3C7"),
-        SimStatus.Connecting => ("Connecting", Color.Info, "#E0F2FE"),
-        SimStatus.NoResponse => ("No Response", Color.Error, "#FEE2E2"),
-        _ => ("Unknown", Color.Default, "#F1F5F9")
+        gsm.Models.SimStatus.Active => ("Active", Color.Success, "#DCFCE7"),
+        gsm.Models.SimStatus.SecurityBlocked => ("Chờ Accept", Color.Warning, "#FEF3C7"),
+        gsm.Models.SimStatus.Connecting => ("Connecting", Color.Info, "#E0F2FE"),
+        gsm.Models.SimStatus.NoResponse => ("No Response", Color.Error, "#FEE2E2"),
+        _ => (Status ?? "Unknown", Color.Default, "#F1F5F9")
     };
 }
 
-<MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="@color" 
-         Style="@($"background:{bg}; font-weight:600;")">
+<span class="status-badge" style="background:@bg; color:@(color == Color.Default ? "#475569" : "inherit"); padding:3px 10px; border-radius:9999px; font-size:11px; font-weight:600; display:inline-block;">
     @text
-</MudChip>
+</span>
 
 @code {
-    [Parameter] public SimStatus Status { get; set; }
+    [Parameter] public string Status { get; set; } = string.Empty;
 }

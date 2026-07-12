@@ -1,27 +1,30 @@
 @page "/"
+@inject MainViewModel Vm
 @inject IGsmModemService ModemService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @implements IDisposable
+@using gsm.ViewModels
+@using gsm.Models
 
-<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:600;">Danh sách cổng COM</MudText>
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Danh sách cổng COM</MudText>
 <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Quản lý multi-port EC20 • New SIM Intake • IMEI Protection
+    Multi-port EC20 • New SIM Intake • IMEI Protection • Real-time
 </MudText>
 
-<!-- Stats Cards -->
+<!-- Stats -->
 <MudGrid Class="mb-4">
     <MudItem xs="6" sm="3">
         <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
             <MudText Typo="Typo.caption" Style="color:#64748B;">Tổng cổng</MudText>
-            <MudText Typo="Typo.h4" Style="font-weight:700;">@_ports.Count</MudText>
+            <MudText Typo="Typo.h4" Style="font-weight:700;">@Ports.Count</MudText>
         </MudPaper>
     </MudItem>
     <MudItem xs="6" sm="3">
         <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
             <MudText Typo="Typo.caption" Style="color:#64748B;">Đang Active</MudText>
             <MudText Typo="Typo.h4" Color="Color.Success" Style="font-weight:700;">
-                @_ports.Count(p => p.Status == SimStatus.Active)
+                @Ports.Count(p => p.Status == SimStatus.Active)
             </MudText>
         </MudPaper>
     </MudItem>
@@ -29,7 +32,7 @@
         <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
             <MudText Typo="Typo.caption" Style="color:#64748B;">Chờ Accept</MudText>
             <MudText Typo="Typo.h4" Color="Color.Warning" Style="font-weight:700;">
-                @_ports.Count(p => p.Status == SimStatus.SecurityBlocked)
+                @Ports.Count(p => p.Status == SimStatus.SecurityBlocked)
             </MudText>
         </MudPaper>
     </MudItem>
@@ -37,91 +40,138 @@
         <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
             <MudText Typo="Typo.caption" Style="color:#64748B;">Lỗi / No Response</MudText>
             <MudText Typo="Typo.h4" Color="Color.Error" Style="font-weight:700;">
-                @_ports.Count(p => p.Status == SimStatus.NoResponse)
+                @Ports.Count(p => p.Status == SimStatus.NoResponse)
             </MudText>
         </MudPaper>
     </MudItem>
 </MudGrid>
 
+<!-- Toolbar -->
+<MudStack Row="true" Class="mb-3" Spacing="2">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
+               OnClick="RefreshAll" Size="Size.Small">
+        Làm mới tất cả
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.PlayArrow"
+               OnClick="ConnectAll" Size="Size.Small">
+        Connect All
+    </MudButton>
+    <MudSpacer />
+    <MudTextField @bind-Value="_search" Placeholder="Tìm COM / IMEI / SĐT..." 
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Immediate="true" Style="max-width:280px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
+</MudStack>
+
 <!-- Port Cards -->
 <MudGrid>
-    @foreach (var port in _ports)
+    @foreach (var port in FilteredPorts)
     {
         <MudItem xs="12" sm="6" md="4" lg="3">
-            <PortCard Port="port" OnAccept="AcceptNewSim" OnRefresh="RefreshPort" />
+            <PortCard Port="port" 
+                      OnAccept="AcceptNewSim" 
+                      OnRefresh="RefreshPort"
+                      OnCheckBalance="CheckBalance"
+                      OnUssd="OpenUssdDialog"
+                      OnSms="OpenSmsDialog" />
         </MudItem>
     }
 </MudGrid>
 
-@if (_ports.Count == 0)
+@if (FilteredPorts.Count == 0)
 {
-    <MudPaper Class="pa-12 text-center" Elevation="0" Style="border:1px dashed #CBD5E1; border-radius:16px;">
+    <MudPaper Class="pa-12 text-center mt-4" Elevation="0" Style="border:1px dashed #CBD5E1; border-radius:16px;">
         <MudIcon Icon="@Icons.Material.Outlined.Usb" Size="Size.Large" Color="Color.Default" Class="mb-3" />
-        <MudText Typo="Typo.h6" Style="color:#64748B;">Chưa có cổng COM nào</MudText>
-        <MudText Typo="Typo.body2" Style="color:#94A3B8;">Cắm thiết bị EC20 để bắt đầu</MudText>
+        <MudText Typo="Typo.h6" Style="color:#64748B;">Không có cổng nào</MudText>
+        <MudText Typo="Typo.body2" Style="color:#94A3B8;">Cắm thiết bị EC20 hoặc bấm Connect All</MudText>
     </MudPaper>
 }
 
 @code {
-    private List<SimPort> _ports = new();
+    private string _search = "";
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+    private List<SimPort> FilteredPorts => string.IsNullOrWhiteSpace(_search)
+        ? Ports
+        : Ports.Where(p => 
+            (p.PortName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (p.Imei?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (p.PhoneNumber?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (p.NetworkProvider?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+          ).ToList();
+
     private System.Threading.Timer? _timer;
 
     protected override void OnInitialized()
     {
-        // Giả lập hoặc lấy từ service thật
-        LoadPorts();
-        
-        // Real-time update mỗi 2 giây
+        // Real-time: refresh UI mỗi 1.5s (hoặc subscribe event nếu MainViewModel có)
         _timer = new System.Threading.Timer(_ =>
         {
-            InvokeAsync(() =>
-            {
-                LoadPorts();
-                StateHasChanged();
-            });
-        }, null, 2000, 2000);
-    }
-
-    void LoadPorts()
-    {
-        // TODO: Thay bằng logic thật của bạn
-        // _ports = ModemService.GetPorts() hoặc từ MainViewModel cũ
-        // Tạm thời demo
-        if (_ports.Count == 0)
-        {
-            _ports = new List<SimPort>
-            {
-                new SimPort { PortName = "COM3", Imei = "860123456789012", Status = SimStatus.Active, PhoneNumber = "0912345678", Balance = "125.000đ", NetworkProvider = "Viettel" },
-                new SimPort { PortName = "COM5", Imei = "860987654321098", Status = SimStatus.SecurityBlocked, PhoneNumber = "", Balance = "", NetworkProvider = "" },
-                new SimPort { PortName = "COM7", Imei = "860555666777888", Status = SimStatus.Connecting, PhoneNumber = "Chưa lấy được số", Balance = "", NetworkProvider = "Vinaphone" },
-            };
-        }
+            InvokeAsync(StateHasChanged);
+        }, null, 1500, 1500);
     }
 
     async Task AcceptNewSim(SimPort port)
     {
         var confirm = await DialogService.ShowMessageBox(
             "Xác nhận chấp nhận SIM mới",
-            $"Bạn có chắc muốn tráng IMEI mới cho {port.PortName}?",
-            yesText: "Chấp nhận", cancelText: "Hủy");
+            $"Tráng IMEI mới cho {port.PortName}?\n\nIMEI hiện tại: {port.Imei}\nSau khi chấp nhận, SIM sẽ bị gán cố định IMEI mới và reboot.",
+            yesText: "Chấp nhận & Tráng IMEI", cancelText: "Hủy");
 
-        if (confirm == true)
+        if (confirm != true) return;
+
+        try
         {
             Snackbar.Add($"[{port.PortName}] Đang tráng IMEI...", Severity.Info);
-            // Gọi backend: await ModemService.AcceptNewSimAndPaintImeiAsync(...)
-            port.Status = SimStatus.Connecting;
-            StateHasChanged();
+
+            // ===== GỌI BACKEND THẬT =====
+            if (Vm != null)
+            {
+                // Gọi ApproveUnknownSim từ MainViewModel
+                Vm.ApproveUnknownSimCommand?.Execute(port);
+                
+                Snackbar.Add($"[{port.PortName}] Đang xử lý Accept SIM...", Severity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Lỗi: {ex.Message}", Severity.Error);
         }
     }
 
     async Task RefreshPort(SimPort port)
     {
         Snackbar.Add($"[{port.PortName}] Đang làm mới...", Severity.Normal);
-        // Gọi logic refresh
+        // Có thể gọi backend gửi *101# hoặc tương tự
     }
 
-    public void Dispose()
+    async Task CheckBalance(SimPort port)
     {
-        _timer?.Dispose();
+        Snackbar.Add($"[{port.PortName}] Đang kiểm tra TKC (*101#)...", Severity.Info);
+        // Gọi backend
     }
+
+    async Task OpenUssdDialog(SimPort port)
+    {
+        var result = await DialogService.ShowMessageBox(
+            $"USSD - {port.PortName}",
+            "Nhập lệnh USSD (ví dụ *101#):",
+            yesText: "Gửi", cancelText: "Hủy");
+    }
+
+    async Task OpenSmsDialog(SimPort port)
+    {
+        Snackbar.Add($"Mở form gửi SMS cho {port.PortName}", Severity.Normal);
+    }
+
+    async Task RefreshAll()
+    {
+        Snackbar.Add("Đang làm mới tất cả cổng...", Severity.Info);
+    }
+
+    async Task ConnectAll()
+    {
+        Snackbar.Add("Đang Connect All...", Severity.Info);
+        ModemService.ConnectAll(115200);
+    }
+
+    public void Dispose() => _timer?.Dispose();
 }

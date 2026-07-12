@@ -1,34 +1,32 @@
 @inherits LayoutComponentBase
-@inject IGsmModemService ModemService
+@inject MainViewModel Vm
 @inject ISnackbar Snackbar
+@using gsm.ViewModels
+@using gsm.Models
 
 <MudLayout>
-    <!-- AppBar -->
     <MudAppBar Elevation="0" Dense="true" Class="border-b" Style="border-color:#E2E8F0; background:white;">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
         
-        <MudText Typo="Typo.h6" Class="ml-2" Style="font-weight:600; color:#0F172A;">
+        <MudText Typo="Typo.h6" Class="ml-2" Style="font-weight:700; color:#0F172A;">
             Tool GSM <span style="color:#2563EB;">EC20</span>
         </MudText>
 
         <MudSpacer />
 
         <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="mr-3">
-            @ActivePortsCount COM Active
+            @ActiveCount COM Active
         </MudChip>
 
         <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Color="Color.Default" OnClick="RefreshAll" Title="Làm mới tất cả" />
         <MudIconButton Icon="@Icons.Material.Outlined.Settings" Color="Color.Default" OnClick="OpenSettings" />
     </MudAppBar>
 
-    <!-- Drawer Sidebar -->
     <MudDrawer @bind-Open="_drawerOpen" Elevation="1" Variant="@DrawerVariant.Mini" 
                OpenMiniOnHover="true" ClipMode="DrawerClipMode.Always"
                Style="border-right:1px solid #E2E8F0;">
-        <MudNavMenu>
-            <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">
-                Dashboard
-            </MudNavLink>
+        <MudNavMenu Dense="true">
+            <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
             <MudNavLink Href="/sms" Icon="@Icons.Material.Filled.Sms">SMS</MudNavLink>
             <MudNavLink Href="/ussd" Icon="@Icons.Material.Filled.Dialpad">USSD</MudNavLink>
             <MudNavLink Href="/call" Icon="@Icons.Material.Filled.Phone">Cuộc gọi</MudNavLink>
@@ -37,7 +35,6 @@
         </MudNavMenu>
     </MudDrawer>
 
-    <!-- Main Content -->
     <MudMainContent Class="pt-4 px-4 pb-6" Style="background:#F8FAFC; min-height:100vh;">
         @Body
     </MudMainContent>
@@ -45,18 +42,17 @@
 
 @code {
     private bool _drawerOpen = true;
-    private int ActivePortsCount => 0; // sẽ bind từ service sau
+    private int ActiveCount => Vm?.Ports?.Count(p => p.Status == SimStatus.Active) ?? 0;
 
     void ToggleDrawer() => _drawerOpen = !_drawerOpen;
 
     async Task RefreshAll()
     {
-        Snackbar.Add("Đang làm mới tất cả cổng...", Severity.Info);
-        // Gọi logic refresh của bạn
+        Snackbar.Add("Đang làm mới tất cả...", Severity.Info);
     }
 
     void OpenSettings()
     {
-        // Mở dialog settings
+        // Navigate hoặc mở dialog
     }
 }

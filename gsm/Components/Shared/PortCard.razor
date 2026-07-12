@@ -1,10 +1,14 @@
-@using gsm.MockModels
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
 
-<MudPaper Class="pa-4 port-card" Elevation="0" Style="border-radius:12px; height:100%;">
+<MudPaper Class="pa-4 port-card" Elevation="0" Style="border-radius:12px; height:100%; border:1px solid #E2E8F0;">
     <MudStack Spacing="2">
         <!-- Header -->
         <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
-            <MudText Typo="Typo.subtitle1" Style="font-weight:600;">@Port.PortName</MudText>
+            <div>
+                <MudText Typo="Typo.subtitle1" Style="font-weight:700;">@Port.PortName</MudText>
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">@Port.DeviceName</MudText>
+            </div>
             <StatusBadge Status="@Port.Status" />
         </MudStack>
 
@@ -12,47 +16,52 @@
 
         <!-- Info -->
         <MudStack Spacing="1">
-            <MudStack Row="true" Justify="Justify.SpaceBetween">
-                <MudText Typo="Typo.caption" Style="color:#64748B;">IMEI</MudText>
-                <MudText Typo="Typo.caption" Style="font-family:monospace;">@(string.IsNullOrEmpty(Port.Imei) ? "—" : Port.Imei)</MudText>
-            </MudStack>
-
-            <MudStack Row="true" Justify="Justify.SpaceBetween">
-                <MudText Typo="Typo.caption" Style="color:#64748B;">SĐT</MudText>
-                <MudText Typo="Typo.caption" Style="font-weight:500;">
-                    @(string.IsNullOrEmpty(Port.PhoneNumber) || Port.PhoneNumber == "Chưa lấy được số" ? "—" : Port.PhoneNumber)
-                </MudText>
-            </MudStack>
-
-            <MudStack Row="true" Justify="Justify.SpaceBetween">
-                <MudText Typo="Typo.caption" Style="color:#64748B;">TKC</MudText>
-                <MudText Typo="Typo.caption" Style="font-weight:600; color:#16A34A;">
-                    @(string.IsNullOrEmpty(Port.Balance) ? "—" : Port.Balance)
-                </MudText>
-            </MudStack>
-
-            <MudStack Row="true" Justify="Justify.SpaceBetween">
-                <MudText Typo="Typo.caption" Style="color:#64748B;">Nhà mạng</MudText>
-                <MudText Typo="Typo.caption">@(string.IsNullOrEmpty(Port.NetworkProvider) ? "—" : Port.NetworkProvider)</MudText>
-            </MudStack>
+            <InfoRow Label="IMEI" Value="@(string.IsNullOrEmpty(Port.Imei) ? "—" : Port.Imei)" Mono="true" />
+            <InfoRow Label="SĐT" Value="@(string.IsNullOrEmpty(Port.PhoneNumber) || Port.PhoneNumber.Contains("Chưa") ? "—" : Port.PhoneNumber)" Bold="true" />
+            <InfoRow Label="TKC" Value="@(string.IsNullOrEmpty(Port.Balance) ? "—" : Port.Balance)" Color="#16A34A" Bold="true" />
+            <InfoRow Label="Nhà mạng" Value="@(string.IsNullOrEmpty(Port.NetworkProvider) ? "—" : Port.NetworkProvider)" />
+            <InfoRow Label="CCID" Value="@(string.IsNullOrEmpty(Port.Serial) ? "—" : Port.Serial)" Mono="true" Small="true" />
         </MudStack>
 
-        <!-- Actions -->
-        <MudStack Row="true" Spacing="1" Class="mt-2">
-            @if (Port.Status == SimStatus.SecurityBlocked)
+        <!-- Actions chính -->
+        <MudStack Spacing="1" Class="mt-2">
+            @if (Port.Status == gsm.Models.SimStatus.SecurityBlocked)
             {
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" 
-                           FullWidth="true" OnClick="OnAcceptClicked">
-                    Chấp nhận SIM
+                           FullWidth="true" OnClick="OnAcceptClicked" StartIcon="@Icons.Material.Filled.VerifiedUser">
+                    Chấp nhận SIM mới
                 </MudButton>
             }
             else
             {
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" 
-                           FullWidth="true" OnClick="OnRefreshClicked">
-                    Làm mới
+                           FullWidth="true" OnClick="OnRefreshClicked" StartIcon="@Icons.Material.Filled.Refresh">
+                    Làm mới dữ liệu
                 </MudButton>
             }
+
+            <!-- Quick actions -->
+            <MudStack Row="true" Spacing="1">
+                <MudTooltip Text="Kiểm tra TKC (*101#)">
+                    <MudIconButton Icon="@Icons.Material.Filled.AccountBalanceWallet" 
+                                   Color="Color.Success" Size="Size.Small" 
+                                   OnClick="CheckBalance" Disabled="@(Port.Status != gsm.Models.SimStatus.Active)" />
+                </MudTooltip>
+                <MudTooltip Text="Gửi USSD tùy chỉnh">
+                    <MudIconButton Icon="@Icons.Material.Filled.Dialpad" 
+                                   Color="Color.Info" Size="Size.Small" 
+                                   OnClick="OpenUssd" Disabled="@(Port.Status != gsm.Models.SimStatus.Active)" />
+                </MudTooltip>
+                <MudTooltip Text="Gửi SMS nhanh">
+                    <MudIconButton Icon="@Icons.Material.Filled.Sms" 
+                                   Color="Color.Secondary" Size="Size.Small" 
+                                   OnClick="OpenSms" Disabled="@(Port.Status != gsm.Models.SimStatus.Active)" />
+                </MudTooltip>
+                <MudSpacer />
+                <MudTooltip Text="Xem log / chi tiết">
+                    <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" OnClick="ShowDetail" />
+                </MudTooltip>
+            </MudStack>
         </MudStack>
     </MudStack>
 </MudPaper>
@@ -61,7 +70,21 @@
     [Parameter] public SimPort Port { get; set; } = new();
     [Parameter] public EventCallback<SimPort> OnAccept { get; set; }
     [Parameter] public EventCallback<SimPort> OnRefresh { get; set; }
+    [Parameter] public EventCallback<SimPort> OnCheckBalance { get; set; }
+    [Parameter] public EventCallback<SimPort> OnUssd { get; set; }
+    [Parameter] public EventCallback<SimPort> OnSms { get; set; }
 
     async Task OnAcceptClicked() => await OnAccept.InvokeAsync(Port);
     async Task OnRefreshClicked() => await OnRefresh.InvokeAsync(Port);
+    async Task CheckBalance() => await OnCheckBalance.InvokeAsync(Port);
+    async Task OpenUssd() => await OnUssd.InvokeAsync(Port);
+    async Task OpenSms() => await OnSms.InvokeAsync(Port);
+
+    async Task ShowDetail()
+    {
+        await DialogService.ShowMessageBox(
+            $"Chi tiết {Port.PortName}",
+            $"IMEI: {Port.Imei}\nSĐT: {Port.PhoneNumber}\nTKC: {Port.Balance}\nNhà mạng: {Port.NetworkProvider}\nCCID: {Port.Serial}\nStatus: {Port.Status}",
+            yesText: "Đóng");
+    }
 }

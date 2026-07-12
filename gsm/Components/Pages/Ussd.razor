@@ -23,7 +23,7 @@
 
     <MudButton Variant="Variant.Outlined" Color="Color.Primary" 
                StartIcon="@Icons.Material.Filled.Send"
-               OnClick="SendToSelectedPorts" Size="Size.Small"
+               OnClick="SendSelectedPorts" Size="Size.Small"
                Disabled="@(!_selectedPorts.Any())">
         Gửi tới cổng đã chọn (@_selectedPorts.Count)
     </MudButton>
@@ -92,12 +92,27 @@
                           Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Clear"
                           OnAdornmentClick="@(() => _ussdCode = "")" />
 
+            <!-- Nút hành động -->
             <MudStack Row="true" Spacing="2" Class="mb-3">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                           OnClick="SendUssd" 
-                           Disabled="@(string.IsNullOrEmpty(_ussdCode) || (string.IsNullOrEmpty(_selectedPort) && !_selectedPorts.Any()))"
-                           StartIcon="@Icons.Material.Filled.Send" FullWidth="true">
-                    Gửi
+                <!-- 1. Gửi 1 cổng (dropdown) -->
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="@(string.IsNullOrEmpty(_selectedPort) || string.IsNullOrEmpty(_ussdCode))"
+                           OnClick="SendOnePort">
+                    Gửi 1 cổng
+                </MudButton>
+
+                <!-- 2. Gửi các cổng đã chọn (checkbox) -->
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                           Disabled="@(!_selectedPorts.Any() || string.IsNullOrEmpty(_ussdCode))"
+                           OnClick="SendSelectedPorts">
+                    Gửi đã chọn (@_selectedPorts.Count)
+                </MudButton>
+
+                <!-- 3. Gửi tất cả Active -->
+                <MudButton Variant="Variant.Outlined" Color="Color.Success"
+                           Disabled="@(string.IsNullOrEmpty(_ussdCode))"
+                           OnClick="SendAllActive">
+                    Gửi tất cả Active
                 </MudButton>
             </MudStack>
 
@@ -249,29 +264,31 @@
         else _selectedPorts.Remove(port);
     }
 
-    async Task SendUssd()
+    // 1. Chỉ 1 cổng
+    async Task SendOnePort()
     {
-        var ports = new List<string>();
-        if (!string.IsNullOrEmpty(_selectedPort)) ports.Add(_selectedPort);
-        ports.AddRange(_selectedPorts);
-        ports = ports.Distinct().ToList();
+        if (string.IsNullOrEmpty(_selectedPort)) return;
+        await SendOne(_selectedPort, _ussdCode);
+    }
 
-        if (!ports.Any() || string.IsNullOrEmpty(_ussdCode)) return;
-
-        foreach (var port in ports)
+    // 2. Các cổng đang tick
+    async Task SendSelectedPorts()
+    {
+        foreach (var port in _selectedPorts.ToList())
         {
             await SendOne(port, _ussdCode);
-            if (ports.Count > 1) await Task.Delay(600); // tránh spam
+            await Task.Delay(700); // chống spam
         }
     }
 
-    async Task SendToSelectedPorts()
+    // 3. Tất cả Active
+    async Task SendAllActive()
     {
-        if (!_selectedPorts.Any() || string.IsNullOrEmpty(_ussdCode)) return;
-        foreach (var port in _selectedPorts)
+        var ports = ActivePorts.Select(p => p.PortName).ToList();
+        foreach (var port in ports)
         {
             await SendOne(port, _ussdCode);
-            await Task.Delay(600);
+            await Task.Delay(700);
         }
     }
 

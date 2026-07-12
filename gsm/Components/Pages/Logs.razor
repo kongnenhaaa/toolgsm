@@ -1,0 +1,461 @@
+@page "/logs"
+@inject MainViewModel Vm
+@inject IGsmModemService ModemService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using gsm.ViewModels
+@using gsm.Models
+@implements IDisposable
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Log & Vận hành</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Nhật ký realtime • Thống kê • Đăng ký EZ COM • Đặt mật khẩu My VNPT
+</MudText>
+
+<!-- ========== STATS ========== -->
+<MudGrid Class="mb-4">
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Tổng log</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700;">@_totalLogs</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Thành công</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Success" Style="font-weight:700;">@_successCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Lỗi</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Error" Style="font-weight:700;">@_errorCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Tỷ lệ thành công</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700;">@_successRate%</MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+<!-- ========== TOOLBAR ========== -->
+<MudStack Row="true" Class="mb-3" Spacing="2" AlignItems="AlignItems.Center">
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.DeleteSweep" OnClick="ClearLogs">
+        Xóa log
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Download" OnClick="ExportLogs">
+        Export log
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Size="Size.Small"
+               StartIcon="@Icons.Material.Filled.Pause" OnClick="ToggleAutoScroll"
+               Color="@(_autoScroll ? Color.Warning : Color.Default)">
+        @(_autoScroll ? "Tắt auto-scroll" : "Bật auto-scroll")
+    </MudButton>
+
+    <MudSpacer />
+
+    <MudSelect T="string" @bind-Value="_filterLevel" Dense="true" Variant="Variant.Outlined" 
+               Margin="Margin.Dense" Style="width:130px;" Placeholder="Mức độ">
+        <MudSelectItem Value="@("all")">Tất cả</MudSelectItem>
+        <MudSelectItem Value="@("info")">Info</MudSelectItem>
+        <MudSelectItem Value="@("success")">Success</MudSelectItem>
+        <MudSelectItem Value="@("warning")">Warning</MudSelectItem>
+        <MudSelectItem Value="@("error")">Error</MudSelectItem>
+    </MudSelect>
+
+    <MudTextField @bind-Value="_search" Placeholder="Tìm trong log..." 
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Immediate="true" Style="max-width:240px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
+</MudStack>
+
+<!-- ========== TABS ========== -->
+<MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" @bind-ActivePanelIndex="_activeTab">
+
+    <!-- TAB 1: LOG REALTIME -->
+    <MudTabPanel Text="Log realtime" Icon="@Icons.Material.Filled.Terminal">
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
+            <div style="height:480px; overflow-y:auto; background:#0F172A; color:#E2E8F0; font-family:Consolas,monospace; font-size:12.5px; padding:12px;" 
+                 id="log-container" @ref="_logContainer">
+                @foreach (var log in FilteredLogs)
+                {
+                    <div style="margin-bottom:3px; display:flex; gap:8px;">
+                        <span style="color:#64748B; min-width:70px;">@log.Time.ToString("HH:mm:ss")</span>
+                        <span style="min-width:70px; color:@(GetLevelColor(log.Level))">[@log.Level.ToUpper()]</span>
+                        <span style="color:#94A3B8; min-width:60px;">@log.Port</span>
+                        <span style="flex:1; word-break:break-all;">@log.Message</span>
+                    </div>
+                }
+                @if (!FilteredLogs.Any())
+                {
+                    <div style="color:#64748B; text-align:center; margin-top:80px;">Chưa có log nào</div>
+                }
+            </div>
+        </MudPaper>
+    </MudTabPanel>
+
+    <!-- TAB 2: THỐNG KÊ CHI TIẾT -->
+    <MudTabPanel Text="Thống kê" Icon="@Icons.Material.Filled.BarChart">
+        <MudGrid Class="mt-3">
+            <MudItem xs="12" md="6">
+                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+                    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Theo loại thao tác</MudText>
+                    <MudSimpleTable Dense="true" Style="background:transparent;">
+                        <tbody>
+                            <tr>
+                                <td>Gửi SMS</td>
+                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_smsSuccess</td>
+                                <td style="text-align:right; color:#DC2626;">@_smsError</td>
+                            </tr>
+                            <tr>
+                                <td>USSD / Check TKC</td>
+                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_ussdSuccess</td>
+                                <td style="text-align:right; color:#DC2626;">@_ussdError</td>
+                            </tr>
+                            <tr>
+                                <td>Cuộc gọi</td>
+                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_callSuccess</td>
+                                <td style="text-align:right; color:#DC2626;">@_callError</td>
+                            </tr>
+                            <tr>
+                                <td>Accept SIM / Tráng IMEI</td>
+                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_acceptSuccess</td>
+                                <td style="text-align:right; color:#DC2626;">@_acceptError</td>
+                            </tr>
+                            <tr>
+                                <td>Đăng ký EZ COM</td>
+                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_ezSuccess</td>
+                                <td style="text-align:right; color:#DC2626;">@_ezError</td>
+                            </tr>
+                            <tr>
+                                <td>Đặt Pass My VNPT</td>
+                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_vnptSuccess</td>
+                                <td style="text-align:right; color:#DC2626;">@_vnptError</td>
+                            </tr>
+                        </tbody>
+                    </MudSimpleTable>
+                </MudPaper>
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; height:100%;">
+                    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Tổng quan hôm nay</MudText>
+                    <MudStack Spacing="2">
+                        <MudText>Tổng thao tác: <b>@_totalOps</b></MudText>
+                        <MudText>Thành công: <b style="color:#16A34A">@_successCount</b></MudText>
+                        <MudText>Lỗi: <b style="color:#DC2626">@_errorCount</b></MudText>
+                        <MudText>Tỷ lệ thành công: <b>@_successRate%</b></MudText>
+                        <MudProgressLinear Color="Color.Success" Value="@_successRate" Class="mt-2" />
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </MudTabPanel>
+
+    <!-- TAB 3: ĐĂNG KÝ EZ COM -->
+    <MudTabPanel Text="Đăng ký EZ COM" Icon="@Icons.Material.Filled.AppRegistration">
+        <MudPaper Class="pa-4 mt-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Đăng ký gói EZ COM</MudText>
+            <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+                Gửi lệnh đăng ký EZ COM cho các cổng đang Active (thường là gửi SMS “DK EZ” đến 888 hoặc USSD tương ứng).
+            </MudText>
+
+            <MudGrid>
+                <MudItem xs="12" md="5">
+                    <MudSelect T="string" Label="Chọn cổng" @bind-Value="_ezPort" 
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
+                        @foreach (var p in ActivePorts)
+                        {
+                            <MudSelectItem Value="@p.PortName">
+                                @p.PortName — @(p.PhoneNumber ?? "—") (@(p.NetworkProvider ?? "—"))
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudTextField @bind-Value="_ezCommand" Label="Lệnh / Nội dung" 
+                                  Placeholder="DK EZ" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+                    <MudTextField @bind-Value="_ezNumber" Label="Số nhận (mặc định 888)" 
+                                  Placeholder="888" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+                    <MudStack Row="true" Spacing="2">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                                   StartIcon="@Icons.Material.Filled.Send"
+                                   OnClick="RegisterEzCom" Disabled="@(string.IsNullOrEmpty(_ezPort))">
+                            Đăng ký 1 cổng
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" 
+                                   StartIcon="@Icons.Material.Filled.DoneAll"
+                                   OnClick="RegisterEzComAll">
+                            Đăng ký tất cả Active
+                        </MudButton>
+                    </MudStack>
+                </MudItem>
+
+                <MudItem xs="12" md="7">
+                    <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:180px;">
+                        <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Kết quả gần đây</MudText>
+                        <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_ezResult</pre>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudTabPanel>
+
+    <!-- TAB 4: ĐẶT PASS MY VNPT -->
+    <MudTabPanel Text="Đặt Pass My VNPT" Icon="@Icons.Material.Filled.Password">
+        <MudPaper Class="pa-4 mt-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Đặt mật khẩu My VNPT</MudText>
+            <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+                Gửi lệnh đặt / đổi mật khẩu My VNPT cho thuê bao Vinaphone (thường qua USSD hoặc SMS).
+            </MudText>
+
+            <MudGrid>
+                <MudItem xs="12" md="5">
+                    <MudSelect T="string" Label="Chọn cổng (Vinaphone)" @bind-Value="_vnptPort" 
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
+                        @foreach (var p in ActivePorts.Where(x => (x.NetworkProvider ?? "").Contains("Vina", StringComparison.OrdinalIgnoreCase) || true))
+                        {
+                            <MudSelectItem Value="@p.PortName">
+                                @p.PortName — @(p.PhoneNumber ?? "—")
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudTextField @bind-Value="_vnptPassword" Label="Mật khẩu mới" 
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                                  InputType="InputType.Password" />
+
+                    <MudTextField @bind-Value="_vnptConfirm" Label="Nhập lại mật khẩu" 
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                                  InputType="InputType.Password" />
+
+                    <MudTextField @bind-Value="_vnptUssd" Label="Lệnh USSD / SMS" 
+                                  Placeholder="*111# hoặc nội dung SMS" 
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+                    <MudStack Row="true" Spacing="2">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                                   StartIcon="@Icons.Material.Filled.Lock"
+                                   OnClick="SetVnptPassword" 
+                                   Disabled="@(string.IsNullOrEmpty(_vnptPort) || string.IsNullOrEmpty(_vnptPassword))">
+                            Đặt mật khẩu
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" 
+                                   OnClick="SetVnptPasswordAll">
+                            Đặt cho tất cả
+                        </MudButton>
+                    </MudStack>
+                </MudItem>
+
+                <MudItem xs="12" md="7">
+                    <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:180px;">
+                        <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Kết quả</MudText>
+                        <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_vnptResult</pre>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    private int _activeTab = 0;
+    private string _search = "";
+    private string _filterLevel = "all";
+    private bool _autoScroll = true;
+    private ElementReference _logContainer;
+
+    // Stats
+    private int _totalLogs => _logs.Count;
+    private int _successCount => _logs.Count(x => x.Level == "success");
+    private int _errorCount => _logs.Count(x => x.Level == "error");
+    private int _successRate => _totalLogs == 0 ? 0 : (int)(_successCount * 100.0 / _totalLogs);
+    private int _totalOps => _smsSuccess + _smsError + _ussdSuccess + _ussdError + _callSuccess + _callError + _acceptSuccess + _acceptError + _ezSuccess + _ezError + _vnptSuccess + _vnptError;
+
+    private int _smsSuccess, _smsError, _ussdSuccess, _ussdError, _callSuccess, _callError;
+    private int _acceptSuccess, _acceptError, _ezSuccess, _ezError, _vnptSuccess, _vnptError;
+
+    // Log list
+    private List<LogItem> _logs = new();
+
+    // EZ COM
+    private string _ezPort = "";
+    private string _ezCommand = "DK EZ";
+    private string _ezNumber = "888";
+    private string _ezResult = "";
+
+    // My VNPT
+    private string _vnptPort = "";
+    private string _vnptPassword = "";
+    private string _vnptConfirm = "";
+    private string _vnptUssd = "*111#";
+    private string _vnptResult = "";
+
+    private IEnumerable<SimPort> ActivePorts => 
+        Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
+
+    private IEnumerable<LogItem> FilteredLogs
+    {
+        get
+        {
+            var list = _logs.AsEnumerable();
+            if (_filterLevel != "all")
+                list = list.Where(x => x.Level == _filterLevel);
+            if (!string.IsNullOrWhiteSpace(_search))
+                list = list.Where(x => 
+                    x.Message.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                    x.Port.Contains(_search, StringComparison.OrdinalIgnoreCase));
+            return list.OrderByDescending(x => x.Time).Take(500);
+        }
+    }
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        // Subscribe log từ ModemService / MainViewModel nếu có
+        // ModemService.LogMessage += OnLogReceived;
+
+        // Demo logs
+        AddLog("system", "info", "Tool GSM đã khởi động");
+        AddLog("system", "info", "Sẵn sàng kết nối thiết bị");
+
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+    }
+
+    void AddLog(string port, string level, string message)
+    {
+        _logs.Insert(0, new LogItem
+        {
+            Time = DateTime.Now,
+            Port = port,
+            Level = level,
+            Message = message
+        });
+        if (_logs.Count > 2000) _logs.RemoveRange(2000, _logs.Count - 2000);
+    }
+
+    string GetLevelColor(string level) => level switch
+    {
+        "success" => "#4ADE80",
+        "error" => "#F87171",
+        "warning" => "#FBBF24",
+        "info" => "#60A5FA",
+        _ => "#94A3B8"
+    };
+
+    async Task RegisterEzCom()
+    {
+        if (string.IsNullOrEmpty(_ezPort)) return;
+        AddLog(_ezPort, "info", $"Bắt đầu đăng ký EZ COM → {_ezNumber} : {_ezCommand}");
+        try
+        {
+            // await Vm.RegisterEzComAsync(_ezPort, _ezNumber, _ezCommand);
+            // hoặc
+            await ModemService.SendSmsAsync(_ezPort, _ezNumber, _ezCommand);
+            _ezResult = $"[{DateTime.Now:HH:mm:ss}] {_ezPort} → Gửi thành công\n{_ezCommand} đến {_ezNumber}";
+            _ezSuccess++;
+            AddLog(_ezPort, "success", "Đăng ký EZ COM thành công");
+            Snackbar.Add("Đăng ký EZ COM thành công", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _ezResult = $"Lỗi: {ex.Message}";
+            _ezError++;
+            AddLog(_ezPort, "error", "Đăng ký EZ COM thất bại: " + ex.Message);
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    async Task RegisterEzComAll()
+    {
+        var ports = ActivePorts.ToList();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Không có cổng Active", Severity.Warning);
+            return;
+        }
+        Snackbar.Add($"Đang đăng ký EZ COM cho {ports.Count} cổng...", Severity.Info);
+        foreach (var p in ports)
+        {
+            _ezPort = p.PortName;
+            await RegisterEzCom();
+            await Task.Delay(1200);
+        }
+        Snackbar.Add("Hoàn tất đăng ký EZ COM", Severity.Success);
+    }
+
+    async Task SetVnptPassword()
+    {
+        if (string.IsNullOrEmpty(_vnptPort) || string.IsNullOrEmpty(_vnptPassword)) return;
+        if (_vnptPassword != _vnptConfirm)
+        {
+            Snackbar.Add("Mật khẩu nhập lại không khớp", Severity.Warning);
+            return;
+        }
+
+        AddLog(_vnptPort, "info", "Bắt đầu đặt mật khẩu My VNPT");
+        try
+        {
+            // Tùy nhà mạng: USSD hoặc SMS
+            // Ví dụ: await ModemService.SendCommandAsync(_vnptPort, $"AT+CUSD=1,\"{_vnptUssd}\",15");
+            // hoặc gửi SMS chứa dung mật khẩu
+
+            _vnptResult = $"[{DateTime.Now:HH:mm:ss}] {_vnptPort}\nĐã gửi lệnh đặt mật khẩu My VNPT\nMật khẩu: {_vnptPassword}";
+            _vnptSuccess++;
+            AddLog(_vnptPort, "success", "Đặt mật khẩu My VNPT thành công");
+            Snackbar.Add("Đã gửi lệnh đặt mật khẩu", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _vnptResult = "Lỗi: " + ex.Message;
+            _vnptError++;
+            AddLog(_vnptPort, "error", "Đặt pass My VNPT lỗi: " + ex.Message);
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    async Task SetVnptPasswordAll()
+    {
+        var ports = ActivePorts.ToList();
+        if (!ports.Any()) return;
+        foreach (var p in ports)
+        {
+            _vnptPort = p.PortName;
+            await SetVnptPassword();
+            await Task.Delay(1500);
+        }
+    }
+
+    async Task ClearLogs()
+    {
+        var ok = await DialogService.ShowMessageBox("Xóa log", "Xóa toàn bộ nhật ký?", yesText: "Xóa", cancelText: "Hủy");
+        if (ok == true)
+        {
+            _logs.Clear();
+            Snackbar.Add("Đã xóa log", Severity.Success);
+        }
+    }
+
+    async Task ExportLogs()
+    {
+        Snackbar.Add("Đang export log...", Severity.Info);
+        // TODO: ghi file .txt / .csv
+    }
+
+    void ToggleAutoScroll() => _autoScroll = !_autoScroll;
+
+    public void Dispose() => _timer?.Dispose();
+
+    public class LogItem
+    {
+        public DateTime Time { get; set; }
+        public string Port { get; set; } = "";
+        public string Level { get; set; } = "info"; // info, success, warning, error
+        public string Message { get; set; } = "";
+    }
+}

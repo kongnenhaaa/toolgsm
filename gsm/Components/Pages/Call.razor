@@ -61,6 +61,26 @@
                         }
                     </MudSelect>
 
+                    <!-- Hoặc chọn nhiều cổng -->
+                    <MudText Typo="Typo.caption" Class="mb-1" Style="color:#64748B;">Hoặc chọn nhiều cổng:</MudText>
+                    <MudPaper Class="pa-2 mb-3" Style="max-height:140px; overflow-y:auto; border:1px solid #E2E8F0; border-radius:8px;">
+                        @if (!ActivePorts.Any())
+                        {
+                            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Không có cổng Active</MudText>
+                        }
+                        else
+                        {
+                            @foreach (var p in ActivePorts)
+                            {
+                                <MudCheckBox T="bool" 
+                                             Value="@_selectedPorts.Contains(p.PortName)"
+                                             ValueChanged="@(v => TogglePort(p.PortName, v))"
+                                             Label="@($"{p.PortName} • {p.PhoneNumber ?? "—"}")"
+                                             Dense="true" Color="Color.Primary" Class="mb-1" />
+                            }
+                        }
+                    </MudPaper>
+
                     <MudTextField @bind-Value="_phone" Label="Số điện thoại" Placeholder="09xxxxxxxx" 
                                   Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
                                   Immediate="true" />
@@ -75,12 +95,29 @@
 
                     <MudSwitch T="bool" @bind-Value="_recordCall" Label="Ghi âm cuộc gọi" Color="Color.Primary" Class="mb-3" />
 
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
-                               StartIcon="@Icons.Material.Filled.Call"
-                               OnClick="StartCall" 
-                               Disabled="@(string.IsNullOrEmpty(_port) || string.IsNullOrEmpty(_phone) || _isCalling)">
-                        @(_isCalling ? "Đang gọi..." : "Bắt đầu gọi")
-                    </MudButton>
+                    <!-- Nút hành động -->
+                    <MudStack Row="true" Spacing="2" Class="mb-3">
+                        <!-- 1. Gọi 1 cổng -->
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                   Disabled="@(string.IsNullOrEmpty(_port) || string.IsNullOrEmpty(_phone) || _isCalling)"
+                                   OnClick="CallOnePort">
+                            Gọi 1 cổng
+                        </MudButton>
+
+                        <!-- 2. Gọi các cổng đã chọn -->
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                   Disabled="@(!_selectedPorts.Any() || string.IsNullOrEmpty(_phone) || _isCalling)"
+                                   OnClick="CallSelectedPorts">
+                            Gọi đã chọn (@_selectedPorts.Count)
+                        </MudButton>
+
+                        <!-- 3. Gọi tất cả trong hàng đợi -->
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success"
+                                   Disabled="@(_isCalling)"
+                                   OnClick="CallAllInQueue">
+                            Gọi tất cả trong hàng đợi
+                        </MudButton>
+                    </MudStack>
 
                     @if (_isCalling)
                     {
@@ -286,6 +323,13 @@
     private string _wavPath = "";
     private int _duration = 30;
     private bool _recordCall = true;
+    private HashSet<string> _selectedPorts = new();
+
+    void TogglePort(string port, bool selected)
+    {
+        if (selected) _selectedPorts.Add(port);
+        else _selectedPorts.Remove(port);
+    }
 
     // Trạng thái
     private bool _isCalling = false;
@@ -327,9 +371,31 @@
         Snackbar.Add("Chọn file WAV (mono 8kHz 16bit khuyến nghị)", Severity.Info);
     }
 
-    async Task StartCall()
+    async Task CallOnePort()
     {
         if (string.IsNullOrEmpty(_port) || string.IsNullOrEmpty(_phone)) return;
+        await StartCall(_port);
+    }
+
+    async Task CallSelectedPorts()
+    {
+        if (!_selectedPorts.Any() || string.IsNullOrEmpty(_phone)) return;
+        foreach (var p in _selectedPorts.ToList())
+        {
+            await StartCall(p);
+            await Task.Delay(2000);
+        }
+    }
+
+    async Task CallAllInQueue()
+    {
+        _activeTab = 2; // Chuyển sang tab Hàng đợi
+        await RunCallQueue();
+    }
+
+    async Task StartCall(string port)
+    {
+        if (string.IsNullOrEmpty(port) || string.IsNullOrEmpty(_phone)) return;
 
         _isCalling = true;
         _elapsedSeconds = 0;
@@ -339,7 +405,7 @@
         try
         {
             // Logic kết nối cuộc gọi thực từ view model
-            var callTask = Vm.ExecuteCallFromUiAsync(_port, _phone, _wavPath, _duration);
+            var callTask = Vm.ExecuteCallFromUiAsync(port, _phone, _wavPath, _duration);
             _callStatus = "Đang kết nối / phát âm thanh...";
 
             // Giả lập progress bar (thời lượng phát)
@@ -365,7 +431,7 @@
             _history.Insert(0, new CallHistoryItem
             {
                 Time = DateTime.Now,
-                Port = _port,
+                Port = port,
                 Phone = _phone,
                 Duration = _duration,
                 WavFile = _wavPath,
@@ -474,7 +540,7 @@
             _wavPath = item.Wav;
             _duration = item.Duration;
 
-            await StartCall();
+            await StartCall(_port);
 
             item.Status = "Xong";
             await Task.Delay(1500); // nghỉ giữa các cuộc

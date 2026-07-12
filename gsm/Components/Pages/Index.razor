@@ -113,7 +113,10 @@
             <MudCheckBox T="bool" Value="@_columns["Hsd"]" Dense="true" Color="Color.Primary" Class="mr-2" /> HSD
         </MudMenuItem>
         <MudMenuItem OnClick="@(() => ToggleColumn("Otp"))">
-            <MudCheckBox T="bool" Value="@_columns["Otp"]" Dense="true" Color="Color.Primary" Class="mr-2" /> OTP / Nội dung
+            <MudCheckBox T="bool" Value="@_columns["Otp"]" Dense="true" Color="Color.Primary" Class="mr-2" /> OTP
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Content"))">
+            <MudCheckBox T="bool" Value="@_columns["Content"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Nội dung
         </MudMenuItem>
         <MudMenuItem OnClick="@(() => ToggleColumn("Updated"))">
             <MudCheckBox T="bool" Value="@_columns["Updated"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Cập nhật
@@ -195,7 +198,8 @@ else
                 @if (_columns["Imei"]) { <MudTh>IMEI</MudTh> }
                 @if (_columns["Ccid"]) { <MudTh>CCID</MudTh> }
                 @if (_columns["Hsd"]) { <MudTh>HSD</MudTh> }
-                @if (_columns["Otp"]) { <MudTh>OTP / Nội dung</MudTh> }
+                @if (_columns["Otp"]) { <MudTh Style="min-width:90px;">OTP</MudTh> }
+                @if (_columns["Content"]) { <MudTh Style="min-width:180px;">Nội dung</MudTh> }
                 @if (_columns["Updated"]) { <MudTh>Cập nhật</MudTh> }
                 <MudTh Style="min-width:150px;">Thao tác</MudTh>
             </HeaderContent>
@@ -256,8 +260,23 @@ else
                 }
                 
                 @if (_columns["Otp"]) {
-                    <MudTd Style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px;">
-                        @(string.IsNullOrEmpty(context.Otp) ? (context.LastMessageContent ?? "—") : context.Otp)
+                    <MudTd Style="font-family:monospace; font-weight:600; color:#2563EB; white-space:nowrap;">
+                        @(string.IsNullOrEmpty(context.Otp) ? "—" : context.Otp)
+                    </MudTd>
+                }
+
+                @if (_columns["Content"]) {
+                    <MudTd Style="max-width:220px;">
+                        <MudTooltip Text="@(context.LastMessageContent ?? "")">
+                            <div style="
+                                max-width:220px; 
+                                overflow:hidden; 
+                                text-overflow:ellipsis; 
+                                white-space:nowrap;
+                                font-size:12.5px;">
+                                @(string.IsNullOrEmpty(context.LastMessageContent) ? "—" : context.LastMessageContent)
+                            </div>
+                        </MudTooltip>
                     </MudTd>
                 }
                 
@@ -337,8 +356,9 @@ else
         ["Phone"] = true,
         ["Imei"] = true,
         ["Ccid"] = true,
-        ["Hsd"] = true,
+        ["Hsd"] = false,
         ["Otp"] = true,
+        ["Content"] = true,
         ["Updated"] = true
     };
 
@@ -368,6 +388,7 @@ else
             ["Ccid"] = false,      // mặc định ẩn CCID nếu muốn gọn
             ["Hsd"] = false,
             ["Otp"] = true,
+            ["Content"] = true,
             ["Updated"] = true
         };
     }

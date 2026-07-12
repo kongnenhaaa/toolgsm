@@ -974,6 +974,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _modemService.CallIncoming += ModemService_CallIncoming;
         _modemService.CallEnded += ModemService_CallEnded;
         _modemService.DtmfReceived += ModemService_DtmfReceived;
+        _modemService.IncomingCallRinging += ModemService_IncomingCallRinging;
+        _modemService.IncomingCallAnswered += ModemService_IncomingCallAnswered;
+        _modemService.IncomingCallEnded += ModemService_IncomingCallEnded;
         
         _speechToTextService = new SpeechToTextService();
         _speechToTextService.LogMessage += (s, msg) => AddLog(msg);
@@ -2783,7 +2786,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 // ---------- LOAD SETTINGS ----------
-                var cfg = SettingsService.Current;
+                var cfg = gsm.Services.SettingsService.Current;
 
                 // ---------- 1. TELEGRAM ----------
                 bool hasToken = !string.IsNullOrWhiteSpace(cfg.TelegramBotToken) &&
@@ -3247,7 +3250,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         bool audioPlayed = false;
         string wavPath = customWavPath ?? string.Empty;
         if (string.IsNullOrWhiteSpace(wavPath))
-            wavPath = AppSettings?.SoundCallOutPath ?? @"C:\Users\congn\Downloads\otp_947523_giong_nu\otp_947523_giong_nu.wav";
+            wavPath = AppSettings?.SoundCallOutPath ?? "";
 
         string fileName = System.IO.Path.GetFileName(wavPath);
         if (string.IsNullOrWhiteSpace(fileName)) fileName = "otp.wav";
@@ -3361,6 +3364,122 @@ public partial class MainViewModel : ObservableObject, IDisposable
             );
         });
     }
+
+    private void ModemService_IncomingCallRinging(object? sender, gsm.Models.IncomingCallSession session)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
+            if (port != null)
+            {
+                port.Status = SimStatus.Calling;
+                port.LastCallResult = $"Ringing: {session.Caller}";
+                port.UpdateDisplayResult("Call");
+                AddLog($"[{session.Port}] Đang đổ chuông từ {session.Caller}", "INFO");
+            }
+        });
+    }
+
+    private void ModemService_IncomingCallAnswered(object? sender, gsm.Models.IncomingCallSession session)
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
+            if (port != null)
+            {
+                port.Status = SimStatus.Calling;
+                port.LastCallResult = $"Answered: {session.Caller}";
+                port.UpdateDisplayResult("Call");
+                AddLog($"[{session.Port}] Đã bắt máy cuộc gọi từ {session.Caller}", "INFO");
+            }
+        });
+    }
+
+    private void ModemService_IncomingCallEnded(object? sender, gsm.Models.IncomingCallSession session)
+    {
+        Application.Current.Dispatcher.Invoke(async () =>
+        {
+            var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
+            if (port != null)
+            {
+                port.Status = SimStatus.Active;
+                port.LastCallResult = $"Ended: {session.Caller}";
+                port.UpdateDisplayResult("Call");
+                
+                if (!string.IsNullOrEmpty(session.Otp))
+                {
+                    port.Otp = session.Otp;
+                    port.LastMessageContent = session.Transcript;
+                    AddLog($"[{session.Port}] Lấy được OTP từ cuộc gọi: {session.Otp}", "SUCCESS");
+                }
+            }
+            
+            await NotifyFromIncomingCallAsync(session, port);
+        });
+    }
+
+    private async Task NotifyFromIncomingCallAsync(gsm.Models.IncomingCallSession session, gsm.Models.SimPort? port)
+    {
+        var cfg = gsm.Services.SettingsService.Current;
+        if (cfg == null) return;
+
+        string otp = session.Otp ?? "";
+        string content = session.Transcript ?? "";
+        string portName = session.Port;
+        string caller = session.Caller;
+
+        if (_notifyService != null)
+        {
+            // Telegram
+            if (!string.IsNullOrWhiteSpace(cfg.TelegramBotToken) &&
+                !string.IsNullOrWhiteSpace(cfg.TelegramChatId))
+            {
+                if (cfg.TelegramOnOtp && !string.IsNullOrEmpty(otp))
+                {
+                    var text =
+                        $"📞 OTP từ cuộc gọi đến\n" +
+                        $"Port: {portName}\n" +
+                        $"Gọi từ: {caller}\n" +
+                        $"OTP: <b>{otp}</b>\n" +
+                        $"STT: {TrimStr(content, 300)}\n" +
+                        $"File: {Path.GetFileName(session.LocalWavPath)}\n" +
+                        $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                    await _notifyService.SendTelegramAsync(cfg.TelegramBotToken, cfg.TelegramChatId, text);
+                }
+                else if (cfg.TelegramOnSms) // Using SMS setting for generic call if TelegramOnCall doesn't exist
+                {
+                    var text =
+                        $"📞 Cuộc gọi đến\n" +
+                        $"Port: {portName}\n" +
+                        $"Từ: {caller}\n" +
+                        $"STT: {TrimStr(content, 400)}\n" +
+                        $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                    await _notifyService.SendTelegramAsync(cfg.TelegramBotToken, cfg.TelegramChatId, text);
+                }
+            }
+
+            // Webhook / toolweb
+            if (cfg.PushOtpToWeb && !string.IsNullOrWhiteSpace(cfg.OtpWebhookUrl))
+            {
+                var payload = new
+                {
+                    event_type = string.IsNullOrEmpty(otp) ? "incoming_call" : "otp_call",
+                    port = portName,
+                    phone = port?.PhoneNumber ?? "", 
+                    sender = caller,
+                    otp = otp,
+                    content = content,
+                    wav = session.LocalWavPath,
+                    imei = port?.Imei ?? "",
+                    ccid = port?.Serial ?? "",
+                    time = DateTime.Now.ToString("o"),
+                    timestamp = DateTimeOffset.Now.ToUnixTimeSeconds()
+                };
+                await _notifyService.PushWebhookAsync(cfg.OtpWebhookUrl, payload);
+            }
+        }
+    }
+
     private void ModemService_CallEnded(object? sender, GsmDataEventArgs e)
     {
         if (e.Data == "NO CARRIER" || e.Data == "BUSY" || e.Data == "NO ANSWER")

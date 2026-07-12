@@ -34,9 +34,14 @@ public class AppSettings
     public bool EnableApiServer { get; set; } = true;
     public int ApiServerPort { get; set; } = 8080;
 
+    // Tự động bắt máy và Ghi âm STT
+    public bool EnableAutoAnswer { get => AutoAnswerIncoming; set => AutoAnswerIncoming = value; }
+    public bool AutoAnswerIncoming { get; set; } = true;
+    public bool RecordIncoming { get; set; } = true;
+    public bool SttIncoming { get; set; } = true;
+    public string SttEngine { get; set; } = "whisper";    // whisper | windows
+    public string WhisperApiUrl { get; set; } = "http://127.0.0.1:8080/inference";
 
-    // Tự động bắt máy
-    public bool EnableAutoAnswer { get => true; set { } }
 
     // Tự động Watchdog (Khởi động lại modem khi lỗi)
     public bool EnableAutoWatchdog { get; set; } = true;
@@ -59,7 +64,7 @@ public class AppSettings
     public string SoundCallPath { get; set; } = "";
 
     /// <summary>Đường dẫn file .wav phát đi khi đối phương nhận cuộc gọi.</summary>
-    public string SoundCallOutPath { get; set; } = @"C:\Users\congn\Downloads\otp_947523_giong_nu\otp_947523_giong_nu.wav";
+    public string SoundCallOutPath { get; set; } = "";
 
     // ========== WEBHOOK RULES ==========
     /// <summary>Danh sách các quy tắc tự động forward OTP/SMS qua HTTP webhook.</summary>

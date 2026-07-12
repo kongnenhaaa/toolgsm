@@ -257,7 +257,7 @@ public class GsmModemService : IGsmModemService
         PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Lỗi phần cứng (Có thể bị rút cáp)" });
     }
 
-    private async Task<string> ReadCcidWithFallbackAsync(string portName, int timeoutMs = 10000, bool silent = true)
+    private async Task<string> ReadCcidWithFallbackAsync(string portName, int timeoutMs = 5000, bool silent = true)
     {
         string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
         string ccid = "ERROR";
@@ -347,6 +347,7 @@ public class GsmModemService : IGsmModemService
 
         if (vendor.Contains("QUECTEL"))
         {
+            await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true); // 0 = Auto (2G/3G/4G)
             await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
             // Bật xuất âm thanh cuộc gọi ra cổng USB (UAC) cho Quectel EC20
             await SendCommandAsync(portName, "AT+QPCMV=0,0", 30000); 
@@ -359,7 +360,7 @@ public class GsmModemService : IGsmModemService
         string ccid = "ERROR";
         for (int i = 0; i < 15; i++)
         {
-            string resp = await ReadCcidWithFallbackAsync(portName, 30000, false);
+            string resp = await ReadCcidWithFallbackAsync(portName, 5000, false);
             if (!resp.Contains("ERROR") && !string.IsNullOrWhiteSpace(resp))
             {
                 ccid = resp;
@@ -530,7 +531,7 @@ public class GsmModemService : IGsmModemService
                     }
                 }
                 
-                string pollResp = await ReadCcidWithFallbackAsync(portName, 10000, silent: true);
+                string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
                 if (!pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp))
                 {
                     // Đè thêm 1 lệnh CFUN=4 nữa để triệt tiêu việc tự động đăng ký mạng trong lúc xử lý IMEI
@@ -566,8 +567,19 @@ public class GsmModemService : IGsmModemService
                 if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
                 
                 string copsStr = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true);
-                if (copsStr.Contains("+COPS:") && Regex.IsMatch(copsStr, @"\+COPS:\s*\d+\s*,\s*\d+\s*,\s*""([^""]+)"""))
+                var match = Regex.Match(copsStr, @"\+COPS:\s*\d+\s*,\s*\d+\s*,\s*""([^""]+)""(?:,\s*(\d+))?");
+                if (copsStr.Contains("+COPS:") && match.Success)
                 {
+                    string act = match.Groups[2].Success ? match.Groups[2].Value : "?";
+                    string netType = act switch
+                    {
+                        "0" => "2G",
+                        "2" => "3G",
+                        "7" => "LTE/4G",
+                        _ => $"Unknown({act})"
+                    };
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_TYPE] {netType}" });
+                    
                     // Lấy mạng thành công, nhả sự kiện ra để ViewModel bắt và tự động chạy USSD
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = copsStr.Trim() });
                     break;
@@ -582,6 +594,12 @@ public class GsmModemService : IGsmModemService
                     recoveryCount++;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_RECOVERY] Không tìm thấy sóng, đang thử khôi phục mạng lần {recoveryCount}..." });
                     
+                    string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
+                    if (vendor.Contains("QUECTEL"))
+                    {
+                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true);
+                    }
+
                     // Toggle chế độ máy bay để reset cọc sóng
                     await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
                     await Task.Delay(1000);

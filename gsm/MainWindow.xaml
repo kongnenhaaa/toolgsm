@@ -13,12 +13,12 @@
         Background="White">
 
     <Grid>
-        <blazor:BlazorWebView HostPage="wwwroot\index.html" 
-                              Services="{DynamicResource services}">
-            <blazor:BlazorWebView.RootComponents>
+        <local:CustomBlazorWebView HostPage="wwwroot\index.html" 
+                               Services="{DynamicResource services}">
+            <local:CustomBlazorWebView.RootComponents>
                 <blazor:RootComponent Selector="#app" 
                                       ComponentType="{x:Type local:App}" />
-            </blazor:BlazorWebView.RootComponents>
-        </blazor:BlazorWebView>
+            </local:CustomBlazorWebView.RootComponents>
+        </local:CustomBlazorWebView>
     </Grid>
 </Window>

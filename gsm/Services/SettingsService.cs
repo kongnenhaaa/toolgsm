@@ -18,16 +18,15 @@ public static class SettingsService
 
     public static AppSettings LoadSettings()
     {
+        AppBootstrap.EnsureAll();
+
         if (File.Exists(SettingsFilePath))
         {
             try
             {
                 var json = File.ReadAllText(SettingsFilePath);
                 var settings = JsonSerializer.Deserialize<AppSettings>(json);
-                if (settings != null)
-                {
-                    return settings;
-                }
+                return settings ?? new AppSettings();
             }
             catch (Exception)
             {

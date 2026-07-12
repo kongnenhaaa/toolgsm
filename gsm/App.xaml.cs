@@ -11,6 +11,16 @@ namespace gsm
     {
         public App()
         {
+            // FIX: Đặt CurrentDirectory về thư mục chứa file exe để BlazorWebView luôn tìm thấy wwwroot
+            var baseDir = System.AppContext.BaseDirectory;
+            if (!string.IsNullOrEmpty(baseDir))
+            {
+                System.IO.Directory.SetCurrentDirectory(baseDir);
+            }
+
+            // TỰ TẠO FILE + FOLDER TRƯỚC MỌI THỨ
+            gsm.Services.AppBootstrap.EnsureAll();
+
             var serviceCollection = new ServiceCollection();
             
             serviceCollection.AddWpfBlazorWebView();

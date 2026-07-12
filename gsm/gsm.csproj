@@ -10,7 +10,6 @@
     <AssemblyName>ToolGSM</AssemblyName>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
     <DefaultItemExcludes>$(DefaultItemExcludes);RegexTest\**</DefaultItemExcludes>
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>

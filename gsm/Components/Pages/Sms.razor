@@ -1,480 +1,160 @@
 @page "/sms"
-@inject MainViewModel Vm
-@inject IGsmModemService ModemService
+@inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
-@inject IDialogService DialogService
-@using gsm.ViewModels
 @using gsm.Models
+@using gsm.Components.Shared
 @implements IDisposable
 
-<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Quản lý SMS</MudText>
-<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Gửi tin nhắn • Lịch sử • Hàng đợi • Mẫu tin nhắn
-</MudText>
+<!-- ========== ACTION FORM ========== -->
+<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
+          Style="background:#0F172A; border:1px solid #1E293B; border-radius:8px;">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.caption" Style="color:#94A3B8; min-width:80px;">Người nhận</MudText>
+        <MudTextField @bind-Value="_phone" Placeholder="09xxxxxxxx" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" 
+                      Style="max-width:140px; background:#1E293B;" Immediate="true" />
 
-<!-- ========== TOOLBAR ========== -->
-<MudStack Row="true" Class="mb-4" Spacing="2" AlignItems="AlignItems.Center">
-    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" 
-               StartIcon="@Icons.Material.Filled.History"
-               OnClick="@(() => _activeTab = 1)" Size="Size.Small">
-        Lịch sử
-    </MudButton>
+        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Nội dung</MudText>
+        <MudTextField @bind-Value="_message" Placeholder="Nhập tin nhắn..." 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" 
+                      Style="min-width:250px; flex:1; background:#1E293B;" Immediate="true" />
 
-    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" 
-               StartIcon="@Icons.Material.Filled.Refresh"
-               OnClick="Refresh" Size="Size.Small">
-        Làm mới
-    </MudButton>
+        <MudText Typo="Typo.caption" Style="color:#94A3B8; margin-left:12px;">Chế độ</MudText>
+        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined" 
+                   Margin="Margin.Dense" Style="width:130px; background:#1E293B;">
+            <MudSelectItem Value="@("Selected")">Cổng đã chọn</MudSelectItem>
+            <MudSelectItem Value="@("All")">Tất cả Active</MudSelectItem>
+        </MudSelect>
 
-    <MudButton Variant="Variant.Text" Color="Color.Error" 
-               StartIcon="@Icons.Material.Filled.DeleteSweep"
-               OnClick="ClearHistory" Size="Size.Small"
-               Disabled="@(!FilteredSms.Any())">
-        Xóa lịch sử
-    </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Send"
+                   OnClick="SendSms" Disabled="@(string.IsNullOrEmpty(_phone) || string.IsNullOrEmpty(_message))">
+            Thêm vào Queue
+        </MudButton>
 
-    <MudSpacer />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="RunQueue">
+            Chạy Queue
+        </MudButton>
+    </MudStack>
+</MudPaper>
 
-    <MudSelect T="string" @bind-Value="_filterStatus" Dense="true" 
-               Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:140px;"
-               Placeholder="Trạng thái">
-        <MudSelectItem Value="@("all")">Tất cả</MudSelectItem>
-        <MudSelectItem Value="@("success")">Đã đọc</MudSelectItem>
-        <MudSelectItem Value="@("pending")">Mới</MudSelectItem>
-    </MudSelect>
+<!-- ========== SUB TABS ========== -->
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
+         PanelClass="pa-0" Class="mx-3"
+         Style="background:transparent;"
+         ActivePanelIndexChanged="OnSubTabChanged">
+    <MudTabPanel Text="Danh sách Cổng" />
+    <MudTabPanel Text="Tin nhắn tới" />
+    <MudTabPanel Text="Hàng đợi Gửi" />
+    <MudTabPanel Text="Mẫu tin nhắn" />
+</MudTabs>
 
-    <MudTextField @bind-Value="_search" Placeholder="Tìm SĐT / nội dung / cổng..." 
-                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-                  Immediate="true" Style="max-width:260px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
-</MudStack>
-
-<!-- ========== STATS ========== -->
-<MudGrid Class="mb-4">
-    <MudItem xs="6" sm="3">
-        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudText Typo="Typo.caption" Style="color:#64748B;">Tin nhắn đã nhận</MudText>
-            <MudText Typo="Typo.h5" Style="font-weight:700;">@_receivedCount</MudText>
-        </MudPaper>
-    </MudItem>
-    <MudItem xs="6" sm="3">
-        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudText Typo="Typo.caption" Style="color:#64748B;">Trong hàng đợi</MudText>
-            <MudText Typo="Typo.h5" Color="Color.Warning" Style="font-weight:700;">@Vm.QueuePendingCount</MudText>
-        </MudPaper>
-    </MudItem>
-    <MudItem xs="6" sm="3">
-        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudText Typo="Typo.caption" Style="color:#64748B;">Thành công</MudText>
-            <MudText Typo="Typo.h5" Color="Color.Success" Style="font-weight:700;">@Vm.QueueSuccessCount</MudText>
-        </MudPaper>
-    </MudItem>
-    <MudItem xs="6" sm="3">
-        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudText Typo="Typo.caption" Style="color:#64748B;">Lỗi</MudText>
-            <MudText Typo="Typo.h5" Color="Color.Error" Style="font-weight:700;">@Vm.QueueErrorCount</MudText>
-        </MudPaper>
-    </MudItem>
-</MudGrid>
-
-<!-- ========== TABS ========== -->
-<MudTabs @bind-ActivePanelIndex="_activeTab" Elevation="0" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-0" Class="mb-2">
-    
-    <!-- TAB 1: GỬI NHANH -->
-    <MudTabPanel Text="Gửi nhanh" Icon="@Icons.Material.Filled.Send">
-        <MudGrid Class="mt-3 pa-3">
-            <MudItem xs="12" md="5">
-                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; height:100%;">
-                    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Gửi SMS nhanh</MudText>
-
-                    <MudSelect T="string" Label="Cổng" @bind-Value="_port" 
-                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
-                        @foreach (var p in ActivePorts)
-                        {
-                            <MudSelectItem Value="@p.PortName">
-                                @p.PortName — @(p.PhoneNumber ?? "Chưa có SĐT") (@(p.NetworkProvider ?? "—"))
-                            </MudSelectItem>
-                        }
-                    </MudSelect>
-
-                    <!-- Hoặc chọn nhiều cổng -->
-                    <MudText Typo="Typo.caption" Class="mb-1" Style="color:#64748B;">Hoặc chọn nhiều cổng:</MudText>
-                    <MudPaper Class="pa-2 mb-3" Style="max-height:140px; overflow-y:auto; border:1px solid #E2E8F0; border-radius:8px;">
-                        @if (!ActivePorts.Any())
-                        {
-                            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Không có cổng Active</MudText>
-                        }
-                        else
-                        {
-                            @foreach (var p in ActivePorts)
-                            {
-                                <MudCheckBox T="bool" 
-                                             Value="@_selectedPorts.Contains(p.PortName)"
-                                             ValueChanged="@(v => TogglePort(p.PortName, v))"
-                                             Label="@($"{p.PortName} • {p.PhoneNumber ?? "—"}")"
-                                             Dense="true" Color="Color.Primary" Class="mb-1" />
-                            }
-                        }
-                    </MudPaper>
-
-                    <MudTextField @bind-Value="_phone" Label="Số điện thoại nhận" Placeholder="09xxxxxxxx" 
-                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-
-                    <MudTextField @bind-Value="_message" Label="Nội dung tin nhắn" Lines="3" 
-                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-
-                    <!-- Nút hành động -->
-                    <MudStack Row="true" Spacing="2">
-                        <!-- 1. Gửi 1 cổng -->
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                                   Disabled="@(string.IsNullOrEmpty(_port) || string.IsNullOrEmpty(_phone) || string.IsNullOrEmpty(_message))"
-                                   OnClick="SendOnePort">
-                            Gửi 1 cổng
-                        </MudButton>
-
-                        <!-- 2. Gửi các cổng đã chọn -->
-                        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                                   Disabled="@(!_selectedPorts.Any() || string.IsNullOrEmpty(_phone) || string.IsNullOrEmpty(_message))"
-                                   OnClick="SendSelectedPorts">
-                            Gửi đã chọn (@_selectedPorts.Count)
-                        </MudButton>
-
-                        <!-- 3. Gửi tất cả Active -->
-                        <MudButton Variant="Variant.Outlined" Color="Color.Success"
-                                   Disabled="@(string.IsNullOrEmpty(_phone) || string.IsNullOrEmpty(_message))"
-                                   OnClick="SendAllActive">
-                            Gửi tất cả Active
-                        </MudButton>
-                    </MudStack>
-                </MudPaper>
-            </MudItem>
-
-            <MudItem xs="12" md="7">
-                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-                    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Trạng thái gửi</MudText>
-                    <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_sendStatus</MudText>
-                </MudPaper>
-            </MudItem>
-        </MudGrid>
-    </MudTabPanel>
-
-    <!-- TAB 2: LỊCH SỬ -->
-    <MudTabPanel Text="Lịch sử SMS" Icon="@Icons.Material.Filled.History">
-        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
-            <MudTable Items="@FilteredSms" Hover="true" Dense="true" Elevation="0" 
-                      MultiSelection="true" @bind-SelectedItems="_selectedSms"
-                      Style="background:white;" Breakpoint="Breakpoint.Sm">
-                <HeaderContent>
-                    <MudTh>Thời gian</MudTh>
-                    <MudTh>Cổng</MudTh>
-                    <MudTh>Người gửi / Nhận</MudTh>
-                    <MudTh>Nội dung</MudTh>
-                    <MudTh>Hướng</MudTh>
-                    <MudTh>Trạng thái</MudTh>
-                    <MudTh Style="width:100px;">Thao tác</MudTh>
-                </HeaderContent>
-                <RowTemplate>
-                    <MudTd Style="white-space:nowrap; font-size:12px;">
-                        @context.ReceivedTime
-                    </MudTd>
-                    <MudTd Style="font-weight:600;">@context.PortName</MudTd>
-                    <MudTd>@context.Sender</MudTd>
-                    <MudTd Style="max-width:280px;">
-                        <MudText Typo="Typo.caption" Style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                            @context.Content
-                        </MudText>
-                    </MudTd>
-                    <MudTd>
-                        <MudChip T="string" Size="Size.Small" 
-                                 Color="Color.Info" 
-                                 Variant="Variant.Outlined">
-                            Đến
-                        </MudChip>
-                    </MudTd>
-                    <MudTd>
-                        <MudChip T="string" Size="Size.Small" 
-                                 Color="@(context.Status == "Đã đọc" ? Color.Default : Color.Success)" 
-                                 Variant="Variant.Filled">
-                            @(string.IsNullOrWhiteSpace(context.Status) ? "Mới" : context.Status)
-                        </MudChip>
-                    </MudTd>
-                    <MudTd>
-                        <MudStack Row="true" Spacing="0">
-                            <MudTooltip Text="Trả lời">
-                                <MudIconButton Icon="@Icons.Material.Filled.Replay" Size="Size.Small" 
-                                               OnClick="@(() => ResendSms(context))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Copy nội dung">
-                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
-                                               OnClick="@(() => CopyText(context.Content))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Xóa">
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
-                                               OnClick="@(() => DeleteSms(context))" />
-                            </MudTooltip>
-                        </MudStack>
-                    </MudTd>
-                </RowTemplate>
-                <NoRecordsContent>
-                    <div class="pa-10 text-center">
-                        <MudIcon Icon="@Icons.Material.Outlined.Sms" Size="Size.Large" Class="mb-3" Style="opacity:0.35;" />
-                        <MudText Typo="Typo.body1" Style="color:#94A3B8;">Chưa có tin nhắn nào</MudText>
-                    </div>
-                </NoRecordsContent>
-                <PagerContent>
-                    <MudTablePager PageSizeOptions="new int[]{20,50,100}" />
-                </PagerContent>
-            </MudTable>
-        </MudPaper>
-    </MudTabPanel>
-
-    <!-- TAB 2: HÀNG ĐỢI -->
-    <MudTabPanel Text="Hàng đợi Gửi" Icon="@Icons.Material.Filled.Queue" BadgeData="@Vm.QueuePendingCount" BadgeColor="Color.Warning">
-        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
-            <MudStack Row="true" Class="pa-3" Spacing="2">
-                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" 
-                           StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="RunQueue">
-                    Chạy hàng đợi
-                </MudButton>
-                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" 
-                           StartIcon="@Icons.Material.Filled.ClearAll" OnClick="ClearQueue">
-                    Xóa hàng đợi
-                </MudButton>
-            </MudStack>
-
-            <MudTable Items="@(Vm.CommandQueue?.Where(x => x.Type == "SMS") ?? Enumerable.Empty<CommandQueueItem>())" 
-                      Hover="true" Dense="true" Elevation="0">
-                <HeaderContent>
-                    <MudTh>Cổng</MudTh>
-                    <MudTh>SĐT</MudTh>
-                    <MudTh>Nội dung</MudTh>
-                    <MudTh>Trạng thái</MudTh>
-                    <MudTh>Kết quả</MudTh>
-                </HeaderContent>
-                <RowTemplate>
-                    <MudTd>@context.PortId</MudTd>
-                    <MudTd>@context.Recipient</MudTd>
-                    <MudTd Style="max-width:250px; overflow:hidden; text-overflow:ellipsis;">@context.Content</MudTd>
-                    <MudTd>
-                        <MudChip T="string" Size="Size.Small" 
-                                 Color="@(context.Status == "Xong" ? Color.Success : context.Status == "Lỗi" ? Color.Error : Color.Warning)">
-                            @context.Status
-                        </MudChip>
-                    </MudTd>
-                    <MudTd Style="font-size:12px; color:#64748B;">@context.Result</MudTd>
-                </RowTemplate>
-                <NoRecordsContent>
-                    <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Hàng đợi trống</MudText>
-                </NoRecordsContent>
-            </MudTable>
-        </MudPaper>
-    </MudTabPanel>
-
-    <!-- TAB 3: MẪU TIN NHẮN -->
-    <MudTabPanel Text="Mẫu tin nhắn" Icon="@Icons.Material.Filled.TextSnippet">
-        <MudPaper Class="pa-4 mt-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudStack Row="true" Class="mb-3" Spacing="2">
-                <MudTextField T="string" @bind-Value="_newTemplate" Placeholder="Nhập nội dung mẫu..." 
-                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="flex:1;" />
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="AddTemplate" Size="Size.Small">
-                    Thêm mẫu
-                </MudButton>
-            </MudStack>
-
+<!-- ========== CONTENT VÙNG DƯỚI TÙY SUB-TAB ========== -->
+<div class="mx-3 mt-1">
+    @if (_subTab == 0)
+    {
+        <!-- Bảng Cổng COM -->
+        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+    }
+    else if (_subTab == 1)
+    {
+        <!-- Tin nhắn tới -->
+        <MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A; min-height:400px; padding:16px;">
+            <MudText Typo="Typo.h6" Style="color:#E2E8F0;">Danh sách SMS nhận được</MudText>
+            <MudText Typo="Typo.body2" Style="color:#94A3B8;">@Vm.SmsMessages.Count tin nhắn</MudText>
             <MudList T="string" Dense="true">
-                @foreach (var tpl in _templates)
+                @foreach(var sms in Vm.SmsMessages.OrderByDescending(x => x.ReceivedTime).Take(50))
                 {
                     <MudListItem>
-                        <MudStack Row="true" AlignItems="AlignItems.Center" Style="width:100%;">
-                            <MudText Style="flex:1; font-size:13px;">@tpl</MudText>
-                            <MudTooltip Text="Copy">
-                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
-                                               OnClick="@(() => CopyText(tpl))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Dùng">
-                                <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary"
-                                               OnClick="@(() => UseTemplate(tpl))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Xóa">
-                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
-                                               OnClick="@(() => RemoveTemplate(tpl))" />
-                            </MudTooltip>
-                        </MudStack>
+                        <MudText Style="color:#E2E8F0; font-size:13px;">
+                            <b>[@sms.PortName]</b> <span style="color:#60A5FA;">@sms.Sender</span>: @sms.Content <span style="color:#64748B; font-size:11px;">(@sms.ReceivedTime)</span>
+                        </MudText>
                     </MudListItem>
                 }
             </MudList>
-
-            @if (_templates.Count == 0)
-            {
-                <MudText Class="pa-6 text-center" Style="color:#94A3B8;">Chưa có mẫu nào. Thêm mẫu để dùng nhanh.</MudText>
-            }
         </MudPaper>
-    </MudTabPanel>
-</MudTabs>
+    }
+    else if (_subTab == 2)
+    {
+        <!-- Hàng đợi Gửi -->
+        <MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A; min-height:400px; padding:16px;">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudText Typo="Typo.h6" Style="color:#E2E8F0;">Hàng đợi lệnh SMS</MudText>
+                <MudSpacer/>
+                <MudButton Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined" OnClick="() => Vm.CommandQueue.Clear()">Xóa hàng đợi</MudButton>
+            </MudStack>
+            
+            <MudTable Items="@(Vm.CommandQueue.Where(x => x.Type == "SMS"))" Dense="true" Hover="true" Elevation="0" Style="background:#0F172A; color:#E2E8F0;">
+                <HeaderContent>
+                    <MudTh Style="background:#1E293B; color:#94A3B8;">Cổng</MudTh>
+                    <MudTh Style="background:#1E293B; color:#94A3B8;">Người nhận</MudTh>
+                    <MudTh Style="background:#1E293B; color:#94A3B8;">Nội dung</MudTh>
+                    <MudTh Style="background:#1E293B; color:#94A3B8;">Trạng thái</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="color:#E2E8F0;">@context.PortId</MudTd>
+                    <MudTd Style="color:#E2E8F0;">@context.Recipient</MudTd>
+                    <MudTd Style="color:#E2E8F0;">@context.Content</MudTd>
+                    <MudTd Style="color:#E2E8F0;">@context.Status</MudTd>
+                </RowTemplate>
+            </MudTable>
+        </MudPaper>
+    }
+    else if (_subTab == 3)
+    {
+        <MudPaper Elevation="0" Style="border:1px solid #1E293B; border-radius:8px; overflow:hidden; background:#0F172A; min-height:400px; padding:16px;">
+            <MudText Typo="Typo.h6" Style="color:#E2E8F0;">Mẫu tin nhắn đang được xây dựng</MudText>
+        </MudPaper>
+    }
+</div>
 
 @code {
-    private int _activeTab = 0;
-    private string _search = "";
-    private string _filterStatus = "all";
-    private string _newTemplate = "";
-    private HashSet<SmsMessage> _selectedSms = new();
-
-    // Gửi nhanh
-    private string _port = "";
     private string _phone = "";
     private string _message = "";
-    private HashSet<string> _selectedPorts = new();
-    private string _sendStatus = "Sẵn sàng";
+    private string _sendMode = "Selected";
+    private HashSet<SimPort> _selectedPorts = new();
+    private int _subTab = 0;
 
-    private IEnumerable<SimPort> ActivePorts => 
-        Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
-
-    private List<string> _templates = new()
-    {
-        "Ma OTP cua ban la: {otp}",
-        "Xin chao, tai khoan cua ban da duoc kich hoat.",
-        "Vui long nap them tien de tiep tuc su dung dich vu."
-    };
-
-    private int _receivedCount => Vm.SmsMessages?.Count ?? 0;
-
-    private IEnumerable<SmsMessage> FilteredSms
-    {
-        get
-        {
-            var list = Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>();
-
-            if (_filterStatus == "success") list = list.Where(x => x.Status == "Đã đọc");
-            else if (_filterStatus == "pending") list = list.Where(x => string.IsNullOrWhiteSpace(x.Status));
-
-            if (!string.IsNullOrWhiteSpace(_search))
-            {
-                list = list.Where(x =>
-                    (x.Sender?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                    (x.Content?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                    (x.PortName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
-            }
-
-            return list.OrderByDescending(x => x.ReceivedTime);
-        }
-    }
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+    private List<SimPort> FilteredPorts => Ports;
 
     private System.Threading.Timer? _timer;
 
     protected override void OnInitialized()
     {
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 2000, 2000);
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
     }
 
-    // ========== ACTIONS ==========
+    void OnSubTabChanged(int index) => _subTab = index;
 
-    void TogglePort(string port, bool selected)
+    async Task SendSms()
     {
-        if (selected) _selectedPorts.Add(port);
-        else _selectedPorts.Remove(port);
-    }
+        var targets = _sendMode == "Selected" 
+            ? _selectedPorts.Select(p => p.PortName).ToList() 
+            : Ports.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
 
-    async Task SendOnePort()
-    {
-        if (string.IsNullOrEmpty(_port) || string.IsNullOrEmpty(_phone)) return;
-        _sendStatus = $"Đang thêm vào hàng đợi: {_port} -> {_phone}...";
-        await Vm.QueueSmsAsync(_port, _phone, _message);
-        _sendStatus = $"Đã thêm thành công";
-        Snackbar.Add("Đã thêm vào hàng đợi", Severity.Success);
-    }
-
-    async Task SendSelectedPorts()
-    {
-        if (!_selectedPorts.Any() || string.IsNullOrEmpty(_phone)) return;
-        int count = 0;
-        foreach (var p in _selectedPorts.ToList())
+        if (!targets.Any())
         {
-            await Vm.QueueSmsAsync(p, _phone, _message);
+            Snackbar.Add("Không có cổng nào được chọn để gửi", Severity.Warning);
+            return;
+        }
+
+        int count = 0;
+        foreach (var port in targets)
+        {
+            await Vm.QueueSmsAsync(port, _phone, _message);
             count++;
         }
-        _sendStatus = $"Đã thêm {count} tin nhắn vào hàng đợi";
-        Snackbar.Add($"Đã thêm {count} tin nhắn", Severity.Success);
-    }
-
-    async Task SendAllActive()
-    {
-        if (string.IsNullOrEmpty(_phone)) return;
-        int count = 0;
-        foreach (var p in ActivePorts)
-        {
-            await Vm.QueueSmsAsync(p.PortName, _phone, _message);
-            count++;
-        }
-        _sendStatus = $"Đã thêm {count} tin nhắn vào hàng đợi";
-        Snackbar.Add($"Đã thêm {count} tin nhắn", Severity.Success);
-    }
-
-    async Task ResendSms(SmsMessage sms)
-    {
-        Snackbar.Add($"Đang gửi phản hồi tới {sms.Sender}...", Severity.Info);
-        var parameters = new DialogParameters();
-        var dialog = await DialogService.ShowAsync<gsm.Components.Shared.SmsDialog>("Trả lời SMS", parameters);
-        var result = await dialog.Result;
         
-        if (result != null && !result.Canceled && result.Data is (string phone, string message))
-        {
-            await Vm.QueueSmsAsync(sms.PortName, phone, message);
-            Snackbar.Add("Đã thêm vào hàng đợi", Severity.Success);
-        }
-    }
-
-    void CopyText(string? text)
-    {
-        if (string.IsNullOrEmpty(text)) return;
-        Snackbar.Add("Đã copy vào clipboard", Severity.Success);
-    }
-
-    async Task DeleteSms(SmsMessage sms)
-    {
-        Vm.SmsMessages.Remove(sms);
-        Snackbar.Add("Đã xóa tin nhắn", Severity.Normal);
-    }
-
-    async Task ClearHistory()
-    {
-        var confirm = await DialogService.ShowMessageBox("Xác nhận", "Xóa toàn bộ lịch sử nhận SMS?", yesText: "Xóa", cancelText: "Hủy");
-        if (confirm == true)
-        {
-            Vm.SmsMessages.Clear();
-            Snackbar.Add("Đã xóa lịch sử", Severity.Success);
-        }
+        Snackbar.Add($"Đã thêm {count} lệnh gửi SMS vào hàng đợi", Severity.Success);
     }
 
     async Task RunQueue()
     {
-        Snackbar.Add("Đang chạy hàng đợi...", Severity.Info);
+        Snackbar.Add("Đang chạy hàng đợi SMS...", Severity.Info);
         Vm.RunCommandQueueCommand?.Execute(null);
-    }
-
-    async Task ClearQueue()
-    {
-        Vm.CommandQueue.Clear();
-        Snackbar.Add("Đã xóa hàng đợi", Severity.Normal);
-    }
-
-    void AddTemplate()
-    {
-        if (string.IsNullOrWhiteSpace(_newTemplate)) return;
-        _templates.Add(_newTemplate.Trim());
-        _newTemplate = "";
-        Snackbar.Add("Đã thêm mẫu", Severity.Success);
-    }
-
-    void RemoveTemplate(string tpl) => _templates.Remove(tpl);
-
-    async Task UseTemplate(string tpl)
-    {
-        Snackbar.Add($"Sử dụng mẫu: {tpl}", Severity.Success);
-    }
-
-    async Task Refresh()
-    {
-        Snackbar.Add("Đã làm mới", Severity.Normal);
-        StateHasChanged();
     }
 
     public void Dispose() => _timer?.Dispose();

@@ -1,107 +1,102 @@
 @inherits LayoutComponentBase
-@inject MainViewModel Vm
-@inject ISnackbar Snackbar
-@using gsm.ViewModels
-@using gsm.Models
+@inject NavigationManager Nav
+@inject gsm.ViewModels.MainViewModel Vm
 
-<MudThemeProvider @bind-IsDarkMode="@_isDarkMode" Theme="@_theme" />
+<MudThemeProvider Theme="_theme" IsDarkMode="true" />
 
 <MudLayout>
+    <!-- TOP APP BAR -->
+    <MudAppBar Elevation="0" Dense="true" Style="background:#0F172A; border-bottom:1px solid #1E293B; height:52px;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="ml-2">
+            <MudButton Variant="@GetTabVariant("ussd")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("ussd"))" Style="@GetTabStyle("ussd")">
+                USSD
+            </MudButton>
+            <MudButton Variant="@GetTabVariant("sms")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("sms"))" Style="@GetTabStyle("sms")">
+                SMS
+            </MudButton>
+            <MudButton Variant="@GetTabVariant("call")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("call"))" Style="@GetTabStyle("call")">
+                Gọi
+            </MudButton>
+            <MudButton Variant="@GetTabVariant("imei")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("imei"))" Style="@GetTabStyle("imei")">
+                IMEI
+            </MudButton>
+            <MudButton Variant="@GetTabVariant("logs")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("logs"))" Style="@GetTabStyle("logs")">
+                Log & Vận hành
+            </MudButton>
+            <MudButton Variant="@GetTabVariant("settings")" Color="Color.Primary" Size="Size.Small"
+                       OnClick="@(() => Navigate("settings"))" Style="@GetTabStyle("settings")">
+                Cài đặt
+            </MudButton>
+        </MudStack>
 
-    <MudDrawer @bind-Open="_drawerOpen" Elevation="1" Variant="@DrawerVariant.Mini" 
-               OpenMiniOnHover="true" ClipMode="DrawerClipMode.Always">
-        <MudNavMenu Dense="true">
-            <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
-            <MudNavLink Href="/sms" Icon="@Icons.Material.Filled.Sms">SMS</MudNavLink>
-            <MudNavLink Href="/ussd" Icon="@Icons.Material.Filled.Dialpad">USSD</MudNavLink>
-            <MudNavLink Href="/call" Icon="@Icons.Material.Filled.Phone">Cuộc gọi</MudNavLink>
-            <MudNavLink Href="/imei" Icon="@Icons.Material.Filled.PhonelinkSetup">IMEI Manager</MudNavLink>
-            <MudNavLink Href="/logs" Icon="@Icons.Material.Filled.ListAlt">Log & Vận hành</MudNavLink>
-            <MudNavLink Href="/ezcom" Icon="@Icons.Material.Filled.AppRegistration">Đăng ký EZ COM</MudNavLink>
-            <MudNavLink Href="/vnpt-pass" Icon="@Icons.Material.Filled.Password">Đặt Pass My VNPT</MudNavLink>
-            <MudNavLink Href="/settings" Icon="@Icons.Material.Filled.Settings">Cài đặt</MudNavLink>
-        </MudNavMenu>
-    </MudDrawer>
+        <MudSpacer />
 
-    <MudMainContent Class="pt-4 px-4 pb-6 d-flex flex-column" Style="min-height: 100vh;">
-        <div class="flex-grow-1">
-            @Body
-        </div>
+        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="mr-3">
+            @ActiveComCount COM Active
+        </MudChip>
+        <MudText Typo="Typo.subtitle2" Style="color:#94A3B8; margin-right:16px;">
+            ♥ Tool GSM Professional
+        </MudText>
+    </MudAppBar>
+
+    <MudMainContent Style="background:#0B1220; min-height:100vh; padding-top:8px;">
+        @Body
     </MudMainContent>
 </MudLayout>
 
 @code {
-    private bool _drawerOpen = true;
-    private bool _isDarkMode = false;
-    private int ActiveCount => Vm?.Ports?.Count(p => p.Status == SimStatus.Active) ?? 0;
+    private string _current = "ussd";
+    private int ActiveComCount => Vm.Ports?.Count(p => p.Status == gsm.Models.SimStatus.Active) ?? 0;
 
-    void ToggleDrawer() => _drawerOpen = !_drawerOpen;
-    void ToggleDarkMode() => _isDarkMode = !_isDarkMode;
-
-    async Task RefreshAll()
+    private MudTheme _theme = new()
     {
-        Snackbar.Add("Đang làm mới tất cả...", Severity.Info);
-    }
-
-    void OpenSettings()
-    {
-        // Navigate hoặc mở dialog
-    }
-
-    private MudTheme _theme = new MudTheme()
-    {
-        PaletteLight = new PaletteLight()
+        PaletteDark = new PaletteDark
         {
-            Primary = "#2563EB",
-            Secondary = "#0D9488",
-            AppbarBackground = "#FFFFFF",
-            Background = "#F8FAFC",
-            Surface = "#FFFFFF",
-            DrawerBackground = "#FFFFFF",
-            DrawerText = "#0F172A",
-            TextPrimary = "#0F172A",
-            TextSecondary = "#475569",
-            TextDisabled = "#94A3B8",
-            ActionDefault = "#64748B",
-            Divider = "#E2E8F0",
-            TableLines = "#E2E8F0",
-            LinesDefault = "#E2E8F0",
-            Success = "#16A34A",
-            Warning = "#D97706",
-            Error = "#DC2626",
-            Info = "#0891B2"
-        },
-        PaletteDark = new PaletteDark()
-        {
-            Primary = "#3B82F6",
-            Secondary = "#14B8A6",
-            Background = "#0F172A",
-            AppbarBackground = "#1E293B",
-            Surface = "#1E293B",
-            DrawerBackground = "#1E293B",
-            DrawerText = "#F8FAFC",
-            TextPrimary = "#F8FAFC",
-            TextSecondary = "#CBD5E1",
-            TextDisabled = "#64748B",
+            Primary = "#22C55E",
+            Secondary = "#3B82F6",
+            Background = "#0B1220",
+            Surface = "#0F172A",
+            AppbarBackground = "#0F172A",
+            DrawerBackground = "#0F172A",
+            TextPrimary = "#E2E8F0",
+            TextSecondary = "#94A3B8",
             ActionDefault = "#94A3B8",
-            Divider = "#334155",
-            TableLines = "#334155",
-            LinesDefault = "#334155",
-            Success = "#22C55E",
-            Warning = "#F59E0B",
-            Error = "#EF4444",
-            Info = "#06B6D4"
-        },
-        Typography = new Typography()
-        {
-            Default = new DefaultTypography()
-            {
-                FontFamily = new[] { "Inter", "Roboto", "sans-serif" }
-            }
-        },
-        LayoutProperties = new LayoutProperties()
-        {
-            DefaultBorderRadius = "10px"
+            Divider = "#1E293B",
+            TableLines = "#1E293B"
         }
     };
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        var path = Nav.ToBaseRelativePath(Nav.Uri).ToLower();
+        if (path.Contains("sms")) _current = "sms";
+        else if (path.Contains("call")) _current = "call";
+        else if (path.Contains("imei")) _current = "imei";
+        else if (path.Contains("logs")) _current = "logs";
+        else if (path.Contains("settings")) _current = "settings";
+        else _current = "ussd";
+
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 2000, 2000);
+    }
+
+    void Navigate(string tab)
+    {
+        _current = tab;
+        if (tab == "ussd") Nav.NavigateTo($"/");
+        else Nav.NavigateTo($"/{tab}");
+    }
+
+    Variant GetTabVariant(string tab) => _current == tab ? Variant.Filled : Variant.Text;
+    string GetTabStyle(string tab) => _current == tab 
+        ? "background:#166534; color:white; font-weight:600;" 
+        : "color:#94A3B8;";
+
+    public void Dispose() => _timer?.Dispose();
 }

@@ -126,9 +126,9 @@ public class ImeiManagementService
     }
 
     private readonly IGsmModemService _modemService;
-    private readonly Action<string, string> _logAction;
+    private readonly Action<string, string>? _logAction;
 
-    public ImeiManagementService(IGsmModemService modemService, Action<string, string> logAction)
+    public ImeiManagementService(IGsmModemService modemService, Action<string, string>? logAction = null)
     {
         _modemService = modemService;
         _logAction = logAction;

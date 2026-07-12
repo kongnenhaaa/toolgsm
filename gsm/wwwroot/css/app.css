@@ -48,3 +48,19 @@
         transform: translateY(0);
     }
 }
+
+/* Cho phép bôi đen text trong bảng */
+.mud-table-root,
+.mud-table-root td,
+.mud-table-root th,
+.mud-table-cell {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+}
+
+/* Log terminal */
+#log-container,
+.log-terminal {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+}

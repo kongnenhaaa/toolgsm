@@ -4,6 +4,7 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JS
+@inject gsm.Services.IFileDialogService FileDialog
 @using gsm.ViewModels
 @using gsm.Models
 @using gsm.Services
@@ -304,13 +305,11 @@
     {
         try
         {
-            var lines = new List<string> { "Ccid,Imei,FirstUsed,LastUsed,UseCount" };
-            foreach (var item in _backupList)
-            {
-                lines.Add($"{item.Ccid},{item.Imei},{item.FirstUsed:O},{item.LastUsed:O},{item.UseCount}");
-            }
-            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "imei_backup.csv");
-            await System.IO.File.WriteAllLinesAsync(path, lines);
+            var path = FileDialog.SaveFile($"imei_backup_{DateTime.Now:yyyyMMdd_HHmmss}.json", "JSON files (*.json)|*.json");
+            if (string.IsNullOrEmpty(path)) return;
+
+            var json = System.Text.Json.JsonSerializer.Serialize(_backupList, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            await System.IO.File.WriteAllTextAsync(path, json);
             Snackbar.Add($"Đã export backup thành công ra {path}", Severity.Success);
         }
         catch (Exception ex)
@@ -323,30 +322,34 @@
     {
         try
         {
-            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "imei_backup.csv");
-            if (!System.IO.File.Exists(path))
+            var path = FileDialog.OpenFile("JSON files (*.json)|*.json");
+            if (string.IsNullOrEmpty(path)) return;
+
+            var json = await System.IO.File.ReadAllTextAsync(path);
+            var list = System.Text.Json.JsonSerializer.Deserialize<List<ImeiBackupItem>>(json);
+            if (list == null || !list.Any())
             {
-                Snackbar.Add("Không tìm thấy file imei_backup.csv", Severity.Warning);
+                Snackbar.Add("File rỗng hoặc sai định dạng", Severity.Warning);
                 return;
             }
-            var lines = await System.IO.File.ReadAllLinesAsync(path);
-            _backupList.Clear();
-            foreach (var line in lines.Skip(1))
+
+            // Merge
+            foreach (var item in list)
             {
-                var parts = line.Split(',');
-                if (parts.Length >= 5)
+                var existing = _backupList.FirstOrDefault(x => x.Ccid == item.Ccid);
+                if (existing != null)
                 {
-                    _backupList.Add(new ImeiBackupItem
-                    {
-                        Ccid = parts[0],
-                        Imei = parts[1],
-                        FirstUsed = DateTime.TryParse(parts[2], out var d1) ? d1 : DateTime.Now,
-                        LastUsed = DateTime.TryParse(parts[3], out var d2) ? d2 : DateTime.Now,
-                        UseCount = int.TryParse(parts[4], out var c) ? c : 0
-                    });
+                    existing.Imei = item.Imei;
+                    existing.LastUsed = item.LastUsed;
+                    existing.UseCount = item.UseCount;
+                }
+                else
+                {
+                    _backupList.Add(item);
                 }
             }
-            Snackbar.Add($"Đã import {_backupList.Count} bản ghi", Severity.Success);
+
+            Snackbar.Add($"Đã import {list.Count} bản ghi", Severity.Success);
             StateHasChanged();
         }
         catch (Exception ex)
@@ -479,8 +482,15 @@
     async Task CopyText(string? text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
-        Snackbar.Add("Đã copy vào Clipboard: " + text, Severity.Success);
+        try
+        {
+            await JS.InvokeVoidAsync("clipboardCopy.copyText", text);
+            Snackbar.Add("Đã copy vào Clipboard", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Copy thất bại", Severity.Warning);
+        }
     }
 
     public void Dispose() => _timer?.Dispose();

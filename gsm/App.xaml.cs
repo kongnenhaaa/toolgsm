@@ -33,6 +33,8 @@ namespace gsm
                 return new ImeiManagementService(modem, null);
             });
             serviceCollection.AddSingleton<MainViewModel>();
+            serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();
+            serviceCollection.AddSingleton<IAudioService, AudioService>();
 
             Resources.Add("services", serviceCollection.BuildServiceProvider());
         }

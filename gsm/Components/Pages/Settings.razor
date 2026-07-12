@@ -2,6 +2,8 @@
 @inject MainViewModel Vm
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject gsm.Services.IFileDialogService FileDialog
+@inject gsm.Services.IAudioService Audio
 @using gsm.ViewModels
 @using gsm.Models
 @using System.IO
@@ -426,10 +428,10 @@
     {
         try
         {
-            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ToolGSM_Config");
-            Directory.CreateDirectory(folder);
-            var path = Path.Combine(folder, $"settings_{DateTime.Now:yyyyMMdd_HHmmss}.json");
             await SaveAll();
+            var path = FileDialog.SaveFile($"settings_{DateTime.Now:yyyyMMdd_HHmmss}.json", "JSON files (*.json)|*.json");
+            if (string.IsNullOrEmpty(path)) return;
+
             File.Copy(_settingsPath, path, true);
             Snackbar.Add($"Đã export: {path}", Severity.Success);
         }
@@ -441,7 +443,19 @@
 
     async Task ImportSettings()
     {
-        Snackbar.Add("Chọn file .json để import", Severity.Info);
+        try
+        {
+            var path = FileDialog.OpenFile("JSON files (*.json)|*.json");
+            if (string.IsNullOrEmpty(path)) return;
+
+            File.Copy(path, _settingsPath, true);
+            LoadSettings();
+            Snackbar.Add("Đã import + load cấu hình thành công", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Import lỗi: " + ex.Message, Severity.Error);
+        }
     }
 
     async Task TestTelegram()
@@ -481,9 +495,34 @@
         catch (Exception ex) { Snackbar.Add("Webhook lỗi: " + ex.Message, Severity.Error); }
     }
 
-    void BrowseSound(string type) => Snackbar.Add($"Chọn file âm thanh cho {type.ToUpper()}", Severity.Info);
+    void BrowseSound(string type)
+    {
+        var path = FileDialog.OpenFile("WAV files (*.wav)|*.wav|All files (*.*)|*.*");
+        if (string.IsNullOrEmpty(path)) return;
 
-    void TestSound(string type) => Snackbar.Add($"Đang phát âm thanh {type.ToUpper()}...", Severity.Normal);
+        if (type == "sms") _soundSmsPath = path;
+        else if (type == "call") _soundCallPath = path;
+        else if (type == "otp") _soundOtpPath = path;
+
+        Snackbar.Add($"Đã chọn file âm thanh cho {type.ToUpper()}", Severity.Success);
+    }
+
+    void TestSound(string type)
+    {
+        var path = "";
+        if (type == "sms") path = _soundSmsPath;
+        else if (type == "call") path = _soundCallPath;
+        else if (type == "otp") path = _soundOtpPath;
+
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            Snackbar.Add("File âm thanh không tồn tại", Severity.Warning);
+            return;
+        }
+
+        Audio.Play(path);
+        Snackbar.Add($"Đang phát âm thanh {type.ToUpper()}...", Severity.Normal);
+    }
 
     async Task ClearAllData()
     {

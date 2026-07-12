@@ -72,7 +72,7 @@
                     </MudTd>
                     <MudTd>
                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
-                                       OnClick="@(() => Copy(context.Content))" Title="Copy" />
+                                       OnClick="@(() => CopyText(context.Content))" Title="Copy" />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
                                        OnClick="@(() => DeleteSms(context))" />
                     </MudTd>
@@ -153,7 +153,7 @@
                     <MudListItem>
                         <MudStack Row="true" AlignItems="AlignItems.Center" Style="width:100%;">
                             <MudText Style="flex:1; font-size:13px;">@tpl</MudText>
-                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="@(() => Copy(tpl))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="@(() => CopyText(tpl))" />
                             <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" OnClick="@(() => UseTemplate(tpl))" />
                             <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => _templates.Remove(tpl))" />
                         </MudStack>
@@ -467,11 +467,18 @@
     // =====================================================
     // 7. COPY / DELETE
     // =====================================================
-    async Task Copy(string? text)
+    async Task CopyText(string? text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
-        Snackbar.Add("Đã copy vào Clipboard", Severity.Success);
+        try
+        {
+            await JS.InvokeVoidAsync("clipboardCopy.copyText", text);
+            Snackbar.Add("Đã copy vào Clipboard", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Copy thất bại", Severity.Warning);
+        }
     }
 
     async Task DeleteSms(SmsMessage sms)

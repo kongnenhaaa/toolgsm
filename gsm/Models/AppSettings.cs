@@ -32,7 +32,13 @@ public class AppSettings
     
     // HTTP API Server
     public bool EnableApiServer { get; set; } = true;
-    public int ApiServerPort { get; set; } = 8080;
+    public int ApiServerPort { get; set; } = 5000;
+    
+    // Web to GSM Bridge & Firebase
+    public string MachineId { get; set; } = "machine-1";
+    public string FirebaseDbUrl { get; set; } = "https://YOUR_PROJECT.firebaseio.com";
+    public string FirebaseAuthToken { get; set; } = "";
+    public bool WriteOtpToFirebase { get; set; } = true;
 
     // Tự động bắt máy và Ghi âm STT
     public bool EnableAutoAnswer { get => AutoAnswerIncoming; set => AutoAnswerIncoming = value; }

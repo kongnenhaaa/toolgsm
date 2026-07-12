@@ -27,6 +27,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Services.ImeiManagementService _imeiManagementService;
     private readonly SpeechToTextService _speechToTextService;
     private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
+    private readonly gsm.Services.IFirebaseOtpService _firebaseOtpService = new gsm.Services.FirebaseOtpService();
 
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, bool>> _sentConfirmations = new();
     public IGsmModemService ModemService => _modemService;
@@ -2788,6 +2789,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // ---------- LOAD SETTINGS ----------
                 var cfg = gsm.Services.SettingsService.Current;
 
+                // ---------- 0. FIREBASE (toolweb) ----------
+                if (cfg != null && cfg.WriteOtpToFirebase && port != null)
+                {
+                    string machineId = cfg.MachineId ?? "machine-1";
+                    
+                    if (extractedOtp != "N/A")
+                    {
+                        _ = _firebaseOtpService.WritePortOtpAsync(machineId, port.PortName, extractedOtp, cleanContent, senderPhone);
+                    }
+
+                    var dto = new gsm.Models.ApiPortDto
+                    {
+                        PortId = port.PortName,
+                        PortName = port.PortName,
+                        Status = port.Status.ToString(),
+                        Phone = port.PhoneNumber,
+                        Otp = extractedOtp != "N/A" ? extractedOtp : port.Otp,
+                        LastContent = cleanContent,
+                        UpdatedAt = DateTime.Now.ToString("HH:mm:ss")
+                    };
+                    _ = _firebaseOtpService.WritePortSnapshotAsync(machineId, dto);
+                }
+
                 // ---------- 1. TELEGRAM ----------
                 bool hasToken = !string.IsNullOrWhiteSpace(cfg.TelegramBotToken) &&
                                 !string.IsNullOrWhiteSpace(cfg.TelegramChatId);
@@ -3372,7 +3396,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
             if (port != null)
             {
-                port.Status = SimStatus.Calling;
+                port.Status = "Calling";
                 port.LastCallResult = $"Ringing: {session.Caller}";
                 port.UpdateDisplayResult("Call");
                 AddLog($"[{session.Port}] Đang đổ chuông từ {session.Caller}", "INFO");
@@ -3387,7 +3411,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
             if (port != null)
             {
-                port.Status = SimStatus.Calling;
+                port.Status = "Calling";
                 port.LastCallResult = $"Answered: {session.Caller}";
                 port.UpdateDisplayResult("Call");
                 AddLog($"[{session.Port}] Đã bắt máy cuộc gọi từ {session.Caller}", "INFO");
@@ -3402,7 +3426,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
             if (port != null)
             {
-                port.Status = SimStatus.Active;
+                port.Status = "Active";
                 port.LastCallResult = $"Ended: {session.Caller}";
                 port.UpdateDisplayResult("Call");
                 

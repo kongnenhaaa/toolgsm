@@ -36,13 +36,21 @@ namespace gsm
             serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();
             serviceCollection.AddSingleton<IAudioService, AudioService>();
             serviceCollection.AddSingleton<INotifyService, NotifyService>();
+            serviceCollection.AddSingleton<IFirebaseOtpService, FirebaseOtpService>();
+            serviceCollection.AddSingleton<ApiHostService>();
 
             Resources.Add("services", serviceCollection.BuildServiceProvider());
         }
 
-        protected override void OnStartup(StartupEventArgs e)
+        protected override async void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            if (Resources["services"] is ServiceProvider sp)
+            {
+                var api = sp.GetRequiredService<ApiHostService>();
+                await api.StartAsync();
+            }
 
             // Bắt lỗi trên luồng UI
             this.DispatcherUnhandledException += (s, args) =>

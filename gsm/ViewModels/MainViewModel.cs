@@ -2048,8 +2048,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.UpdateDisplayResult(CommandPanelTab);
                     System.IO.File.AppendAllText("ussd_debug.txt", $"[{DateTime.Now}] [{e.PortName}] {ussdContent}\n");
 
-                    // Thử match đầu số Viettel (032-039, 086, 096, 097, 098) và Vinaphone (081-085, 088, 091, 094)
-                    var phoneMatch = Regex.Match(ussdContent, @"(?:84|0)(3[2-9]|8[1-9]|9[1-9])\d{7}");
+                    var phoneMatch = Regex.Match(ussdContent, @"(?:thuê bao|thue bao|so tb|số tb|msisdn|sim)[^\d]{0,15}(0\d{9,10}|84\d{9,10})", RegexOptions.IgnoreCase);
+                    if (!phoneMatch.Success)
+                    {
+                        // Thử match đầu số Viettel (032-039, 086, 096, 097, 098) và Vinaphone (081-085, 088, 091, 094)
+                        phoneMatch = Regex.Match(ussdContent, @"(?:84|0)(3[2-9]|8[1-9]|9[1-9])\d{7}");
+                    }
                     if (!phoneMatch.Success)
                     {
                         // Fallback: bắt bất kỳ số 9-10 chữ số bắt đầu bằng 0 hoặc 84
@@ -2089,11 +2093,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
                     
                     // Sửa lỗi Parse nhầm "1đ" từ tin nhắn báo không đủ tiền hoặc quảng cáo cước phí
-                    // Cập nhật hỗ trợ TKG (Tài Khoản Gốc) của Viettel
-                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK)[^\d]*?(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)", RegexOptions.IgnoreCase);
+                    // Cập nhật hỗ trợ TKG (Tài Khoản Gốc) của Viettel, VinaPhone
+                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK|balance)[^\d]{0,20}(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)?", RegexOptions.IgnoreCase);
                     if (strictMatch.Success) 
                     {
-                        port.Balance = strictMatch.Groups[1].Value + " " + strictMatch.Groups[2].Value;
+                        string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
+                        port.Balance = strictMatch.Groups[1].Value + " " + unit;
                     }
                     else
                     {
@@ -2639,6 +2644,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                     extractedOtp = gsm.Services.GsmModemService.ExtractOtp(cleanContent) ?? "N/A";
+                }
+
+                if (port != null)
+                {
+                    // 1. Parse SĐT từ SMS (nếu có)
+                    var phoneMatch = Regex.Match(cleanContent, @"(?:thuê bao|thue bao|so tb|số tb|msisdn|sim)[^\d]{0,15}(0\d{9,10}|84\d{9,10})", RegexOptions.IgnoreCase);
+                    if (phoneMatch.Success)
+                    {
+                        string foundNumber = phoneMatch.Groups[1].Value;
+                        if (foundNumber.StartsWith("84")) foundNumber = "0" + foundNumber.Substring(2);
+                        else if (!foundNumber.StartsWith("0")) foundNumber = "0" + foundNumber;
+
+                        if (string.IsNullOrEmpty(port.PhoneNumber) || port.PhoneNumber != foundNumber)
+                        {
+                            port.PhoneNumber = foundNumber;
+                            UpdateSmsReceiverPhone(port.PortName, foundNumber);
+                            AddLog($"[{e.PortName}] Đã cập nhật SĐT từ SMS: {foundNumber}", "SUCCESS");
+                        }
+                    }
+
+                    // 2. Parse TKC từ SMS (nếu có)
+                    var strictMatch = Regex.Match(cleanContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK|balance)[^\d]{0,20}(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)?", RegexOptions.IgnoreCase);
+                    if (strictMatch.Success)
+                    {
+                        string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
+                        string bal = strictMatch.Groups[1].Value + " " + unit;
+                        if (port.Balance != bal)
+                        {
+                            port.Balance = bal;
+                            AddLog($"[{e.PortName}] Đã cập nhật số dư từ SMS: {bal}", "SUCCESS");
+                        }
+                    }
                 }
 
                 // Tự động kiểm tra TKC khi nhận thông báo trừ tiền từ tổng đài:

@@ -276,9 +276,7 @@
     {
         try
         {
-            Snackbar.Add($"[{port.PortName}] Đang chấp nhận SIM + tráng IMEI...", Severity.Info);
             await Vm.AcceptNewSimAsync(port.PortName);
-            Snackbar.Add($"[{port.PortName}] Đã xử lý chấp nhận", Severity.Success);
         }
         catch (Exception ex)
         {

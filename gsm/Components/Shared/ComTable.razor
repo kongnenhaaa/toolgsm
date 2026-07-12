@@ -187,7 +187,6 @@
             {
                 try
                 {
-                    Snackbar.Add($"[{port.PortName}] Đang Accept...", Severity.Info);
                     if (OnAccept.HasDelegate)
                     {
                         await OnAccept.InvokeAsync(port);

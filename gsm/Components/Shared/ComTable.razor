@@ -126,8 +126,7 @@
         return s.Contains("Pending", StringComparison.OrdinalIgnoreCase)
             || s.Contains("WaitAccept", StringComparison.OrdinalIgnoreCase)
             || s.Contains("SecurityBlocked", StringComparison.OrdinalIgnoreCase)
-            || err.Contains("sim_mới_chờ_chấp_nhận", StringComparison.OrdinalIgnoreCase)
-            || (p.StatusDisplay?.Contains("Chờ Accept") == true);
+            || err.Contains("sim_mới_chờ_chấp_nhận", StringComparison.OrdinalIgnoreCase);
     }
 
     async Task AcceptOne(SimPort port)
@@ -158,7 +157,7 @@
         }
     }
 
-    [Inject] private IDialogService DialogService { get; set; }
+    [Inject] private IDialogService DialogService { get; set; } = default!;
 
     bool _bulkAccepting;
 

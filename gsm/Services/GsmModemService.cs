@@ -20,7 +20,7 @@ public interface IGsmModemService
     Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile);
     void StartPollingNetwork(string portName);
     List<string> GetAvailablePorts();
-    void ConnectAll(int baudRate = 115200);
+    string ConnectAll(int baudRate = 115200);
     void Disconnect(string portName);
     void DisconnectAll();
     void StartHotplugWaitLoop(string portName);
@@ -170,9 +170,10 @@ public class GsmModemService : IGsmModemService
         return filtered;
     }
 
-    public void ConnectAll(int baudRate = 115200)
+    public string ConnectAll(int baudRate = 115200)
     {
         List<string> newlyOpenedPorts = new List<string>();
+        List<string> failedPorts = new List<string>();
 
         lock (_connectLock)
         {
@@ -233,6 +234,7 @@ public class GsmModemService : IGsmModemService
                         {
                             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Lỗi kết nối {p}: {ex.Message}" });
                         }
+                        failedPorts.Add(p);
                     }
                 }
             }
@@ -251,6 +253,11 @@ public class GsmModemService : IGsmModemService
                 }
             });
         }
+
+        string result = "";
+        if (newlyOpenedPorts.Count > 0) result += $"Mới: {string.Join(", ", newlyOpenedPorts)}. ";
+        if (failedPorts.Count > 0) result += $"Lỗi: {string.Join(", ", failedPorts)}.";
+        return string.IsNullOrWhiteSpace(result) ? "Không có cổng mới cần kết nối" : result.Trim();
     }
 
     private void HandleErrorReceived(string portName, SerialPort sp)

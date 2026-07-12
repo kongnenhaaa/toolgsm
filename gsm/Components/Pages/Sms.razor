@@ -446,7 +446,8 @@
 
     async Task RunQueue()
     {
-        Snackbar.Add("Đang chạy hàng đợi SMS...", Severity.Info);
+        Snackbar.Add("Đang chạy hàng đợi...", Severity.Info);
+        Vm.RunCommandQueueCommand?.Execute(null);
     }
 
     async Task ClearQueue()

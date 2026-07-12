@@ -57,6 +57,23 @@
         Connect All
     </MudButton>
 
+    @if (_selectedPorts.Any())
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="RefreshSelected">
+            Làm mới (@_selectedPorts.Count)
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" OnClick="CheckBalanceSelected">
+            Check TKC (@_selectedPorts.Count)
+        </MudButton>
+    }
+    
+    @if (Ports.Any(p => p.Status == SimStatus.SecurityBlocked))
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small" OnClick="AcceptAllWaiting">
+            Accept Tất Cả Đang Chờ
+        </MudButton>
+    }
+
     <MudSpacer />
 
     <!-- Toggle Card / Table -->
@@ -442,6 +459,53 @@ else
         await Vm.RefreshPortAsync(port.PortName);
     }
 
+    async Task RefreshSelected()
+    {
+        int count = 0;
+        foreach (var port in _selectedPorts)
+        {
+            Vm.RefreshPortAsync(port.PortName);
+            count++;
+        }
+        Snackbar.Add($"Đã ra lệnh làm mới {count} cổng", Severity.Success);
+    }
+
+    async Task CheckBalanceSelected()
+    {
+        int count = 0;
+        foreach (var port in _selectedPorts)
+        {
+            Vm.CheckBalanceForPortAsync(port.PortName);
+            count++;
+        }
+        Snackbar.Add($"Đã ra lệnh kiểm tra TKC {count} cổng", Severity.Success);
+    }
+
+    async Task AcceptAllWaiting()
+    {
+        var waitingPorts = Ports.Where(p => p.Status == SimStatus.SecurityBlocked).ToList();
+        if (!waitingPorts.Any()) return;
+
+        var confirm = await DialogService.ShowMessageBox(
+            "Xác nhận",
+            $"Chấp nhận và tráng IMEI mới cho {waitingPorts.Count} SIM đang chờ?",
+            yesText: "Chấp nhận tất cả", cancelText: "Hủy");
+
+        if (confirm != true) return;
+
+        int count = 0;
+        foreach (var port in waitingPorts)
+        {
+            try
+            {
+                Vm.ApproveUnknownSimCommand?.Execute(port);
+                count++;
+            }
+            catch {}
+        }
+        Snackbar.Add($"Đã chấp nhận {count} SIM mới", Severity.Success);
+    }
+
     async Task CheckBalance(SimPort port)
     {
         Snackbar.Add($"[{port.PortName}] Đang kiểm tra TKC (*101#)...", Severity.Info);
@@ -496,8 +560,9 @@ else
 
     async Task ConnectAll()
     {
-        Snackbar.Add("Đang Connect All...", Severity.Info);
-        ModemService.ConnectAll(115200);
+        Snackbar.Add("Đang quét kết nối...", Severity.Info);
+        string result = ModemService.ConnectAll(115200);
+        Snackbar.Add(result, result.Contains("Lỗi") ? Severity.Warning : Severity.Success);
     }
 
     public void Dispose() => _timer?.Dispose();

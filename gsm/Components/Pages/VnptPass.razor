@@ -75,9 +75,11 @@
 
         try
         {
-            // Tùy nhà mạng: USSD hoặc SMS
-            _vnptResult = $"[{DateTime.Now:HH:mm:ss}] {_vnptPort}\nĐã gửi lệnh đặt mật khẩu My VNPT\nMật khẩu: {_vnptPassword}\n\n" + _vnptResult;
-            Snackbar.Add("Đã gửi lệnh đặt mật khẩu", Severity.Success);
+            // Gửi tin nhắn đổi mật khẩu mạng Vina: gửi MK [mật khẩu] đến 333
+            await ModemService.SendSmsAsync(_vnptPort, "333", $"MK {_vnptPassword}");
+
+            _vnptResult = $"[{DateTime.Now:HH:mm:ss}] {_vnptPort}\nĐã gửi tin nhắn đổi mật khẩu (MK {_vnptPassword} -> 333)\n\n" + _vnptResult;
+            Snackbar.Add("Đã gửi tin đổi mật khẩu", Severity.Success);
         }
         catch (Exception ex)
         {

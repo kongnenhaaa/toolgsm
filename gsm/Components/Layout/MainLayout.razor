@@ -7,24 +7,6 @@
 <MudThemeProvider @bind-IsDarkMode="@_isDarkMode" Theme="@_theme" />
 
 <MudLayout>
-    <MudAppBar Elevation="1" Dense="true" Color="Color.Surface">
-        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
-        
-        <MudText Typo="Typo.h6" Class="ml-2 font-bold" Color="Color.Primary">
-            Tool GSM
-        </MudText>
-
-        <MudSpacer />
-
-        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="mr-3">
-            @ActiveCount COM Active
-        </MudChip>
-
-        <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Color="Color.Default" OnClick="RefreshAll" />
-        <MudIconButton Icon="@(_isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Outlined.DarkMode)" 
-                       Color="Color.Inherit" OnClick="ToggleDarkMode" />
-        <MudIconButton Icon="@Icons.Material.Outlined.Settings" Color="Color.Default" OnClick="OpenSettings" />
-    </MudAppBar>
 
     <MudDrawer @bind-Open="_drawerOpen" Elevation="1" Variant="@DrawerVariant.Mini" 
                OpenMiniOnHover="true" ClipMode="DrawerClipMode.Always">
@@ -42,9 +24,6 @@
         <div class="flex-grow-1">
             @Body
         </div>
-        <MudText Typo="Typo.caption" Align="Align.Center" Style="color: #94A3B8;" Class="mt-8">
-            Tool GSM Professional v1.0.0 &copy; @DateTime.Now.Year
-        </MudText>
     </MudMainContent>
 </MudLayout>
 

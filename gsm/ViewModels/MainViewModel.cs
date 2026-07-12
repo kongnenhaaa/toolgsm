@@ -4691,32 +4691,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // Network & Sim methods removed
     
-    public async Task<string> ExecuteCallFromUiAsync(string portName, string phoneNumber, string wavPath, int duration)
+    public async Task ExecuteCallFromUiAsync(
+        string port,
+        string phone,
+        string wavPath,
+        int duration,
+        bool record = false)
     {
-        if (string.IsNullOrWhiteSpace(phoneNumber)) return "ERROR: Số điện thoại trống";
-        
-        string cmd = $"ATD{phoneNumber};";
-        AddLog($"[{portName}] Bắt đầu gọi: {cmd}");
-        string result = await _modemService.SendCommandAsync(portName, cmd, timeoutMs: 5000);
-        
-        if (result.Contains("OK"))
-        {
-            _callFailures.TryRemove(portName, out _);
-            _ = Task.Run(async () =>
-            {
-                await MonitorAndPlayAudioDuringCallAsync(portName, duration, wavPath);
-                
-                await Task.Delay(1000); // Đợi 1 giây trước khi kết thúc
-                AddLog($"[{portName}] Hết thời gian gọi ({duration}s), đang dập máy...");
-                await _modemService.SendCommandAsync(portName, "ATH", timeoutMs: 5000);
-            });
-            return "Đang gọi...";
-        }
-        else
-        {
-            AddLog($"[{portName}] Lỗi khi gọi: {result}", "ERROR");
-            return $"Lỗi: {result}";
-        }
+        await _modemService.CallWithAudioAsync(
+            port,
+            phone,
+            string.IsNullOrWhiteSpace(wavPath) ? null : wavPath,
+            duration,
+            record);
     }
     // Phân tích User Data Header (UDH) để lấy thông tin ghép tin nhắn dài (concatenated SMS).
     // udHex: chuỗi hex của phần User Data (bắt đầu bằng UDHL nếu hasUdh = true).

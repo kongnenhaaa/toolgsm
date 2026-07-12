@@ -27,6 +27,8 @@ public interface IGsmModemService
     Task ReinitializeSettingsAsync(string portName);
     Task<bool> ResetNetworkAsync(string portName);
     Task<bool> AcceptNewSimAndPaintImeiAsync(string portName, string targetImei);
+    Task<bool> CallWithAudioAsync(string portName, string phoneNumber, string? wavPath, int durationSeconds = 30, bool record = false, CancellationToken ct = default);
+
     
     // Events
     event EventHandler<GsmDataEventArgs> SmsReceived;
@@ -1865,6 +1867,225 @@ public class GsmModemService : IGsmModemService
         
         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đang quét tin nhắn tồn đọng (Sweep)..." });
         await SendCommandAsync(portName, "AT+CMGL=\"REC UNREAD\"");
+    }
+
+    public async Task<bool> CallWithAudioAsync(
+        string portName,
+        string phoneNumber,
+        string? wavPath,
+        int durationSeconds = 30,
+        bool record = false,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(phoneNumber))
+            return false;
+
+        string? remoteFileName = null;
+
+        try
+        {
+            // ---------- 1. Upload WAV nếu có ----------
+            if (!string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath))
+            {
+                remoteFileName = await UploadWavAsync(portName, wavPath, ct);
+                if (remoteFileName == null)
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Upload WAV thất bại → gọi không audio" });
+                }
+            }
+
+            // ---------- 2. Bật CLIP / báo trạng thái (tuỳ chọn) ----------
+            await SendCommandAsync(portName, "AT+CLIP=1", 2000, silent: true);
+            await SendCommandAsync(portName, "AT+CRC=1", 2000, silent: true);
+
+            // ---------- 3. Gọi ----------
+            // ATDxxx;  (dấu ; = voice call)
+            var dialResp = await SendCommandAsync(portName, $"ATD{phoneNumber.Trim()};", 15000);
+            if (dialResp.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
+                dialResp.Contains("NO CARRIER", StringComparison.OrdinalIgnoreCase))
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Gọi thất bại: {dialResp}" });
+                return false;
+            }
+
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đang gọi {phoneNumber}..." });
+
+            // ---------- 4. Chờ nhấc máy (CLCC) hoặc timeout ----------
+            bool answered = await WaitForAnswerAsync(portName, timeoutSeconds: 45, ct);
+            if (!answered)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Không nhấc máy / timeout → ATH" });
+                await SendCommandAsync(portName, "ATH", 3000, silent: true);
+                return false;
+            }
+
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đã kết nối" });
+
+            // ---------- 5. Phát WAV nếu đã upload ----------
+            if (!string.IsNullOrEmpty(remoteFileName))
+            {
+                await PlayWavAsync(portName, remoteFileName, ct);
+            }
+
+            // ---------- 6. (Tuỳ chọn) Bắt đầu ghi âm ----------
+            if (record)
+            {
+                try
+                {
+                    await SendCommandAsync(portName, "AT+QAUDRD=1,\"call_rec.wav\",1", 3000, silent: true);
+                }
+                catch { /* ignore nếu không hỗ trợ */ }
+            }
+
+            // ---------- 7. Giữ cuộc gọi theo duration ----------
+            var end = DateTime.UtcNow.AddSeconds(Math.Max(5, durationSeconds));
+            while (DateTime.UtcNow < end && !ct.IsCancellationRequested)
+            {
+                // Kiểm tra còn trong cuộc gọi không
+                var clcc = await SendCommandAsync(portName, "AT+CLCC", 2000, silent: true);
+                if (!clcc.Contains("+CLCC:"))
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Cuộc gọi đã kết thúc sớm" });
+                    break;
+                }
+                await Task.Delay(1000, ct);
+            }
+
+            // ---------- 8. Dập máy ----------
+            await SendCommandAsync(portName, "ATH", 5000);
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đã dập máy" });
+
+            // ---------- 9. Dọn file trên modem (tuỳ chọn) ----------
+            if (!string.IsNullOrEmpty(remoteFileName))
+            {
+                try
+                {
+                    await SendCommandAsync(portName, $"AT+QFDEL=\"{remoteFileName}\"", 3000, silent: true);
+                }
+                catch { }
+            }
+
+            if (record)
+            {
+                try { await SendCommandAsync(portName, "AT+QAUDRD=0", 2000, silent: true); } catch { }
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            try { await SendCommandAsync(portName, "ATH", 3000, silent: true); } catch { }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"CallWithAudio lỗi: {ex.Message}" });
+            try { await SendCommandAsync(portName, "ATH", 3000, silent: true); } catch { }
+            return false;
+        }
+    }
+
+    async Task<string?> UploadWavAsync(string portName, string localPath, CancellationToken ct)
+    {
+        try
+        {
+            var fi = new FileInfo(localPath);
+            if (!fi.Exists || fi.Length == 0) return null;
+
+            string remoteName = "play.wav";
+            long size = fi.Length;
+
+            await SendCommandAsync(portName, $"AT+QFDEL=\"{remoteName}\"", 2000, silent: true);
+
+            int uploadTimeoutSec = Math.Max(30, (int)(size / 1024) + 20);
+            string cmd = $"AT+QFUPL=\"{remoteName}\",{size},{uploadTimeoutSec}";
+
+            var resp = await SendCommandAsync(portName, cmd, 10000);
+            if (!resp.Contains("CONNECT", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!resp.Contains("OK", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"QFUPL không nhận CONNECT: {resp}" });
+                    return null;
+                }
+            }
+
+            byte[] data = await File.ReadAllBytesAsync(localPath, ct);
+            bool written = await WriteRawAsync(portName, data, ct);
+            if (!written)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Ghi binary WAV thất bại" });
+                return null;
+            }
+
+            await Task.Delay(500, ct);
+            var final = await SendCommandAsync(portName, "AT", 5000, silent: true); // flush
+
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Upload WAV OK → {remoteName} ({size} bytes)" });
+            return remoteName;
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"UploadWav lỗi: {ex.Message}" });
+            return null;
+        }
+    }
+
+    async Task<bool> WriteRawAsync(string portName, byte[] data, CancellationToken ct)
+    {
+        if (!_serialPorts.TryGetValue(portName, out var sp) || sp == null || !sp.IsOpen)
+            return false;
+
+        try
+        {
+            await sp.BaseStream.WriteAsync(data, 0, data.Length, ct);
+            await sp.BaseStream.FlushAsync(ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"WriteRaw lỗi: {ex.Message}" });
+            return false;
+        }
+    }
+
+    async Task PlayWavAsync(string portName, string remoteFileName, CancellationToken ct)
+    {
+        try
+        {
+            await SendCommandAsync(portName, "AT+CLVL=5", 2000, silent: true); // volume 0-5
+
+            var playCmd = $"AT+QPSND=1,\"{remoteFileName}\"";
+            var resp = await SendCommandAsync(portName, playCmd, 8000);
+
+            if (resp.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                playCmd = $"AT+QAUDPLAY=\"{remoteFileName}\",0,1";
+                resp = await SendCommandAsync(portName, playCmd, 8000);
+            }
+
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Play WAV: {resp}" });
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"PlayWav lỗi: {ex.Message}" });
+        }
+    }
+
+    async Task<bool> WaitForAnswerAsync(string portName, int timeoutSeconds, CancellationToken ct)
+    {
+        var end = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        while (DateTime.UtcNow < end && !ct.IsCancellationRequested)
+        {
+            var clcc = await SendCommandAsync(portName, "AT+CLCC", 2000, silent: true);
+            if (clcc.Contains("+CLCC:"))
+            {
+                if (clcc.Contains(",0,0,") || Regex.IsMatch(clcc, @"\+CLCC:\s*\d+,\d+,0,"))
+                    return true;
+            }
+            await Task.Delay(800, ct);
+        }
+        return false;
     }
 }
 

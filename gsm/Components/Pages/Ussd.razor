@@ -76,7 +76,7 @@
 <div class="mx-3 mt-1">
     @if (_subTab == 0)
     {
-        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" OnAccept="HandleAcceptOne" />
     }
     else if (_subTab == 1) // Tin nhắn tới
     {
@@ -259,6 +259,20 @@
     // DTMF
     private string _dtmfPort = "";
     private string _dtmfCode = "";
+
+    async Task HandleAcceptOne(SimPort port)
+    {
+        try
+        {
+            Snackbar.Add($"[{port.PortName}] Đang chấp nhận SIM + tráng IMEI...", Severity.Info);
+            await Vm.AcceptNewSimAsync(port.PortName);
+            Snackbar.Add($"[{port.PortName}] Đã xử lý chấp nhận", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"[{port.PortName}] Accept lỗi: {ex.Message}", Severity.Error);
+        }
+    }
 
     // Notify
     private bool _notifySms = true;

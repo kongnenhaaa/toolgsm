@@ -16,6 +16,20 @@
                        Variant="Variant.Outlined" Color="Color.Success" OnClick="CheckTkcSelected">Check TKC</MudButton>
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Dialpad" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Warning" OnClick="Ussd101Selected">USSD *101#</MudButton>
+            
+            @{
+                var pendingCount = SelectedItems.Count(IsPendingAccept);
+            }
+            @if (pendingCount > 0)
+            {
+                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" Class="mr-2"
+                           StartIcon="@Icons.Material.Filled.CheckCircle"
+                           OnClick="AcceptSelectedPending"
+                           Disabled="@_bulkAccepting">
+                    @(_bulkAccepting ? "Đang chấp nhận..." : $"CHẤP NHẬN ({pendingCount})")
+                </MudButton>
+            }
+
             <MudSpacer />
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
                        Variant="Variant.Text" Color="Color.Default" OnClick="() => SelectedItems.Clear()">Bỏ chọn</MudButton>
@@ -141,6 +155,59 @@
             try { ModemService.Disconnect(port.PortName); } catch {}
             await Task.Delay(500);
             ModemService.ConnectAll(115200);
+        }
+    }
+
+    [Inject] private IDialogService DialogService { get; set; }
+
+    bool _bulkAccepting;
+
+    async Task AcceptSelectedPending()
+    {
+        var list = SelectedItems.Where(IsPendingAccept).ToList();
+        if (!list.Any())
+        {
+            Snackbar.Add("Không có cổng nào đang Chờ Accept trong selection", Severity.Warning);
+            return;
+        }
+
+        if (list.Count > 5)
+        {
+            var ok = await DialogService.ShowMessageBox(
+                "Xác nhận",
+                $"Chấp nhận SIM + tráng IMEI cho {list.Count} cổng?\nChỉ Accept khi đã chắc SIM đúng.",
+                yesText: "Chấp nhận", cancelText: "Hủy");
+            if (ok != true) return;
+        }
+
+        _bulkAccepting = true;
+        int okN = 0, failN = 0;
+        try
+        {
+            foreach (var port in list)
+            {
+                try
+                {
+                    Snackbar.Add($"[{port.PortName}] Đang Accept...", Severity.Info);
+                    if (OnAccept.HasDelegate)
+                    {
+                        await OnAccept.InvokeAsync(port);
+                        okN++;
+                        await Task.Delay(600);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failN++;
+                    Snackbar.Add($"[{port.PortName}] Lỗi: {ex.Message}", Severity.Error);
+                }
+            }
+            if (okN > 0 || failN > 0)
+                Snackbar.Add($"Accept xong: {okN} OK, {failN} lỗi", failN == 0 ? Severity.Success : Severity.Warning);
+        }
+        finally
+        {
+            _bulkAccepting = false;
         }
     }
 

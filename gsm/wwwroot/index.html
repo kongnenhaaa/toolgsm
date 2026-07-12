@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Tool GSM EC20</title>
+    <base href="/" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link href="css/app.css" rel="stylesheet" />
+    <style>
+        html, body {
+            font-family: 'Inter', Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background: #F8FAFC;
+        }
+        #app {
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div style="display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;gap:16px;">
+            <div class="mud-progress-circular mud-progress-circular-indeterminate" style="width:48px;height:48px;"></div>
+            <div style="color:#64748B;font-size:14px;">Đang khởi động Tool GSM...</div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui" style="display:none;">
+        Đã xảy ra lỗi.
+        <a href="" class="reload">Tải lại</a>
+        <a class="dismiss">🗙</a>
+    </div>
+
+    <script src="_framework/blazor.webview.js"></script>
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+</body>
+</html>

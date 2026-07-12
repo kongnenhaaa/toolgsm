@@ -1,15 +1,38 @@
-using System.Configuration;
-using System.Data;
+using System;
 using System.Windows;
+using Microsoft.Extensions.DependencyInjection;
+using MudBlazor.Services;
+using gsm.Services;
 using gsm.ViewModels;
 
 namespace gsm
 {
-    /// <summary>
-    /// Interaction logic for App.xaml
-    /// </summary>
     public partial class App : Application
     {
+        public App()
+        {
+            var serviceCollection = new ServiceCollection();
+            
+            serviceCollection.AddWpfBlazorWebView();
+            serviceCollection.AddMudServices(config =>
+            {
+                config.SnackbarConfiguration.PositionClass = MudBlazor.Defaults.Classes.Position.BottomRight;
+                config.SnackbarConfiguration.PreventDuplicates = false;
+                config.SnackbarConfiguration.NewestOnTop = true;
+                config.SnackbarConfiguration.ShowCloseIcon = true;
+                config.SnackbarConfiguration.VisibleStateDuration = 4000;
+                config.SnackbarConfiguration.HideTransitionDuration = 300;
+                config.SnackbarConfiguration.ShowTransitionDuration = 300;
+            });
+
+            // ===== ĐĂNG KÝ BACKEND CŨ =====
+            serviceCollection.AddSingleton<IGsmModemService, GsmModemService>();
+            serviceCollection.AddSingleton<ImeiManagementService>();
+            serviceCollection.AddSingleton<MainViewModel>();
+
+            Resources.Add("services", serviceCollection.BuildServiceProvider());
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
@@ -68,5 +91,4 @@ namespace gsm
             base.OnExit(e);
         }
     }
-
 }

@@ -1,0 +1,26 @@
+:root {
+    --mud-palette-primary: #2563EB;
+    --mud-palette-secondary: #0D9488;
+}
+
+.mud-paper {
+    border-radius: 12px !important;
+}
+
+.port-card {
+    transition: all 0.2s ease;
+    border: 1px solid #E2E8F0;
+}
+
+.port-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.08);
+    border-color: #93C5FD;
+}
+
+.status-badge {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 9999px;
+}

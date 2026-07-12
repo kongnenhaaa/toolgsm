@@ -1,0 +1,67 @@
+@using gsm.MockModels
+
+<MudPaper Class="pa-4 port-card" Elevation="0" Style="border-radius:12px; height:100%;">
+    <MudStack Spacing="2">
+        <!-- Header -->
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+            <MudText Typo="Typo.subtitle1" Style="font-weight:600;">@Port.PortName</MudText>
+            <StatusBadge Status="@Port.Status" />
+        </MudStack>
+
+        <MudDivider Class="my-1" />
+
+        <!-- Info -->
+        <MudStack Spacing="1">
+            <MudStack Row="true" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.caption" Style="color:#64748B;">IMEI</MudText>
+                <MudText Typo="Typo.caption" Style="font-family:monospace;">@(string.IsNullOrEmpty(Port.Imei) ? "—" : Port.Imei)</MudText>
+            </MudStack>
+
+            <MudStack Row="true" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.caption" Style="color:#64748B;">SĐT</MudText>
+                <MudText Typo="Typo.caption" Style="font-weight:500;">
+                    @(string.IsNullOrEmpty(Port.PhoneNumber) || Port.PhoneNumber == "Chưa lấy được số" ? "—" : Port.PhoneNumber)
+                </MudText>
+            </MudStack>
+
+            <MudStack Row="true" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.caption" Style="color:#64748B;">TKC</MudText>
+                <MudText Typo="Typo.caption" Style="font-weight:600; color:#16A34A;">
+                    @(string.IsNullOrEmpty(Port.Balance) ? "—" : Port.Balance)
+                </MudText>
+            </MudStack>
+
+            <MudStack Row="true" Justify="Justify.SpaceBetween">
+                <MudText Typo="Typo.caption" Style="color:#64748B;">Nhà mạng</MudText>
+                <MudText Typo="Typo.caption">@(string.IsNullOrEmpty(Port.NetworkProvider) ? "—" : Port.NetworkProvider)</MudText>
+            </MudStack>
+        </MudStack>
+
+        <!-- Actions -->
+        <MudStack Row="true" Spacing="1" Class="mt-2">
+            @if (Port.Status == SimStatus.SecurityBlocked)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" 
+                           FullWidth="true" OnClick="OnAcceptClicked">
+                    Chấp nhận SIM
+                </MudButton>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" 
+                           FullWidth="true" OnClick="OnRefreshClicked">
+                    Làm mới
+                </MudButton>
+            }
+        </MudStack>
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter] public SimPort Port { get; set; } = new();
+    [Parameter] public EventCallback<SimPort> OnAccept { get; set; }
+    [Parameter] public EventCallback<SimPort> OnRefresh { get; set; }
+
+    async Task OnAcceptClicked() => await OnAccept.InvokeAsync(Port);
+    async Task OnRefreshClicked() => await OnRefresh.InvokeAsync(Port);
+}

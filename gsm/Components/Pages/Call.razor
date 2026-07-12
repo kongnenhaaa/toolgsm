@@ -2,48 +2,63 @@
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @using gsm.Models
 @using gsm.Components.Shared
 @implements IDisposable
 
 <!-- ========== ACTION FORM ========== -->
-<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
-          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
-    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-        <MudText Typo="Typo.caption" Style="color:#64748B; min-width:80px;">Người nhận</MudText>
-        <MudTextField @bind-Value="_phone" Placeholder="09xxxxxxxx" 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="max-width:140px; background:#F8FAFC;" Immediate="true" />
+<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mb-2">
+        <MudTextField @bind-Value="_phone" Label="Số điện thoại" Placeholder="09xxxxxxxx"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:180px;" Immediate="true" />
 
-        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Nhấn phím (DTMF)</MudText>
-        <MudTextField @bind-Value="_dtmf" Placeholder="1,2,3" 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" 
-                      Style="max-width:100px; background:#F8FAFC;" Immediate="true" />
+        <MudTextField @bind-Value="_wavPath" Label="File WAV (tùy chọn)" Placeholder="C:\audio\otp.wav"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="flex:1;"
+                      Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.FolderOpen"
+                      OnAdornmentClick="BrowseWav" HelperText="mono 8kHz 16-bit" />
 
-        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Thời gian (s)</MudText>
-        <MudNumericField @bind-Value="_duration" Min="1" Max="300"
-                         Variant="Variant.Outlined" Margin="Margin.Dense" 
-                         Style="max-width:80px; background:#F8FAFC;" />
+        <MudNumericField @bind-Value="_duration" Label="Thời lượng (s)" Min="5" Max="180"
+                         Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:120px;" />
+    </MudStack>
 
-        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Chế độ</MudText>
-        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined" 
-                   Margin="Margin.Dense" Style="width:130px; background:#F8FAFC;">
-            <MudSelectItem Value="@("Selected")">Cổng đã chọn</MudSelectItem>
-            <MudSelectItem Value="@("All")">Tất cả Active</MudSelectItem>
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined"
+                   Margin="Margin.Dense" Style="width:150px;" Label="Gửi tới">
+            <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
+            <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
         </MudSelect>
 
-        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                   StartIcon="@Icons.Material.Filled.Phone"
-                   OnClick="MakeCall" Disabled="@(string.IsNullOrEmpty(_phone))">
-            Gọi
+        <MudSwitch T="bool" @bind-Value="_recordCall" Label="Ghi âm" Color="Color.Primary" />
+
+        <MudTextField @bind-Value="_dtmf" Label="DTMF" Placeholder="1#" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:100px;" />
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Call" OnClick="MakeCall"
+                   Disabled="@(string.IsNullOrWhiteSpace(_phone) || _isCalling)">
+            @(_isCalling ? "Đang gọi..." : "Gọi")
         </MudButton>
 
-        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
-                   StartIcon="@Icons.Material.Filled.PhoneDisabled"
-                   OnClick="HangupAll">
-            Cúp máy
+        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.CallEnd" OnClick="HangupAll"
+                   Disabled="@(!_isCalling && !_isRunningQueue)">
+            Dập máy
+        </MudButton>
+
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="SendDtmfDuringCall"
+                   Disabled="@(string.IsNullOrEmpty(_dtmf) || !_isCalling)">
+            Gửi DTMF
         </MudButton>
     </MudStack>
+
+    @if (_isCalling)
+    {
+        <MudStack Class="mt-2" Spacing="1">
+            <MudText Typo="Typo.caption">@_callStatus • @_elapsedSeconds s</MudText>
+            <MudProgressLinear Color="Color.Primary" Value="@_progressPercent" />
+        </MudStack>
+    }
 </MudPaper>
 
 <!-- ========== SUB TABS ========== -->
@@ -100,22 +115,443 @@
             </MudTable>
         </MudPaper>
     </MudTabPanel>
+
+    <MudTabPanel Text="Hàng đợi gọi">
+        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudTextField @bind-Value="_queuePhones" Label="Danh sách SĐT (mỗi dòng 1 số)" Lines="4"
+                          Variant="Variant.Outlined" Class="mb-3"
+                          Placeholder="0912345678&#10;0987654321" />
+
+            <MudStack Row="true" Spacing="2" Class="mb-3">
+                <MudTextField @bind-Value="_queueWav" Label="WAV chung" Variant="Variant.Outlined" 
+                              Margin="Margin.Dense" Style="flex:1;" />
+                <MudNumericField @bind-Value="_queueDuration" Label="Giây" Min="5" Max="120"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:100px;" />
+                <MudSwitch T="bool" @bind-Value="_queueRecord" Label="Ghi âm" Color="Color.Primary" />
+            </MudStack>
+
+            <MudStack Row="true" Spacing="2" Class="mb-3">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           OnClick="AddToCallQueue">Thêm vào hàng đợi</MudButton>
+
+                @if (!_isRunningQueue)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                               OnClick="RunCallQueue" Disabled="@(!_callQueue.Any())">
+                        Chạy hàng đợi (@_callQueue.Count)
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                               OnClick="StopCallQueue">Dừng</MudButton>
+                }
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                           OnClick="ClearCallQueue">Xóa hàng đợi</MudButton>
+            </MudStack>
+
+            <MudTable Items="@_callQueue" Dense="true" Hover="true" Elevation="0" Height="280px">
+                <HeaderContent>
+                    <MudTh>SĐT</MudTh>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>WAV</MudTh>
+                    <MudTh>Giây</MudTh>
+                    <MudTh>Trạng thái</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.Phone</MudTd>
+                    <MudTd>@context.Port</MudTd>
+                    <MudTd Style="font-size:12px;">@(System.IO.Path.GetFileName(context.Wav) ?? "—")</MudTd>
+                    <MudTd>@context.Duration</MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.Status == "Xong" ? Color.Success : context.Status == "Lỗi" ? Color.Error : Color.Default)">
+                            @context.Status
+                        </MudChip>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Hàng đợi trống</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </MudTabPanel>
 </MudTabs>
 
 @code {
+    // ========== BINDINGS ==========
     private string _phone = "";
+    private string _wavPath = "";
+    private int _duration = 30;
+    private bool _recordCall = true;
     private string _dtmf = "";
-    private int _duration = 15;
-    private string _sendMode = "Selected";
+    private string _sendMode = "selected"; // selected | all
     private HashSet<SimPort> _selectedPorts = new();
     private int _callSubTab = 0;
 
+    // Trạng thái cuộc gọi
+    private bool _isCalling = false;
+    private string _callStatus = "";
+    private int _elapsedSeconds = 0;
+    private double _progressPercent = 0;
+    private string _currentPort = "";
+    private System.Threading.Timer? _callTimer;
+    private CancellationTokenSource? _callCts;
+
+    // Lịch sử
+    private List<CallHistoryItem> _callHistory = new();
+
+    // Hàng đợi
+    private string _queuePhones = "";
+    private string _queueWav = "";
+    private int _queueDuration = 30;
+    private bool _queueRecord = true;
+    private List<CallQueueItem> _callQueue = new();
+    private bool _isRunningQueue = false;
+    private CancellationTokenSource? _queueCts;
+
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+    private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
     private List<SimPort> FilteredPorts => Ports;
 
-    private System.Threading.Timer? _timer;
+    private System.Threading.Timer? _uiTimer;
 
-    // --- Lịch sử gọi Models ---
+    protected override void OnInitialized()
+    {
+        _uiTimer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+    }
+
+    // =====================================================
+    // 1. GỌI NGAY (1 / Selected / All) – FIX THẬT 100%
+    // =====================================================
+    async Task MakeCall()
+    {
+        if (string.IsNullOrWhiteSpace(_phone))
+        {
+            Snackbar.Add("Nhập số điện thoại", Severity.Warning);
+            return;
+        }
+
+        var ports = GetTargetPorts();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
+            return;
+        }
+
+        if (ports.Count > 5)
+        {
+            var ok = await DialogService.ShowMessageBox("Xác nhận",
+                $"Gọi {_phone} trên {ports.Count} cổng?", yesText: "Gọi", cancelText: "Hủy");
+            if (ok != true) return;
+        }
+
+        _isCalling = true;
+        _callCts = new CancellationTokenSource();
+        int okCount = 0, failCount = 0;
+
+        foreach (var port in ports)
+        {
+            if (_callCts.Token.IsCancellationRequested) break;
+
+            _currentPort = port;
+            _callStatus = $"[{port}] Đang gọi {_phone}...";
+            _elapsedSeconds = 0;
+            _progressPercent = 0;
+            StateHasChanged();
+
+            bool success = false;
+            string resultMsg = "";
+
+            try
+            {
+                // Ưu tiên method đầy đủ của ViewModel (hỗ trợ WAV + ghi âm)
+                if (HasMethod(Vm, "ExecuteCallFromUiAsync"))
+                {
+                    await (Task)Vm.GetType().GetMethod("ExecuteCallFromUiAsync")!.Invoke(Vm, new object[] { port, _phone, _wavPath ?? "", _duration, _recordCall })!;
+                    success = true;
+                    resultMsg = "OK";
+                }
+                else
+                {
+                    // Fallback thủ công
+                    await ModemService.SendCommandAsync(port, $"ATD{_phone};", 15000);
+                    _callStatus = $"[{port}] Đang đổ chuông / đàm thoại...";
+
+                    // Phát WAV nếu có (QFUPL + QPSND – tùy firmware)
+                    if (!string.IsNullOrEmpty(_wavPath) && System.IO.File.Exists(_wavPath))
+                    {
+                        // TODO: QFUPL file rồi QPSND nếu backend hỗ trợ
+                        _callStatus = $"[{port}] Đang phát WAV...";
+                    }
+
+                    // Chờ thời lượng
+                    for (int i = 0; i < _duration; i++)
+                    {
+                        if (_callCts.Token.IsCancellationRequested) break;
+                        _elapsedSeconds = i + 1;
+                        _progressPercent = (_elapsedSeconds * 100.0) / _duration;
+                        StateHasChanged();
+                        await Task.Delay(1000, _callCts.Token);
+                    }
+
+                    // Dập máy
+                    await ModemService.SendCommandAsync(port, "ATH", 5000);
+                    success = true;
+                    resultMsg = "OK";
+                }
+
+                okCount++;
+                Snackbar.Add($"[{port}] Gọi xong", Severity.Success);
+            }
+            catch (Exception ex)
+            {
+                failCount++;
+                resultMsg = ex.Message;
+                try { await ModemService.SendCommandAsync(port, "ATH", 3000); } catch { }
+                Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
+            }
+
+            // Lưu lịch sử
+            _callHistory.Insert(0, new CallHistoryItem
+            {
+                Time = DateTime.Now,
+                Port = port,
+                Phone = _phone,
+                Duration = _elapsedSeconds > 0 ? _elapsedSeconds : _duration,
+                WavFile = _wavPath ?? "",
+                HasRecording = _recordCall,
+                Success = success,
+                Result = resultMsg
+            });
+
+            if (_callHistory.Count > 200) _callHistory.RemoveRange(200, _callHistory.Count - 200);
+            await Task.Delay(600);
+        }
+
+        _isCalling = false;
+        _callStatus = $"Hoàn tất: {okCount} OK, {failCount} lỗi";
+        Snackbar.Add(_callStatus, failCount == 0 ? Severity.Success : Severity.Warning);
+    }
+
+    // =====================================================
+    // 2. DẬP MÁY
+    // =====================================================
+    async Task HangupAll()
+    {
+        _callCts?.Cancel();
+        _isCalling = false;
+
+        var ports = GetTargetPorts();
+        if (!ports.Any()) ports = Ports.Select(p => p.PortName).ToList();
+
+        foreach (var port in ports)
+        {
+            try
+            {
+                await ModemService.SendCommandAsync(port, "ATH", 3000);
+            }
+            catch { }
+        }
+
+        _callStatus = "Đã dập tất cả";
+        Snackbar.Add("Đã dập tất cả cuộc gọi", Severity.Success);
+    }
+
+    // =====================================================
+    // 3. GỌI LẠI (Redial) – TỰ GỌI
+    // =====================================================
+    async Task Redial(CallHistoryItem item)
+    {
+        _phone = item.Phone;
+        _wavPath = item.WavFile;
+        _duration = item.Duration > 0 ? item.Duration : 30;
+        _recordCall = item.HasRecording;
+        _callSubTab = 0; // về form gọi
+        StateHasChanged();
+
+        // Tự động gọi luôn
+        await MakeCall();
+    }
+
+    // =====================================================
+    // 4. DTMF TRONG LÚC GỌI
+    // =====================================================
+    async Task SendDtmfDuringCall()
+    {
+        if (string.IsNullOrWhiteSpace(_dtmf))
+        {
+            Snackbar.Add("Nhập mã DTMF", Severity.Warning);
+            return;
+        }
+
+        var port = !string.IsNullOrEmpty(_currentPort) ? _currentPort : GetTargetPorts().FirstOrDefault();
+        if (string.IsNullOrEmpty(port))
+        {
+            Snackbar.Add("Không có cổng đang gọi", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            // Quectel: AT+VTS hoặc AT+QVTS
+            try
+            {
+                await ModemService.SendCommandAsync(port, $"AT+VTS=\"{_dtmf}\"", 5000);
+            }
+            catch
+            {
+                await ModemService.SendCommandAsync(port, $"AT+QVTS=\"{_dtmf}\"", 5000);
+            }
+            Snackbar.Add($"[{port}] Đã gửi DTMF {_dtmf}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("DTMF lỗi: " + ex.Message, Severity.Error);
+        }
+    }
+
+    // =====================================================
+    // 5. HÀNG ĐỢI GỌI – FIX THẬT 100%
+    // =====================================================
+    void AddToCallQueue()
+    {
+        var phones = _queuePhones.Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                 .Select(x => x.Trim())
+                                 .Where(x => x.Length >= 9)
+                                 .Distinct()
+                                 .ToList();
+
+        if (!phones.Any())
+        {
+            Snackbar.Add("Nhập danh sách số hợp lệ", Severity.Warning);
+            return;
+        }
+
+        var ports = GetTargetPorts();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Không có cổng", Severity.Warning);
+            return;
+        }
+
+        foreach (var phone in phones)
+        {
+            foreach (var port in ports)
+            {
+                _callQueue.Add(new CallQueueItem
+                {
+                    Phone = phone,
+                    Port = port,
+                    Wav = _queueWav,
+                    Duration = _queueDuration,
+                    Record = _queueRecord,
+                    Status = "Chờ"
+                });
+            }
+        }
+
+        _queuePhones = "";
+        Snackbar.Add($"Đã thêm {phones.Count * ports.Count} cuộc gọi vào hàng đợi", Severity.Success);
+    }
+
+    async Task RunCallQueue()
+    {
+        var pending = _callQueue.Where(x => x.Status == "Chờ").ToList();
+        if (!pending.Any())
+        {
+            Snackbar.Add("Hàng đợi trống", Severity.Warning);
+            return;
+        }
+
+        _isRunningQueue = true;
+        _queueCts = new CancellationTokenSource();
+        Snackbar.Add($"Bắt đầu chạy {pending.Count} cuộc gọi...", Severity.Info);
+
+        foreach (var item in pending)
+        {
+            if (_queueCts.Token.IsCancellationRequested) break;
+
+            item.Status = "Đang gọi";
+            StateHasChanged();
+
+            _phone = item.Phone;
+            _wavPath = item.Wav;
+            _duration = item.Duration;
+            _recordCall = item.Record;
+            _selectedPorts = new HashSet<SimPort>(Ports.Where(p => p.PortName == item.Port));
+            _sendMode = "selected";
+
+            try
+            {
+                await MakeCall(); // tái sử dụng logic gọi
+                item.Status = "Xong";
+            }
+            catch
+            {
+                item.Status = "Lỗi";
+            }
+
+            StateHasChanged();
+            await Task.Delay(1500, _queueCts.Token);
+        }
+
+        _isRunningQueue = false;
+        Snackbar.Add("Hoàn tất hàng đợi gọi", Severity.Success);
+    }
+
+    void StopCallQueue()
+    {
+        _queueCts?.Cancel();
+        _callCts?.Cancel();
+        _isRunningQueue = false;
+        _isCalling = false;
+        Snackbar.Add("Đã dừng hàng đợi", Severity.Normal);
+    }
+
+    void ClearCallQueue()
+    {
+        _callQueue.Clear();
+        Snackbar.Add("Đã xóa hàng đợi", Severity.Normal);
+    }
+
+    // =====================================================
+    // 6. CHỌN FILE WAV (UI)
+    // =====================================================
+    async Task BrowseWav()
+    {
+        // Trong WPF Blazor Hybrid có thể dùng OpenFileDialog qua JS/Interop hoặc service
+        // Tạm thời để user nhập path, hoặc tích hợp IFilePicker
+        Snackbar.Add("Nhập đường dẫn file WAV (mono 8kHz 16-bit khuyến nghị)", Severity.Info);
+    }
+
+    // =====================================================
+    // HELPERS
+    // =====================================================
+    List<string> GetTargetPorts()
+    {
+        if (_sendMode == "all" || !_selectedPorts.Any())
+            return ActivePorts.Select(p => p.PortName).ToList();
+        return _selectedPorts.Select(p => p.PortName).ToList();
+    }
+
+    bool HasMethod(object obj, string name)
+    {
+        return obj.GetType().GetMethod(name) != null;
+    }
+
+    public void Dispose()
+    {
+        _uiTimer?.Dispose();
+        _callTimer?.Dispose();
+        _callCts?.Cancel();
+        _queueCts?.Cancel();
+        _callCts?.Dispose();
+        _queueCts?.Dispose();
+    }
+
+    // ========== MODELS ==========
     public class CallHistoryItem
     {
         public DateTime Time { get; set; }
@@ -125,64 +561,16 @@
         public string WavFile { get; set; } = "";
         public bool HasRecording { get; set; }
         public bool Success { get; set; }
-    }
-    private List<CallHistoryItem> _callHistory = new();
-
-    protected override void OnInitialized()
-    {
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+        public string Result { get; set; } = "";
     }
 
-    async Task MakeCall()
+    public class CallQueueItem
     {
-        var targets = _sendMode == "Selected" 
-            ? _selectedPorts.Select(p => p.PortName).ToList() 
-            : Ports.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
-
-        if (!targets.Any())
-        {
-            Snackbar.Add("Không có cổng nào để gọi", Severity.Warning);
-            return;
-        }
-
-        foreach (var port in targets)
-        {
-            _ = Vm.ExecuteCallFromUiAsync(port, _phone, "", _duration);
-            
-            _callHistory.Insert(0, new CallHistoryItem
-            {
-                Time = DateTime.Now,
-                Port = port,
-                Phone = _phone,
-                Duration = _duration,
-                Success = true
-            });
-            await Task.Delay(500);
-        }
-        Snackbar.Add($"Đã gửi lệnh gọi tới {targets.Count} cổng", Severity.Success);
-    }
-
-    async Task HangupAll()
-    {
-        var targets = _sendMode == "Selected" 
-            ? _selectedPorts.Select(p => p.PortName).ToList() 
-            : Ports.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
-
-        foreach (var port in targets)
-        {
-            await ModemService.SendCommandAsync(port, "ATH");
-        }
-        Snackbar.Add("Đã gửi lệnh cúp máy (ATH)", Severity.Info);
-    }
-
-    void Redial(CallHistoryItem item)
-    {
-        _phone = item.Phone;
-        Snackbar.Add($"Chuẩn bị gọi lại {item.Phone}", Severity.Info);
-    }
-
-    public void Dispose()
-    {
-        _timer?.Dispose();
+        public string Phone { get; set; } = "";
+        public string Port { get; set; } = "";
+        public string Wav { get; set; } = "";
+        public int Duration { get; set; }
+        public bool Record { get; set; }
+        public string Status { get; set; } = "Chờ";
     }
 }

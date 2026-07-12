@@ -38,8 +38,13 @@
         </MudNavMenu>
     </MudDrawer>
 
-    <MudMainContent Class="pt-4 px-4 pb-6">
-        @Body
+    <MudMainContent Class="pt-4 px-4 pb-6 d-flex flex-column" Style="min-height: 100vh;">
+        <div class="flex-grow-1">
+            @Body
+        </div>
+        <MudText Typo="Typo.caption" Align="Align.Center" Style="color: #94A3B8;" Class="mt-8">
+            Tool GSM Professional v1.0.0 &copy; @DateTime.Now.Year
+        </MudText>
     </MudMainContent>
 </MudLayout>
 

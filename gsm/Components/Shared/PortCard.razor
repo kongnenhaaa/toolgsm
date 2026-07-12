@@ -73,6 +73,11 @@
                                    Color="Color.Secondary" Size="Size.Small" 
                                    OnClick="OpenSms" Disabled="@(Port.Status != gsm.Models.SimStatus.Active)" />
                 </MudTooltip>
+                <MudTooltip Text="Gọi điện ra ngoài">
+                    <MudIconButton Icon="@Icons.Material.Filled.Phone" 
+                                   Color="Color.Warning" Size="Size.Small" 
+                                   OnClick="OpenCall" Disabled="@(Port.Status != gsm.Models.SimStatus.Active)" />
+                </MudTooltip>
                 <MudSpacer />
                 <MudTooltip Text="Xem log / chi tiết">
                     <MudIconButton Icon="@Icons.Material.Filled.Info" Size="Size.Small" OnClick="ShowDetail" />
@@ -90,12 +95,14 @@
     [Parameter] public EventCallback<SimPort> OnCheckBalance { get; set; }
     [Parameter] public EventCallback<SimPort> OnUssd { get; set; }
     [Parameter] public EventCallback<SimPort> OnSms { get; set; }
+    [Parameter] public EventCallback<SimPort> OnCall { get; set; }
 
     async Task OnAcceptClicked() => await OnAccept.InvokeAsync(Port);
     async Task OnRefreshClicked() => await OnRefresh.InvokeAsync(Port);
     async Task CheckBalance() => await OnCheckBalance.InvokeAsync(Port);
     async Task OpenUssd() => await OnUssd.InvokeAsync(Port);
     async Task OpenSms() => await OnSms.InvokeAsync(Port);
+    async Task OpenCall() => await OnCall.InvokeAsync(Port);
 
     async Task ShowDetail()
     {

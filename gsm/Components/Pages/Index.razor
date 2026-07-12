@@ -52,10 +52,13 @@
                OnClick="RefreshAll" Size="Size.Small">
         Làm mới tất cả
     </MudButton>
-    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.PlayArrow"
-               OnClick="ConnectAll" Size="Size.Small">
-        Connect All
-    </MudButton>
+    @if (Ports.Count > 0)
+    {
+        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.PlayArrow"
+                   OnClick="ConnectAll" Size="Size.Small">
+            Connect All
+        </MudButton>
+    }
     <MudSpacer />
     <MudTextField @bind-Value="_search" Placeholder="Tìm COM / IMEI / SĐT..." 
                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
@@ -72,18 +75,27 @@
                       OnRefresh="RefreshPort"
                       OnCheckBalance="CheckBalance"
                       OnUssd="OpenUssdDialog"
-                      OnSms="OpenSmsDialog" />
+                      OnSms="OpenSmsDialog"
+                      OnCall="OpenCallDialog" />
         </MudItem>
     }
 </MudGrid>
 
 @if (FilteredPorts.Count == 0)
 {
-    <MudPaper Class="pa-12 text-center mt-4" Elevation="0" Style="border:1px dashed #CBD5E1; border-radius:16px;">
-        <MudIcon Icon="@Icons.Material.Outlined.Usb" Size="Size.Large" Color="Color.Default" Class="mb-3" />
-        <MudText Typo="Typo.h6" Style="color:#64748B;">Không có cổng nào</MudText>
-        <MudText Typo="Typo.body2" Style="color:#94A3B8;">Cắm thiết bị GSM hoặc bấm Connect All</MudText>
-    </MudPaper>
+    <!-- Empty state đẹp hơn -->
+    <div class="text-center py-16">
+        <div class="mb-4" style="font-size: 48px; opacity: 0.4;">📡</div>
+        <MudText Typo="Typo.h6" Class="mb-2">Chưa có thiết bị nào</MudText>
+        <MudText Typo="Typo.body2" Class="mb-6" Style="color:#94A3B8; max-width:320px; margin:0 auto;">
+            Cắm modem GSM vào máy tính rồi nhấn <b>Connect All</b> để bắt đầu
+        </MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                   StartIcon="@Icons.Material.Filled.PlayArrow"
+                   OnClick="ConnectAll" Size="Size.Medium">
+            Connect All
+        </MudButton>
+    </div>
 }
 
 @code {
@@ -155,7 +167,7 @@
         var dialog = await DialogService.ShowAsync<gsm.Components.Shared.UssdDialog>($"USSD - {port.PortName}", parameters);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is string code)
+        if (result != null && !result.Canceled && result.Data is string code)
         {
             Snackbar.Add($"Đang gửi USSD: {code} trên {port.PortName}", Severity.Info);
             await ModemService.SendCommandAsync(port.PortName, $"AT+CUSD=1,\"{code}\",15", 15000);
@@ -168,10 +180,24 @@
         var dialog = await DialogService.ShowAsync<gsm.Components.Shared.SmsDialog>($"Gửi SMS - {port.PortName}", parameters);
         var result = await dialog.Result;
 
-        if (!result.Canceled && result.Data is (string phone, string message))
+        if (result != null && !result.Canceled && result.Data is (string phone, string message))
         {
             Snackbar.Add($"Đã lên lịch gửi SMS trên {port.PortName}", Severity.Info);
             await Vm.QueueSmsAsync(port.PortName, phone, message);
+        }
+    }
+
+    async Task OpenCallDialog(SimPort port)
+    {
+        var parameters = new DialogParameters { ["PortName"] = port.PortName };
+        var dialog = await DialogService.ShowAsync<gsm.Components.Shared.CallDialog>($"Gọi điện - {port.PortName}", parameters);
+        var result = await dialog.Result;
+
+        if (result != null && !result.Canceled && result.Data is (string phone, string wavPath, int duration))
+        {
+            Snackbar.Add($"Đang gọi {phone} trên {port.PortName}...", Severity.Info);
+            string status = await Vm.ExecuteCallFromUiAsync(port.PortName, phone, wavPath, duration);
+            Snackbar.Add(status, status.Contains("Lỗi") ? Severity.Error : Severity.Success);
         }
     }
 

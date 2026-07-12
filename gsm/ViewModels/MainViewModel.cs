@@ -3213,10 +3213,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
-    private async Task MonitorAndPlayAudioDuringCallAsync(string portName, int durationSeconds)
+    private async Task MonitorAndPlayAudioDuringCallAsync(string portName, int durationSeconds, string? customWavPath = null)
     {
         bool audioPlayed = false;
-        string wavPath = AppSettings?.SoundCallOutPath ?? @"C:\Users\congn\Downloads\otp_947523_giong_nu\otp_947523_giong_nu.wav";
+        string wavPath = customWavPath ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(wavPath))
+            wavPath = AppSettings?.SoundCallOutPath ?? @"C:\Users\congn\Downloads\otp_947523_giong_nu\otp_947523_giong_nu.wav";
+
+        string fileName = System.IO.Path.GetFileName(wavPath);
+        if (string.IsNullOrWhiteSpace(fileName)) fileName = "otp.wav";
 
         for (int i = 0; i < durationSeconds * 2; i++)
         {
@@ -3255,7 +3260,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     string flst = await _modemService.SendCommandAsync(portName, "AT+QFLST", 3000, silent: true);
                                     
                                     bool exists = false;
-                                    if (flst.Contains("otp.wav"))
+                                    if (flst.Contains(fileName))
                                     {
                                         exists = true;
                                     }
@@ -3266,12 +3271,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                         {
                                             AddLog($"[{portName}] Đang tải file âm thanh lên modem (lần đầu)...", "INFO");
                                         });
-                                        bool uploadOk = await _modemService.UploadFileToModemAsync(portName, wavPath, "otp.wav");
+                                        bool uploadOk = await _modemService.UploadFileToModemAsync(portName, wavPath, fileName);
                                         if (uploadOk)
                                         {
                                             Application.Current.Dispatcher.Invoke(() => 
                                             {
-                                                AddLog($"[{portName}] Tải file âm thanh lên modem thành công.", "SUCCESS");
+                                                AddLog($"[{portName}] Tải file {fileName} lên modem thành công.", "SUCCESS");
                                             });
                                             exists = true;
                                         }
@@ -3279,7 +3284,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                         {
                                             Application.Current.Dispatcher.Invoke(() => 
                                             {
-                                                AddLog($"[{portName}] Lỗi khi tải file âm thanh lên modem.", "ERROR");
+                                                AddLog($"[{portName}] Lỗi khi tải file {fileName} lên modem.", "ERROR");
                                             });
                                         }
                                     }
@@ -3291,7 +3296,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                             AddLog($"[{portName}] Đang phát file âm thanh cuộc gọi...", "INFO");
                                         });
                                         // Phát file âm thanh cuộc gọi thông qua AT+QPSND
-                                        await _modemService.SendCommandAsync(portName, "AT+QPSND=1,\"ufs:otp.wav\",0", 5000);
+                                        await _modemService.SendCommandAsync(portName, $"AT+QPSND=1,\"ufs:{fileName}\",0", 5000);
                                     }
                                     break;
                                 }
@@ -3638,11 +3643,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }
 
-        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn chạy lệnh Fix EC20 cho {targetPorts.Count} modem?\nThao tác này sẽ thiết lập lại cấu hình mạng và khởi động lại modem.", "Fix EC20", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
+        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn chạy lệnh Fix Modem cho {targetPorts.Count} modem?\nThao tác này sẽ thiết lập lại cấu hình mạng và khởi động lại modem.", "Fix Modem", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
             return;
 
-        SnackbarMessageQueue.Enqueue($"Đang gửi lệnh Fix EC20 cho {targetPorts.Count} cổng...");
-        AddLog($"Bắt đầu Fix EC20 cho {targetPorts.Count} cổng...");
+        SnackbarMessageQueue.Enqueue($"Đang gửi lệnh Fix Modem cho {targetPorts.Count} cổng...");
+        AddLog($"Bắt đầu Fix Modem cho {targetPorts.Count} cổng...");
 
         foreach (var port in targetPorts)
         {
@@ -3650,7 +3655,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 try
                 {
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang gửi lệnh Fix EC20..."));
+                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang gửi lệnh Fix Modem..."));
                     var commands = new[]
                     {
                         "AT+QURCCFG=\"urcport\",\"uart1\"",
@@ -4704,9 +4709,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     // Network & Sim methods removed
-
-
-
+    
+    public async Task<string> ExecuteCallFromUiAsync(string portName, string phoneNumber, string wavPath, int duration)
+    {
+        if (string.IsNullOrWhiteSpace(phoneNumber)) return "ERROR: Số điện thoại trống";
+        
+        string cmd = $"ATD{phoneNumber};";
+        AddLog($"[{portName}] Bắt đầu gọi: {cmd}");
+        string result = await _modemService.SendCommandAsync(portName, cmd, timeoutMs: 5000);
+        
+        if (result.Contains("OK"))
+        {
+            _callFailures.TryRemove(portName, out _);
+            _ = Task.Run(async () =>
+            {
+                await MonitorAndPlayAudioDuringCallAsync(portName, duration, wavPath);
+                
+                await Task.Delay(1000); // Đợi 1 giây trước khi kết thúc
+                AddLog($"[{portName}] Hết thời gian gọi ({duration}s), đang dập máy...");
+                await _modemService.SendCommandAsync(portName, "ATH", timeoutMs: 5000);
+            });
+            return "Đang gọi...";
+        }
+        else
+        {
+            AddLog($"[{portName}] Lỗi khi gọi: {result}", "ERROR");
+            return $"Lỗi: {result}";
+        }
+    }
     // Phân tích User Data Header (UDH) để lấy thông tin ghép tin nhắn dài (concatenated SMS).
     // udHex: chuỗi hex của phần User Data (bắt đầu bằng UDHL nếu hasUdh = true).
     // Trả về udhTotalBytes = tổng số byte của UDH (kể cả byte độ dài) để bên gọi bỏ qua khi đọc nội dung.

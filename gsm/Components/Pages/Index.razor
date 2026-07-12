@@ -73,6 +73,61 @@
         </MudTooltip>
     </MudButtonGroup>
 
+    <!-- ========== NÚT CHỌN CỘT ========== -->
+    <MudMenu Icon="@Icons.Material.Filled.ViewColumn" 
+             Label="Cột" 
+             Variant="Variant.Outlined" 
+             Size="Size.Small"
+             Color="Color.Primary"
+             Dense="true"
+             AnchorOrigin="Origin.BottomRight"
+             TransformOrigin="Origin.TopRight">
+        <MudText Typo="Typo.caption" Class="px-3 py-1" Style="color:#64748B;">Chọn cột hiển thị</MudText>
+        <MudDivider />
+        
+        <MudMenuItem OnClick="@(() => ToggleColumn("Stt"))">
+            <MudCheckBox T="bool" Value="@_columns["Stt"]" Dense="true" Color="Color.Primary" Class="mr-2" /> STT
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Port"))">
+            <MudCheckBox T="bool" Value="@_columns["Port"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Cổng
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Status"))">
+            <MudCheckBox T="bool" Value="@_columns["Status"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Trạng thái
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Network"))">
+            <MudCheckBox T="bool" Value="@_columns["Network"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Nhà mạng
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Balance"))">
+            <MudCheckBox T="bool" Value="@_columns["Balance"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Số dư
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Phone"))">
+            <MudCheckBox T="bool" Value="@_columns["Phone"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Số điện thoại
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Imei"))">
+            <MudCheckBox T="bool" Value="@_columns["Imei"]" Dense="true" Color="Color.Primary" Class="mr-2" /> IMEI
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Ccid"))">
+            <MudCheckBox T="bool" Value="@_columns["Ccid"]" Dense="true" Color="Color.Primary" Class="mr-2" /> CCID
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Hsd"))">
+            <MudCheckBox T="bool" Value="@_columns["Hsd"]" Dense="true" Color="Color.Primary" Class="mr-2" /> HSD
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Otp"))">
+            <MudCheckBox T="bool" Value="@_columns["Otp"]" Dense="true" Color="Color.Primary" Class="mr-2" /> OTP / Nội dung
+        </MudMenuItem>
+        <MudMenuItem OnClick="@(() => ToggleColumn("Updated"))">
+            <MudCheckBox T="bool" Value="@_columns["Updated"]" Dense="true" Color="Color.Primary" Class="mr-2" /> Cập nhật
+        </MudMenuItem>
+        
+        <MudDivider />
+        <MudMenuItem OnClick="ShowAllColumns">
+            <MudIcon Icon="@Icons.Material.Filled.SelectAll" Size="Size.Small" Class="mr-2" /> Hiện tất cả
+        </MudMenuItem>
+        <MudMenuItem OnClick="ResetColumns">
+            <MudIcon Icon="@Icons.Material.Filled.RestartAlt" Size="Size.Small" Class="mr-2" /> Mặc định
+        </MudMenuItem>
+    </MudMenu>
+
     <MudTextField @bind-Value="_search" Placeholder="Tìm COM / IMEI / SĐT..." 
                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
                   Immediate="true" Style="max-width:260px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
@@ -131,17 +186,17 @@ else
             
             <HeaderContent>
                 <MudTh Style="width:42px;"></MudTh>
-                <MudTh>STT</MudTh>
-                <MudTh>Cổng</MudTh>
-                <MudTh>Trạng thái</MudTh>
-                <MudTh>Nhà mạng</MudTh>
-                <MudTh>Số dư</MudTh>
-                <MudTh>Số điện thoại</MudTh>
-                <MudTh>IMEI</MudTh>
-                <MudTh>CCID</MudTh>
-                <MudTh>HSD</MudTh>
-                <MudTh>OTP / Nội dung</MudTh>
-                <MudTh>Cập nhật</MudTh>
+                @if (_columns["Stt"]) { <MudTh>STT</MudTh> }
+                @if (_columns["Port"]) { <MudTh>Cổng</MudTh> }
+                @if (_columns["Status"]) { <MudTh>Trạng thái</MudTh> }
+                @if (_columns["Network"]) { <MudTh>Nhà mạng</MudTh> }
+                @if (_columns["Balance"]) { <MudTh>Số dư</MudTh> }
+                @if (_columns["Phone"]) { <MudTh>Số điện thoại</MudTh> }
+                @if (_columns["Imei"]) { <MudTh>IMEI</MudTh> }
+                @if (_columns["Ccid"]) { <MudTh>CCID</MudTh> }
+                @if (_columns["Hsd"]) { <MudTh>HSD</MudTh> }
+                @if (_columns["Otp"]) { <MudTh>OTP / Nội dung</MudTh> }
+                @if (_columns["Updated"]) { <MudTh>Cập nhật</MudTh> }
                 <MudTh Style="min-width:150px;">Thao tác</MudTh>
             </HeaderContent>
 
@@ -151,44 +206,66 @@ else
                                  ValueChanged="@(v => context.IsSelected = v)" 
                                  Color="Color.Primary" Dense="true" />
                 </MudTd>
-                <MudTd>@context.Stt</MudTd>
-                <MudTd Style="font-weight:600;">@context.PortName</MudTd>
+
+                @if (_columns["Stt"]) {
+                    <MudTd>@context.Stt</MudTd>
+                }
                 
-                <MudTd>
-                    <gsm.Components.Shared.StatusBadge Status="@context.Status" />
-                </MudTd>
+                @if (_columns["Port"]) {
+                    <MudTd Style="font-weight:600;">@context.PortName</MudTd>
+                }
                 
-                <MudTd>@(string.IsNullOrEmpty(context.NetworkProvider) ? "—" : context.NetworkProvider)</MudTd>
+                @if (_columns["Status"]) {
+                    <MudTd><gsm.Components.Shared.StatusBadge Status="@context.Status" /></MudTd>
+                }
                 
-                <MudTd>
-                    <span style="color:#16A34A; font-weight:600; white-space:nowrap;">
-                        @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
-                    </span>
-                </MudTd>
+                @if (_columns["Network"]) {
+                    <MudTd>@(string.IsNullOrEmpty(context.NetworkProvider) ? "—" : context.NetworkProvider)</MudTd>
+                }
                 
-                <MudTd Style="white-space:nowrap;">
-                    @(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)
-                </MudTd>
+                @if (_columns["Balance"]) {
+                    <MudTd>
+                        <span style="color:#16A34A; font-weight:600; white-space:nowrap;">
+                            @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
+                        </span>
+                    </MudTd>
+                }
                 
-                <MudTd Style="font-family:monospace; font-size:12px; white-space:nowrap;">
-                    @(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)
-                </MudTd>
+                @if (_columns["Phone"]) {
+                    <MudTd Style="white-space:nowrap;">
+                        @(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)
+                    </MudTd>
+                }
                 
-                <MudTd Style="font-family:monospace; font-size:11px; max-width:130px; overflow:hidden; text-overflow:ellipsis;">
-                    @(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)
-                </MudTd>
+                @if (_columns["Imei"]) {
+                    <MudTd Style="font-family:monospace; font-size:12px; white-space:nowrap;">
+                        @(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)
+                    </MudTd>
+                }
                 
-                <MudTd Style="white-space:nowrap; font-size:12px;">
-                    @(string.IsNullOrEmpty(context.ExpiryDate) ? "—" : context.ExpiryDate)
-                </MudTd>
+                @if (_columns["Ccid"]) {
+                    <MudTd Style="font-family:monospace; font-size:11px; max-width:130px; overflow:hidden; text-overflow:ellipsis;">
+                        @(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)
+                    </MudTd>
+                }
                 
-                <MudTd Style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px;">
-                    @(string.IsNullOrEmpty(context.Otp) ? (context.LastMessageContent ?? "—") : context.Otp)
-                </MudTd>
+                @if (_columns["Hsd"]) {
+                    <MudTd Style="white-space:nowrap; font-size:12px;">
+                        @(string.IsNullOrEmpty(context.ExpiryDate) ? "—" : context.ExpiryDate)
+                    </MudTd>
+                }
                 
-                <MudTd Style="font-size:12px; color:#64748B; white-space:nowrap;">
-                    @context.UpdatedAt
-                </MudTd>
+                @if (_columns["Otp"]) {
+                    <MudTd Style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px;">
+                        @(string.IsNullOrEmpty(context.Otp) ? (context.LastMessageContent ?? "—") : context.Otp)
+                    </MudTd>
+                }
+                
+                @if (_columns["Updated"]) {
+                    <MudTd Style="font-size:12px; color:#64748B; white-space:nowrap;">
+                        @context.UpdatedAt
+                    </MudTd>
+                }
                 
                 <MudTd>
                     <MudStack Row="true" Spacing="0">
@@ -248,6 +325,52 @@ else
     private string _search = "";
     private string _viewMode = "table"; // mặc định là bảng (hoặc "card")
     private HashSet<SimPort> _selectedPorts = new();
+
+    // ========== COLUMN VISIBILITY ==========
+    private Dictionary<string, bool> _columns = new()
+    {
+        ["Stt"] = true,
+        ["Port"] = true,
+        ["Status"] = true,
+        ["Network"] = true,
+        ["Balance"] = true,
+        ["Phone"] = true,
+        ["Imei"] = true,
+        ["Ccid"] = true,
+        ["Hsd"] = true,
+        ["Otp"] = true,
+        ["Updated"] = true
+    };
+
+    void ToggleColumn(string key)
+    {
+        if (_columns.ContainsKey(key))
+            _columns[key] = !_columns[key];
+    }
+
+    void ShowAllColumns()
+    {
+        foreach (var key in _columns.Keys.ToList())
+            _columns[key] = true;
+    }
+
+    void ResetColumns()
+    {
+        _columns = new()
+        {
+            ["Stt"] = true,
+            ["Port"] = true,
+            ["Status"] = true,
+            ["Network"] = true,
+            ["Balance"] = true,
+            ["Phone"] = true,
+            ["Imei"] = true,
+            ["Ccid"] = false,      // mặc định ẩn CCID nếu muốn gọn
+            ["Hsd"] = false,
+            ["Otp"] = true,
+            ["Updated"] = true
+        };
+    }
 
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     

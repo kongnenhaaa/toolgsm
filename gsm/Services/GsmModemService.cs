@@ -26,6 +26,7 @@ public interface IGsmModemService
     void StartHotplugWaitLoop(string portName);
     Task ReinitializeSettingsAsync(string portName);
     Task<bool> ResetNetworkAsync(string portName);
+    Task<bool> AcceptNewSimAndPaintImeiAsync(string portName, string targetImei);
     
     // Events
     event EventHandler<GsmDataEventArgs> SmsReceived;
@@ -408,29 +409,14 @@ public class GsmModemService : IGsmModemService
         {
             if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
             
-            // NEW SIM INTAKE MODE: PRE-COAT FAKE IMEI
+            // Lấy cài đặt
             var settings = gsm.Services.SettingsService.Current;
             if (settings != null && settings.EnableNewSimIntakeMode)
             {
-                string cleanImei = imei.Replace("OK", "").Trim();
-                bool isAlreadyFake = gsm.Services.ImeiManagementService.IsFakeImei(cleanImei);
-
-                if (!isAlreadyFake && !string.IsNullOrEmpty(cleanImei))
-                {
-                    string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
-                    string v = _portVendors.TryGetValue(portName, out var val) ? val : "";
-                    if (v.Contains("QUECTEL") || v.Contains("SIMCOM"))
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NEW_SIM_MODE] Đang tráng sẵn Fake IMEI: {targetImei}" });
-                        await SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000);
-                        await SendCommandAsync(portName, "AT+CFUN=1,1", 30000); // Reboot modem
-                        return; // Return and wait for it to reconnect
-                    }
-                    else
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NEW_SIM_MODE] Bỏ qua tráng Fake IMEI vì firmware ({v}) không hỗ trợ AT+EGMR." });
-                    }
-                }
+                // Không tự động tráng IMEI. Đẩy vào luồng chờ chấp nhận
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_WAITING_ACCEPT] SIM mới – đang chờ user chấp nhận" });
+                StartHotplugWaitLoop(portName);
+                return;
             }
 
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
@@ -522,26 +508,26 @@ public class GsmModemService : IGsmModemService
         StartPollingNetwork(portName);
     }
 
-    /// <summary>
-    /// Kích hoạt vòng lặp chờ SIM (Hot-plug). Đưa modem vào chế độ máy bay và liên tục kiểm tra CCID.
-    /// Dùng khi khởi động không có SIM, hoặc khi người dùng yêu cầu chuẩn bị đổi SIM.
-    /// </summary>
     public void StartHotplugWaitLoop(string portName)
     {
         _ = Task.Run(async () =>
         {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Đang chờ cắm SIM (Hot-plug)..." });
-            
-            // Ép tắt sóng (Airplane mode) ngay khi bắt đầu vòng lặp chờ SIM
+            LogMessage?.Invoke(this, new GsmDataEventArgs 
+            { 
+                PortName = portName, 
+                Data = "[WAITING_FOR_SIM] Đang chờ cắm SIM (Hot-plug) – giữ CFUN=4" 
+            });
+
+            // Ép tắt sóng ngay
             await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
-            
+
             int cfunCheckCounter = 0;
             while (true)
             {
-                await Task.Delay(2000); // Tăng khoảng cách kiểm tra lên 2 giây để mạch rảnh xử lý
-                if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
-                
-                // Thỉnh thoảng kiểm tra lại CFUN (mỗi 5 chu kỳ = 10 giây) để tránh tự động bật sóng
+                await Task.Delay(2000);
+                if (!_serialPorts.ContainsKey(portName)) break;
+
+                // Kiểm tra CFUN mỗi 10 giây
                 cfunCheckCounter++;
                 if (cfunCheckCounter >= 5)
                 {
@@ -552,27 +538,100 @@ public class GsmModemService : IGsmModemService
                         await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
                     }
                 }
-                
+
                 string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
                 if (!pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp))
                 {
-                    // Đè thêm 1 lệnh CFUN=4 nữa để triệt tiêu việc tự động đăng ký mạng trong lúc xử lý IMEI
+                    // Có SIM rồi → ép tắt sóng lần nữa
                     await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
 
-                    // Cập nhật IMEI hiện tại trước khi báo CCID
+                    // Đọc IMEI hiện tại (vẫn offline)
                     string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
                     if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
                     {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" });
+                        LogMessage?.Invoke(this, new GsmDataEventArgs 
+                        { 
+                            PortName = portName, 
+                            Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" 
+                        });
                     }
-                    
-                    string newCcid = pollResp;
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {newCcid.Replace("OK", "").Trim()}" });
-                    
-                    break; // Có SIM rồi thì thoát vòng lặp
+
+                    LogMessage?.Invoke(this, new GsmDataEventArgs 
+                    { 
+                        PortName = portName, 
+                        Data = $"[PARSE_CCID] {pollResp.Replace("OK", "").Trim()}" 
+                    });
+
+                    // Quan trọng: Báo cho UI biết đây là SIM mới đang chờ chấp nhận
+                    var settings = gsm.Services.SettingsService.Current;
+                    if (settings != null && settings.EnableNewSimIntakeMode)
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs 
+                        { 
+                            PortName = portName, 
+                            Data = "[STATUS_WAITING_ACCEPT] SIM mới đã cắm – CHỜ USER CHẤP NHẬN" 
+                        });
+                    }
+                    else 
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs 
+                        { 
+                            PortName = portName, 
+                            Data = "[STATUS_WAITING_ACCEPT] SIM lạ – CHỜ CHẤP NHẬN HOẶC ĐĂNG KÝ VÀO BACKUP" 
+                        });
+                    }
+
+                    break; // Thoát vòng lặp, giữ CFUN=4
                 }
             }
         });
+    }
+
+    public async Task<bool> AcceptNewSimAndPaintImeiAsync(string portName, string targetImei)
+    {
+        if (!_serialPorts.ContainsKey(portName)) return false;
+
+        LogMessage?.Invoke(this, new GsmDataEventArgs 
+        { 
+            PortName = portName, 
+            Data = $"[ACCEPT_NEW_SIM] Đang tráng IMEI {targetImei}..." 
+        });
+
+        // 1. Đảm bảo tắt sóng
+        await SendCommandAsync(portName, "AT+CFUN=4", 8000, silent: true);
+        await Task.Delay(800);
+
+        // 2. Ghi IMEI
+        string writeResp = await SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000);
+        if (writeResp.Contains("ERROR"))
+        {
+            // Fallback
+            writeResp = await SendCommandAsync(portName, $"AT+SIMEI=\"{targetImei}\"", 30000);
+        }
+
+        // 3. Verify
+        string verify = await SendCommandAsync(portName, "AT+CGSN", 8000, silent: true);
+        string finalImei = verify.Replace("OK", "").Trim();
+
+        if (finalImei != targetImei && !finalImei.Contains(targetImei))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs 
+            { 
+                PortName = portName, 
+                Data = $"[ACCEPT_NEW_SIM] Ghi IMEI thất bại! Đọc lại: {finalImei}" 
+            });
+            return false;
+        }
+
+        LogMessage?.Invoke(this, new GsmDataEventArgs 
+        { 
+            PortName = portName, 
+            Data = $"[ACCEPT_NEW_SIM] Ghi IMEI thành công → đang khởi động lại (Reboot)..." 
+        });
+
+        // 4. Reboot để áp dụng
+        await SendCommandAsync(portName, "AT+CFUN=1,1", 30000);
+        return true;
     }
 
     public void StartPollingNetwork(string portName)

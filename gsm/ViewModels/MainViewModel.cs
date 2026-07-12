@@ -1817,40 +1817,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.DeviceName = "Đang tráng IMEI Fake...";
                 });
 
-                string currentImei = NormalizeImei(port.Imei);
-                if (string.IsNullOrEmpty(currentImei))
-                {
-                    currentImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 10000, silent: true);
-                    currentImei = NormalizeImei(currentImei);
-                }
-                
-                var result = await _imeiManagementService.ProcessImeiAsync(
-                    port,
-                    port.Serial,
-                    currentImei,
-                    AppSettings,
-                    (queryCcid) => { _imeiCache.TryGetValue(queryCcid, out var e); return e; },
-                    (newE) => AddNewImeiCacheEntry(newE),
-                    (action) => Application.Current.Dispatcher.Invoke(action)
-                );
+                bool success = await _modemService.AcceptNewSimAndPaintImeiAsync(port.PortName, targetImei);
                 
                 Application.Current.Dispatcher.Invoke(() => 
                 {
-                    if (result.Status == Services.ImeiProcessStatus.Matched)
-                    {
-                        port.IsRebooting = false;
-                        port.Imei = result.FinalImei;
-                        MarkPortActiveAfterInit(port.PortName);
-                        _ = _modemService.ReinitializeSettingsAsync(port.PortName);
-                    }
-                    else if (result.Status == Services.ImeiProcessStatus.Applied)
+                    if (success)
                     {
                         port.IsRebooting = true;
-                        port.Imei = result.FinalImei;
+                        port.Imei = targetImei;
                         port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
                         port.Status = SimStatus.Connecting;
                         
-                        // [FIX] Handle modems with separate USB bridge chips that don't drop USB on AT+CFUN=1,1
                         _ = Task.Run(async () =>
                         {
                             await Task.Delay(15000);
@@ -1865,19 +1842,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             }
                         });
                     }
-                    else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
-                    {
-                        port.Status = SimStatus.SecurityBlocked;
-                        port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? gsm.Models.SecurityErrors.WrongImei : result.ErrorMessage;
-                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                        UpdateDashboard();
-                    }
                     else
                     {
-                        port.Status = SimStatus.NoResponse;
-                        port.LastError = "Lỗi xử lý IMEI";
-                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                        UpdateDashboard();
+                        port.Status = SimStatus.SecurityBlocked;
+                        port.LastError = "Lỗi tráng IMEI";
+                        port.DeviceName = "Lỗi tráng IMEI";
                     }
                 });
             });
@@ -2415,6 +2384,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             else if (e.Data == "[STATUS_NO_RESPONSE]")
             {
                 port.Status = SimStatus.NoResponse;
+                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                UpdateDashboard();
+            }
+            else if (e.Data.StartsWith("[STATUS_WAITING_ACCEPT]"))
+            {
+                port.Status = SimStatus.SecurityBlocked;
+                port.LastError = "Chờ chấp nhận SIM mới";
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
             }

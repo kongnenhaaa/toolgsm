@@ -160,6 +160,25 @@
             </MudStack>
         </MudPaper>
 
+        <!-- API / WEBHOOK -->
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.Webhook" Class="mr-1" Size="Size.Small" />
+                API / Webhook
+            </MudText>
+
+            <MudTextField @bind-Value="_otpWebhookUrl" Label="Link đẩy OTP Web (Webhook URL)" 
+                          Placeholder="https://your-server.com/api/otp"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+            
+            <MudSwitch T="bool" @bind-Value="_pushOtpToWeb" Label="Tự động đẩy OTP lên Web" Color="Color.Primary" Class="mb-3" />
+
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       OnClick="TestWebhook" Disabled="@(string.IsNullOrEmpty(_otpWebhookUrl))">
+                Test gửi Webhook
+            </MudButton>
+        </MudPaper>
+
         <!-- ÂM THANH -->
         <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
             <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
@@ -252,6 +271,10 @@
     private string _telegramChatId = "";
     private bool _showToken = false;
 
+    // Webhook
+    private string _otpWebhookUrl = "";
+    private bool _pushOtpToWeb = false;
+
     // Âm thanh
     private string _soundSmsPath = "";
     private string _soundCallPath = "";
@@ -318,6 +341,13 @@
     {
         // Mở link hướng dẫn
         Snackbar.Add("Mở hướng dẫn lấy Bot Token & Chat ID", Severity.Info);
+    }
+
+    async Task TestWebhook()
+    {
+        Snackbar.Add("Đang test gửi Webhook...", Severity.Info);
+        await Task.Delay(500);
+        Snackbar.Add("Gửi Webhook thành công (Demo)", Severity.Success);
     }
 
     void BrowseSound(string type)

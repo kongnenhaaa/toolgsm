@@ -103,7 +103,7 @@
                     </MudTd>
                     <MudTd>
                         <MudIconButton Icon="@Icons.Material.Filled.Replay" Size="Size.Small" 
-                                       OnClick="@(() => Redial(context))" Title="Gọi lại" />
+                                       OnClick="@(() => Redial(context))" title="Gọi lại" />
                     </MudTd>
                 </RowTemplate>
                 <NoRecordsContent>
@@ -196,7 +196,7 @@
     private int _elapsedSeconds = 0;
     private double _progressPercent = 0;
     private string _currentPort = "";
-    private System.Threading.Timer? _callTimer;
+    private System.Threading.Timer? _callTimer { get; set; }
     private CancellationTokenSource? _callCts;
 
     // Lịch sử

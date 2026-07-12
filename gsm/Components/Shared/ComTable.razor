@@ -48,14 +48,14 @@
                 @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
             </MudTd>
             <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569;">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
-            <MudTd Style="font-family:monospace; font-size:11px; max-width:120px; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid #F1F5F9; color:#64748B;" Title="@context.Serial">
+            <MudTd Style="font-family:monospace; font-size:11px; max-width:120px; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid #F1F5F9; color:#64748B;" title="@context.Serial">
                 @(context.Serial ?? "—")
             </MudTd>
             <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B;">@(context.ExpiryDate ?? "—")</MudTd>
             <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#2563EB;">
                 @(string.IsNullOrEmpty(context.Otp) ? "—" : context.Otp)
             </MudTd>
-            <MudTd Style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; border-bottom:1px solid #F1F5F9; color:#475569;" Title="@context.LastMessageContent">
+            <MudTd Style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; border-bottom:1px solid #F1F5F9; color:#475569;" title="@context.LastMessageContent">
                 @(context.LastMessageContent ?? "—")
             </MudTd>
         </RowTemplate>
@@ -76,21 +76,8 @@
     [Parameter]
     public IEnumerable<SimPort> Ports { get; set; } = Enumerable.Empty<SimPort>();
 
-    private HashSet<SimPort> _selectedItems = new();
-
     [Parameter]
-    public HashSet<SimPort> SelectedItems
-    {
-        get => _selectedItems;
-        set
-        {
-            if (_selectedItems != value)
-            {
-                _selectedItems = value;
-                SelectedItemsChanged.InvokeAsync(value);
-            }
-        }
-    }
+    public HashSet<SimPort> SelectedItems { get; set; } = new();
 
     [Parameter]
     public EventCallback<HashSet<SimPort>> SelectedItemsChanged { get; set; }
@@ -106,7 +93,7 @@
         }
         ModemService.ConnectAll(115200);
         SelectedItems.Clear();
-        SelectedItemsChanged.InvokeAsync(SelectedItems);
+        _ = SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
     async Task CheckTkcSelected()
@@ -119,7 +106,7 @@
             await Task.Delay(500);
         }
         SelectedItems.Clear();
-        SelectedItemsChanged.InvokeAsync(SelectedItems);
+        _ = SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
     async Task Ussd101Selected() => await CheckTkcSelected();

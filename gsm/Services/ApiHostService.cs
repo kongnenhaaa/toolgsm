@@ -144,8 +144,16 @@ public class ApiHostService
             time = DateTime.UtcNow
         }));
 
-        _ = _app.RunAsync();
-        System.Diagnostics.Debug.WriteLine($"API listening http://0.0.0.0:{cfg.ApiServerPort}");
+        try
+        {
+            await _app.StartAsync();
+            System.Diagnostics.Debug.WriteLine($"API listening http://0.0.0.0:{cfg.ApiServerPort}");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Không thể khởi động API Server (Cổng {cfg.ApiServerPort} có thể đang bị chiếm): {ex.Message}");
+            // Tuỳ chọn: Ghi log vào file hoặc UI
+        }
     }
 
     string? ResolvePort(string portId)

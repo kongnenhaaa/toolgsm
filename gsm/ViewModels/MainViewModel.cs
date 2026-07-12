@@ -2788,9 +2788,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 // ---------- LOAD SETTINGS ----------
                 var cfg = gsm.Services.SettingsService.Current;
+                if (cfg == null) return;
 
                 // ---------- 0. FIREBASE (toolweb) ----------
-                if (cfg != null && cfg.WriteOtpToFirebase && port != null)
+                if (cfg.WriteOtpToFirebase && port != null)
                 {
                     string machineId = cfg.MachineId ?? "machine-1";
                     
@@ -3433,7 +3434,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (!string.IsNullOrEmpty(session.Otp))
                 {
                     port.Otp = session.Otp;
-                    port.LastMessageContent = session.Transcript;
+                    port.LastMessageContent = session.Transcript ?? "";
                     AddLog($"[{session.Port}] Lấy được OTP từ cuộc gọi: {session.Otp}", "SUCCESS");
                 }
             }

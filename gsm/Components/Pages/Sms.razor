@@ -64,7 +64,7 @@
                     <MudTd Style="font-size:12px; white-space:nowrap;">@context.ReceivedTime</MudTd>
                     <MudTd Style="font-weight:600;">@context.PortName</MudTd>
                     <MudTd>@context.Sender</MudTd>
-                    <MudTd Style="max-width:260px; overflow:hidden; text-overflow:ellipsis;" Title="@context.Content">
+                    <MudTd Style="max-width:260px; overflow:hidden; text-overflow:ellipsis;" title="@context.Content">
                         @context.Content
                     </MudTd>
                     <MudTd Style="font-family:monospace; color:#2563EB; font-weight:600;">
@@ -72,7 +72,7 @@
                     </MudTd>
                     <MudTd>
                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
-                                       OnClick="@(() => CopyText(context.Content))" Title="Copy" />
+                                       OnClick="@(() => CopyText(context.Content))" title="Copy" />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
                                        OnClick="@(() => DeleteSms(context))" />
                     </MudTd>

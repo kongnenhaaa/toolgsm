@@ -52,13 +52,10 @@
                OnClick="RefreshAll" Size="Size.Small">
         Làm mới tất cả
     </MudButton>
-    @if (Ports.Count > 0)
-    {
-        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.PlayArrow"
-                   OnClick="ConnectAll" Size="Size.Small">
-            Connect All
-        </MudButton>
-    }
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.PlayArrow"
+               OnClick="ConnectAll" Size="Size.Small">
+        Connect All
+    </MudButton>
     <MudSpacer />
     <MudTextField @bind-Value="_search" Placeholder="Tìm COM / IMEI / SĐT..." 
                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
@@ -88,13 +85,8 @@
         <div class="mb-4" style="font-size: 48px; opacity: 0.4;">📡</div>
         <MudText Typo="Typo.h6" Class="mb-2">Chưa có thiết bị nào</MudText>
         <MudText Typo="Typo.body2" Class="mb-6" Style="color:#94A3B8; max-width:320px; margin:0 auto;">
-            Cắm modem GSM vào máy tính rồi nhấn <b>Connect All</b> để bắt đầu
+            Cắm modem GSM vào máy tính rồi nhấn <b>Connect All</b> ở góc trái để bắt đầu
         </MudText>
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                   StartIcon="@Icons.Material.Filled.PlayArrow"
-                   OnClick="ConnectAll" Size="Size.Medium">
-            Connect All
-        </MudButton>
     </div>
 }
 

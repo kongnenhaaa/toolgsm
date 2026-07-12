@@ -6,7 +6,7 @@
         xmlns:blazor="clr-namespace:Microsoft.AspNetCore.Components.WebView.Wpf;assembly=Microsoft.AspNetCore.Components.WebView.Wpf"
         xmlns:local="clr-namespace:gsm.Components"
         mc:Ignorable="d"
-        Title="Tool GSM EC20 Professional"
+        Title="Tool GSM Professional"
         Height="920" Width="1480"
         MinHeight="700" MinWidth="1100"
         WindowStartupLocation="CenterScreen"

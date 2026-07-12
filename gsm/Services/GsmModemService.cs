@@ -952,29 +952,24 @@ public class GsmModemService : IGsmModemService
             // ---------------------------------------------------------
             // 1.5. BẮT KẾT QUẢ USSD (+CUSD)
             // ---------------------------------------------------------
-            if (currentData.Contains("+CUSD:") && !currentData.StartsWith("AT+CUSD"))
+            if (currentData.Contains("+CUSD:"))
             {
-                // USSD của nhà mạng thường kết thúc bằng ",15 hoặc ",72 hoặc không có text gì (+CUSD: 2)
-                bool isUssdComplete = Regex.IsMatch(currentData, @"\+CUSD:\s*\d+\r?\n?$") || 
-                                      Regex.IsMatch(currentData, @"\+CUSD:\s*\d+,\""[\s\S]*?\""(,\d+)?\r?\n?$");
-
-                if (isUssdComplete)
+                var match = Regex.Match(currentData, @"\+CUSD:\s*\d+,\""[\s\S]*?\""(,\d+)?\r?\n?|\+CUSD:\s*\d+\r?\n?");
+                if (match.Success)
                 {
+                    string ussdData = match.Value;
                     if (_commandTcs.TryGetValue(portName, out var t) && t.Task.AsyncState is string c && c.StartsWith("AT+CUSD"))
                     {
-                        // Đang chờ lệnh AT+CUSD, nhả kết quả cho SendCommandAsync để nó tự log
-                        t.TrySetResult(currentData.Trim());
+                        t.TrySetResult(currentData.Substring(0, match.Index + match.Length).Trim());
+                        buffer.Remove(0, match.Index + match.Length);
                     }
                     else
                     {
-                        // Nhận được USSD tự do (không có lệnh nào đang đợi), nên ta chủ động log để MainViewModel bắt
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = currentData.Trim() });
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = ussdData.Trim() });
+                        buffer.Replace(ussdData, "");
                     }
-                    
-                    buffer.Clear();
-                    return;
+                    currentData = buffer.ToString();
                 }
-                // Nếu chưa complete thì không return, để vòng lặp tiếp tục nối chuỗi
             }
 
             // ---------------------------------------------------------
@@ -983,20 +978,32 @@ public class GsmModemService : IGsmModemService
             if (_commandTcs.TryGetValue(portName, out var tcs))
             {
                 // Kiểm tra dấu hiệu kết thúc của lệnh AT (OK, ERROR, hoặc CMS/CME ERROR, hoặc dấu nhắc >, hoặc CONNECT)
-                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:|>\s*$|\r?\nCONNECT\r?\n?$");
-                if (isCompleted)
+                var match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?|>\s*|\r?\nCONNECT\r?\n?)");
+                if (match.Success)
                 {
                     if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
                     {
                         // Đợi USSD từ tổng đài. VNSKY có lỗi gửi "+CME ERROR: 100" trước "+CUSD:"
                         if (currentData.Contains("+CME ERROR: 100"))
                         {
-                            return; // Bỏ qua CME ERROR 100 để tiếp tục chờ CUSD thực sự từ VNSKY
+                            buffer.Replace("+CME ERROR: 100", ""); // Xóa rác này để không kẹt
+                            currentData = buffer.ToString();
+                        }
+                        else
+                        {
+                            int endIndex = match.Index + match.Length;
+                            tcs.TrySetResult(currentData.Substring(0, endIndex));
+                            buffer.Remove(0, endIndex);
+                            currentData = buffer.ToString();
                         }
                     }
-
-                    tcs.TrySetResult(currentData);
-                    buffer.Clear(); // An toàn để xóa
+                    else
+                    {
+                        int endIndex = match.Index + match.Length;
+                        tcs.TrySetResult(currentData.Substring(0, endIndex));
+                        buffer.Remove(0, endIndex);
+                        currentData = buffer.ToString();
+                    }
                 }
             }
             // ---------------------------------------------------------
@@ -1005,15 +1012,17 @@ public class GsmModemService : IGsmModemService
             else
             {
                 // Chỉ xóa bộ đệm khi thiết bị nhả rác có chữ OK/ERROR chuẩn
-                bool isCompleted = Regex.IsMatch(currentData, @"\r?\nOK\r?\n?$|\r?\nERROR\r?\n?$|\+CMS ERROR:|\+CME ERROR:");
-                if (isCompleted)
+                var match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?)");
+                if (match.Success)
                 {
-                    buffer.Clear();
+                    buffer.Remove(0, match.Index + match.Length);
+                    currentData = buffer.ToString();
                 }
                 // Nếu bị nhiễu sóng, dữ liệu rác dồn quá nhiều thì xóa để chống tràn RAM
                 else if (currentData.Length > 2000) 
                 {
                     buffer.Clear();
+                    currentData = "";
                 }
             }
         }
@@ -1113,11 +1122,6 @@ public class GsmModemService : IGsmModemService
         {
             if (!silent) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> {command}" });
             
-            if (_portBuffers.TryGetValue(portName, out var buffer)) buffer.Clear();
-            
-            sp.DiscardInBuffer();
-            sp.DiscardOutBuffer();
-            
             sp.Write(command + "\r\n");
             
             // Đứng chờ HandleDataReceived bơm dữ liệu vào TCS, hoặc bị quá giờ (Timeout)
@@ -1182,11 +1186,6 @@ public class GsmModemService : IGsmModemService
         {
             if (!silent) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> [RAW] {data}" });
             
-            if (_portBuffers.TryGetValue(portName, out var buffer)) buffer.Clear();
-            
-            sp.DiscardInBuffer();
-            sp.DiscardOutBuffer();
-            
             sp.Write(data);
             
             var timeoutTask = Task.Delay(timeoutMs);
@@ -1237,9 +1236,6 @@ public class GsmModemService : IGsmModemService
             if (!_commandTcs.TryAdd(portName, innerTcs)) return;
             try
             {
-                if (_portBuffers.TryGetValue(portName, out var b)) b.Clear();
-                sp.DiscardInBuffer();
-                sp.DiscardOutBuffer();
                 sp.Write(cmd + "\r");
                 await Task.WhenAny(innerTcs.Task, Task.Delay(2000));
             }
@@ -1285,7 +1281,6 @@ public class GsmModemService : IGsmModemService
             
             tcs = new TaskCompletionSource<string>("SMS_PAYLOAD", TaskCreationOptions.RunContinuationsAsynchronously);
             _commandTcs.TryAdd(portName, tcs);
-            if (_portBuffers.TryGetValue(portName, out var buf2)) buf2.Clear();
 
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> {message}" });
             sp.Write(message + "\x1A");

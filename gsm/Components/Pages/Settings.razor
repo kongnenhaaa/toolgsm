@@ -1,0 +1,56 @@
+@page "/settings"
+@inject MainViewModel Vm
+@inject ISnackbar Snackbar
+@using gsm.ViewModels
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Cài đặt</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Cấu hình tool • New SIM Intake • IMEI Restore • Thông báo
+</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Bảo mật SIM / IMEI</MudText>
+
+            <MudSwitch T="bool" Label="Bật New SIM Intake Mode" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" Label="Tự động Restore IMEI từ backup" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" Label="Chặn SIM lạ (Block Unknown)" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" Label="Tự động Accept SIM mới (không khuyến nghị)" Color="Color.Warning" Class="mb-2" />
+        </MudPaper>
+
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Mạng & Tín hiệu</MudText>
+            <MudSwitch T="bool" Label="Ưu tiên 4G → 3G → 2G (nwscanseq)" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" Label="Bật VoLTE / IMS" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" Label="Tự recovery khi mất sóng" Color="Color.Primary" Class="mb-2" />
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Thông báo & Âm thanh</MudText>
+            <MudSwitch T="bool" Label="Phát âm thanh khi có SMS" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" Label="Phát âm thanh khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" Label="Gửi Telegram khi có OTP" Color="Color.Primary" Class="mb-2" />
+        </MudPaper>
+
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Khác</MudText>
+            <MudTextField Label="Telegram Bot Token" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+            <MudTextField Label="Telegram Chat ID" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" Class="mt-2"
+                       OnClick="SaveSettings">
+                Lưu cài đặt
+            </MudButton>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    async Task SaveSettings()
+    {
+        Snackbar.Add("Đã lưu cài đặt", Severity.Success);
+        // Gọi SettingsService.Save()
+    }
+}

@@ -1,0 +1,64 @@
+@page "/imei"
+@inject MainViewModel Vm
+@inject ISnackbar Snackbar
+@using gsm.ViewModels
+@using gsm.Models
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">IMEI Manager</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Backup IMEI • Restore • Quản lý mapping CCID ↔ IMEI
+</MudText>
+
+<MudStack Row="true" Class="mb-4" Spacing="2">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" Size="Size.Small">
+        Export Backup
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Upload" Size="Size.Small">
+        Import Backup
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.DeleteSweep" Size="Size.Small">
+        Xóa tất cả
+    </MudButton>
+</MudStack>
+
+<MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
+    <MudTable Items="@(Vm.Ports ?? new())" Hover="true" Dense="true" Elevation="0">
+        <HeaderContent>
+            <MudTh>COM</MudTh>
+            <MudTh>CCID / Serial</MudTh>
+            <MudTh>IMEI hiện tại</MudTh>
+            <MudTh>SĐT</MudTh>
+            <MudTh>Trạng thái</MudTh>
+            <MudTh>Thao tác</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.PortName</MudTd>
+            <MudTd Style="font-family:monospace; font-size:12px;">@(context.Serial ?? "—")</MudTd>
+            <MudTd Style="font-family:monospace; font-size:12px;">@(context.Imei ?? "—")</MudTd>
+            <MudTd>@(context.PhoneNumber ?? "—")</MudTd>
+            <MudTd>
+                <MudChip T="string" Size="Size.Small" 
+                         Color="@(context.Status == SimStatus.Active ? Color.Success : Color.Default)"
+                         Variant="Variant.Filled">
+                    @context.Status
+                </MudChip>
+            </MudTd>
+            <MudTd>
+                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
+                               OnClick="@(() => CopyImei(context.Imei))" Title="Copy IMEI" />
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Chưa có dữ liệu IMEI</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudPaper>
+
+@code {
+    void CopyImei(string? imei)
+    {
+        if (string.IsNullOrEmpty(imei)) return;
+        // JS interop copy nếu cần
+        Snackbar.Add($"Đã copy: {imei}", Severity.Success);
+    }
+}

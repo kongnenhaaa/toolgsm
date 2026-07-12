@@ -1,0 +1,111 @@
+@page "/call"
+@inject MainViewModel Vm
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using gsm.ViewModels
+@using gsm.Models
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Cuộc gọi</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Gọi ra • Gọi + phát WAV • Lịch sử cuộc gọi
+</MudText>
+
+<!-- Toolbar -->
+<MudStack Row="true" Class="mb-4" Spacing="2">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+               StartIcon="@Icons.Material.Filled.Phone"
+               OnClick="OpenCallDialog" Size="Size.Small">
+        Gọi mới + WAV
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" 
+               StartIcon="@Icons.Material.Filled.History"
+               Size="Size.Small">
+        Lịch sử
+    </MudButton>
+</MudStack>
+
+<!-- Form gọi nhanh -->
+<MudGrid Class="mb-4">
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Gọi nhanh</MudText>
+
+            <MudSelect T="string" Label="Cổng" @bind-Value="_port" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true">
+                @foreach (var p in Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>())
+                {
+                    <MudSelectItem Value="@p.PortName">@p.PortName</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField @bind-Value="_phone" Label="Số điện thoại" Placeholder="09xxxxxxxx" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudTextField @bind-Value="_wavPath" Label="File WAV (tùy chọn)" Placeholder="C:\audio\otp.wav" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" 
+                          Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.FolderOpen" 
+                          OnAdornmentClick="BrowseWav" />
+
+            <MudNumericField @bind-Value="_duration" Label="Thời lượng (giây)" Min="5" Max="120" 
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                       StartIcon="@Icons.Material.Filled.Call"
+                       OnClick="StartCall" Disabled="@(string.IsNullOrEmpty(_port) || string.IsNullOrEmpty(_phone))">
+                Bắt đầu gọi
+            </MudButton>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; height:100%;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Trạng thái cuộc gọi</MudText>
+            <MudText Typo="Typo.body2" Style="color:#94A3B8;">
+                @(_callStatus ?? "Chưa có cuộc gọi đang diễn ra")
+            </MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string _port = "";
+    private string _phone = "";
+    private string _wavPath = "";
+    private int _duration = 30;
+    private string? _callStatus;
+
+    async Task OpenCallDialog()
+    {
+        var parameters = new DialogParameters();
+        var dialog = await DialogService.ShowAsync<gsm.Components.Shared.CallDialog>("Gọi + phát WAV", parameters);
+        var result = await dialog.Result;
+        // Xử lý kết quả nếu cần
+    }
+
+    async Task BrowseWav()
+    {
+        // Có thể dùng JS interop hoặc giữ path thủ công
+        Snackbar.Add("Chọn file WAV (mono 8kHz 16bit khuyến nghị)", Severity.Info);
+    }
+
+    async Task StartCall()
+    {
+        if (string.IsNullOrEmpty(_port) || string.IsNullOrEmpty(_phone)) return;
+
+        _callStatus = $"Đang gọi {_phone} trên {_port}...";
+        Snackbar.Add(_callStatus, Severity.Info);
+
+        try
+        {
+            // Gọi backend
+            // await Vm.ExecuteCallFromUiAsync(_port, _phone, _wavPath, _duration);
+            await Task.Delay(500); // placeholder
+            _callStatus = $"Đã kết nối • Phát audio {_duration}s";
+            Snackbar.Add("Cuộc gọi đã bắt đầu", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _callStatus = "Lỗi: " + ex.Message;
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+}

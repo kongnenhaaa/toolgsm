@@ -1,0 +1,106 @@
+@page "/ussd"
+@inject MainViewModel Vm
+@inject IGsmModemService ModemService
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using gsm.ViewModels
+@using gsm.Models
+@using gsm.Services
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">USSD</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Gửi lệnh USSD nhanh • Kiểm tra TKC • Custom
+</MudText>
+
+<MudGrid>
+    <!-- Gửi USSD nhanh -->
+    <MudItem xs="12" md="5">
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; height:100%;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Gửi USSD</MudText>
+
+            <MudSelect T="string" Label="Chọn cổng" @bind-Value="_selectedPort" Variant="Variant.Outlined" 
+                       Margin="Margin.Dense" Class="mb-3" Dense="true">
+                @foreach (var p in Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>())
+                {
+                    <MudSelectItem Value="@p.PortName">@p.PortName - @(p.PhoneNumber ?? "Chưa có SĐT")</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField @bind-Value="_ussdCode" Label="Lệnh USSD" Placeholder="*101#" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudStack Row="true" Spacing="2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                           OnClick="SendUssd" Disabled="@(string.IsNullOrEmpty(_selectedPort) || string.IsNullOrEmpty(_ussdCode))"
+                           StartIcon="@Icons.Material.Filled.Send" FullWidth="true">
+                    Gửi
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Success" 
+                           OnClick="CheckAllBalance" StartIcon="@Icons.Material.Filled.AccountBalanceWallet">
+                    Check tất cả TKC
+                </MudButton>
+            </MudStack>
+
+            <MudDivider Class="my-4" />
+
+            <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Lệnh nhanh</MudText>
+            <MudChipSet T="string" Filter="true">
+                <MudChip T="string" Text="*101#" OnClick="@(() => _ussdCode = "*101#")" Variant="Variant.Outlined" Size="Size.Small">*101#</MudChip>
+                <MudChip T="string" Text="*100#" OnClick="@(() => _ussdCode = "*100#")" Variant="Variant.Outlined" Size="Size.Small">*100#</MudChip>
+                <MudChip T="string" Text="*101*1#" OnClick="@(() => _ussdCode = "*101*1#")" Variant="Variant.Outlined" Size="Size.Small">*101*1#</MudChip>
+            </MudChipSet>
+        </MudPaper>
+    </MudItem>
+
+    <!-- Kết quả -->
+    <MudItem xs="12" md="7">
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; min-height:320px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Kết quả gần đây</MudText>
+            
+            @if (string.IsNullOrEmpty(_lastResult))
+            {
+                <MudText Typo="Typo.body2" Style="color:#94A3B8;">Chưa có kết quả USSD</MudText>
+            }
+            else
+            {
+                <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; white-space:pre-wrap; font-family:monospace; font-size:13px;">
+                    @_lastResult
+                </MudPaper>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string _selectedPort = "";
+    private string _ussdCode = "*101#";
+    private string _lastResult = "";
+
+    async Task SendUssd()
+    {
+        if (string.IsNullOrEmpty(_selectedPort) || string.IsNullOrEmpty(_ussdCode)) return;
+
+        Snackbar.Add($"Đang gửi {_ussdCode} trên {_selectedPort}...", Severity.Info);
+        try
+        {
+            var resp = await ModemService.SendCommandAsync(_selectedPort, $"AT+CUSD=1,\"{_ussdCode}\",15", 20000);
+            _lastResult = $"[{DateTime.Now:HH:mm:ss}] {_selectedPort}\n{_ussdCode}\n\n{resp}";
+            Snackbar.Add("Đã gửi USSD", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    async Task CheckAllBalance()
+    {
+        Snackbar.Add("Đang kiểm tra TKC tất cả cổng active...", Severity.Info);
+        foreach (var p in Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>())
+        {
+            await Vm.CheckBalanceForPortAsync(p.PortName);
+            await Task.Delay(800);
+        }
+        Snackbar.Add("Hoàn tất check TKC", Severity.Success);
+    }
+}

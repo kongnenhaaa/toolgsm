@@ -1,0 +1,114 @@
+@page "/sms"
+@inject MainViewModel Vm
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using gsm.ViewModels
+@using gsm.Models
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Quản lý SMS</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Gửi tin nhắn • Lịch sử • Hàng đợi
+</MudText>
+
+<!-- Toolbar -->
+<MudStack Row="true" Class="mb-4" Spacing="2">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+               StartIcon="@Icons.Material.Filled.Send"
+               OnClick="OpenBulkSms" Size="Size.Small">
+        Gửi SMS hàng loạt
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" 
+               StartIcon="@Icons.Material.Filled.Refresh"
+               OnClick="Refresh" Size="Size.Small">
+        Làm mới
+    </MudButton>
+    <MudSpacer />
+    <MudTextField @bind-Value="_search" Placeholder="Tìm SĐT / nội dung..." 
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Immediate="true" Style="max-width:280px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
+</MudStack>
+
+<!-- Stats -->
+<MudGrid Class="mb-4">
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Đã gửi hôm nay</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700;">@Vm.SmsMessages?.Count(x => x.Timestamp.Date == DateTime.Today) ?? 0</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Trong hàng đợi</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Warning" Style="font-weight:700;">@Vm.QueuePendingCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Thành công</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Success" Style="font-weight:700;">@Vm.QueueSuccessCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Lỗi</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Error" Style="font-weight:700;">@Vm.QueueErrorCount</MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+<!-- Lịch sử SMS -->
+<MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
+    <MudTable Items="@FilteredSms" Hover="true" Dense="true" Elevation="0" 
+              Style="background:white;" Breakpoint="Breakpoint.Sm">
+        <HeaderContent>
+            <MudTh>Thời gian</MudTh>
+            <MudTh>Cổng</MudTh>
+            <MudTh>SĐT</MudTh>
+            <MudTh>Nội dung</MudTh>
+            <MudTh>Trạng thái</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Thời gian">@context.Timestamp.ToString("HH:mm:ss dd/MM")</MudTd>
+            <MudTd DataLabel="Cổng">@context.PortName</MudTd>
+            <MudTd DataLabel="SĐT">@context.PhoneNumber</MudTd>
+            <MudTd DataLabel="Nội dung">
+                <MudText Typo="Typo.caption" Style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    @context.Content
+                </MudText>
+            </MudTd>
+            <MudTd DataLabel="Trạng thái">
+                <MudChip T="string" Size="Size.Small" Color="@(context.IsSuccess ? Color.Success : Color.Error)" Variant="Variant.Filled">
+                    @(context.IsSuccess ? "Thành công" : "Lỗi")
+                </MudChip>
+            </MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Chưa có tin nhắn nào</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudPaper>
+
+@code {
+    private string _search = "";
+
+    private IEnumerable<SmsMessage> FilteredSms => 
+        string.IsNullOrWhiteSpace(_search) 
+            ? Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>()
+            : (Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>())
+                .Where(x => (x.PhoneNumber?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                            (x.Content?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                            (x.PortName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
+
+    async Task OpenBulkSms()
+    {
+        // Mở dialog gửi hàng loạt (có thể dùng SmsDialog mở rộng)
+        Snackbar.Add("Mở form gửi SMS hàng loạt...", Severity.Info);
+        // TODO: Dialog bulk
+    }
+
+    async Task Refresh()
+    {
+        Snackbar.Add("Đã làm mới danh sách SMS", Severity.Normal);
+        StateHasChanged();
+    }
+}

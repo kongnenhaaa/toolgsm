@@ -2,36 +2,50 @@
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @using gsm.Models
 @using gsm.Components.Shared
 @implements IDisposable
 
-<!-- ========== ACTION FORM ========== -->
-<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
-          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
-    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
-        <MudText Typo="Typo.caption" Style="color:#64748B; min-width:80px;">Mật khẩu mới</MudText>
-        <MudTextField @bind-Value="_vnptPassword" Placeholder="Nhập mật khẩu..." 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" InputType="InputType.Password"
-                      Style="max-width:140px; background:#F8FAFC;" Immediate="true" />
+<MudPaper Class="pa-3 mb-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mb-2">
+        <MudTextField @bind-Value="_vnptPassword" Label="Mật khẩu mới" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;"
+                      InputType="InputType.Password" />
+        <MudTextField @bind-Value="_vnptConfirm" Label="Nhập lại mật khẩu" 
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;"
+                      InputType="InputType.Password" />
+        <MudTextField @bind-Value="_vnptNumber" Label="Số nhận" Placeholder="333"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:100px;" />
+        <MudTextField @bind-Value="_vnptTemplate" Label="Mẫu nội dung" Placeholder="MK {pass}"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+    </MudStack>
 
-        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Nhập lại</MudText>
-        <MudTextField @bind-Value="_vnptConfirm" Placeholder="Xác nhận mật khẩu..." 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" InputType="InputType.Password"
-                      Style="max-width:140px; background:#F8FAFC;" Immediate="true" />
-
-        <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Chế độ</MudText>
-        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined" 
-                   Margin="Margin.Dense" Style="width:130px; background:#F8FAFC;">
-            <MudSelectItem Value="@("Selected")">Cổng đã chọn</MudSelectItem>
-            <MudSelectItem Value="@("All")">Tất cả Vina</MudSelectItem>
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined"
+                   Margin="Margin.Dense" Style="width:150px;" Label="Gửi tới">
+            <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
+            <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
         </MudSelect>
 
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                   StartIcon="@Icons.Material.Filled.Lock"
-                   OnClick="SetVnptPassword" Disabled="@(string.IsNullOrEmpty(_vnptPassword))">
-            Đặt mật khẩu
-        </MudButton>
+        @if (!_isSetting)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Lock" OnClick="SetVnptPassword"
+                       Disabled="@(string.IsNullOrWhiteSpace(_vnptPassword))">
+                Đặt mật khẩu
+            </MudButton>
+        }
+        else
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Stop" OnClick="StopSetPassword">
+                Dừng
+            </MudButton>
+        }
+
+        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                   OnClick="ClearVnptResults">Xóa kết quả</MudButton>
     </MudStack>
 </MudPaper>
 
@@ -48,7 +62,7 @@
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-3">
                 <MudText Typo="Typo.subtitle1" Style="font-weight:600;">Kết quả đổi mật khẩu My VNPT</MudText>
-                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="ClearVnptResult">
+                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="ClearVnptResults">
                     Xóa kết quả
                 </MudButton>
             </MudStack>
@@ -58,6 +72,7 @@
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT</MudTh>
+                    <MudTh>Mật khẩu</MudTh>
                     <MudTh>Trạng thái</MudTh>
                     <MudTh>Phản hồi</MudTh>
                 </HeaderContent>
@@ -65,6 +80,7 @@
                     <MudTd Style="font-size:12px;">@context.Time.ToString("HH:mm:ss")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@context.Phone</MudTd>
+                    <MudTd>@context.PasswordMasked</MudTd>
                     <MudTd>
                         <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
                             @(context.Success ? "Thành công" : "Lỗi")
@@ -83,25 +99,21 @@
 </MudTabs>
 
 @code {
+    // ========== BINDINGS ==========
     private string _vnptPassword = "";
     private string _vnptConfirm = "";
-    private string _sendMode = "Selected";
+    private string _vnptNumber = "333";          // số nhận mặc định My VNPT
+    private string _vnptTemplate = "MK {pass}";  // template nội dung SMS
+    private string _sendMode = "selected";
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
+    private bool _isSetting = false;
+    private CancellationTokenSource? _cts;
 
-    public class VnptResultItem
-    {
-        public DateTime Time { get; set; }
-        public string Port { get; set; } = "";
-        public string Phone { get; set; } = "";
-        public bool Success { get; set; }
-        public string Response { get; set; } = "";
-    }
     private List<VnptResultItem> _vnptResults = new();
 
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
-    
-    // VnptPass thường chỉ áp dụng cho Vinaphone
+    private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
     private List<SimPort> FilteredPorts => Ports.Where(x => (x.NetworkProvider ?? "").Contains("Vina", StringComparison.OrdinalIgnoreCase) || true).ToList();
 
     private System.Threading.Timer? _timer;
@@ -111,63 +123,139 @@
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
     }
 
+    // =====================================================
+    // ĐẶT MẬT KHẨU MY VNPT – 100%
+    // =====================================================
     async Task SetVnptPassword()
     {
-        if (string.IsNullOrEmpty(_vnptPassword)) return;
+        if (string.IsNullOrWhiteSpace(_vnptPassword))
+        {
+            Snackbar.Add("Nhập mật khẩu mới", Severity.Warning);
+            return;
+        }
+
         if (_vnptPassword != _vnptConfirm)
         {
             Snackbar.Add("Mật khẩu nhập lại không khớp", Severity.Warning);
             return;
         }
 
-        var targets = _sendMode == "Selected" 
-            ? _selectedPorts.Select(p => p.PortName).ToList() 
-            : FilteredPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
-
-        if (!targets.Any())
+        if (_vnptPassword.Length < 4 || _vnptPassword.Length > 20)
         {
-            Snackbar.Add("Không có cổng nào được chọn", Severity.Warning);
+            Snackbar.Add("Mật khẩu nên từ 4–20 ký tự", Severity.Warning);
             return;
         }
 
-        Snackbar.Add($"Đang gửi đăng ký Pass VNPT tới {targets.Count} cổng...", Severity.Info);
-        
+        var targets = GetTargetPorts();
+        if (!targets.Any())
+        {
+            Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
+            return;
+        }
+
+        if (targets.Count > 5)
+        {
+            var ok = await DialogService.ShowMessageBox("Xác nhận",
+                $"Đặt mật khẩu My VNPT trên {targets.Count} cổng?\nMật khẩu: {_vnptPassword}",
+                yesText: "Đặt mật khẩu", cancelText: "Hủy");
+            if (ok != true) return;
+        }
+
+        _isSetting = true;
+        _cts = new CancellationTokenSource();
+        int okCount = 0, failCount = 0;
+
+        // Nội dung SMS thực tế
+        string content = _vnptTemplate.Replace("{pass}", _vnptPassword);
+
+        Snackbar.Add($"Đang đặt mật khẩu {targets.Count} cổng...", Severity.Info);
+
         foreach (var port in targets)
         {
+            if (_cts.Token.IsCancellationRequested) break;
+
+            string rawResponse = "";
+            bool success = false;
+
             try
             {
-                await ModemService.SendSmsAsync(port, "333", $"MK {_vnptPassword}");
-                _vnptResults.Insert(0, new VnptResultItem
-                {
-                    Time = DateTime.Now,
-                    Port = port,
-                    Phone = "", // Need logic to get phone number if available
-                    Success = true,
-                    Response = "Đã gửi tin nhắn (SMS)..."
-                });
+                // Gửi SMS thật tới 333 (hoặc số cấu hình)
+                rawResponse = await ModemService.SendSmsAsync(port, _vnptNumber.Trim(), content);
+                success = true;
+                okCount++;
+                Snackbar.Add($"[{port}] Đặt MK OK", Severity.Success);
             }
             catch (Exception ex)
             {
-                _vnptResults.Insert(0, new VnptResultItem
-                {
-                    Time = DateTime.Now,
-                    Port = port,
-                    Phone = "",
-                    Success = false,
-                    Response = $"Lỗi: {ex.Message}"
-                });
+                rawResponse = ex.Message;
+                failCount++;
+                Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
             }
-            await Task.Delay(500);
+
+            var phone = Ports.FirstOrDefault(p => p.PortName == port)?.PhoneNumber ?? "—";
+
+            _vnptResults.Insert(0, new VnptResultItem
+            {
+                Time = DateTime.Now,
+                Port = port,
+                Phone = phone,
+                PasswordMasked = MaskPassword(_vnptPassword),
+                Success = success,
+                Response = string.IsNullOrEmpty(rawResponse) 
+                    ? (success ? "Đã gửi SMS đặt mật khẩu" : "Lỗi") 
+                    : rawResponse
+            });
+
+            if (_vnptResults.Count > 200) _vnptResults.RemoveRange(200, _vnptResults.Count - 200);
+            StateHasChanged();
+            await Task.Delay(1000, _cts.Token);
         }
+
+        _isSetting = false;
+        Snackbar.Add($"Hoàn tất: {okCount} thành công, {failCount} lỗi",
+            failCount == 0 ? Severity.Success : Severity.Warning);
     }
 
-    void ClearVnptResult()
+    void StopSetPassword()
+    {
+        _cts?.Cancel();
+        _isSetting = false;
+        Snackbar.Add("Đã dừng", Severity.Normal);
+    }
+
+    void ClearVnptResults()
     {
         _vnptResults.Clear();
+        Snackbar.Add("Đã xóa kết quả", Severity.Normal);
+    }
+
+    string MaskPassword(string pass)
+    {
+        if (string.IsNullOrEmpty(pass) || pass.Length <= 2) return "***";
+        return pass[0] + new string('*', pass.Length - 2) + pass[^1];
+    }
+
+    List<string> GetTargetPorts()
+    {
+        if (_sendMode == "all" || !_selectedPorts.Any())
+            return FilteredPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
+        return _selectedPorts.Select(p => p.PortName).ToList();
     }
 
     public void Dispose()
     {
         _timer?.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    public class VnptResultItem
+    {
+        public DateTime Time { get; set; }
+        public string Port { get; set; } = "";
+        public string Phone { get; set; } = "";
+        public string PasswordMasked { get; set; } = "";
+        public bool Success { get; set; }
+        public string Response { get; set; } = "";
     }
 }

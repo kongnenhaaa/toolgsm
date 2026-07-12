@@ -78,38 +78,47 @@
                   Immediate="true" Style="max-width:260px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
 </MudStack>
 
-@if (FilteredPorts.Count == 0)
+@if (_viewMode == "card")
 {
-    <!-- Empty state đẹp hơn -->
-    <div class="text-center py-16">
-        <div class="mb-4" style="font-size: 48px; opacity: 0.4;">📡</div>
-        <MudText Typo="Typo.h6" Class="mb-2">Chưa có thiết bị nào</MudText>
-        <MudText Typo="Typo.body2" Class="mb-6" Style="color:#94A3B8; max-width:320px; margin:0 auto;">
-            Cắm modem GSM vào máy tính rồi nhấn <b>Connect All</b> ở góc trái để bắt đầu
-        </MudText>
-    </div>
-}
-else if (_viewMode == "card")
-{
-    <!-- ========== CARD VIEW ========== -->
-    <MudGrid>
-        @foreach (var port in FilteredPorts)
-        {
-            <MudItem xs="12" sm="6" md="4" lg="3">
-                <PortCard Port="port" 
-                          OnAccept="AcceptNewSim" 
-                          OnRefresh="RefreshPort"
-                          OnCheckBalance="CheckBalance"
-                          OnUssd="OpenUssdDialog"
-                          OnSms="OpenSmsDialog"
-                          OnCall="OpenCallDialog" />
-            </MudItem>
-        }
-    </MudGrid>
+    @if (FilteredPorts.Count == 0)
+    {
+        <!-- Empty state nhỏ gọn trong card mode -->
+        <MudPaper Class="pa-16" Elevation="0" Style="border:1px dashed #CBD5E1; border-radius:16px;">
+            <MudStack AlignItems="AlignItems.Center" Justify="Justify.Center" Spacing="4">
+                <MudIcon Icon="@Icons.Material.Outlined.CellTower" Style="opacity:0.35; font-size:64px;" />
+                <MudText Typo="Typo.h6" Style="color:#64748B;">Chưa có thiết bị nào</MudText>
+                <MudText Typo="Typo.body2" Align="Align.Center" Style="color:#94A3B8; max-width:360px;">
+                    Cắm modem GSM vào máy tính rồi nhấn <b>Connect All</b> để bắt đầu
+                </MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PlayArrow"
+                           OnClick="ConnectAll" Size="Size.Medium">
+                    Connect All
+                </MudButton>
+            </MudStack>
+        </MudPaper>
+    }
+    else
+    {
+        <!-- ========== CARD VIEW ========== -->
+        <MudGrid>
+            @foreach (var port in FilteredPorts)
+            {
+                <MudItem xs="12" sm="6" md="4" lg="3">
+                    <PortCard Port="port" 
+                              OnAccept="AcceptNewSim" 
+                              OnRefresh="RefreshPort"
+                              OnCheckBalance="CheckBalance"
+                              OnUssd="OpenUssdDialog"
+                              OnSms="OpenSmsDialog"
+                              OnCall="OpenCallDialog" />
+                </MudItem>
+            }
+        </MudGrid>
+    }
 }
 else
 {
-    <!-- ========== TABLE VIEW ========== -->
+    <!-- ========== TABLE VIEW LUÔN HIỆN ========== -->
     <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
         <MudTable Items="@FilteredPorts" 
                   Hover="true" 
@@ -219,7 +228,17 @@ else
             </RowTemplate>
 
             <NoRecordsContent>
-                <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Không tìm thấy cổng nào</MudText>
+                <div class="pa-12 text-center">
+                    <MudIcon Icon="@Icons.Material.Outlined.CellTower" Size="Size.Large" Class="mb-3" Style="opacity:0.35;" />
+                    <MudText Typo="Typo.h6" Style="color:#64748B;">Chưa có thiết bị nào</MudText>
+                    <MudText Typo="Typo.body2" Style="color:#94A3B8; margin-bottom:16px;">
+                        Cắm modem GSM rồi nhấn <b>Connect All</b>
+                    </MudText>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="ConnectAll">
+                        Connect All
+                    </MudButton>
+                </div>
             </NoRecordsContent>
         </MudTable>
     </MudPaper>

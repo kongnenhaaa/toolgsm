@@ -44,8 +44,10 @@
                 </MudChip>
             </MudTd>
             <MudTd>
-                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
-                               OnClick="@(() => CopyImei(context.Imei))" Title="Copy IMEI" />
+                <MudTooltip Text="Copy IMEI">
+                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
+                                   OnClick="@(() => CopyImei(context.Imei))" />
+                </MudTooltip>
             </MudTd>
         </RowTemplate>
         <NoRecordsContent>

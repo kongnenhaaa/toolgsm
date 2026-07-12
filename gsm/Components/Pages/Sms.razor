@@ -32,8 +32,8 @@
 <MudGrid Class="mb-4">
     <MudItem xs="6" sm="3">
         <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudText Typo="Typo.caption" Style="color:#64748B;">Đã gửi hôm nay</MudText>
-            <MudText Typo="Typo.h5" Style="font-weight:700;">@Vm.SmsMessages?.Count(x => x.Timestamp.Date == DateTime.Today) ?? 0</MudText>
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Tin nhắn đã nhận</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700;">@Vm.SmsReceivedCount</MudText>
         </MudPaper>
     </MudItem>
     <MudItem xs="6" sm="3">
@@ -63,22 +63,22 @@
         <HeaderContent>
             <MudTh>Thời gian</MudTh>
             <MudTh>Cổng</MudTh>
-            <MudTh>SĐT</MudTh>
+            <MudTh>Người gửi</MudTh>
             <MudTh>Nội dung</MudTh>
             <MudTh>Trạng thái</MudTh>
         </HeaderContent>
         <RowTemplate>
-            <MudTd DataLabel="Thời gian">@context.Timestamp.ToString("HH:mm:ss dd/MM")</MudTd>
+            <MudTd DataLabel="Thời gian">@context.ReceivedTime</MudTd>
             <MudTd DataLabel="Cổng">@context.PortName</MudTd>
-            <MudTd DataLabel="SĐT">@context.PhoneNumber</MudTd>
+            <MudTd DataLabel="SĐT">@context.Sender</MudTd>
             <MudTd DataLabel="Nội dung">
                 <MudText Typo="Typo.caption" Style="max-width:280px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
                     @context.Content
                 </MudText>
             </MudTd>
             <MudTd DataLabel="Trạng thái">
-                <MudChip T="string" Size="Size.Small" Color="@(context.IsSuccess ? Color.Success : Color.Error)" Variant="Variant.Filled">
-                    @(context.IsSuccess ? "Thành công" : "Lỗi")
+                <MudChip T="string" Size="Size.Small" Color="@(context.Status == "Đã đọc" ? Color.Default : Color.Success)" Variant="Variant.Filled">
+                    @(string.IsNullOrWhiteSpace(context.Status) ? "Mới" : context.Status)
                 </MudChip>
             </MudTd>
         </RowTemplate>
@@ -95,7 +95,7 @@
         string.IsNullOrWhiteSpace(_search) 
             ? Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>()
             : (Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>())
-                .Where(x => (x.PhoneNumber?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                .Where(x => (x.Sender?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
                             (x.Content?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
                             (x.PortName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false));
 

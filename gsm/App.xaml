@@ -7,27 +7,35 @@
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <materialDesign:BundledTheme BaseTheme="Dark" PrimaryColor="DeepPurple" SecondaryColor="Lime" />
+                <!-- Light Theme chuyên nghiệp -->
+                <materialDesign:BundledTheme BaseTheme="Light" 
+                                             PrimaryColor="Blue" 
+                                             SecondaryColor="Teal" />
                 <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesign3.Defaults.xaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Custom Light Palette (Web-style) -->
+            <SolidColorBrush x:Key="AppBackground" Color="#F8FAFC"/>
+            <SolidColorBrush x:Key="SidebarBackground" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="PanelBackground" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="HoverBackground" Color="#F1F5F9"/>
+            <SolidColorBrush x:Key="InputBackground" Color="#FFFFFF"/>
             
-            <!-- Dark Enterprise Dashboard Colors -->
-            <SolidColorBrush x:Key="AppBackground" Color="#0B1220"/>
-            <SolidColorBrush x:Key="SidebarBackground" Color="#111B2E"/>
-            <SolidColorBrush x:Key="PanelBackground" Color="#182338"/>
-            <SolidColorBrush x:Key="HoverBackground" Color="#202D44"/>
-            <SolidColorBrush x:Key="InputBackground" Color="#0F172A"/>
-            <SolidColorBrush x:Key="MainBorderBrush" Color="#2A3952"/>
-            <SolidColorBrush x:Key="InputBorderBrush" Color="#334155"/>
-            <SolidColorBrush x:Key="AccentColor" Color="#3B82F6"/>
-            <SolidColorBrush x:Key="AccentHoverColor" Color="#2563EB"/>
-            <SolidColorBrush x:Key="ForegroundText" Color="#F8FAFC"/>
-            <SolidColorBrush x:Key="SubtextText" Color="#CBD5E1"/>
-            <SolidColorBrush x:Key="DimtextText" Color="#64748B"/>
-            <SolidColorBrush x:Key="SuccessColor" Color="#22C55E"/>
-            <SolidColorBrush x:Key="ErrorColor" Color="#EF4444"/>
-            <SolidColorBrush x:Key="WarningColor" Color="#F59E0B"/>
-            <SolidColorBrush x:Key="InfoColor" Color="#06B6D4"/>
+            <SolidColorBrush x:Key="MainBorderBrush" Color="#E2E8F0"/>
+            <SolidColorBrush x:Key="InputBorderBrush" Color="#CBD5E1"/>
+            
+            <SolidColorBrush x:Key="AccentColor" Color="#2563EB"/>
+            <SolidColorBrush x:Key="AccentHoverColor" Color="#1D4ED8"/>
+            
+            <SolidColorBrush x:Key="ForegroundText" Color="#0F172A"/>
+            <SolidColorBrush x:Key="SubtextText" Color="#475569"/>
+            <SolidColorBrush x:Key="DimtextText" Color="#94A3B8"/>
+            
+            <SolidColorBrush x:Key="SuccessColor" Color="#16A34A"/>
+            <SolidColorBrush x:Key="ErrorColor" Color="#DC2626"/>
+            <SolidColorBrush x:Key="WarningColor" Color="#D97706"/>
+            <SolidColorBrush x:Key="InfoColor" Color="#0891B2"/>
             
             <!-- Professional Button Style -->
             <Style TargetType="Button" x:Key="ModernButtonStyle" BasedOn="{StaticResource MaterialDesignRaisedButton}">

@@ -1828,19 +1828,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
                         port.Status = SimStatus.Connecting;
                         
-                        _ = Task.Run(async () =>
-                        {
-                            await Task.Delay(15000);
-                            if (port.IsRebooting)
-                            {
-                                Application.Current.Dispatcher.Invoke(() => 
-                                {
-                                    port.IsRebooting = false;
-                                    AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
-                                    _modemService.StartHotplugWaitLoop(port.PortName);
-                                });
-                            }
-                        });
+                        // Mạch sẽ tự ngắt kết nối USB và nhận lại. InitializeModemAsync sẽ tự chạy.
+                        // Không cần ép StartHotplugWaitLoop sau 15s.
                     }
                     else
                     {

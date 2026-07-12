@@ -177,7 +177,7 @@ public class ImeiManagementService
             var cachedEntry = getBackupEntry(ccid);
 
             // [FIX LOGIC]: Đưa ưu tiên chặn SIM lạ lên hàng đầu (Tính năng 3)
-            if (cachedEntry == null)
+            if (cachedEntry == null && !port.IsRebooting)
             {
                 if (settings.EnableNewSimIntakeMode)
                 {

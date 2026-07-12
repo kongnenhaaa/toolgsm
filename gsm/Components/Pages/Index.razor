@@ -47,7 +47,7 @@
 </MudGrid>
 
 <!-- Toolbar -->
-<MudStack Row="true" Class="mb-3" Spacing="2">
+<MudStack Row="true" Class="mb-3" Spacing="2" AlignItems="AlignItems.Center">
     <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Refresh"
                OnClick="RefreshAll" Size="Size.Small">
         Làm mới tất cả
@@ -56,27 +56,27 @@
                OnClick="ConnectAll" Size="Size.Small">
         Connect All
     </MudButton>
+
     <MudSpacer />
+
+    <!-- Toggle Card / Table -->
+    <MudButtonGroup OverrideStyles="false" Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary">
+        <MudTooltip Text="Xem dạng Card">
+            <MudIconButton Icon="@Icons.Material.Filled.GridView" 
+                           Color="@(_viewMode == "card" ? Color.Primary : Color.Default)"
+                           OnClick="@(() => _viewMode = "card")" />
+        </MudTooltip>
+        <MudTooltip Text="Xem dạng Bảng">
+            <MudIconButton Icon="@Icons.Material.Filled.TableRows" 
+                           Color="@(_viewMode == "table" ? Color.Primary : Color.Default)"
+                           OnClick="@(() => _viewMode = "table")" />
+        </MudTooltip>
+    </MudButtonGroup>
+
     <MudTextField @bind-Value="_search" Placeholder="Tìm COM / IMEI / SĐT..." 
                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-                  Immediate="true" Style="max-width:280px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                  Immediate="true" Style="max-width:260px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
 </MudStack>
-
-<!-- Port Cards -->
-<MudGrid>
-    @foreach (var port in FilteredPorts)
-    {
-        <MudItem xs="12" sm="6" md="4" lg="3">
-            <PortCard Port="port" 
-                      OnAccept="AcceptNewSim" 
-                      OnRefresh="RefreshPort"
-                      OnCheckBalance="CheckBalance"
-                      OnUssd="OpenUssdDialog"
-                      OnSms="OpenSmsDialog"
-                      OnCall="OpenCallDialog" />
-        </MudItem>
-    }
-</MudGrid>
 
 @if (FilteredPorts.Count == 0)
 {
@@ -89,24 +89,163 @@
         </MudText>
     </div>
 }
+else if (_viewMode == "card")
+{
+    <!-- ========== CARD VIEW ========== -->
+    <MudGrid>
+        @foreach (var port in FilteredPorts)
+        {
+            <MudItem xs="12" sm="6" md="4" lg="3">
+                <PortCard Port="port" 
+                          OnAccept="AcceptNewSim" 
+                          OnRefresh="RefreshPort"
+                          OnCheckBalance="CheckBalance"
+                          OnUssd="OpenUssdDialog"
+                          OnSms="OpenSmsDialog"
+                          OnCall="OpenCallDialog" />
+            </MudItem>
+        }
+    </MudGrid>
+}
+else
+{
+    <!-- ========== TABLE VIEW ========== -->
+    <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
+        <MudTable Items="@FilteredPorts" 
+                  Hover="true" 
+                  Dense="true" 
+                  Elevation="0"
+                  MultiSelection="true"
+                  @bind-SelectedItems="_selectedPorts"
+                  Style="background:white;"
+                  Breakpoint="Breakpoint.None">
+            
+            <HeaderContent>
+                <MudTh Style="width:42px;"></MudTh>
+                <MudTh>STT</MudTh>
+                <MudTh>Cổng</MudTh>
+                <MudTh>Trạng thái</MudTh>
+                <MudTh>Nhà mạng</MudTh>
+                <MudTh>Số dư</MudTh>
+                <MudTh>Số điện thoại</MudTh>
+                <MudTh>IMEI</MudTh>
+                <MudTh>CCID</MudTh>
+                <MudTh>HSD</MudTh>
+                <MudTh>OTP / Nội dung</MudTh>
+                <MudTh>Cập nhật</MudTh>
+                <MudTh Style="min-width:150px;">Thao tác</MudTh>
+            </HeaderContent>
+
+            <RowTemplate>
+                <MudTd>
+                    <MudCheckBox T="bool" Value="@context.IsSelected" 
+                                 ValueChanged="@(v => context.IsSelected = v)" 
+                                 Color="Color.Primary" Dense="true" />
+                </MudTd>
+                <MudTd>@context.Stt</MudTd>
+                <MudTd Style="font-weight:600;">@context.PortName</MudTd>
+                
+                <MudTd>
+                    <gsm.Components.Shared.StatusBadge Status="@context.Status" />
+                </MudTd>
+                
+                <MudTd>@(string.IsNullOrEmpty(context.NetworkProvider) ? "—" : context.NetworkProvider)</MudTd>
+                
+                <MudTd>
+                    <span style="color:#16A34A; font-weight:600; white-space:nowrap;">
+                        @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
+                    </span>
+                </MudTd>
+                
+                <MudTd Style="white-space:nowrap;">
+                    @(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)
+                </MudTd>
+                
+                <MudTd Style="font-family:monospace; font-size:12px; white-space:nowrap;">
+                    @(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)
+                </MudTd>
+                
+                <MudTd Style="font-family:monospace; font-size:11px; max-width:130px; overflow:hidden; text-overflow:ellipsis;">
+                    @(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)
+                </MudTd>
+                
+                <MudTd Style="white-space:nowrap; font-size:12px;">
+                    @(string.IsNullOrEmpty(context.ExpiryDate) ? "—" : context.ExpiryDate)
+                </MudTd>
+                
+                <MudTd Style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px;">
+                    @(string.IsNullOrEmpty(context.Otp) ? (context.LastMessageContent ?? "—") : context.Otp)
+                </MudTd>
+                
+                <MudTd Style="font-size:12px; color:#64748B; white-space:nowrap;">
+                    @context.UpdatedAt
+                </MudTd>
+                
+                <MudTd>
+                    <MudStack Row="true" Spacing="0">
+                        @if (context.Status == SimStatus.SecurityBlocked)
+                        {
+                            <MudTooltip Text="Chấp nhận SIM mới">
+                                <MudIconButton Icon="@Icons.Material.Filled.VerifiedUser" Size="Size.Small" 
+                                               Color="Color.Primary"
+                                               OnClick="@(() => AcceptNewSim(context))" />
+                            </MudTooltip>
+                        }
+                        <MudTooltip Text="Làm mới">
+                            <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" 
+                                           OnClick="@(() => RefreshPort(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Check TKC">
+                            <MudIconButton Icon="@Icons.Material.Filled.AccountBalanceWallet" Size="Size.Small" 
+                                           Color="Color.Success"
+                                           OnClick="@(() => CheckBalance(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="USSD">
+                            <MudIconButton Icon="@Icons.Material.Filled.Dialpad" Size="Size.Small" 
+                                           Color="Color.Info"
+                                           OnClick="@(() => OpenUssdDialog(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Gọi">
+                            <MudIconButton Icon="@Icons.Material.Filled.Phone" Size="Size.Small" 
+                                           OnClick="@(() => OpenCallDialog(context))" />
+                        </MudTooltip>
+                        <MudTooltip Text="Gửi SMS">
+                            <MudIconButton Icon="@Icons.Material.Filled.Sms" Size="Size.Small" 
+                                           Color="Color.Secondary"
+                                           OnClick="@(() => OpenSmsDialog(context))" />
+                        </MudTooltip>
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+
+            <NoRecordsContent>
+                <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Không tìm thấy cổng nào</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+}
 
 @code {
     private string _search = "";
+    private string _viewMode = "table"; // mặc định là bảng (hoặc "card")
+    private HashSet<SimPort> _selectedPorts = new();
+
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+    
     private List<SimPort> FilteredPorts => string.IsNullOrWhiteSpace(_search)
         ? Ports
         : Ports.Where(p => 
             (p.PortName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
             (p.Imei?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
             (p.PhoneNumber?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
-            (p.NetworkProvider?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+            (p.NetworkProvider?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (p.Serial?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
           ).ToList();
 
     private System.Threading.Timer? _timer;
 
     protected override void OnInitialized()
     {
-        // Real-time: refresh UI mỗi 1.5s (hoặc subscribe event nếu MainViewModel có)
         _timer = new System.Threading.Timer(_ =>
         {
             InvokeAsync(StateHasChanged);
@@ -125,15 +264,8 @@
         try
         {
             Snackbar.Add($"[{port.PortName}] Đang tráng IMEI...", Severity.Info);
-
-            // ===== GỌI BACKEND THẬT =====
-            if (Vm != null)
-            {
-                // Gọi ApproveUnknownSim từ MainViewModel
-                Vm.ApproveUnknownSimCommand?.Execute(port);
-                
-                Snackbar.Add($"[{port.PortName}] Đang xử lý Accept SIM...", Severity.Success);
-            }
+            Vm.ApproveUnknownSimCommand?.Execute(port);
+            Snackbar.Add($"[{port.PortName}] Đang xử lý Accept SIM...", Severity.Success);
         }
         catch (Exception ex)
         {

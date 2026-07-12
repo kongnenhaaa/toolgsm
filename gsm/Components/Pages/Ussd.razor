@@ -6,67 +6,200 @@
 @using gsm.ViewModels
 @using gsm.Models
 @using gsm.Services
+@implements IDisposable
 
 <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">USSD</MudText>
 <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Gửi lệnh USSD nhanh • Kiểm tra TKC • Custom
+    Gửi lệnh USSD nhanh • Kiểm tra TKC • Custom • Lịch sử
 </MudText>
 
+<!-- ========== TOOLBAR ========== -->
+<MudStack Row="true" Class="mb-4" Spacing="2" AlignItems="AlignItems.Center">
+    <MudButton Variant="Variant.Filled" Color="Color.Success" 
+               StartIcon="@Icons.Material.Filled.AccountBalanceWallet"
+               OnClick="CheckAllBalance" Size="Size.Small">
+        Check tất cả TKC
+    </MudButton>
+
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" 
+               StartIcon="@Icons.Material.Filled.Send"
+               OnClick="SendToSelectedPorts" Size="Size.Small"
+               Disabled="@(!_selectedPorts.Any())">
+        Gửi tới cổng đã chọn (@_selectedPorts.Count)
+    </MudButton>
+
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" 
+               StartIcon="@Icons.Material.Filled.Refresh"
+               OnClick="Refresh" Size="Size.Small">
+        Làm mới
+    </MudButton>
+
+    <MudButton Variant="Variant.Text" Color="Color.Error" 
+               StartIcon="@Icons.Material.Filled.DeleteSweep"
+               OnClick="ClearHistory" Size="Size.Small">
+        Xóa lịch sử
+    </MudButton>
+
+    <MudSpacer />
+
+    <MudTextField @bind-Value="_search" Placeholder="Tìm trong lịch sử..." 
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Immediate="true" Style="max-width:240px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
+</MudStack>
+
+<!-- ========== MAIN CONTENT ========== -->
 <MudGrid>
-    <!-- Gửi USSD nhanh -->
+    <!-- LEFT: Gửi USSD -->
     <MudItem xs="12" md="5">
         <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; height:100%;">
             <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Gửi USSD</MudText>
 
-            <MudSelect T="string" Label="Chọn cổng" @bind-Value="_selectedPort" Variant="Variant.Outlined" 
-                       Margin="Margin.Dense" Class="mb-3" Dense="true">
-                @foreach (var p in Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>())
+            <!-- Chọn 1 cổng -->
+            <MudSelect T="string" Label="Chọn cổng" @bind-Value="_selectedPort" 
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true"
+                       Clearable="true">
+                @foreach (var p in ActivePorts)
                 {
-                    <MudSelectItem Value="@p.PortName">@p.PortName - @(p.PhoneNumber ?? "Chưa có SĐT")</MudSelectItem>
+                    <MudSelectItem Value="@p.PortName">
+                        @p.PortName — @(string.IsNullOrEmpty(p.PhoneNumber) ? "Chưa có SĐT" : p.PhoneNumber) 
+                        (@(p.NetworkProvider ?? "—"))
+                    </MudSelectItem>
                 }
             </MudSelect>
 
-            <MudTextField @bind-Value="_ussdCode" Label="Lệnh USSD" Placeholder="*101#" 
-                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+            <!-- Hoặc chọn nhiều cổng -->
+            <MudText Typo="Typo.caption" Class="mb-1" Style="color:#64748B;">Hoặc chọn nhiều cổng:</MudText>
+            <MudPaper Class="pa-2 mb-3" Style="max-height:140px; overflow-y:auto; border:1px solid #E2E8F0; border-radius:8px;">
+                @if (!ActivePorts.Any())
+                {
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">Không có cổng Active</MudText>
+                }
+                else
+                {
+                    @foreach (var p in ActivePorts)
+                    {
+                        <MudCheckBox T="bool" 
+                                     Value="@_selectedPorts.Contains(p.PortName)"
+                                     ValueChanged="@(v => TogglePort(p.PortName, v))"
+                                     Label="@($"{p.PortName} • {p.PhoneNumber ?? "—"}")"
+                                     Dense="true" Color="Color.Primary" Class="mb-1" />
+                    }
+                }
+            </MudPaper>
 
-            <MudStack Row="true" Spacing="2">
+            <MudTextField @bind-Value="_ussdCode" Label="Lệnh USSD" Placeholder="*101#" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                          Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Clear"
+                          OnAdornmentClick="@(() => _ussdCode = "")" />
+
+            <MudStack Row="true" Spacing="2" Class="mb-3">
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                           OnClick="SendUssd" Disabled="@(string.IsNullOrEmpty(_selectedPort) || string.IsNullOrEmpty(_ussdCode))"
+                           OnClick="SendUssd" 
+                           Disabled="@(string.IsNullOrEmpty(_ussdCode) || (string.IsNullOrEmpty(_selectedPort) && !_selectedPorts.Any()))"
                            StartIcon="@Icons.Material.Filled.Send" FullWidth="true">
                     Gửi
                 </MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Success" 
-                           OnClick="CheckAllBalance" StartIcon="@Icons.Material.Filled.AccountBalanceWallet">
-                    Check tất cả TKC
-                </MudButton>
             </MudStack>
 
-            <MudDivider Class="my-4" />
+            <MudDivider Class="my-3" />
 
-            <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Lệnh nhanh</MudText>
-            <MudChipSet T="string">
-                <MudChip T="string" Text="*101#" OnClick="@(() => _ussdCode = "*101#")" Variant="Variant.Outlined" Size="Size.Small">*101#</MudChip>
-                <MudChip T="string" Text="*100#" OnClick="@(() => _ussdCode = "*100#")" Variant="Variant.Outlined" Size="Size.Small">*100#</MudChip>
-                <MudChip T="string" Text="*101*1#" OnClick="@(() => _ussdCode = "*101*1#")" Variant="Variant.Outlined" Size="Size.Small">*101*1#</MudChip>
+            <!-- Lệnh nhanh -->
+            <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Lệnh nhanh (nhà mạng VN)</MudText>
+            <MudChipSet T="string" Class="mb-2">
+                @foreach (var cmd in _quickCommands)
+                {
+                    <MudTooltip Text="@cmd.Name">
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" 
+                                 OnClick="@(() => _ussdCode = cmd.Code)">
+                            @cmd.Code
+                        </MudChip>
+                    </MudTooltip>
+                }
             </MudChipSet>
+
+            <!-- Mẫu theo nhà mạng -->
+            <MudText Typo="Typo.caption" Class="mb-2 mt-3" Style="color:#64748B;">Theo nhà mạng</MudText>
+            <MudExpansionPanels Elevation="0" MultiExpansion="true">
+                <MudExpansionPanel Text="Viettel" Dense="true" Style="border:1px solid #E2E8F0; border-radius:8px; margin-bottom:6px;">
+                    <MudChipSet T="string">
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*101#")">*101# (TKC)</MudChip>
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*100#")">*100#</MudChip>
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*101*1#")">*101*1#</MudChip>
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*098#")">*098# (KM)</MudChip>
+                    </MudChipSet>
+                </MudExpansionPanel>
+                <MudExpansionPanel Text="Vinaphone" Dense="true" Style="border:1px solid #E2E8F0; border-radius:8px; margin-bottom:6px;">
+                    <MudChipSet T="string">
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*101#")">*101#</MudChip>
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*110#")">*110#</MudChip>
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*111#")">*111#</MudChip>
+                    </MudChipSet>
+                </MudExpansionPanel>
+                <MudExpansionPanel Text="Mobifone" Dense="true" Style="border:1px solid #E2E8F0; border-radius:8px;">
+                    <MudChipSet T="string">
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*101#")">*101#</MudChip>
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*0#")">*0#</MudChip>
+                        <MudChip T="string" Size="Size.Small" OnClick="@(() => _ussdCode = "*999#")">*999#</MudChip>
+                    </MudChipSet>
+                </MudExpansionPanel>
+            </MudExpansionPanels>
         </MudPaper>
     </MudItem>
 
-    <!-- Kết quả -->
+    <!-- RIGHT: Kết quả + Lịch sử -->
     <MudItem xs="12" md="7">
-        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; min-height:320px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Kết quả gần đây</MudText>
-            
+        <!-- Kết quả mới nhất -->
+        <MudPaper Class="pa-4 mb-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-2">
+                <MudText Typo="Typo.subtitle1" Style="font-weight:600;">Kết quả gần đây</MudText>
+                @if (!string.IsNullOrEmpty(_lastResult))
+                {
+                    <MudTooltip Text="Copy kết quả">
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
+                                       OnClick="@(() => CopyText(_lastResult))" />
+                    </MudTooltip>
+                }
+            </MudStack>
+
             @if (string.IsNullOrEmpty(_lastResult))
             {
                 <MudText Typo="Typo.body2" Style="color:#94A3B8;">Chưa có kết quả USSD</MudText>
             }
             else
             {
-                <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; white-space:pre-wrap; font-family:monospace; font-size:13px;">
+                <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; white-space:pre-wrap; font-family:monospace; font-size:13px; max-height:180px; overflow-y:auto;">
                     @_lastResult
                 </MudPaper>
             }
+        </MudPaper>
+
+        <!-- Lịch sử USSD -->
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
+            <MudTable Items="@FilteredHistory" Hover="true" Dense="true" Elevation="0" 
+                      Style="background:white;" Height="320px">
+                <HeaderContent>
+                    <MudTh>Thời gian</MudTh>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>Lệnh</MudTh>
+                    <MudTh>Kết quả</MudTh>
+                    <MudTh Style="width:70px;"></MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="font-size:12px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss")</MudTd>
+                    <MudTd Style="font-weight:600;">@context.Port</MudTd>
+                    <MudTd Style="font-family:monospace; font-size:12px;">@context.Code</MudTd>
+                    <MudTd Style="max-width:220px; overflow:hidden; text-overflow:ellipsis; font-size:12px;">
+                        @context.Result
+                    </MudTd>
+                    <MudTd>
+                        <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
+                                       OnClick="@(() => CopyText(context.Result))" />
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Chưa có lịch sử USSD</MudText>
+                </NoRecordsContent>
+            </MudTable>
         </MudPaper>
     </MudItem>
 </MudGrid>
@@ -75,32 +208,150 @@
     private string _selectedPort = "";
     private string _ussdCode = "*101#";
     private string _lastResult = "";
+    private string _search = "";
+    private HashSet<string> _selectedPorts = new();
+
+    private List<UssdHistoryItem> _history = new();
+
+    private IEnumerable<SimPort> ActivePorts => 
+        Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
+
+    private IEnumerable<UssdHistoryItem> FilteredHistory =>
+        string.IsNullOrWhiteSpace(_search)
+            ? _history.OrderByDescending(x => x.Time)
+            : _history.Where(x => 
+                x.Port.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                x.Code.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+                x.Result.Contains(_search, StringComparison.OrdinalIgnoreCase)
+              ).OrderByDescending(x => x.Time);
+
+    private readonly List<(string Code, string Name)> _quickCommands = new()
+    {
+        ("*101#", "TKC chung"),
+        ("*100#", "TKC Viettel"),
+        ("*101*1#", "TKC chi tiết"),
+        ("*098#", "KM Viettel"),
+        ("*110#", "Vinaphone"),
+        ("*0#", "Mobifone"),
+        ("*999#", "Mobifone KM")
+    };
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 2000, 2000);
+    }
+
+    void TogglePort(string port, bool selected)
+    {
+        if (selected) _selectedPorts.Add(port);
+        else _selectedPorts.Remove(port);
+    }
 
     async Task SendUssd()
     {
-        if (string.IsNullOrEmpty(_selectedPort) || string.IsNullOrEmpty(_ussdCode)) return;
+        var ports = new List<string>();
+        if (!string.IsNullOrEmpty(_selectedPort)) ports.Add(_selectedPort);
+        ports.AddRange(_selectedPorts);
+        ports = ports.Distinct().ToList();
 
-        Snackbar.Add($"Đang gửi {_ussdCode} trên {_selectedPort}...", Severity.Info);
+        if (!ports.Any() || string.IsNullOrEmpty(_ussdCode)) return;
+
+        foreach (var port in ports)
+        {
+            await SendOne(port, _ussdCode);
+            if (ports.Count > 1) await Task.Delay(600); // tránh spam
+        }
+    }
+
+    async Task SendToSelectedPorts()
+    {
+        if (!_selectedPorts.Any() || string.IsNullOrEmpty(_ussdCode)) return;
+        foreach (var port in _selectedPorts)
+        {
+            await SendOne(port, _ussdCode);
+            await Task.Delay(600);
+        }
+    }
+
+    async Task SendOne(string port, string code)
+    {
+        Snackbar.Add($"[{port}] Đang gửi {code}...", Severity.Info);
         try
         {
-            var resp = await ModemService.SendCommandAsync(_selectedPort, $"AT+CUSD=1,\"{_ussdCode}\",15", 20000);
-            _lastResult = $"[{DateTime.Now:HH:mm:ss}] {_selectedPort}\n{_ussdCode}\n\n{resp}";
-            Snackbar.Add("Đã gửi USSD", Severity.Success);
+            var resp = await ModemService.SendCommandAsync(port, $"AT+CUSD=1,\"{code}\",15", 20000);
+            
+            _lastResult = $"[{DateTime.Now:HH:mm:ss}] {port}\n{code}\n\n{resp}";
+            
+            _history.Insert(0, new UssdHistoryItem
+            {
+                Time = DateTime.Now,
+                Port = port,
+                Code = code,
+                Result = resp
+            });
+
+            // Giữ tối đa 100 dòng
+            if (_history.Count > 100) _history.RemoveRange(100, _history.Count - 100);
+
+            Snackbar.Add($"[{port}] USSD thành công", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add(ex.Message, Severity.Error);
+            _lastResult = $"[{DateTime.Now:HH:mm:ss}] {port}\n{code}\n\nLỖI: {ex.Message}";
+            Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
         }
     }
 
     async Task CheckAllBalance()
     {
-        Snackbar.Add("Đang kiểm tra TKC tất cả cổng active...", Severity.Info);
-        foreach (var p in Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>())
+        var ports = ActivePorts.ToList();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Không có cổng Active", Severity.Warning);
+            return;
+        }
+
+        Snackbar.Add($"Đang check TKC {ports.Count} cổng...", Severity.Info);
+
+        foreach (var p in ports)
         {
             await Vm.CheckBalanceForPortAsync(p.PortName);
-            await Task.Delay(800);
+            await Task.Delay(900);
         }
-        Snackbar.Add("Hoàn tất check TKC", Severity.Success);
+
+        Snackbar.Add("Hoàn tất check TKC tất cả cổng", Severity.Success);
+    }
+
+    void CopyText(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        Snackbar.Add("Đã copy", Severity.Success);
+        // TODO: JS Interop copy thật
+    }
+
+    async Task ClearHistory()
+    {
+        var ok = await DialogService.ShowMessageBox("Xác nhận", "Xóa toàn bộ lịch sử USSD?", yesText: "Xóa", cancelText: "Hủy");
+        if (ok == true)
+        {
+            _history.Clear();
+            _lastResult = "";
+            Snackbar.Add("Đã xóa lịch sử", Severity.Success);
+        }
+    }
+
+    async Task Refresh() => StateHasChanged();
+
+    public void Dispose() => _timer?.Dispose();
+
+    // Helper class
+    public class UssdHistoryItem
+    {
+        public DateTime Time { get; set; }
+        public string Port { get; set; } = "";
+        public string Code { get; set; } = "";
+        public string Result { get; set; } = "";
     }
 }

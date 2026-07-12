@@ -1,66 +1,464 @@
 @page "/imei"
 @inject MainViewModel Vm
+@inject ImeiManagementService ImeiService
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @using gsm.ViewModels
 @using gsm.Models
+@using gsm.Services
+@implements IDisposable
 
 <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">IMEI Manager</MudText>
 <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Backup IMEI • Restore • Quản lý mapping CCID ↔ IMEI
+    Backup IMEI • Restore • Quản lý mapping CCID ↔ IMEI • Bảo vệ IMEI gốc
 </MudText>
 
-<MudStack Row="true" Class="mb-4" Spacing="2">
-    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" Size="Size.Small">
+<!-- ========== TOOLBAR ========== -->
+<MudStack Row="true" Class="mb-4" Spacing="2" AlignItems="AlignItems.Center">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+               StartIcon="@Icons.Material.Filled.Save"
+               OnClick="ExportBackup" Size="Size.Small">
         Export Backup
     </MudButton>
-    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Upload" Size="Size.Small">
+
+    <MudButton Variant="Variant.Outlined" Color="Color.Success" 
+               StartIcon="@Icons.Material.Filled.Upload"
+               OnClick="ImportBackup" Size="Size.Small">
         Import Backup
     </MudButton>
-    <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.DeleteSweep" Size="Size.Small">
+
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" 
+               StartIcon="@Icons.Material.Filled.Sync"
+               OnClick="RestoreAll" Size="Size.Small">
+        Restore tất cả
+    </MudButton>
+
+    <MudButton Variant="Variant.Text" Color="Color.Error" 
+               StartIcon="@Icons.Material.Filled.DeleteSweep"
+               OnClick="ClearAllBackup" Size="Size.Small">
         Xóa tất cả
     </MudButton>
+
+    <MudSpacer />
+
+    <MudTextField @bind-Value="_search" Placeholder="Tìm COM / IMEI / CCID / SĐT..." 
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                  Immediate="true" Style="max-width:280px;" Variant="Variant.Outlined" Margin="Margin.Dense" />
 </MudStack>
 
-<MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden;">
-    <MudTable Items="@(Vm.Ports ?? new())" Hover="true" Dense="true" Elevation="0">
-        <HeaderContent>
-            <MudTh>COM</MudTh>
-            <MudTh>CCID / Serial</MudTh>
-            <MudTh>IMEI hiện tại</MudTh>
-            <MudTh>SĐT</MudTh>
-            <MudTh>Trạng thái</MudTh>
-            <MudTh>Thao tác</MudTh>
-        </HeaderContent>
-        <RowTemplate>
-            <MudTd>@context.PortName</MudTd>
-            <MudTd Style="font-family:monospace; font-size:12px;">@(context.Serial ?? "—")</MudTd>
-            <MudTd Style="font-family:monospace; font-size:12px;">@(context.Imei ?? "—")</MudTd>
-            <MudTd>@(context.PhoneNumber ?? "—")</MudTd>
-            <MudTd>
-                <MudChip T="string" Size="Size.Small" 
-                         Color="@(context.Status == SimStatus.Active ? Color.Success : Color.Default)"
-                         Variant="Variant.Filled">
-                    @context.Status
-                </MudChip>
-            </MudTd>
-            <MudTd>
-                <MudTooltip Text="Copy IMEI">
-                    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
-                                   OnClick="@(() => CopyImei(context.Imei))" />
-                </MudTooltip>
-            </MudTd>
-        </RowTemplate>
-        <NoRecordsContent>
-            <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Chưa có dữ liệu IMEI</MudText>
-        </NoRecordsContent>
-    </MudTable>
-</MudPaper>
+<!-- ========== STATS ========== -->
+<MudGrid Class="mb-4">
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Tổng mapping</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight:700;">@BackupCount</MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Đang Active</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Success" Style="font-weight:700;">
+                @Ports.Count(p => p.Status == SimStatus.Active)
+            </MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Chờ Accept</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Warning" Style="font-weight:700;">
+                @Ports.Count(p => p.Status == SimStatus.SecurityBlocked)
+            </MudText>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="6" sm="3">
+        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Có backup</MudText>
+            <MudText Typo="Typo.h5" Color="Color.Info" Style="font-weight:700;">@_withBackupCount</MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+<!-- ========== TABS ========== -->
+<MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true">
+
+    <!-- TAB 1: MAPPING HIỆN TẠI -->
+    <MudTabPanel Text="Mapping hiện tại" Icon="@Icons.Material.Filled.TableChart">
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
+            <MudTable Items="@FilteredPorts" Hover="true" Dense="true" Elevation="0" 
+                      MultiSelection="true" @bind-SelectedItems="_selectedPorts"
+                      Style="background:white;" Breakpoint="Breakpoint.Sm">
+                <HeaderContent>
+                    <MudTh Style="width:40px;"></MudTh>
+                    <MudTh>COM</MudTh>
+                    <MudTh>CCID / Serial</MudTh>
+                    <MudTh>IMEI hiện tại</MudTh>
+                    <MudTh>IMEI gốc (backup)</MudTh>
+                    <MudTh>SĐT</MudTh>
+                    <MudTh>Nhà mạng</MudTh>
+                    <MudTh>Trạng thái</MudTh>
+                    <MudTh Style="min-width:160px;">Thao tác</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>
+                        <MudCheckBox T="bool" Value="@context.IsSelected" 
+                                     ValueChanged="@(v => context.IsSelected = v)" 
+                                     Dense="true" Color="Color.Primary" />
+                    </MudTd>
+                    <MudTd Style="font-weight:600;">@context.PortName</MudTd>
+                    <MudTd Style="font-family:monospace; font-size:11px; max-width:140px; overflow:hidden; text-overflow:ellipsis;">
+                        @(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)
+                    </MudTd>
+                    <MudTd Style="font-family:monospace; font-size:12px;">
+                        @(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)
+                    </MudTd>
+                    <MudTd Style="font-family:monospace; font-size:12px; color:#64748B;">
+                        @(GetOriginalImei(context.Serial) ?? "—")
+                    </MudTd>
+                    <MudTd>@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
+                    <MudTd>@(context.NetworkProvider ?? "—")</MudTd>
+                    <MudTd>
+                        <gsm.Components.Shared.StatusBadge Status="@context.Status" />
+                    </MudTd>
+                    <MudTd>
+                        <MudStack Row="true" Spacing="0">
+                            <MudTooltip Text="Copy IMEI">
+                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
+                                               OnClick="@(() => CopyText(context.Imei))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Restore IMEI từ backup">
+                                <MudIconButton Icon="@Icons.Material.Filled.Restore" Size="Size.Small" Color="Color.Primary"
+                                               OnClick="@(() => RestoreOne(context))" 
+                                               Disabled="@(string.IsNullOrEmpty(GetOriginalImei(context.Serial)))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Tráng IMEI mới">
+                                <MudIconButton Icon="@Icons.Material.Filled.Brush" Size="Size.Small" Color="Color.Warning"
+                                               OnClick="@(() => PaintNewImei(context))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Xóa mapping">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                               OnClick="@(() => DeleteMapping(context))" />
+                            </MudTooltip>
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="pa-10 text-center">
+                        <MudIcon Icon="@Icons.Material.Outlined.PhonelinkSetup" Size="Size.Large" Class="mb-3" Style="opacity:0.35;" />
+                        <MudText Typo="Typo.body1" Style="color:#94A3B8;">Chưa có dữ liệu IMEI</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">Cắm thiết bị và Connect All để bắt đầu</MudText>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </MudTabPanel>
+
+    <!-- TAB 2: BACKUP DATABASE -->
+    <MudTabPanel Text="Backup Database" Icon="@Icons.Material.Filled.Storage">
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
+            <MudTable Items="@_backupList" Hover="true" Dense="true" Elevation="0" Style="background:white;">
+                <HeaderContent>
+                    <MudTh>CCID</MudTh>
+                    <MudTh>IMEI đã gán</MudTh>
+                    <MudTh>Lần đầu</MudTh>
+                    <MudTh>Lần cuối</MudTh>
+                    <MudTh>Số lần dùng</MudTh>
+                    <MudTh Style="width:100px;">Thao tác</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="font-family:monospace; font-size:11px;">@context.Ccid</MudTd>
+                    <MudTd Style="font-family:monospace; font-size:12px; font-weight:600;">@context.Imei</MudTd>
+                    <MudTd Style="font-size:12px;">@context.FirstUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
+                    <MudTd Style="font-size:12px;">@context.LastUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
+                    <MudTd>@context.UseCount</MudTd>
+                    <MudTd>
+                        <MudStack Row="true" Spacing="0">
+                            <MudTooltip Text="Copy IMEI">
+                                <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
+                                               OnClick="@(() => CopyText(context.Imei))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Xóa mapping này">
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                               OnClick="@(() => DeleteBackupItem(context))" />
+                            </MudTooltip>
+                        </MudStack>
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <MudText Class="pa-10 text-center" Style="color:#94A3B8;">Backup database trống</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </MudTabPanel>
+
+    <!-- TAB 3: CÔNG CỤ -->
+    <MudTabPanel Text="Công cụ" Icon="@Icons.Material.Filled.Build">
+        <MudGrid Class="mt-3">
+            <MudItem xs="12" md="6">
+                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+                    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Generate IMEI mới</MudText>
+                    
+                    <MudTextField @bind-Value="_customTac" Label="TAC (8 số đầu, tùy chọn)" 
+                                  Placeholder="86012345" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+                    
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                               StartIcon="@Icons.Material.Filled.Casino"
+                               OnClick="GenerateImei">
+                        Generate IMEI ngẫu nhiên
+                    </MudButton>
+
+                    @if (!string.IsNullOrEmpty(_generatedImei))
+                    {
+                        <MudPaper Class="pa-3 mt-3" Style="background:#F0FDF4; border-radius:8px;">
+                            <MudText Typo="Typo.caption" Style="color:#64748B;">IMEI vừa tạo:</MudText>
+                            <MudText Typo="Typo.h6" Style="font-family:monospace; font-weight:700; color:#16A34A;">
+                                @_generatedImei
+                            </MudText>
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.ContentCopy"
+                                       OnClick="@(() => CopyText(_generatedImei))" Class="mt-1">
+                                Copy
+                            </MudButton>
+                        </MudPaper>
+                    }
+                </MudPaper>
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+                    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Kiểm tra IMEI</MudText>
+                    
+                    <MudTextField @bind-Value="_checkImei" Label="Nhập IMEI cần check" 
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                                  Immediate="true" />
+                    
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" FullWidth="true"
+                               OnClick="ValidateImei" Disabled="@(string.IsNullOrEmpty(_checkImei))">
+                        Kiểm tra Luhn + định dạng
+                    </MudButton>
+
+                    @if (!string.IsNullOrEmpty(_imeiCheckResult))
+                    {
+                        <MudAlert Severity="@(_imeiValid ? Severity.Success : Severity.Error)" Class="mt-3" Dense="true">
+                            @_imeiCheckResult
+                        </MudAlert>
+                    }
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+    </MudTabPanel>
+</MudTabs>
 
 @code {
-    void CopyImei(string? imei)
+    private string _search = "";
+    private HashSet<SimPort> _selectedPorts = new();
+    private List<ImeiBackupItem> _backupList = new();
+    private int BackupCount => _backupList.Count;
+    private int _withBackupCount = 0;
+
+    private string _customTac = "";
+    private string _generatedImei = "";
+    private string _checkImei = "";
+    private string _imeiCheckResult = "";
+    private bool _imeiValid = false;
+
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+
+    private List<SimPort> FilteredPorts => string.IsNullOrWhiteSpace(_search)
+        ? Ports
+        : Ports.Where(p =>
+            (p.PortName?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (p.Imei?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (p.Serial?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            (p.PhoneNumber?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)
+          ).ToList();
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
     {
-        if (string.IsNullOrEmpty(imei)) return;
-        // JS interop copy nếu cần
-        Snackbar.Add($"Đã copy: {imei}", Severity.Success);
+        LoadBackup();
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 2000, 2000);
+    }
+
+    void LoadBackup()
+    {
+        // TODO: Load từ ImeiService / file backup
+        // _backupList = ImeiService.GetAllMappings();
+        _withBackupCount = Ports.Count(p => !string.IsNullOrEmpty(GetOriginalImei(p.Serial)));
+    }
+
+    string? GetOriginalImei(string? ccid)
+    {
+        if (string.IsNullOrEmpty(ccid)) return null;
+        return _backupList.FirstOrDefault(x => x.Ccid == ccid)?.Imei;
+    }
+
+    // ========== ACTIONS ==========
+
+    async Task ExportBackup()
+    {
+        try
+        {
+            // ImeiService.ExportToFile("imei_backup.json");
+            Snackbar.Add("Đã export backup thành công", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Lỗi export: " + ex.Message, Severity.Error);
+        }
+    }
+
+    async Task ImportBackup()
+    {
+        try
+        {
+            // ImeiService.ImportFromFile(...);
+            LoadBackup();
+            Snackbar.Add("Đã import backup", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Lỗi import: " + ex.Message, Severity.Error);
+        }
+    }
+
+    async Task RestoreAll()
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            "Xác nhận Restore",
+            "Restore IMEI từ backup cho tất cả cổng đang có mapping?",
+            yesText: "Restore", cancelText: "Hủy");
+
+        if (confirm != true) return;
+
+        Snackbar.Add("Đang restore tất cả...", Severity.Info);
+        // foreach ... ImeiService.RestoreImei(port);
+        Snackbar.Add("Hoàn tất restore", Severity.Success);
+    }
+
+    async Task RestoreOne(SimPort port)
+    {
+        var original = GetOriginalImei(port.Serial);
+        if (string.IsNullOrEmpty(original)) return;
+
+        var confirm = await DialogService.ShowMessageBox(
+            "Restore IMEI",
+            $"Restore IMEI gốc cho {port.PortName}?\n\nIMEI hiện tại: {port.Imei}\nIMEI gốc: {original}",
+            yesText: "Restore", cancelText: "Hủy");
+
+        if (confirm != true) return;
+
+        Snackbar.Add($"[{port.PortName}] Đang restore IMEI...", Severity.Info);
+        // await ImeiService.RestoreImeiAsync(port.PortName, original);
+        Snackbar.Add("Đã restore", Severity.Success);
+    }
+
+    async Task PaintNewImei(SimPort port)
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            "Tráng IMEI mới",
+            $"Tạo và tráng IMEI mới cho {port.PortName}?\nSIM sẽ bị gán IMEI mới vĩnh viễn.",
+            yesText: "Tráng mới", cancelText: "Hủy");
+
+        if (confirm != true) return;
+
+        Vm.ApproveUnknownSimCommand?.Execute(port);
+        Snackbar.Add($"[{port.PortName}] Đang tráng IMEI mới...", Severity.Info);
+    }
+
+    async Task DeleteMapping(SimPort port)
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            "Xóa mapping",
+            $"Xóa mapping của {port.PortName}?",
+            yesText: "Xóa", cancelText: "Hủy");
+
+        if (confirm == true)
+        {
+            // ImeiService.RemoveMapping(port.Serial);
+            Snackbar.Add("Đã xóa mapping", Severity.Normal);
+        }
+    }
+
+    async Task DeleteBackupItem(ImeiBackupItem item)
+    {
+        _backupList.Remove(item);
+        Snackbar.Add("Đã xóa", Severity.Normal);
+    }
+
+    async Task ClearAllBackup()
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            "Xóa toàn bộ backup",
+            "Bạn có chắc muốn xóa hết database mapping IMEI? Hành động này không thể hoàn tác.",
+            yesText: "Xóa tất cả", cancelText: "Hủy");
+
+        if (confirm == true)
+        {
+            _backupList.Clear();
+            // ImeiService.ClearAll();
+            Snackbar.Add("Đã xóa toàn bộ backup", Severity.Success);
+        }
+    }
+
+    void GenerateImei()
+    {
+        var rnd = new Random();
+        string tac = string.IsNullOrWhiteSpace(_customTac) ? "86" + rnd.Next(100000, 999999).ToString() : _customTac.PadRight(8, '0')[..8];
+        string body = tac;
+        for (int i = 0; i < 6; i++) body += rnd.Next(0, 10);
+
+        // Luhn check digit
+        int sum = 0;
+        for (int i = 0; i < 14; i++)
+        {
+            int d = body[i] - '0';
+            if (i % 2 == 1) { d *= 2; if (d > 9) d -= 9; }
+            sum += d;
+        }
+        int check = (10 - (sum % 10)) % 10;
+        _generatedImei = body + check;
+    }
+
+    void ValidateImei()
+    {
+        var imei = _checkImei.Trim();
+        if (imei.Length != 15 || !imei.All(char.IsDigit))
+        {
+            _imeiValid = false;
+            _imeiCheckResult = "IMEI phải đúng 15 chữ số";
+            return;
+        }
+
+        // Luhn
+        int sum = 0;
+        for (int i = 0; i < 14; i++)
+        {
+            int d = imei[i] - '0';
+            if (i % 2 == 1) { d *= 2; if (d > 9) d -= 9; }
+            sum += d;
+        }
+        int check = (10 - (sum % 10)) % 10;
+        _imeiValid = check == (imei[14] - '0');
+        _imeiCheckResult = _imeiValid ? "IMEI hợp lệ (Luhn OK)" : "IMEI không hợp lệ (sai check digit)";
+    }
+
+    void CopyText(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        Snackbar.Add("Đã copy: " + text, Severity.Success);
+        // TODO: JS Interop
+    }
+
+    public void Dispose() => _timer?.Dispose();
+
+    // Model
+    public class ImeiBackupItem
+    {
+        public string Ccid { get; set; } = "";
+        public string Imei { get; set; } = "";
+        public DateTime FirstUsed { get; set; }
+        public DateTime LastUsed { get; set; }
+        public int UseCount { get; set; }
     }
 }

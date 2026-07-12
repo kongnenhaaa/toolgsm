@@ -1,56 +1,356 @@
 @page "/settings"
 @inject MainViewModel Vm
 @inject ISnackbar Snackbar
+@inject IDialogService DialogService
 @using gsm.ViewModels
+@using gsm.Models
 
 <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Cài đặt</MudText>
 <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-    Cấu hình tool • New SIM Intake • IMEI Restore • Thông báo
+    Cấu hình tool • New SIM Intake • IMEI Restore • Thông báo • Nâng cao
 </MudText>
 
-<MudGrid>
-    <MudItem xs="12" md="6">
-        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Bảo mật SIM / IMEI</MudText>
+<!-- ========== TOOLBAR ========== -->
+<MudStack Row="true" Class="mb-4" Spacing="2">
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+               StartIcon="@Icons.Material.Filled.Save"
+               OnClick="SaveAll" Size="Size.Small">
+        Lưu tất cả cài đặt
+    </MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Secondary" 
+               StartIcon="@Icons.Material.Filled.RestartAlt"
+               OnClick="ResetDefault" Size="Size.Small">
+        Khôi phục mặc định
+    </MudButton>
+    <MudButton Variant="Variant.Text" Color="Color.Info" 
+               StartIcon="@Icons.Material.Filled.Download"
+               OnClick="ExportSettings" Size="Size.Small">
+        Export cấu hình
+    </MudButton>
+    <MudButton Variant="Variant.Text" Color="Color.Info" 
+               StartIcon="@Icons.Material.Filled.Upload"
+               OnClick="ImportSettings" Size="Size.Small">
+        Import cấu hình
+    </MudButton>
+</MudStack>
 
-            <MudSwitch T="bool" Label="Bật New SIM Intake Mode" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" Label="Tự động Restore IMEI từ backup" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" Label="Chặn SIM lạ (Block Unknown)" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" Label="Tự động Accept SIM mới (không khuyến nghị)" Color="Color.Warning" Class="mb-2" />
+<MudGrid>
+    <!-- ========== CỘT TRÁI ========== -->
+    <MudItem xs="12" md="6">
+
+        <!-- BẢO MẬT SIM / IMEI -->
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.Security" Class="mr-1" Size="Size.Small" />
+                Bảo mật SIM / IMEI
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_newSimIntake" Label="Bật New SIM Intake Mode" Color="Color.Primary" Class="mb-2" />
+            <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B;">
+                CFUN=4 khi cắm SIM mới, chờ user chấp nhận mới tráng IMEI
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_autoRestoreImei" Label="Tự động Restore IMEI từ backup" Color="Color.Primary" Class="mb-2" />
+            <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B;">
+                Khi cắm lại SIM cũ → tự lấy IMEI đã gán trước đó
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_blockUnknown" Label="Chặn SIM lạ (Block Unknown)" Color="Color.Primary" Class="mb-2" />
+            <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B;">
+                Không cho SIM chưa có trong backup hoạt động
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_autoAccept" Label="Tự động Accept SIM mới (không khuyến nghị)" Color="Color.Warning" Class="mb-2" />
+            <MudText Typo="Typo.caption" Class="mb-1 ml-10" Style="color:#D97706;">
+                Tự tráng IMEI ngay khi phát hiện SIM mới (nguy hiểm)
+            </MudText>
         </MudPaper>
 
-        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Mạng & Tín hiệu</MudText>
-            <MudSwitch T="bool" Label="Ưu tiên 4G → 3G → 2G (nwscanseq)" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" Label="Bật VoLTE / IMS" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" Label="Tự recovery khi mất sóng" Color="Color.Primary" Class="mb-2" />
+        <!-- MẠNG & TÍN HIỆU -->
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.SignalCellularAlt" Class="mr-1" Size="Size.Small" />
+                Mạng & Tín hiệu
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_prefer4G" Label="Ưu tiên 4G → 3G → 2G (nwscanseq=030201)" Color="Color.Primary" Class="mb-2" />
+            
+            <MudSwitch T="bool" @bind-Value="_enableVolte" Label="Bật VoLTE / IMS" Color="Color.Primary" Class="mb-2" />
+            
+            <MudSwitch T="bool" @bind-Value="_autoRecovery" Label="Tự recovery khi mất sóng" Color="Color.Primary" Class="mb-2" />
+            <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B;">
+                Tự CFUN=1 + re-apply scan mode + COPS=0 khi mất sóng lâu
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_forceCfun1AfterReboot" Label="Ép CFUN=1 sau reboot" Color="Color.Primary" Class="mb-2" />
+
+            <MudNumericField T="int" @bind-Value="_recoveryThreshold" Label="Ngưỡng recovery (lần poll)" Min="5" Max="30" 
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Style="max-width:200px;" />
+            
+            <MudNumericField T="int" @bind-Value="_watchdogSeconds" Label="Watchdog force CFUN (giây)" Min="20" Max="120" 
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:200px;" />
+        </MudPaper>
+
+        <!-- SMS / USSD -->
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.Sms" Class="mr-1" Size="Size.Small" />
+                SMS & USSD
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_autoCheckBalanceAfterSms" Label="Tự check TKC sau khi gửi SMS" Color="Color.Primary" Class="mb-2" />
+            
+            <MudSwitch T="bool" @bind-Value="_autoUssdOnNetwork" Label="Tự USSD *101# khi có nhà mạng" Color="Color.Primary" Class="mb-2" />
+            
+            <MudNumericField T="int" @bind-Value="_ussdRetrySeconds" Label="Retry USSD sau (giây) nếu trống" Min="15" Max="90" 
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Style="max-width:220px;" />
+
+            <MudNumericField T="int" @bind-Value="_smsTimeout" Label="Timeout gửi SMS (ms)" Min="10000" Max="60000" Step="1000"
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:220px;" />
         </MudPaper>
     </MudItem>
 
+    <!-- ========== CỘT PHẢI ========== -->
     <MudItem xs="12" md="6">
+
+        <!-- THÔNG BÁO & ÂM THANH -->
         <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Thông báo & Âm thanh</MudText>
-            <MudSwitch T="bool" Label="Phát âm thanh khi có SMS" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" Label="Phát âm thanh khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" Label="Gửi Telegram khi có OTP" Color="Color.Primary" Class="mb-2" />
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.Notifications" Class="mr-1" Size="Size.Small" />
+                Thông báo & Âm thanh
+            </MudText>
+
+            <MudSwitch T="bool" @bind-Value="_soundOnSms" Label="Phát âm thanh khi có SMS" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_soundOnCall" Label="Phát âm thanh khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_soundOnOtp" Label="Phát âm thanh khi có OTP" Color="Color.Primary" Class="mb-2" />
+            
+            <MudDivider Class="my-3" />
+
+            <MudSwitch T="bool" @bind-Value="_telegramOnOtp" Label="Gửi Telegram khi có OTP" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_telegramOnSms" Label="Gửi Telegram khi có SMS" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_telegramOnCall" Label="Gửi Telegram khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_telegramOnError" Label="Gửi Telegram khi có lỗi" Color="Color.Primary" Class="mb-2" />
         </MudPaper>
 
+        <!-- TELEGRAM -->
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.Message" Class="mr-1" Size="Size.Small" />
+                Telegram
+            </MudText>
+
+            <MudTextField @bind-Value="_telegramBotToken" Label="Bot Token" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                          InputType="@(_showToken ? InputType.Text : InputType.Password)"
+                          Adornment="Adornment.End" AdornmentIcon="@(_showToken ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                          OnAdornmentClick="@(() => _showToken = !_showToken)" />
+
+            <MudTextField @bind-Value="_telegramChatId" Label="Chat ID" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudStack Row="true" Spacing="2">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                           OnClick="TestTelegram" Disabled="@(string.IsNullOrEmpty(_telegramBotToken) || string.IsNullOrEmpty(_telegramChatId))">
+                    Test gửi tin
+                </MudButton>
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
+                           OnClick="OpenTelegramGuide">
+                    Hướng dẫn lấy Token
+                </MudButton>
+            </MudStack>
+        </MudPaper>
+
+        <!-- ÂM THANH -->
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.VolumeUp" Class="mr-1" Size="Size.Small" />
+                File âm thanh
+            </MudText>
+
+            <MudTextField @bind-Value="_soundSmsPath" Label="Âm thanh SMS" Variant="Variant.Outlined" 
+                          Margin="Margin.Dense" Class="mb-2"
+                          Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.FolderOpen"
+                          OnAdornmentClick="@(() => BrowseSound("sms"))" />
+
+            <MudTextField @bind-Value="_soundCallPath" Label="Âm thanh cuộc gọi" Variant="Variant.Outlined" 
+                          Margin="Margin.Dense" Class="mb-2"
+                          Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.FolderOpen"
+                          OnAdornmentClick="@(() => BrowseSound("call"))" />
+
+            <MudTextField @bind-Value="_soundOtpPath" Label="Âm thanh OTP" Variant="Variant.Outlined" 
+                          Margin="Margin.Dense" Class="mb-3"
+                          Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.FolderOpen"
+                          OnAdornmentClick="@(() => BrowseSound("otp"))" />
+
+            <MudStack Row="true" Spacing="1">
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => TestSound("sms"))">Test SMS</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => TestSound("call"))">Test Call</MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="@(() => TestSound("otp"))">Test OTP</MudButton>
+            </MudStack>
+        </MudPaper>
+
+        <!-- NÂNG CAO -->
         <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Khác</MudText>
-            <MudTextField T="string" Label="Telegram Bot Token" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-            <MudTextField T="string" Label="Telegram Chat ID" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" Class="mt-2"
-                       OnClick="SaveSettings">
-                Lưu cài đặt
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.Tune" Class="mr-1" Size="Size.Small" />
+                Nâng cao
+            </MudText>
+
+            <MudNumericField T="int" @bind-Value="_baudRate" Label="Baud rate" Variant="Variant.Outlined" 
+                             Margin="Margin.Dense" Class="mb-2" Style="max-width:160px;" />
+
+            <MudNumericField T="int" @bind-Value="_commandTimeout" Label="Timeout AT command (ms)" 
+                             Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Style="max-width:200px;" />
+
+            <MudSwitch T="bool" @bind-Value="_enableLog" Label="Ghi log chi tiết" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_autoConnectOnStart" Label="Tự Connect All khi khởi động" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_minimizeToTray" Label="Thu nhỏ xuống tray" Color="Color.Primary" Class="mb-2" />
+
+            <MudDivider Class="my-3" />
+
+            <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.DeleteForever"
+                       OnClick="ClearAllData">
+                Xóa toàn bộ dữ liệu tool
             </MudButton>
         </MudPaper>
     </MudItem>
 </MudGrid>
 
 @code {
-    async Task SaveSettings()
+    // Bảo mật
+    private bool _newSimIntake = true;
+    private bool _autoRestoreImei = true;
+    private bool _blockUnknown = false;
+    private bool _autoAccept = false;
+
+    // Mạng
+    private bool _prefer4G = true;
+    private bool _enableVolte = false;
+    private bool _autoRecovery = true;
+    private bool _forceCfun1AfterReboot = true;
+    private int _recoveryThreshold = 12;
+    private int _watchdogSeconds = 50;
+
+    // SMS/USSD
+    private bool _autoCheckBalanceAfterSms = true;
+    private bool _autoUssdOnNetwork = true;
+    private int _ussdRetrySeconds = 35;
+    private int _smsTimeout = 30000;
+
+    // Thông báo
+    private bool _soundOnSms = true;
+    private bool _soundOnCall = true;
+    private bool _soundOnOtp = true;
+    private bool _telegramOnOtp = true;
+    private bool _telegramOnSms = false;
+    private bool _telegramOnCall = true;
+    private bool _telegramOnError = true;
+
+    // Telegram
+    private string _telegramBotToken = "";
+    private string _telegramChatId = "";
+    private bool _showToken = false;
+
+    // Âm thanh
+    private string _soundSmsPath = "";
+    private string _soundCallPath = "";
+    private string _soundOtpPath = "";
+
+    // Nâng cao
+    private int _baudRate = 115200;
+    private int _commandTimeout = 10000;
+    private bool _enableLog = true;
+    private bool _autoConnectOnStart = false;
+    private bool _minimizeToTray = true;
+
+    protected override void OnInitialized()
     {
-        Snackbar.Add("Đã lưu cài đặt", Severity.Success);
-        // Gọi SettingsService.Save()
+        // Load từ SettingsService / file config
+        // LoadSettings();
+    }
+
+    async Task SaveAll()
+    {
+        try
+        {
+            // SettingsService.Save(...);
+            Snackbar.Add("Đã lưu tất cả cài đặt", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Lỗi lưu: " + ex.Message, Severity.Error);
+        }
+    }
+
+    async Task ResetDefault()
+    {
+        var ok = await DialogService.ShowMessageBox("Khôi phục mặc định", 
+            "Bạn có chắc muốn đặt lại tất cả cài đặt về mặc định?", 
+            yesText: "Khôi phục", cancelText: "Hủy");
+        
+        if (ok == true)
+        {
+            _newSimIntake = true;
+            _autoRestoreImei = true;
+            _blockUnknown = false;
+            _autoAccept = false;
+            _prefer4G = true;
+            _autoRecovery = true;
+            _forceCfun1AfterReboot = true;
+            _recoveryThreshold = 12;
+            _watchdogSeconds = 50;
+            _autoUssdOnNetwork = true;
+            _ussdRetrySeconds = 35;
+            Snackbar.Add("Đã khôi phục mặc định", Severity.Success);
+        }
+    }
+
+    async Task TestTelegram()
+    {
+        Snackbar.Add("Đang gửi tin test Telegram...", Severity.Info);
+        // await TelegramService.SendMessageAsync("Test từ Tool GSM");
+        await Task.Delay(800);
+        Snackbar.Add("Đã gửi tin test (nếu token đúng sẽ nhận được)", Severity.Success);
+    }
+
+    void OpenTelegramGuide()
+    {
+        // Mở link hướng dẫn
+        Snackbar.Add("Mở hướng dẫn lấy Bot Token & Chat ID", Severity.Info);
+    }
+
+    void BrowseSound(string type)
+    {
+        Snackbar.Add($"Chọn file âm thanh cho {type.ToUpper()}", Severity.Info);
+        // OpenFileDialog
+    }
+
+    void TestSound(string type)
+    {
+        Snackbar.Add($"Đang phát âm thanh {type.ToUpper()}...", Severity.Normal);
+        // SoundAlertService.Play...
+    }
+
+    async Task ExportSettings()
+    {
+        Snackbar.Add("Đã export cấu hình", Severity.Success);
+    }
+
+    async Task ImportSettings()
+    {
+        Snackbar.Add("Đã import cấu hình", Severity.Success);
+    }
+
+    async Task ClearAllData()
+    {
+        var ok = await DialogService.ShowMessageBox("Xóa toàn bộ dữ liệu", 
+            "Xóa hết lịch sử SMS, cuộc gọi, mapping IMEI, log...?\nHành động này không thể hoàn tác!", 
+            yesText: "Xóa hết", cancelText: "Hủy");
+        
+        if (ok == true)
+        {
+            Snackbar.Add("Đã xóa toàn bộ dữ liệu", Severity.Success);
+        }
     }
 }

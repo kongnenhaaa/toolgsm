@@ -37,6 +37,7 @@
             <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">HSD</MudTh>
             <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">OTP</MudTh>
             <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Nội dung</MudTh>
+            <MudTh Style="width:120px; text-align:center; background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Thao tác</MudTh>
         </HeaderContent>
         <RowTemplate>
             <MudTd Style="font-weight:600; border-bottom:1px solid #F1F5F9; color:#1E293B;">@context.PortName</MudTd>
@@ -57,6 +58,22 @@
             </MudTd>
             <MudTd Style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; border-bottom:1px solid #F1F5F9; color:#475569;" title="@context.LastMessageContent">
                 @(context.LastMessageContent ?? "—")
+            </MudTd>
+            <MudTd Style="text-align:center; white-space:nowrap; border-bottom:1px solid #F1F5F9;">
+                @if (IsPendingAccept(context))
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.CheckCircle"
+                               OnClick="@(() => AcceptOne(context))"
+                               Disabled="@_accepting.Contains(context.PortName)">
+                        @(_accepting.Contains(context.PortName) ? "..." : "Chấp nhận")
+                    </MudButton>
+                }
+                else
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
+                                   title="Refresh" OnClick="@(() => RefreshOne(context))" />
+                }
             </MudTd>
         </RowTemplate>
         <NoRecordsContent>
@@ -81,6 +98,51 @@
 
     [Parameter]
     public EventCallback<HashSet<SimPort>> SelectedItemsChanged { get; set; }
+
+    [Parameter] public EventCallback<SimPort> OnAccept { get; set; }
+    [Parameter] public EventCallback<SimPort> OnRefresh { get; set; }
+
+    private HashSet<string> _accepting = new();
+
+    bool IsPendingAccept(SimPort p)
+    {
+        if (p == null) return false;
+        var s = p.Status.ToString();
+        var err = p.LastError?.ToLowerInvariant() ?? "";
+        return s.Contains("Pending", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("WaitAccept", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("SecurityBlocked", StringComparison.OrdinalIgnoreCase)
+            || err.Contains("sim_mới_chờ_chấp_nhận", StringComparison.OrdinalIgnoreCase)
+            || (p.StatusDisplay?.Contains("Chờ Accept") == true);
+    }
+
+    async Task AcceptOne(SimPort port)
+    {
+        if (port == null || _accepting.Contains(port.PortName)) return;
+        _accepting.Add(port.PortName);
+        try
+        {
+            if (OnAccept.HasDelegate)
+                await OnAccept.InvokeAsync(port);
+        }
+        finally
+        {
+            _accepting.Remove(port.PortName);
+            StateHasChanged();
+        }
+    }
+
+    async Task RefreshOne(SimPort port)
+    {
+        if (OnRefresh.HasDelegate)
+            await OnRefresh.InvokeAsync(port);
+        else
+        {
+            try { ModemService.Disconnect(port.PortName); } catch {}
+            await Task.Delay(500);
+            ModemService.ConnectAll(115200);
+        }
+    }
 
     async Task RefreshSelected()
     {

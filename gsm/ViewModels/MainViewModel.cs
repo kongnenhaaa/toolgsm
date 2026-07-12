@@ -2462,6 +2462,110 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ = gsm.Services.FirebaseService.ClearWebStateAsync(portName);
     }
 
+    // ---------------------------------------------------------------------
+    // THAO TÁC ACCEPT SIM MỚI TỪ UI
+    // ---------------------------------------------------------------------
+    public async Task AcceptNewSimAsync(string portName)
+    {
+        var port = Ports.FirstOrDefault(p => p.PortName == portName);
+        if (port == null || string.IsNullOrEmpty(port.Serial)) return;
+        
+        AddLog($"[{portName}] Bắt đầu xử lý Chấp nhận SIM mới (CCID: {port.Serial})...");
+        string ccid = port.Serial;
+        string currentImei = port.Imei;
+
+        if (string.IsNullOrEmpty(currentImei) || currentImei.Contains("ERROR"))
+        {
+            currentImei = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
+            currentImei = NormalizeImei(currentImei);
+        }
+        
+        Application.Current.Dispatcher.Invoke(() => 
+        {
+            port.Status = SimStatus.Connecting;
+            port.DeviceName = "Đang xử lý chấp nhận...";
+            UpdateDashboard();
+        });
+        
+        var result = await _imeiManagementService.ProcessImeiAsync(
+            port,
+            ccid,
+            currentImei,
+            AppSettings,
+            (queryCcid) => 
+            {
+                _imeiCache.TryGetValue(queryCcid, out var entry);
+                return entry;
+            },
+            (newEntry) => AddNewImeiCacheEntry(newEntry),
+            (action) => Application.Current.Dispatcher.Invoke(action),
+            forceAccept: true
+        );
+        
+        Application.Current.Dispatcher.Invoke(() => 
+        {
+            if (result.Status == Services.ImeiProcessStatus.Matched)
+            {
+                port.IsRebooting = false;
+                port.Imei = result.FinalImei;
+                MarkPortActiveAfterInit(port.PortName);
+                _ = _modemService.ReinitializeSettingsAsync(port.PortName);
+                
+                // Lấy số điện thoại
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(5000);
+                    string ussd = GetUssdCodeForProvider(port.NetworkProvider);
+                    await SendUssdThrottledAsync(port.PortName, ussd, "Lấy SĐT sau khi Accept", maxAttempts: 3);
+                });
+            }
+            else if (result.Status == Services.ImeiProcessStatus.Applied)
+            {
+                port.IsRebooting = true;
+                port.Imei = result.FinalImei;
+                port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
+                port.Status = SimStatus.Connecting;
+                
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(15000);
+                    if (port.IsRebooting)
+                    {
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            port.IsRebooting = false;
+                            AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
+                            _modemService.StartHotplugWaitLoop(port.PortName);
+                        });
+                    }
+                });
+            }
+            else
+            {
+                port.Status = SimStatus.SecurityBlocked;
+                port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? "Lỗi không xác định khi Accept" : result.ErrorMessage;
+                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                UpdateDashboard();
+            }
+        });
+    }
+
+    public async Task AcceptSelectedAsync(IEnumerable<string> portNames)
+    {
+        foreach (var p in portNames.Distinct())
+        {
+            try
+            {
+                await AcceptNewSimAsync(p);
+                await Task.Delay(600);
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{p}] Lỗi khi accept hàng loạt: {ex.Message}", "ERROR");
+            }
+        }
+    }
+
     private void ModemService_PortDisconnected(object? sender, GsmDataEventArgs e)
     {
         Application.Current.Dispatcher.InvokeAsync(() =>

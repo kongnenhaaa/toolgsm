@@ -165,7 +165,8 @@ public class ImeiManagementService
         AppSettings settings,
         Func<string, SimBackupEntry?> getBackupEntry, 
         Action<SimBackupEntry> saveBackupEntry,
-        Action<Action> dispatcherInvoke)
+        Action<Action> dispatcherInvoke,
+        bool forceAccept = false)
     {
         string targetImei = string.Empty;
         string expectedImei = currentImei;
@@ -177,7 +178,7 @@ public class ImeiManagementService
             var cachedEntry = getBackupEntry(ccid);
 
             // [FIX LOGIC]: Đưa ưu tiên chặn SIM lạ lên hàng đầu (Tính năng 3)
-            if (cachedEntry == null && !port.IsRebooting)
+            if (cachedEntry == null && !port.IsRebooting && !forceAccept)
             {
                 if (settings.EnableNewSimIntakeMode)
                 {

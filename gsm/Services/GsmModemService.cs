@@ -257,6 +257,33 @@ public class GsmModemService : IGsmModemService
         PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Lỗi phần cứng (Có thể bị rút cáp)" });
     }
 
+    private async Task<string> ReadCcidWithFallbackAsync(string portName, int timeoutMs = 10000, bool silent = true)
+    {
+        string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
+        string ccid = "ERROR";
+
+        if (vendor.Contains("QUECTEL"))
+        {
+            ccid = await SendCommandAsync(portName, "AT+QCCID", timeoutMs, silent);
+        }
+        
+        if (ccid.Contains("ERROR") || string.IsNullOrWhiteSpace(ccid))
+        {
+            ccid = await SendCommandAsync(portName, "AT+CCID", timeoutMs, silent);
+        }
+
+        if (ccid.Contains("ERROR") || string.IsNullOrWhiteSpace(ccid))
+        {
+            string crsm = await SendCommandAsync(portName, "AT+CRSM=176,12258,0,0,10", timeoutMs, silent);
+            if (!crsm.Contains("ERROR") && crsm.Contains("+CRSM:"))
+            {
+                ccid = crsm; // Lấy luôn chuỗi raw để logic parse phía trên tự xử lý
+            }
+        }
+
+        return ccid;
+    }
+
     private async Task InitializeModemAsync(string portName)
     {
         // [SECURITY] Gửi lệnh ngắt sóng NGAY LẬP TỨC ngay khi mở cổng COM, không chờ đợi PING AT.
@@ -332,7 +359,7 @@ public class GsmModemService : IGsmModemService
         string ccid = "ERROR";
         for (int i = 0; i < 15; i++)
         {
-            string resp = await SendCommandAsync(portName, "AT+CCID", 30000);
+            string resp = await ReadCcidWithFallbackAsync(portName, 30000, false);
             if (!resp.Contains("ERROR") && !string.IsNullOrWhiteSpace(resp))
             {
                 ccid = resp;
@@ -503,7 +530,7 @@ public class GsmModemService : IGsmModemService
                     }
                 }
                 
-                string pollResp = await SendCommandAsync(portName, "AT+CCID", 10000, silent: true);
+                string pollResp = await ReadCcidWithFallbackAsync(portName, 10000, silent: true);
                 if (!pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp))
                 {
                     // Đè thêm 1 lệnh CFUN=4 nữa để triệt tiêu việc tự động đăng ký mạng trong lúc xử lý IMEI

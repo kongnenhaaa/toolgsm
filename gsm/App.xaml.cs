@@ -27,7 +27,11 @@ namespace gsm
 
             // ===== ĐĂNG KÝ BACKEND CŨ =====
             serviceCollection.AddSingleton<IGsmModemService, GsmModemService>();
-            serviceCollection.AddSingleton<ImeiManagementService>();
+            serviceCollection.AddSingleton<ImeiManagementService>(sp => 
+            {
+                var modem = sp.GetRequiredService<IGsmModemService>();
+                return new ImeiManagementService(modem, null);
+            });
             serviceCollection.AddSingleton<MainViewModel>();
 
             Resources.Add("services", serviceCollection.BuildServiceProvider());

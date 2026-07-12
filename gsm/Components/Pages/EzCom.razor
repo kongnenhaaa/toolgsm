@@ -1,0 +1,96 @@
+@page "/ezcom"
+@inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.IGsmModemService ModemService
+@inject ISnackbar Snackbar
+@using gsm.Models
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Đăng ký EZ COM</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Gửi lệnh đăng ký EZ COM cho các cổng đang Active (thường là gửi SMS “DK EZ” đến 888 hoặc USSD tương ứng).
+</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="5">
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudSelect T="string" Label="Chọn cổng" @bind-Value="_ezPort" 
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
+                @foreach (var p in ActivePorts)
+                {
+                    <MudSelectItem Value="@p.PortName">
+                        @p.PortName — @(p.PhoneNumber ?? "—") (@(p.NetworkProvider ?? "—"))
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField @bind-Value="_ezCommand" Label="Lệnh / Nội dung" 
+                          Placeholder="DK EZ" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudTextField @bind-Value="_ezNumber" Label="Số nhận (mặc định 888)" 
+                          Placeholder="888" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudStack Row="true" Spacing="2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                           StartIcon="@Icons.Material.Filled.Send"
+                           OnClick="RegisterEzCom" Disabled="@(string.IsNullOrEmpty(_ezPort))">
+                    Đăng ký 1 cổng
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Success" 
+                           StartIcon="@Icons.Material.Filled.DoneAll"
+                           OnClick="RegisterEzComAll">
+                    Đăng ký tất cả Active
+                </MudButton>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="7">
+        <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:180px;">
+            <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Kết quả gần đây</MudText>
+            <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_ezResult</pre>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string _ezPort = "";
+    private string _ezCommand = "DK EZ";
+    private string _ezNumber = "888";
+    private string _ezResult = "";
+
+    private IEnumerable<SimPort> ActivePorts => 
+        Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
+
+    async Task RegisterEzCom()
+    {
+        if (string.IsNullOrEmpty(_ezPort)) return;
+        try
+        {
+            await ModemService.SendSmsAsync(_ezPort, _ezNumber, _ezCommand);
+            _ezResult = $"[{DateTime.Now:HH:mm:ss}] {_ezPort} → Gửi thành công\n{_ezCommand} đến {_ezNumber}\n\n" + _ezResult;
+            Snackbar.Add("Đăng ký EZ COM thành công", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _ezResult = $"[{DateTime.Now:HH:mm:ss}] Lỗi {_ezPort}: {ex.Message}\n\n" + _ezResult;
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    async Task RegisterEzComAll()
+    {
+        var ports = ActivePorts.ToList();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Không có cổng Active", Severity.Warning);
+            return;
+        }
+        Snackbar.Add($"Đang đăng ký EZ COM cho {ports.Count} cổng...", Severity.Info);
+        foreach (var p in ports)
+        {
+            _ezPort = p.PortName;
+            await RegisterEzCom();
+            await Task.Delay(1200);
+        }
+        Snackbar.Add("Hoàn tất đăng ký EZ COM", Severity.Success);
+    }
+}

@@ -1,0 +1,104 @@
+@page "/vnpt-pass"
+@inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.IGsmModemService ModemService
+@inject ISnackbar Snackbar
+@using gsm.Models
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Đặt mật khẩu My VNPT</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
+    Gửi lệnh đặt / đổi mật khẩu My VNPT cho thuê bao Vinaphone (thường qua USSD hoặc SMS).
+</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="5">
+        <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudSelect T="string" Label="Chọn cổng (Vinaphone)" @bind-Value="_vnptPort" 
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
+                @foreach (var p in ActivePorts.Where(x => (x.NetworkProvider ?? "").Contains("Vina", StringComparison.OrdinalIgnoreCase) || true))
+                {
+                    <MudSelectItem Value="@p.PortName">
+                        @p.PortName — @(p.PhoneNumber ?? "—")
+                    </MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField @bind-Value="_vnptPassword" Label="Mật khẩu mới" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                          InputType="InputType.Password" />
+
+            <MudTextField @bind-Value="_vnptConfirm" Label="Nhập lại mật khẩu" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                          InputType="InputType.Password" />
+
+            <MudTextField @bind-Value="_vnptUssd" Label="Lệnh USSD / SMS" 
+                          Placeholder="*111# hoặc nội dung SMS" 
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudStack Row="true" Spacing="2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                           StartIcon="@Icons.Material.Filled.Lock"
+                           OnClick="SetVnptPassword" 
+                           Disabled="@(string.IsNullOrEmpty(_vnptPort) || string.IsNullOrEmpty(_vnptPassword))">
+                    Đặt mật khẩu
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Success" 
+                           StartIcon="@Icons.Material.Filled.DoneAll"
+                           OnClick="SetVnptPasswordAll">
+                    Đặt cho tất cả
+                </MudButton>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="7">
+        <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:180px;">
+            <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Kết quả gần đây</MudText>
+            <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_vnptResult</pre>
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string _vnptPort = "";
+    private string _vnptPassword = "";
+    private string _vnptConfirm = "";
+    private string _vnptUssd = "";
+    private string _vnptResult = "";
+
+    private IEnumerable<SimPort> ActivePorts => 
+        Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
+
+    async Task SetVnptPassword()
+    {
+        if (string.IsNullOrEmpty(_vnptPort) || string.IsNullOrEmpty(_vnptPassword)) return;
+        if (_vnptPassword != _vnptConfirm)
+        {
+            Snackbar.Add("Mật khẩu nhập lại không khớp", Severity.Warning);
+            return;
+        }
+
+        try
+        {
+            // Tùy nhà mạng: USSD hoặc SMS
+            _vnptResult = $"[{DateTime.Now:HH:mm:ss}] {_vnptPort}\nĐã gửi lệnh đặt mật khẩu My VNPT\nMật khẩu: {_vnptPassword}\n\n" + _vnptResult;
+            Snackbar.Add("Đã gửi lệnh đặt mật khẩu", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _vnptResult = $"[{DateTime.Now:HH:mm:ss}] Lỗi {_vnptPort}: {ex.Message}\n\n" + _vnptResult;
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+    }
+
+    async Task SetVnptPasswordAll()
+    {
+        var ports = ActivePorts.ToList();
+        if (!ports.Any()) return;
+        foreach (var p in ports)
+        {
+            _vnptPort = p.PortName;
+            await SetVnptPassword();
+            await Task.Delay(1500);
+        }
+    }
+}

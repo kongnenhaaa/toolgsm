@@ -125,16 +125,6 @@
                                 <td style="text-align:right; color:#16A34A; font-weight:600;">@_acceptSuccess</td>
                                 <td style="text-align:right; color:#DC2626;">@_acceptError</td>
                             </tr>
-                            <tr>
-                                <td>Đăng ký EZ COM</td>
-                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_ezSuccess</td>
-                                <td style="text-align:right; color:#DC2626;">@_ezError</td>
-                            </tr>
-                            <tr>
-                                <td>Đặt Pass My VNPT</td>
-                                <td style="text-align:right; color:#16A34A; font-weight:600;">@_vnptSuccess</td>
-                                <td style="text-align:right; color:#DC2626;">@_vnptError</td>
-                            </tr>
                         </tbody>
                     </MudSimpleTable>
                 </MudPaper>
@@ -154,112 +144,6 @@
             </MudItem>
         </MudGrid>
     </MudTabPanel>
-
-    <!-- TAB 3: ĐĂNG KÝ EZ COM -->
-    <MudTabPanel Text="Đăng ký EZ COM" Icon="@Icons.Material.Filled.AppRegistration">
-        <MudPaper Class="pa-4 mt-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Đăng ký gói EZ COM</MudText>
-            <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-                Gửi lệnh đăng ký EZ COM cho các cổng đang Active (thường là gửi SMS “DK EZ” đến 888 hoặc USSD tương ứng).
-            </MudText>
-
-            <MudGrid>
-                <MudItem xs="12" md="5">
-                    <MudSelect T="string" Label="Chọn cổng" @bind-Value="_ezPort" 
-                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
-                        @foreach (var p in ActivePorts)
-                        {
-                            <MudSelectItem Value="@p.PortName">
-                                @p.PortName — @(p.PhoneNumber ?? "—") (@(p.NetworkProvider ?? "—"))
-                            </MudSelectItem>
-                        }
-                    </MudSelect>
-
-                    <MudTextField @bind-Value="_ezCommand" Label="Lệnh / Nội dung" 
-                                  Placeholder="DK EZ" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-
-                    <MudTextField @bind-Value="_ezNumber" Label="Số nhận (mặc định 888)" 
-                                  Placeholder="888" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-
-                    <MudStack Row="true" Spacing="2">
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                                   StartIcon="@Icons.Material.Filled.Send"
-                                   OnClick="RegisterEzCom" Disabled="@(string.IsNullOrEmpty(_ezPort))">
-                            Đăng ký 1 cổng
-                        </MudButton>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Success" 
-                                   StartIcon="@Icons.Material.Filled.DoneAll"
-                                   OnClick="RegisterEzComAll">
-                            Đăng ký tất cả Active
-                        </MudButton>
-                    </MudStack>
-                </MudItem>
-
-                <MudItem xs="12" md="7">
-                    <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:180px;">
-                        <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Kết quả gần đây</MudText>
-                        <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_ezResult</pre>
-                    </MudPaper>
-                </MudItem>
-            </MudGrid>
-        </MudPaper>
-    </MudTabPanel>
-
-    <!-- TAB 4: ĐẶT PASS MY VNPT -->
-    <MudTabPanel Text="Đặt Pass My VNPT" Icon="@Icons.Material.Filled.Password">
-        <MudPaper Class="pa-4 mt-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Đặt mật khẩu My VNPT</MudText>
-            <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-                Gửi lệnh đặt / đổi mật khẩu My VNPT cho thuê bao Vinaphone (thường qua USSD hoặc SMS).
-            </MudText>
-
-            <MudGrid>
-                <MudItem xs="12" md="5">
-                    <MudSelect T="string" Label="Chọn cổng (Vinaphone)" @bind-Value="_vnptPort" 
-                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" Dense="true" Clearable="true">
-                        @foreach (var p in ActivePorts.Where(x => (x.NetworkProvider ?? "").Contains("Vina", StringComparison.OrdinalIgnoreCase) || true))
-                        {
-                            <MudSelectItem Value="@p.PortName">
-                                @p.PortName — @(p.PhoneNumber ?? "—")
-                            </MudSelectItem>
-                        }
-                    </MudSelect>
-
-                    <MudTextField @bind-Value="_vnptPassword" Label="Mật khẩu mới" 
-                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
-                                  InputType="InputType.Password" />
-
-                    <MudTextField @bind-Value="_vnptConfirm" Label="Nhập lại mật khẩu" 
-                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
-                                  InputType="InputType.Password" />
-
-                    <MudTextField @bind-Value="_vnptUssd" Label="Lệnh USSD / SMS" 
-                                  Placeholder="*111# hoặc nội dung SMS" 
-                                  Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-
-                    <MudStack Row="true" Spacing="2">
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                                   StartIcon="@Icons.Material.Filled.Lock"
-                                   OnClick="SetVnptPassword" 
-                                   Disabled="@(string.IsNullOrEmpty(_vnptPort) || string.IsNullOrEmpty(_vnptPassword))">
-                            Đặt mật khẩu
-                        </MudButton>
-                        <MudButton Variant="Variant.Outlined" Color="Color.Success" 
-                                   OnClick="SetVnptPasswordAll">
-                            Đặt cho tất cả
-                        </MudButton>
-                    </MudStack>
-                </MudItem>
-
-                <MudItem xs="12" md="7">
-                    <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:180px;">
-                        <MudText Typo="Typo.caption" Class="mb-2" Style="color:#64748B;">Kết quả</MudText>
-                        <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_vnptResult</pre>
-                    </MudPaper>
-                </MudItem>
-            </MudGrid>
-        </MudPaper>
-    </MudTabPanel>
 </MudTabs>
 
 @code {
@@ -274,26 +158,13 @@
     private int _successCount => _logs.Count(x => x.Level == "success");
     private int _errorCount => _logs.Count(x => x.Level == "error");
     private int _successRate => _totalLogs == 0 ? 0 : (int)(_successCount * 100.0 / _totalLogs);
-    private int _totalOps => _smsSuccess + _smsError + _ussdSuccess + _ussdError + _callSuccess + _callError + _acceptSuccess + _acceptError + _ezSuccess + _ezError + _vnptSuccess + _vnptError;
+    private int _totalOps => _smsSuccess + _smsError + _ussdSuccess + _ussdError + _callSuccess + _callError + _acceptSuccess + _acceptError;
 
     private int _smsSuccess, _smsError, _ussdSuccess, _ussdError, _callSuccess, _callError;
-    private int _acceptSuccess, _acceptError, _ezSuccess, _ezError, _vnptSuccess, _vnptError;
+    private int _acceptSuccess, _acceptError;
 
     // Log list
     private List<LogItem> _logs = new();
-
-    // EZ COM
-    private string _ezPort = "";
-    private string _ezCommand = "DK EZ";
-    private string _ezNumber = "888";
-    private string _ezResult = "";
-
-    // My VNPT
-    private string _vnptPort = "";
-    private string _vnptPassword = "";
-    private string _vnptConfirm = "";
-    private string _vnptUssd = "*111#";
-    private string _vnptResult = "";
 
     private IEnumerable<SimPort> ActivePorts => 
         Vm.Ports?.Where(x => x.Status == SimStatus.Active) ?? Enumerable.Empty<SimPort>();
@@ -348,88 +219,6 @@
         _ => "#94A3B8"
     };
 
-    async Task RegisterEzCom()
-    {
-        if (string.IsNullOrEmpty(_ezPort)) return;
-        AddLog(_ezPort, "info", $"Bắt đầu đăng ký EZ COM → {_ezNumber} : {_ezCommand}");
-        try
-        {
-            // await Vm.RegisterEzComAsync(_ezPort, _ezNumber, _ezCommand);
-            // hoặc
-            await ModemService.SendSmsAsync(_ezPort, _ezNumber, _ezCommand);
-            _ezResult = $"[{DateTime.Now:HH:mm:ss}] {_ezPort} → Gửi thành công\n{_ezCommand} đến {_ezNumber}";
-            _ezSuccess++;
-            AddLog(_ezPort, "success", "Đăng ký EZ COM thành công");
-            Snackbar.Add("Đăng ký EZ COM thành công", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            _ezResult = $"Lỗi: {ex.Message}";
-            _ezError++;
-            AddLog(_ezPort, "error", "Đăng ký EZ COM thất bại: " + ex.Message);
-            Snackbar.Add(ex.Message, Severity.Error);
-        }
-    }
-
-    async Task RegisterEzComAll()
-    {
-        var ports = ActivePorts.ToList();
-        if (!ports.Any())
-        {
-            Snackbar.Add("Không có cổng Active", Severity.Warning);
-            return;
-        }
-        Snackbar.Add($"Đang đăng ký EZ COM cho {ports.Count} cổng...", Severity.Info);
-        foreach (var p in ports)
-        {
-            _ezPort = p.PortName;
-            await RegisterEzCom();
-            await Task.Delay(1200);
-        }
-        Snackbar.Add("Hoàn tất đăng ký EZ COM", Severity.Success);
-    }
-
-    async Task SetVnptPassword()
-    {
-        if (string.IsNullOrEmpty(_vnptPort) || string.IsNullOrEmpty(_vnptPassword)) return;
-        if (_vnptPassword != _vnptConfirm)
-        {
-            Snackbar.Add("Mật khẩu nhập lại không khớp", Severity.Warning);
-            return;
-        }
-
-        AddLog(_vnptPort, "info", "Bắt đầu đặt mật khẩu My VNPT");
-        try
-        {
-            // Tùy nhà mạng: USSD hoặc SMS
-            // Ví dụ: await ModemService.SendCommandAsync(_vnptPort, $"AT+CUSD=1,\"{_vnptUssd}\",15");
-            // hoặc gửi SMS chứa dung mật khẩu
-
-            _vnptResult = $"[{DateTime.Now:HH:mm:ss}] {_vnptPort}\nĐã gửi lệnh đặt mật khẩu My VNPT\nMật khẩu: {_vnptPassword}";
-            _vnptSuccess++;
-            AddLog(_vnptPort, "success", "Đặt mật khẩu My VNPT thành công");
-            Snackbar.Add("Đã gửi lệnh đặt mật khẩu", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            _vnptResult = "Lỗi: " + ex.Message;
-            _vnptError++;
-            AddLog(_vnptPort, "error", "Đặt pass My VNPT lỗi: " + ex.Message);
-            Snackbar.Add(ex.Message, Severity.Error);
-        }
-    }
-
-    async Task SetVnptPasswordAll()
-    {
-        var ports = ActivePorts.ToList();
-        if (!ports.Any()) return;
-        foreach (var p in ports)
-        {
-            _vnptPort = p.PortName;
-            await SetVnptPassword();
-            await Task.Delay(1500);
-        }
-    }
 
     async Task ClearLogs()
     {

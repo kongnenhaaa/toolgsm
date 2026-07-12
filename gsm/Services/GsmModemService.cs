@@ -54,6 +54,7 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, string> _portVendors = new();
     private readonly ConcurrentDictionary<string, SerialDataReceivedEventHandler> _dataReceivedHandlers = new();
     private readonly ConcurrentDictionary<string, bool> _isDownloading = new();
+    private readonly ConcurrentDictionary<string, bool> _activeCalls = new();
     private readonly object _connectLock = new object();
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
@@ -498,6 +499,9 @@ public class GsmModemService : IGsmModemService
         string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
         if (vendor.Contains("QUECTEL"))
         {
+            await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"usbat\"", 5000, silent: true);
+            await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true);
+            await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 5000, silent: true);
             await SendCommandAsync(portName, "AT+QCFG=\"ims\",1", 5000, silent: true); // Bật VoLTE
             await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true); // Bật bộ phát hiện âm tần DTMF
             await SendCommandAsync(portName, "AT+QPCMV=0,0", 5000, silent: true);
@@ -626,6 +630,7 @@ public class GsmModemService : IGsmModemService
                     {
                         // Đặt lại chuẩn ưu tiên sau khi AT+COPS=0 vì một số FW Qualcomm reset giá trị này
                         await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true);
+                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 10000, silent: true);
                     }
                 }
             }
@@ -644,11 +649,13 @@ public class GsmModemService : IGsmModemService
                 string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
                 if (vendor.Contains("QUECTEL"))
                 {
-                    await SendCommandAsync(portName, "AT+CREG?;+QCSQ", 10000, silent: true);
+                    await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
+                    await SendCommandAsync(portName, "AT+QCSQ", 5000, silent: true);
                 }
                 else
                 {
-                    await SendCommandAsync(portName, "AT+CREG?;+CSQ", 10000, silent: true);
+                    await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
+                    await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true);
                 }
                 
                 // Sweep bù (quét tin nhắn kẹt định kỳ)
@@ -1056,6 +1063,7 @@ public class GsmModemService : IGsmModemService
                 if (clipMatch.Success)
                 {
                     string callerNumber = clipMatch.Groups[1].Value;
+                    _activeCalls[portName] = true;
                     CallIncoming?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = callerNumber });
                     
                     // Lấy chi tiết thông tin cuộc gọi đang diễn ra
@@ -1065,9 +1073,10 @@ public class GsmModemService : IGsmModemService
                     _ = Task.Run(async () =>
                     {
                         await Task.Delay(60000);
-                        if (_serialPorts.ContainsKey(portName))
+                        if (_serialPorts.ContainsKey(portName) && _activeCalls.TryGetValue(portName, out bool isActive) && isActive)
                         {
                             await SendCommandAsync(portName, "ATH", 5000, silent: true);
+                            _activeCalls[portName] = false;
                         }
                     });
                     
@@ -1080,18 +1089,21 @@ public class GsmModemService : IGsmModemService
 
             if (currentData.Contains("NO CARRIER"))
             {
+                _activeCalls[portName] = false;
                 CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "NO CARRIER" });
                 buffer.Replace("NO CARRIER", "");
                 currentData = buffer.ToString();
             }
             else if (currentData.Contains("BUSY"))
             {
+                _activeCalls[portName] = false;
                 CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "BUSY" });
                 buffer.Replace("BUSY", "");
                 currentData = buffer.ToString();
             }
             else if (currentData.Contains("NO ANSWER"))
             {
+                _activeCalls[portName] = false;
                 CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "NO ANSWER" });
                 buffer.Replace("NO ANSWER", "");
                 currentData = buffer.ToString();

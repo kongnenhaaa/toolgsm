@@ -35,6 +35,7 @@ namespace gsm
             serviceCollection.AddSingleton<MainViewModel>();
             serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();
             serviceCollection.AddSingleton<IAudioService, AudioService>();
+            serviceCollection.AddSingleton<INotifyService, NotifyService>();
 
             Resources.Add("services", serviceCollection.BuildServiceProvider());
         }

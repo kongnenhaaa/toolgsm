@@ -25,9 +25,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IGsmModemService _modemService;
     private readonly Services.ImeiManagementService _imeiManagementService;
+    private readonly SpeechToTextService _speechToTextService;
+    private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
+
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, bool>> _sentConfirmations = new();
     public IGsmModemService ModemService => _modemService;
 
-    private readonly SpeechToTextService _speechToTextService;
     private readonly FirebaseService _firebaseService;
     public ProxyManagerService ProxyManager { get; }
     private readonly ApiServerService? _apiServerService;
@@ -2779,22 +2782,67 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     return;
                 }
 
-                if (receiveAll || extractedOtp != "N/A")
+                // ---------- LOAD SETTINGS ----------
+                var cfg = SettingsService.Current;
+
+                // ---------- 1. TELEGRAM ----------
+                bool hasToken = !string.IsNullOrWhiteSpace(cfg.TelegramBotToken) &&
+                                !string.IsNullOrWhiteSpace(cfg.TelegramChatId);
+
+                if (hasToken)
                 {
-                    // Escape HTML characters for Telegram parse_mode = HTML
-                    string safeContent = System.Net.WebUtility.HtmlEncode(cleanContent);
-                    string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
-                    
-                    // GỌI HÀM BẮN TELEGRAM (Toàn văn nếu receiveAll)
-                    string teleMsg = receiveAll 
-                        ? $"📩 <b>Tin Nhắn Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {safeSender}\n📝 Nội dung: <i>{safeContent}</i>"
-                        : $"📩 <b>OTP Mới Từ {e.PortName}</b>\n📱 SĐT: {receiverPhone}\n👤 Từ: {safeSender}\n🔑 OTP: <code>{extractedOtp}</code>\n📝 Nội dung: <i>{safeContent}</i>";
-
-                    _ = TelegramService.SendMessageAsync(teleMsg);
-
-                    if (extractedOtp != "N/A")
-                        OtpReceivedEvent?.Invoke(e.PortName, extractedOtp);
+                    // OTP
+                    if (cfg.TelegramOnOtp && extractedOtp != "N/A")
+                    {
+                        var text =
+                            $"🔐 OTP mới\n" +
+                            $"Port: {e.PortName}\n" +
+                            $"SĐT: {receiverPhone}\n" +
+                            $"Từ: {System.Net.WebUtility.HtmlEncode(senderPhone)}\n" +
+                            $"OTP: <b>{extractedOtp}</b>\n" +
+                            $"Nội dung: {System.Net.WebUtility.HtmlEncode(TrimStr(cleanContent, 200))}\n" +
+                            $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                        _ = _notifyService.SendTelegramAsync(cfg.TelegramBotToken, cfg.TelegramChatId, text);
+                    }
+                    // Full SMS (kể cả không OTP)
+                    else if (cfg.TelegramOnSms || receiveAll)
+                    {
+                        var text =
+                            $"📩 SMS mới\n" +
+                            $"Port: {e.PortName}\n" +
+                            $"SĐT: {receiverPhone}\n" +
+                            $"Từ: {System.Net.WebUtility.HtmlEncode(senderPhone)}\n" +
+                            $"Nội dung: {System.Net.WebUtility.HtmlEncode(TrimStr(cleanContent, 500))}\n" +
+                            $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                        _ = _notifyService.SendTelegramAsync(cfg.TelegramBotToken, cfg.TelegramChatId, text);
+                    }
                 }
+
+                // ---------- 2. WEBHOOK / TOOLWEB ----------
+                if (cfg.PushOtpToWeb && !string.IsNullOrWhiteSpace(cfg.OtpWebhookUrl))
+                {
+                    if (extractedOtp != "N/A" || cfg.PushOtpToWeb)
+                    {
+                        var payload = new
+                        {
+                            event_type = extractedOtp == "N/A" ? "sms" : "otp",
+                            port = e.PortName,
+                            phone = receiverPhone,
+                            sender = senderPhone,
+                            otp = extractedOtp == "N/A" ? "" : extractedOtp,
+                            content = cleanContent,
+                            imei = port?.Imei ?? "",
+                            ccid = port?.Serial ?? "",
+                            time = DateTime.Now.ToString("o"),
+                            timestamp = DateTimeOffset.Now.ToUnixTimeSeconds()
+                        };
+
+                        _ = _notifyService.PushWebhookAsync(cfg.OtpWebhookUrl, payload);
+                    }
+                }
+
+                if (extractedOtp != "N/A")
+                    OtpReceivedEvent?.Invoke(e.PortName, extractedOtp);
 
                 // 4. Đưa lên UI (Cập nhật Tab SMS)
                 SmsMessages.Insert(0, new SmsMessage
@@ -5847,6 +5895,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var win = new ImeiManagerWindow();
         win.ShowDialog();
+    }
+
+    private static string TrimStr(string s, int max)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        s = s.Replace("\r", " ").Replace("\n", " ");
+        return s.Length <= max ? s : s.Substring(0, max) + "…";
     }
 }
 

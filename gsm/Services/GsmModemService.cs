@@ -505,6 +505,17 @@ public class GsmModemService : IGsmModemService
             }
         }
         
+        // === FIX QUAN TRỌNG: Sau Accept SIM / reboot, bắt buộc bật full radio ===
+        await SendCommandAsync(portName, "AT+CFUN=1", 12000, silent: true);
+        await Task.Delay(2000);   // Cho modem thời gian gắn mạng
+
+        // Re-apply scan mode sau khi CFUN=1 (vì COPS=0 hay CFUN có thể reset)
+        if (vendor.Contains("QUECTEL"))
+        {
+            await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 8000, silent: true);
+            await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 8000, silent: true);
+        }
+        
         StartPollingNetwork(portName);
     }
 
@@ -669,8 +680,8 @@ public class GsmModemService : IGsmModemService
 
                 attempts++;
 
-                // Khôi phục sóng nếu kẹt quá lâu (Khoảng 40 giây = 20 lần)
-                if (attempts > 20)
+                // Khôi phục sóng nếu kẹt quá lâu
+                if (attempts > 12)
                 {
                     attempts = 0;
                     recoveryCount++;
@@ -678,19 +689,20 @@ public class GsmModemService : IGsmModemService
                     
                     // Toggle chế độ máy bay để reset cọc sóng
                     await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
-                    await Task.Delay(1000);
-                    await SendCommandAsync(portName, "AT+CFUN=1", 10000, silent: true);
-                    
-                    // Ép tự động quét lại trạm sóng mạng
-                    await SendCommandAsync(portName, "AT+COPS=0", 10000, silent: true);
+                    await Task.Delay(1200);
+                    await SendCommandAsync(portName, "AT+CFUN=1", 12000, silent: true);
+                    await Task.Delay(1500);
                     
                     string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
                     if (vendor.Contains("QUECTEL"))
                     {
                         // Đặt lại chuẩn ưu tiên sau khi AT+COPS=0 vì một số FW Qualcomm reset giá trị này
-                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true);
-                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 10000, silent: true);
+                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 8000, silent: true);
+                        await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 8000, silent: true);
                     }
+                    
+                    // Ép tự động quét lại trạm sóng mạng
+                    await SendCommandAsync(portName, "AT+COPS=0", 10000, silent: true);
                 }
             }
         });

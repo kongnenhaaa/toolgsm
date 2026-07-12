@@ -140,31 +140,45 @@
     async Task RefreshPort(SimPort port)
     {
         Snackbar.Add($"[{port.PortName}] Đang làm mới...", Severity.Normal);
-        // Có thể gọi backend gửi *101# hoặc tương tự
+        await Vm.RefreshPortAsync(port.PortName);
     }
 
     async Task CheckBalance(SimPort port)
     {
         Snackbar.Add($"[{port.PortName}] Đang kiểm tra TKC (*101#)...", Severity.Info);
-        // Gọi backend
+        await Vm.CheckBalanceForPortAsync(port.PortName);
     }
 
     async Task OpenUssdDialog(SimPort port)
     {
-        var result = await DialogService.ShowMessageBox(
-            $"USSD - {port.PortName}",
-            "Nhập lệnh USSD (ví dụ *101#):",
-            yesText: "Gửi", cancelText: "Hủy");
+        var parameters = new DialogParameters { ["PortName"] = port.PortName };
+        var dialog = await DialogService.ShowAsync<gsm.Components.Shared.UssdDialog>($"USSD - {port.PortName}", parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is string code)
+        {
+            Snackbar.Add($"Đang gửi USSD: {code} trên {port.PortName}", Severity.Info);
+            await ModemService.SendCommandAsync(port.PortName, $"AT+CUSD=1,\"{code}\",15", 15000);
+        }
     }
 
     async Task OpenSmsDialog(SimPort port)
     {
-        Snackbar.Add($"Mở form gửi SMS cho {port.PortName}", Severity.Normal);
+        var parameters = new DialogParameters { ["PortName"] = port.PortName };
+        var dialog = await DialogService.ShowAsync<gsm.Components.Shared.SmsDialog>($"Gửi SMS - {port.PortName}", parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is (string phone, string message))
+        {
+            Snackbar.Add($"Đã lên lịch gửi SMS trên {port.PortName}", Severity.Info);
+            await Vm.QueueSmsAsync(port.PortName, phone, message);
+        }
     }
 
     async Task RefreshAll()
     {
         Snackbar.Add("Đang làm mới tất cả cổng...", Severity.Info);
+        Vm.RefreshAllPorts();
     }
 
     async Task ConnectAll()

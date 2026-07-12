@@ -1,0 +1,24 @@
+@inject IDialogService DialogService
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="PhoneNumber" Label="Số điện thoại nhận" Placeholder="Nhập SĐT..." Variant="Variant.Outlined" Class="mb-3" />
+        <MudTextField @bind-Value="Message" Label="Nội dung tin nhắn" Lines="3" Variant="Variant.Outlined" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Hủy</MudButton>
+        <MudButton Color="Color.Secondary" Variant="Variant.Filled" OnClick="Submit" Disabled="@(string.IsNullOrWhiteSpace(PhoneNumber) || string.IsNullOrWhiteSpace(Message))">Gửi SMS</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+    
+    [Parameter] public string PortName { get; set; } = string.Empty;
+
+    public string PhoneNumber { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+
+    void Submit() => MudDialog.Close(DialogResult.Ok((PhoneNumber, Message)));
+    void Cancel() => MudDialog.Cancel();
+}

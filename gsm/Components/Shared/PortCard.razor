@@ -1,7 +1,7 @@
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
-<MudPaper Class="pa-4 port-card" Elevation="0" Style="border-radius:12px; height:100%; border:1px solid #E2E8F0;">
+<MudPaper Class="@($"pa-4 port-card {(Port.IsRebooting ? "card-accepting" : "")}")" Elevation="0" Style="border-radius:12px; height:100%; border:1px solid #E2E8F0;">
     <MudStack Spacing="2">
         <!-- Header -->
         <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
@@ -14,8 +14,24 @@
 
         <MudDivider Class="my-1" />
 
-        <!-- Info -->
-        <MudStack Spacing="1">
+        @if (Port.Status == gsm.Models.SimStatus.Connecting)
+        {
+            <MudStack Spacing="1">
+                <MudSkeleton Width="100%" Height="20px" />
+                <MudSkeleton Width="80%" Height="20px" />
+                <MudSkeleton Width="60%" Height="20px" />
+                <MudSkeleton Width="90%" Height="20px" />
+                <MudSkeleton Width="50%" Height="20px" />
+            </MudStack>
+            
+            <MudStack Row="true" Spacing="1" Class="mt-2">
+                <MudSkeleton Width="100%" Height="32px" />
+            </MudStack>
+        }
+        else
+        {
+            <!-- Info -->
+            <MudStack Spacing="1">
             <InfoRow Label="IMEI" Value="@(string.IsNullOrEmpty(Port.Imei) ? "—" : Port.Imei)" Mono="true" />
             <InfoRow Label="SĐT" Value="@(string.IsNullOrEmpty(Port.PhoneNumber) || Port.PhoneNumber.Contains("Chưa") ? "—" : Port.PhoneNumber)" Bold="true" />
             <InfoRow Label="TKC" Value="@(string.IsNullOrEmpty(Port.Balance) ? "—" : Port.Balance)" Color="#16A34A" Bold="true" />
@@ -63,6 +79,7 @@
                 </MudTooltip>
             </MudStack>
         </MudStack>
+        }
     </MudStack>
 </MudPaper>
 

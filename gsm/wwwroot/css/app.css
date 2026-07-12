@@ -8,8 +8,9 @@
 }
 
 .port-card {
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     border: 1px solid #E2E8F0;
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
 }
 
 .port-card:hover {
@@ -23,4 +24,15 @@
     font-weight: 600;
     padding: 2px 10px;
     border-radius: 9999px;
+}
+
+@keyframes acceptPulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4); }
+    50% { transform: scale(1.02); box-shadow: 0 0 0 10px rgba(37, 99, 235, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+}
+
+.card-accepting {
+    animation: acceptPulse 1.5s infinite;
+    border-color: #2563EB !important;
 }

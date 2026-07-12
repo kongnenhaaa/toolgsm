@@ -1,0 +1,22 @@
+@inject IDialogService DialogService
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField @bind-Value="UssdCode" Label="Lệnh USSD" Placeholder="Ví dụ: *101#" Variant="Variant.Outlined" AutoFocus="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Hủy</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Submit">Gửi USSD</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = null!;
+    
+    [Parameter] public string PortName { get; set; } = string.Empty;
+
+    public string UssdCode { get; set; } = "*101#";
+
+    void Submit() => MudDialog.Close(DialogResult.Ok(UssdCode));
+    void Cancel() => MudDialog.Cancel();
+}

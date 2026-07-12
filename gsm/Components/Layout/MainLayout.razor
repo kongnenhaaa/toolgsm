@@ -4,12 +4,14 @@
 @using gsm.ViewModels
 @using gsm.Models
 
+<MudThemeProvider @bind-IsDarkMode="@_isDarkMode" Theme="@_theme" />
+
 <MudLayout>
-    <MudAppBar Elevation="0" Dense="true" Class="border-b" Style="border-color:#E2E8F0; background:white;">
+    <MudAppBar Elevation="1" Dense="true" Color="Color.Surface">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="ToggleDrawer" />
         
-        <MudText Typo="Typo.h6" Class="ml-2" Style="font-weight:700; color:#0F172A;">
-            Tool GSM <span style="color:#2563EB;">EC20</span>
+        <MudText Typo="Typo.h6" Class="ml-2 font-bold" Color="Color.Primary">
+            Tool GSM EC20
         </MudText>
 
         <MudSpacer />
@@ -18,13 +20,14 @@
             @ActiveCount COM Active
         </MudChip>
 
-        <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Color="Color.Default" OnClick="RefreshAll" Title="Làm mới tất cả" />
+        <MudIconButton Icon="@Icons.Material.Outlined.Refresh" Color="Color.Default" OnClick="RefreshAll" />
+        <MudIconButton Icon="@(_isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Outlined.DarkMode)" 
+                       Color="Color.Inherit" OnClick="ToggleDarkMode" />
         <MudIconButton Icon="@Icons.Material.Outlined.Settings" Color="Color.Default" OnClick="OpenSettings" />
     </MudAppBar>
 
     <MudDrawer @bind-Open="_drawerOpen" Elevation="1" Variant="@DrawerVariant.Mini" 
-               OpenMiniOnHover="true" ClipMode="DrawerClipMode.Always"
-               Style="border-right:1px solid #E2E8F0;">
+               OpenMiniOnHover="true" ClipMode="DrawerClipMode.Always">
         <MudNavMenu Dense="true">
             <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
             <MudNavLink Href="/sms" Icon="@Icons.Material.Filled.Sms">SMS</MudNavLink>
@@ -35,16 +38,18 @@
         </MudNavMenu>
     </MudDrawer>
 
-    <MudMainContent Class="pt-4 px-4 pb-6" Style="background:#F8FAFC; min-height:100vh;">
+    <MudMainContent Class="pt-4 px-4 pb-6">
         @Body
     </MudMainContent>
 </MudLayout>
 
 @code {
     private bool _drawerOpen = true;
+    private bool _isDarkMode = false;
     private int ActiveCount => Vm?.Ports?.Count(p => p.Status == SimStatus.Active) ?? 0;
 
     void ToggleDrawer() => _drawerOpen = !_drawerOpen;
+    void ToggleDarkMode() => _isDarkMode = !_isDarkMode;
 
     async Task RefreshAll()
     {
@@ -55,4 +60,61 @@
     {
         // Navigate hoặc mở dialog
     }
+
+    private MudTheme _theme = new MudTheme()
+    {
+        PaletteLight = new PaletteLight()
+        {
+            Primary = "#2563EB",
+            Secondary = "#0D9488",
+            AppbarBackground = "#FFFFFF",
+            Background = "#F8FAFC",
+            Surface = "#FFFFFF",
+            DrawerBackground = "#FFFFFF",
+            DrawerText = "#0F172A",
+            TextPrimary = "#0F172A",
+            TextSecondary = "#475569",
+            TextDisabled = "#94A3B8",
+            ActionDefault = "#64748B",
+            Divider = "#E2E8F0",
+            TableLines = "#E2E8F0",
+            LinesDefault = "#E2E8F0",
+            Success = "#16A34A",
+            Warning = "#D97706",
+            Error = "#DC2626",
+            Info = "#0891B2"
+        },
+        PaletteDark = new PaletteDark()
+        {
+            Primary = "#3B82F6",
+            Secondary = "#14B8A6",
+            Background = "#0F172A",
+            AppbarBackground = "#1E293B",
+            Surface = "#1E293B",
+            DrawerBackground = "#1E293B",
+            DrawerText = "#F8FAFC",
+            TextPrimary = "#F8FAFC",
+            TextSecondary = "#CBD5E1",
+            TextDisabled = "#64748B",
+            ActionDefault = "#94A3B8",
+            Divider = "#334155",
+            TableLines = "#334155",
+            LinesDefault = "#334155",
+            Success = "#22C55E",
+            Warning = "#F59E0B",
+            Error = "#EF4444",
+            Info = "#06B6D4"
+        },
+        Typography = new Typography()
+        {
+            Default = new DefaultTypography()
+            {
+                FontFamily = new[] { "Inter", "Roboto", "sans-serif" }
+            }
+        },
+        LayoutProperties = new LayoutProperties()
+        {
+            DefaultBorderRadius = "10px"
+        }
+    };
 }

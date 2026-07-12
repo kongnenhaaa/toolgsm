@@ -295,20 +295,110 @@
 
     protected override void OnInitialized()
     {
-        // Load từ SettingsService / file config
-        // LoadSettings();
+        LoadSettings();
     }
 
     async Task SaveAll()
     {
         try
         {
-            // SettingsService.Save(...);
-            Snackbar.Add("Đã lưu tất cả cài đặt", Severity.Success);
+            var config = new AppConfig
+            {
+                NewSimIntake = _newSimIntake,
+                AutoRestoreImei = _autoRestoreImei,
+                BlockUnknown = _blockUnknown,
+                AutoAccept = _autoAccept,
+                Prefer4G = _prefer4G,
+                EnableVolte = _enableVolte,
+                AutoRecovery = _autoRecovery,
+                ForceCfun1AfterReboot = _forceCfun1AfterReboot,
+                RecoveryThreshold = _recoveryThreshold,
+                WatchdogSeconds = _watchdogSeconds,
+                AutoCheckBalanceAfterSms = _autoCheckBalanceAfterSms,
+                AutoUssdOnNetwork = _autoUssdOnNetwork,
+                UssdRetrySeconds = _ussdRetrySeconds,
+                SmsTimeout = _smsTimeout,
+                SoundOnSms = _soundOnSms,
+                SoundOnCall = _soundOnCall,
+                SoundOnOtp = _soundOnOtp,
+                TelegramOnOtp = _telegramOnOtp,
+                TelegramOnSms = _telegramOnSms,
+                TelegramOnCall = _telegramOnCall,
+                TelegramOnError = _telegramOnError,
+                TelegramBotToken = _telegramBotToken,
+                TelegramChatId = _telegramChatId,
+                OtpWebhookUrl = _otpWebhookUrl,
+                PushOtpToWeb = _pushOtpToWeb,
+                SoundSmsPath = _soundSmsPath,
+                SoundCallPath = _soundCallPath,
+                SoundOtpPath = _soundOtpPath,
+                BaudRate = _baudRate,
+                CommandTimeout = _commandTimeout,
+                EnableLog = _enableLog,
+                AutoConnectOnStart = _autoConnectOnStart,
+                MinimizeToTray = _minimizeToTray
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(config, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.json");
+            await System.IO.File.WriteAllTextAsync(path, json);
+            Snackbar.Add("Đã lưu tất cả cài đặt vào settings.json", Severity.Success);
         }
         catch (Exception ex)
         {
             Snackbar.Add("Lỗi lưu: " + ex.Message, Severity.Error);
+        }
+    }
+
+    void LoadSettings()
+    {
+        try
+        {
+            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.json");
+            if (System.IO.File.Exists(path))
+            {
+                var json = System.IO.File.ReadAllText(path);
+                var config = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json);
+                if (config != null)
+                {
+                    _newSimIntake = config.NewSimIntake;
+                    _autoRestoreImei = config.AutoRestoreImei;
+                    _blockUnknown = config.BlockUnknown;
+                    _autoAccept = config.AutoAccept;
+                    _prefer4G = config.Prefer4G;
+                    _enableVolte = config.EnableVolte;
+                    _autoRecovery = config.AutoRecovery;
+                    _forceCfun1AfterReboot = config.ForceCfun1AfterReboot;
+                    _recoveryThreshold = config.RecoveryThreshold;
+                    _watchdogSeconds = config.WatchdogSeconds;
+                    _autoCheckBalanceAfterSms = config.AutoCheckBalanceAfterSms;
+                    _autoUssdOnNetwork = config.AutoUssdOnNetwork;
+                    _ussdRetrySeconds = config.UssdRetrySeconds;
+                    _smsTimeout = config.SmsTimeout;
+                    _soundOnSms = config.SoundOnSms;
+                    _soundOnCall = config.SoundOnCall;
+                    _soundOnOtp = config.SoundOnOtp;
+                    _telegramOnOtp = config.TelegramOnOtp;
+                    _telegramOnSms = config.TelegramOnSms;
+                    _telegramOnCall = config.TelegramOnCall;
+                    _telegramOnError = config.TelegramOnError;
+                    _telegramBotToken = config.TelegramBotToken ?? "";
+                    _telegramChatId = config.TelegramChatId ?? "";
+                    _otpWebhookUrl = config.OtpWebhookUrl ?? "";
+                    _pushOtpToWeb = config.PushOtpToWeb;
+                    _soundSmsPath = config.SoundSmsPath ?? "";
+                    _soundCallPath = config.SoundCallPath ?? "";
+                    _soundOtpPath = config.SoundOtpPath ?? "";
+                    _baudRate = config.BaudRate;
+                    _commandTimeout = config.CommandTimeout;
+                    _enableLog = config.EnableLog;
+                    _autoConnectOnStart = config.AutoConnectOnStart;
+                    _minimizeToTray = config.MinimizeToTray;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Ignore load error
         }
     }
 
@@ -388,5 +478,42 @@
         {
             Snackbar.Add("Đã xóa toàn bộ dữ liệu", Severity.Success);
         }
+    }
+
+    public class AppConfig
+    {
+        public bool NewSimIntake { get; set; } = true;
+        public bool AutoRestoreImei { get; set; } = true;
+        public bool BlockUnknown { get; set; } = false;
+        public bool AutoAccept { get; set; } = false;
+        public bool Prefer4G { get; set; } = true;
+        public bool EnableVolte { get; set; } = false;
+        public bool AutoRecovery { get; set; } = true;
+        public bool ForceCfun1AfterReboot { get; set; } = true;
+        public int RecoveryThreshold { get; set; } = 12;
+        public int WatchdogSeconds { get; set; } = 50;
+        public bool AutoCheckBalanceAfterSms { get; set; } = true;
+        public bool AutoUssdOnNetwork { get; set; } = true;
+        public int UssdRetrySeconds { get; set; } = 35;
+        public int SmsTimeout { get; set; } = 30000;
+        public bool SoundOnSms { get; set; } = true;
+        public bool SoundOnCall { get; set; } = true;
+        public bool SoundOnOtp { get; set; } = true;
+        public bool TelegramOnOtp { get; set; } = true;
+        public bool TelegramOnSms { get; set; } = false;
+        public bool TelegramOnCall { get; set; } = true;
+        public bool TelegramOnError { get; set; } = true;
+        public string TelegramBotToken { get; set; } = "";
+        public string TelegramChatId { get; set; } = "";
+        public string OtpWebhookUrl { get; set; } = "";
+        public bool PushOtpToWeb { get; set; } = false;
+        public string SoundSmsPath { get; set; } = "";
+        public string SoundCallPath { get; set; } = "";
+        public string SoundOtpPath { get; set; } = "";
+        public int BaudRate { get; set; } = 115200;
+        public int CommandTimeout { get; set; } = 10000;
+        public bool EnableLog { get; set; } = true;
+        public bool AutoConnectOnStart { get; set; } = false;
+        public bool MinimizeToTray { get; set; } = true;
     }
 }

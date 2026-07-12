@@ -2,6 +2,7 @@
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS
 @using gsm.Models
 @using gsm.Components.Shared
 @implements IDisposable
@@ -214,9 +215,10 @@
         Snackbar.Add("Đã xóa hàng đợi SMS", Severity.Success);
     }
 
-    void Copy(string text)
+    async Task Copy(string text)
     {
-        Snackbar.Add("Đã copy", Severity.Success);
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        Snackbar.Add("Đã copy vào Clipboard", Severity.Success);
     }
 
     void DeleteSms(SmsMessage msg)

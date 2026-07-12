@@ -3,6 +3,7 @@
 @inject ImeiManagementService ImeiService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
+@inject IJSRuntime JS
 @using gsm.ViewModels
 @using gsm.Models
 @using gsm.Services
@@ -105,9 +106,7 @@
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd>
-                        <MudCheckBox T="bool" Value="@context.IsSelected" 
-                                     ValueChanged="@(v => context.IsSelected = v)" 
-                                     Dense="true" Color="Color.Primary" />
+                        <!-- Moved to MultiSelection natively -->
                     </MudTd>
                     <MudTd Style="font-weight:600;">@context.PortName</MudTd>
                     <MudTd Style="font-family:monospace; font-size:11px; max-width:140px; overflow:hidden; text-overflow:ellipsis;">
@@ -305,8 +304,14 @@
     {
         try
         {
-            // ImeiService.ExportToFile("imei_backup.json");
-            Snackbar.Add("Đã export backup thành công", Severity.Success);
+            var lines = new List<string> { "Ccid,Imei,FirstUsed,LastUsed,UseCount" };
+            foreach (var item in _backupList)
+            {
+                lines.Add($"{item.Ccid},{item.Imei},{item.FirstUsed:O},{item.LastUsed:O},{item.UseCount}");
+            }
+            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "imei_backup.csv");
+            await System.IO.File.WriteAllLinesAsync(path, lines);
+            Snackbar.Add($"Đã export backup thành công ra {path}", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -318,9 +323,31 @@
     {
         try
         {
-            // ImeiService.ImportFromFile(...);
-            LoadBackup();
-            Snackbar.Add("Đã import backup", Severity.Success);
+            var path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "imei_backup.csv");
+            if (!System.IO.File.Exists(path))
+            {
+                Snackbar.Add("Không tìm thấy file imei_backup.csv", Severity.Warning);
+                return;
+            }
+            var lines = await System.IO.File.ReadAllLinesAsync(path);
+            _backupList.Clear();
+            foreach (var line in lines.Skip(1))
+            {
+                var parts = line.Split(',');
+                if (parts.Length >= 5)
+                {
+                    _backupList.Add(new ImeiBackupItem
+                    {
+                        Ccid = parts[0],
+                        Imei = parts[1],
+                        FirstUsed = DateTime.TryParse(parts[2], out var d1) ? d1 : DateTime.Now,
+                        LastUsed = DateTime.TryParse(parts[3], out var d2) ? d2 : DateTime.Now,
+                        UseCount = int.TryParse(parts[4], out var c) ? c : 0
+                    });
+                }
+            }
+            Snackbar.Add($"Đã import {_backupList.Count} bản ghi", Severity.Success);
+            StateHasChanged();
         }
         catch (Exception ex)
         {
@@ -449,11 +476,11 @@
         _imeiCheckResult = _imeiValid ? "IMEI hợp lệ (Luhn OK)" : "IMEI không hợp lệ (sai check digit)";
     }
 
-    void CopyText(string? text)
+    async Task CopyText(string? text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        Snackbar.Add("Đã copy: " + text, Severity.Success);
-        // TODO: JS Interop
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        Snackbar.Add("Đã copy vào Clipboard: " + text, Severity.Success);
     }
 
     public void Dispose() => _timer?.Dispose();

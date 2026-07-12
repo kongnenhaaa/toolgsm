@@ -28,7 +28,6 @@
               FixedHeader="true" Height="calc(100vh - 280px)"
               Breakpoint="Breakpoint.None">
         <HeaderContent>
-            <MudTh Style="width:40px; background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;"></MudTh>
             <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Cổng</MudTh>
             <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Trạng thái</MudTh>
             <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Nhà mạng</MudTh>
@@ -40,11 +39,6 @@
             <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Nội dung</MudTh>
         </HeaderContent>
         <RowTemplate>
-            <MudTd Style="border-bottom:1px solid #F1F5F9;">
-                <MudCheckBox T="bool" Value="@context.IsSelected"
-                             ValueChanged="@(v => { context.IsSelected = v; SelectedItemsChanged.InvokeAsync(SelectedItems); })"
-                             Dense="true" Color="Color.Primary" />
-            </MudTd>
             <MudTd Style="font-weight:600; border-bottom:1px solid #F1F5F9; color:#1E293B;">@context.PortName</MudTd>
             <MudTd Style="border-bottom:1px solid #F1F5F9;">
                 <StatusBadge Status="@context.Status" />

@@ -1,4 +1,4 @@
-﻿@page "/call"
+@page "/call"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -469,6 +469,13 @@
             return false;
         }
 
+        string cleanPhone = (_phone.StartsWith("+") ? "+" : "") + new string(_phone.Where(char.IsDigit).ToArray());
+        if (string.IsNullOrWhiteSpace(cleanPhone))
+        {
+            Snackbar.Add("Số điện thoại không hợp lệ", Severity.Warning);
+            return false;
+        }
+
         var ports = GetTargetPorts();
         if (!ports.Any())
         {
@@ -479,7 +486,7 @@
         if (ports.Count > 5)
         {
             var ok = await DialogService.ShowMessageBox("Xác nhận",
-                $"Gọi {_phone} trên {ports.Count} cổng?", yesText: "Gọi", cancelText: "Hủy");
+                $"Gọi {cleanPhone} trên {ports.Count} cổng?", yesText: "Gọi", cancelText: "Hủy");
             if (ok != true) return false;
         }
 
@@ -492,7 +499,7 @@
             if (_callCts.Token.IsCancellationRequested) break;
 
             _currentPort = port;
-            _callStatus = $"[{port}] Đang gọi {_phone}...";
+            _callStatus = $"[{port}] Đang gọi {cleanPhone}...";
             _elapsedSeconds = 0;
             _progressPercent = 0;
             StateHasChanged();
@@ -505,7 +512,7 @@
                 // Ưu tiên method đầy đủ của ViewModel (hỗ trợ WAV + ghi âm)
                 if (HasMethod(Vm, "ExecuteCallFromUiAsync"))
                 {
-                    var callTask = Vm.GetType().GetMethod("ExecuteCallFromUiAsync")!.Invoke(Vm, new object[] { port, _phone, _wavPath ?? "", _duration, _recordCall })!;
+                    var callTask = Vm.GetType().GetMethod("ExecuteCallFromUiAsync")!.Invoke(Vm, new object[] { port, cleanPhone, _wavPath ?? "", _duration, _recordCall })!;
                     
                     int maxSeconds = _duration + 45; 
                     for (int i = 0; i < maxSeconds; i++)
@@ -531,7 +538,7 @@
                 else
                 {
                     // Fallback thủ công
-                    await ModemService.SendCommandAsync(port, $"ATD{_phone};", 15000);
+                    await ModemService.SendCommandAsync(port, $"ATD{cleanPhone};", 15000);
                     _callStatus = $"[{port}] Đang đổ chuông / đàm thoại...";
 
                     // Phát WAV nếu có (QFUPL + QPSND – tùy firmware)

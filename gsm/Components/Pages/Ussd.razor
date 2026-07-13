@@ -1,4 +1,4 @@
-﻿@page "/ussd"
+@page "/ussd"
 @page "/"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
@@ -278,12 +278,16 @@
     bool IsPendingAccept(SimPort p)
     {
         if (p == null) return false;
-        var s = p.Status.ToString();
+        var s = p.Status?.ToString() ?? "";
         var err = p.LastError?.ToLowerInvariant() ?? "";
-        return s.Contains("Pending", StringComparison.OrdinalIgnoreCase)
+        return s == gsm.Models.SimStatus.SecurityBlocked
+            || s.Contains("Pending", StringComparison.OrdinalIgnoreCase)
             || s.Contains("WaitAccept", StringComparison.OrdinalIgnoreCase)
             || s.Contains("SecurityBlocked", StringComparison.OrdinalIgnoreCase)
-            || err.Contains("sim_mới_chờ_chấp_nhận", StringComparison.OrdinalIgnoreCase);
+            || s.Contains("Chặn bảo mật", StringComparison.OrdinalIgnoreCase)
+            || s.Contains("Chờ Accept", StringComparison.OrdinalIgnoreCase)
+            || err.Contains("sim_mới_chờ_chấp_nhận", StringComparison.OrdinalIgnoreCase)
+            || err.Contains("chấp nhận", StringComparison.OrdinalIgnoreCase);
     }
 
     async Task AcceptSelectedPending()

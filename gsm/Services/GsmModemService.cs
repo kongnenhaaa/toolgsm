@@ -558,7 +558,9 @@ public class GsmModemService : IGsmModemService
             await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 10000, silent: true); // Định tuyến URC đúng cổng UART1 để nhận +CUSD và +CMTI
             await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true); // 0 = Auto (2G/3G/4G)
             await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 10000, silent: true); // Ưu tiên 4G -> 3G -> 2G
-            await SendCommandAsync(portName, "AT+QCFG=\"ims\",1", 10000, silent: true); // Bật VoLTE/IMS
+            var settings = gsm.Services.SettingsService.Current;
+            int imsVal = (settings != null && settings.EnableVolte) ? 1 : 0;
+            await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 10000, silent: true); // Cấu hình VoLTE theo Settings
             await SendCommandAsync(portName, "AT+QSIMDET=0,0", 10000, silent: true); // Tắt phát hiện chân SIM vật lý (ép đọc SIM)
             await SendCommandAsync(portName, "AT&W", 10000, silent: true); // Lưu cấu hình vào bộ nhớ profile modem
             await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
@@ -688,7 +690,9 @@ public class GsmModemService : IGsmModemService
             await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true);
             await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true);
             await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 5000, silent: true);
-            await SendCommandAsync(portName, "AT+QCFG=\"ims\",1", 5000, silent: true); // Bật VoLTE
+            var settings = gsm.Services.SettingsService.Current;
+            int imsVal = (settings != null && settings.EnableVolte) ? 1 : 0;
+            await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 5000, silent: true); // Cấu hình VoLTE theo Settings
             await SendCommandAsync(portName, "AT+QSIMDET=0,0", 5000, silent: true); // Tắt phát hiện SIM vật lý
             await SendCommandAsync(portName, "AT&W", 5000, silent: true);
             await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true); // Bật bộ phát hiện âm tần DTMF
@@ -2120,7 +2124,8 @@ public class GsmModemService : IGsmModemService
 
             // ---------- 3. Gọi ----------
             // ATDxxx;  (dấu ; = voice call)
-            var dialResp = await SendCommandAsync(portName, $"ATD{phoneNumber.Trim()};", 15000);
+            string cleanPhone = (phoneNumber.StartsWith("+") ? "+" : "") + new string(phoneNumber.Where(char.IsDigit).ToArray());
+            var dialResp = await SendCommandAsync(portName, $"ATD{cleanPhone};", 15000);
             if (dialResp.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
                 dialResp.Contains("NO CARRIER", StringComparison.OrdinalIgnoreCase))
             {

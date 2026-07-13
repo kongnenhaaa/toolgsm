@@ -13,6 +13,7 @@ public class AppSettings
     public string OtpWebhookUrl { get; set; } = "";
     public bool SoundOnOtp { get; set; } = true;
     public bool SoundOnSms { get; set; } = true;
+    public bool SoundOnCall { get; set; } = true;
 
     public bool ReceiveAllSms { get; set; } = true;
     public bool EnableTelegramNotification { get => true; set { } }
@@ -109,4 +110,32 @@ public class AppSettings
     public bool ShowColUpdatedAt { get; set; } = false;
     public bool ShowColSender { get; set; } = false;
     public bool ShowColLastReceived { get; set; } = false;
+
+    // Extra Settings from settings.json UI
+    public bool NewSimIntake { get; set; } = true;
+    public bool AutoRestoreImei { get; set; } = true;
+    public bool BlockUnknown { get; set; } = false;
+    public bool AutoAccept { get; set; } = false;
+    public bool Prefer4G { get; set; } = true;
+    public bool EnableVolte { get; set; } = false;
+    public bool AutoRecovery { get; set; } = true;
+    public bool ForceCfun1AfterReboot { get; set; } = true;
+    public int RecoveryThreshold { get; set; } = 12;
+    public int WatchdogSeconds { get; set; } = 50;
+    public bool AutoCheckBalanceAfterSms { get; set; } = true;
+    public bool AutoUssdOnNetwork { get; set; } = true;
+    public int UssdRetrySeconds { get; set; } = 35;
+    public int SmsTimeout { get; set; } = 30000;
+    public bool TelegramOnCall { get; set; } = true;
+    public bool TelegramOnError { get; set; } = true;
+    public int BaudRate { get; set; } = 115200;
+    public int CommandTimeout { get; set; } = 10000;
+    public bool EnableLog { get; set; } = true;
+    public bool AutoConnectOnStart { get; set; } = false;
+    public bool MinimizeToTray { get; set; } = true;
+
+    // Custom Columns and Ports filters
+    public System.Collections.Generic.List<string> ColumnOrder { get; set; } = new();
+    public System.Collections.Generic.List<string> HiddenColumns { get; set; } = new();
+    public System.Collections.Generic.List<string> HiddenComPorts { get; set; } = new();
 }

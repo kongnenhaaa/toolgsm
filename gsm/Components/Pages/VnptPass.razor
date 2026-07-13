@@ -5,20 +5,15 @@
 @inject IDialogService DialogService
 @using gsm.Models
 @using gsm.Components.Shared
+@using gsm.Services
+@using System.IO
 @implements IDisposable
 
 <MudPaper Class="pa-3 mb-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
     <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mb-2">
         <MudTextField @bind-Value="_vnptPassword" Label="Mật khẩu mới" 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;"
-                      InputType="InputType.Password" />
-        <MudTextField @bind-Value="_vnptConfirm" Label="Nhập lại mật khẩu" 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;"
-                      InputType="InputType.Password" />
-        <MudTextField @bind-Value="_vnptNumber" Label="Số nhận" Placeholder="333"
-                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:100px;" />
-        <MudTextField @bind-Value="_vnptTemplate" Label="Mẫu nội dung" Placeholder="MK {pass}"
-                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:200px;"
+                      InputType="InputType.Text" />
     </MudStack>
 
     <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
@@ -100,10 +95,7 @@
 
 @code {
     // ========== BINDINGS ==========
-    private string _vnptPassword = "";
-    private string _vnptConfirm = "";
-    private string _vnptNumber = "333";          // số nhận mặc định My VNPT
-    private string _vnptTemplate = "MK {pass}";  // template nội dung SMS
+    private string _vnptPassword = "123456a@A";
     private string _sendMode = "selected";
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
@@ -124,7 +116,7 @@
     }
 
     // =====================================================
-    // ĐẶT MẬT KHẨU MY VNPT – 100%
+    // ĐẶT MẬT KHẨU MY VNPT QUA API – TỰ ĐỘNG 100%
     // =====================================================
     async Task SetVnptPassword()
     {
@@ -134,19 +126,22 @@
             return;
         }
 
-        if (_vnptPassword != _vnptConfirm)
-        {
-            Snackbar.Add("Mật khẩu nhập lại không khớp", Severity.Warning);
-            return;
-        }
-
         if (_vnptPassword.Length < 4 || _vnptPassword.Length > 20)
         {
             Snackbar.Add("Mật khẩu nên từ 4–20 ký tự", Severity.Warning);
             return;
         }
 
-        var targets = GetTargetPorts();
+        var targets = new List<SimPort>();
+        if (_sendMode == "all")
+        {
+            targets = ActivePorts.ToList();
+        }
+        else
+        {
+            targets = _selectedPorts.ToList();
+        }
+
         if (!targets.Any())
         {
             Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
@@ -156,64 +151,36 @@
         if (targets.Count > 5)
         {
             var ok = await DialogService.ShowMessageBox("Xác nhận",
-                $"Đặt mật khẩu My VNPT trên {targets.Count} cổng?\nMật khẩu: {_vnptPassword}",
+                $"Đặt mật khẩu My VNPT trên {targets.Count} cổng qua API?\nMật khẩu: {_vnptPassword}",
                 yesText: "Đặt mật khẩu", cancelText: "Hủy");
             if (ok != true) return;
         }
 
-        _isSetting = true;
-        _cts = new CancellationTokenSource();
-        int okCount = 0, failCount = 0;
-
-        // Nội dung SMS thực tế
-        string content = _vnptTemplate.Replace("{pass}", _vnptPassword);
-
-        Snackbar.Add($"Đang đặt mật khẩu {targets.Count} cổng...", Severity.Info);
-
-        foreach (var port in targets)
+        // 1. Ghi mật khẩu vào file dat_passvnpt.txt để MyVnptService sử dụng khi nhận được OTP
+        try
         {
-            if (_cts.Token.IsCancellationRequested) break;
-
-            string rawResponse = "";
-            bool success = false;
-
-            try
-            {
-                // Gửi SMS thật tới 333 (hoặc số cấu hình)
-                rawResponse = await ModemService.SendSmsAsync(port, _vnptNumber.Trim(), content);
-                success = true;
-                okCount++;
-                Snackbar.Add($"[{port}] Đặt MK OK", Severity.Success);
-            }
-            catch (Exception ex)
-            {
-                rawResponse = ex.Message;
-                failCount++;
-                Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
-            }
-
-            var phone = Ports.FirstOrDefault(p => p.PortName == port)?.PhoneNumber ?? "—";
-
-            _vnptResults.Insert(0, new VnptResultItem
-            {
-                Time = DateTime.Now,
-                Port = port,
-                Phone = phone,
-                PasswordMasked = MaskPassword(_vnptPassword),
-                Success = success,
-                Response = string.IsNullOrEmpty(rawResponse) 
-                    ? (success ? "Đã gửi SMS đặt mật khẩu" : "Lỗi") 
-                    : rawResponse
-            });
-
-            if (_vnptResults.Count > 200) _vnptResults.RemoveRange(200, _vnptResults.Count - 200);
-            StateHasChanged();
-            await Task.Delay(1000, _cts.Token);
+            string passPath = AppPaths.ForRuntimeFile("dat_passvnpt.txt");
+            await File.WriteAllTextAsync(passPath, _vnptPassword.Trim());
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Lỗi ghi cấu hình mật khẩu: {ex.Message}", Severity.Error);
+            return;
         }
 
+        _isSetting = true;
+        
+        try
+        {
+            // 2. Gọi API để thực hiện gửi yêu cầu OTP và tự động cấu hình
+            await Vm.SetMyVnptPassword(targets);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Lỗi yêu cầu: {ex.Message}", Severity.Error);
+        }
+        
         _isSetting = false;
-        Snackbar.Add($"Hoàn tất: {okCount} thành công, {failCount} lỗi",
-            failCount == 0 ? Severity.Success : Severity.Warning);
     }
 
     void StopSetPassword()
@@ -231,8 +198,7 @@
 
     string MaskPassword(string pass)
     {
-        if (string.IsNullOrEmpty(pass) || pass.Length <= 2) return "***";
-        return pass[0] + new string('*', pass.Length - 2) + pass[^1];
+        return pass;
     }
 
     List<string> GetTargetPorts()

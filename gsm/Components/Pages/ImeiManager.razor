@@ -96,35 +96,29 @@
                       Style="background:white;" Breakpoint="Breakpoint.Sm">
                 <HeaderContent>
                     <MudTh Style="width:40px;"></MudTh>
-                    <MudTh>COM</MudTh>
-                    <MudTh>CCID / Serial</MudTh>
-                    <MudTh>IMEI hiện tại</MudTh>
-                    <MudTh>IMEI gốc (backup)</MudTh>
-                    <MudTh>SĐT</MudTh>
-                    <MudTh>Nhà mạng</MudTh>
-                    <MudTh>Trạng thái</MudTh>
-                    <MudTh Style="min-width:160px;">Thao tác</MudTh>
+                    <MudTh Style="white-space: nowrap;">COM</MudTh>
+                    <MudTh Style="white-space: nowrap;">CCID / Serial</MudTh>
+                    <MudTh Style="white-space: nowrap;">IMEI hiện tại</MudTh>
+                    <MudTh Style="white-space: nowrap;">IMEI gốc (backup)</MudTh>
+                    <MudTh Style="white-space: nowrap;">SĐT</MudTh>
+                    <MudTh Style="white-space: nowrap;">Nhà mạng</MudTh>
+                    <MudTh Style="white-space: nowrap;">Trạng thái</MudTh>
+                    <MudTh Style="min-width:160px; white-space: nowrap;">Thao tác</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd>
                         <!-- Moved to MultiSelection natively -->
                     </MudTd>
-                    <MudTd Style="font-weight:600;">@context.PortName</MudTd>
-                    <MudTd Style="font-family:monospace; font-size:11px; max-width:140px; overflow:hidden; text-overflow:ellipsis;">
-                        @(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)
-                    </MudTd>
-                    <MudTd Style="font-family:monospace; font-size:12px;">
-                        @(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)
-                    </MudTd>
-                    <MudTd Style="font-family:monospace; font-size:12px; color:#64748B;">
-                        @(GetOriginalImei(context.Serial) ?? "—")
-                    </MudTd>
-                    <MudTd>@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
-                    <MudTd>@(context.NetworkProvider ?? "—")</MudTd>
-                    <MudTd>
+                    <MudTd Style="font-weight:600; white-space: nowrap;">@context.PortName</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:13px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:13px; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:13px; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@(GetOriginalImei(context.Serial) ?? "—")</MudTd>
+                    <MudTd Style="@("white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
+                    <MudTd Style="white-space: nowrap;">@(context.NetworkProvider ?? "—")</MudTd>
+                    <MudTd Style="white-space: nowrap;">
                         <gsm.Components.Shared.StatusBadge Status="@context.Status" />
                     </MudTd>
-                    <MudTd>
+                    <MudTd Style="white-space: nowrap;">
                         <MudStack Row="true" Spacing="0">
                             <MudTooltip Text="Copy IMEI">
                                 <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
@@ -162,20 +156,20 @@
         <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
             <MudTable Items="@_backupList" Hover="true" Dense="true" Elevation="0" Style="background:white;">
                 <HeaderContent>
-                    <MudTh>CCID</MudTh>
-                    <MudTh>IMEI đã gán</MudTh>
-                    <MudTh>Lần đầu</MudTh>
-                    <MudTh>Lần cuối</MudTh>
-                    <MudTh>Số lần dùng</MudTh>
-                    <MudTh Style="width:100px;">Thao tác</MudTh>
+                    <MudTh Style="white-space: nowrap;">CCID</MudTh>
+                    <MudTh Style="white-space: nowrap;">IMEI đã gán</MudTh>
+                    <MudTh Style="white-space: nowrap;">Lần đầu</MudTh>
+                    <MudTh Style="white-space: nowrap;">Lần cuối</MudTh>
+                    <MudTh Style="white-space: nowrap;">Số lần dùng</MudTh>
+                    <MudTh Style="width:100px; white-space: nowrap;">Thao tác</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="font-family:monospace; font-size:11px;">@context.Ccid</MudTd>
-                    <MudTd Style="font-family:monospace; font-size:12px; font-weight:600;">@context.Imei</MudTd>
-                    <MudTd Style="font-size:12px;">@context.FirstUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
-                    <MudTd Style="font-size:12px;">@context.LastUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
-                    <MudTd>@context.UseCount</MudTd>
-                    <MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:13px; white-space: nowrap; mso-number-format: '\\@';")">@context.Ccid</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:13px; font-weight:600; white-space: nowrap; mso-number-format: '\\@';")">@context.Imei</MudTd>
+                    <MudTd Style="font-size:12px; white-space: nowrap;">@context.FirstUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
+                    <MudTd Style="font-size:12px; white-space: nowrap;">@context.LastUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
+                    <MudTd Style="white-space: nowrap;">@context.UseCount</MudTd>
+                    <MudTd Style="white-space: nowrap;">
                         <MudStack Row="true" Spacing="0">
                             <MudTooltip Text="Copy IMEI">
                                 <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
@@ -288,8 +282,18 @@
 
     void LoadBackup()
     {
-        // TODO: Load từ ImeiService / file backup
-        // _backupList = ImeiService.GetAllMappings();
+        _backupList.Clear();
+        foreach (var kvp in Vm.ImeiCache)
+        {
+            var entry = kvp.Value;
+            _backupList.Add(new ImeiBackupItem
+            {
+                Ccid = entry.Ccid,
+                Imei = entry.Imei,
+                LastUsed = string.IsNullOrEmpty(entry.CreatedAt) ? DateTime.Now : (DateTime.TryParse(entry.CreatedAt, out var dt) ? dt : DateTime.Now),
+                UseCount = 1
+            });
+        }
         _withBackupCount = Ports.Count(p => !string.IsNullOrEmpty(GetOriginalImei(p.Serial)));
     }
 
@@ -347,6 +351,15 @@
                 {
                     _backupList.Add(item);
                 }
+
+                // Đồng bộ sang Vm.ImeiCache
+                var entry = new SimBackupEntry
+                {
+                    Ccid = item.Ccid,
+                    Imei = item.Imei,
+                    CreatedAt = item.LastUsed.ToString("yyyy-MM-dd HH:mm:ss")
+                };
+                Vm.AddNewImeiCacheEntry(entry);
             }
 
             Snackbar.Add($"Đã import {list.Count} bản ghi", Severity.Success);
@@ -360,15 +373,29 @@
 
     async Task RestoreAll()
     {
+        var targets = Ports.Where(p => !string.IsNullOrEmpty(p.Serial) && !string.IsNullOrEmpty(GetOriginalImei(p.Serial))).ToList();
+        if (!targets.Any())
+        {
+            Snackbar.Add("Không có cổng nào có IMEI gốc/backup", Severity.Warning);
+            return;
+        }
+
         var confirm = await DialogService.ShowMessageBox(
             "Xác nhận Restore",
-            "Restore IMEI từ backup cho tất cả cổng đang có mapping?",
+            $"Restore IMEI từ backup cho tất cả {targets.Count} cổng đang cắm?",
             yesText: "Restore", cancelText: "Hủy");
 
         if (confirm != true) return;
 
-        Snackbar.Add("Đang restore tất cả...", Severity.Info);
-        // foreach ... ImeiService.RestoreImei(port);
+        Snackbar.Add($"Bắt đầu Restore IMEI cho {targets.Count} cổng...", Severity.Info);
+        foreach (var port in targets)
+        {
+            var original = GetOriginalImei(port.Serial);
+            if (!string.IsNullOrEmpty(original) && port.Imei != original)
+            {
+                await PerformPaintImeiAsync(port, original);
+            }
+        }
         Snackbar.Add("Hoàn tất restore", Severity.Success);
     }
 
@@ -384,9 +411,7 @@
 
         if (confirm != true) return;
 
-        Snackbar.Add($"[{port.PortName}] Đang restore IMEI...", Severity.Info);
-        // await ImeiService.RestoreImeiAsync(port.PortName, original);
-        Snackbar.Add("Đã restore", Severity.Success);
+        await PerformPaintImeiAsync(port, original);
     }
 
     async Task PaintNewImei(SimPort port)
@@ -398,27 +423,82 @@
 
         if (confirm != true) return;
 
-        Vm.ApproveUnknownSimCommand?.Execute(port);
-        Snackbar.Add($"[{port.PortName}] Đang tráng IMEI mới...", Severity.Info);
+        string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
+        await PerformPaintImeiAsync(port, targetImei);
+    }
+
+    async Task PerformPaintImeiAsync(SimPort port, string targetImei)
+    {
+        try
+        {
+            // Set status to indicate writing is in progress
+            port.Status = SimStatus.Connecting;
+            port.DeviceName = "Đang tráng IMEI...";
+            StateHasChanged();
+
+            bool success = await Vm.ModemService.AcceptNewSimAndPaintImeiAsync(port.PortName, targetImei);
+            
+            if (success)
+            {
+                port.Imei = targetImei;
+                port.Status = SimStatus.Active;
+                port.DeviceName = gsm.Services.ImeiManagementService.GetDeviceNameFromImei(targetImei);
+                
+                // Save to backup entry
+                var entry = new SimBackupEntry
+                {
+                    Ccid = port.Serial ?? "",
+                    Imei = targetImei,
+                    PhoneNumber = port.PhoneNumber ?? "",
+                    CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    SourceFile = "manual-paint"
+                };
+                Vm.AddNewImeiCacheEntry(entry);
+                
+                // Re-initialize settings
+                await Vm.ModemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 12000);
+                
+                Snackbar.Add($"[{port.PortName}] Tráng IMEI {targetImei} thành công!", Severity.Success);
+            }
+            else
+            {
+                port.Status = SimStatus.Active;
+                port.DeviceName = gsm.Services.ImeiManagementService.GetDeviceNameFromImei(port.Imei);
+                Snackbar.Add($"[{port.PortName}] Tráng IMEI {targetImei} thất bại!", Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            port.Status = SimStatus.Active;
+            port.DeviceName = gsm.Services.ImeiManagementService.GetDeviceNameFromImei(port.Imei);
+            Snackbar.Add($"[{port.PortName}] Lỗi: {ex.Message}", Severity.Error);
+        }
+        
+        LoadBackup();
+        StateHasChanged();
     }
 
     async Task DeleteMapping(SimPort port)
     {
+        if (string.IsNullOrEmpty(port.Serial)) return;
         var confirm = await DialogService.ShowMessageBox(
             "Xóa mapping",
-            $"Xóa mapping của {port.PortName}?",
+            $"Xóa mapping của cổng {port.PortName} (CCID: {port.Serial})?",
             yesText: "Xóa", cancelText: "Hủy");
 
         if (confirm == true)
         {
-            // ImeiService.RemoveMapping(port.Serial);
-            Snackbar.Add("Đã xóa mapping", Severity.Normal);
+            Vm.RemoveImeiCacheEntry(port.Serial);
+            LoadBackup();
+            Snackbar.Add("Đã xóa mapping khỏi cache", Severity.Success);
         }
     }
 
     async Task DeleteBackupItem(ImeiBackupItem item)
     {
         _backupList.Remove(item);
+        Vm.RemoveImeiCacheEntry(item.Ccid);
+        _withBackupCount = Ports.Count(p => !string.IsNullOrEmpty(GetOriginalImei(p.Serial)));
         Snackbar.Add("Đã xóa", Severity.Normal);
     }
 
@@ -431,8 +511,12 @@
 
         if (confirm == true)
         {
+            foreach (var item in _backupList)
+            {
+                Vm.RemoveImeiCacheEntry(item.Ccid);
+            }
             _backupList.Clear();
-            // ImeiService.ClearAll();
+            _withBackupCount = Ports.Count(p => !string.IsNullOrEmpty(GetOriginalImei(p.Serial)));
             Snackbar.Add("Đã xóa toàn bộ backup", Severity.Success);
         }
     }

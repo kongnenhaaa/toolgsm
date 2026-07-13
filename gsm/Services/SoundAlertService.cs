@@ -13,21 +13,21 @@ public static class SoundAlertService
     /// <summary>Phát âm khi nhận được OTP mới.</summary>
     public static void PlayOtp()
     {
-        if (!SettingsService.Current.EnableSoundAlert) return;
+        if (!SettingsService.Current.EnableSoundAlert || !SettingsService.Current.SoundOnOtp) return;
         Play(SettingsService.Current.SoundOtpPath, SystemSounds.Exclamation);
     }
 
     /// <summary>Phát âm khi nhận tin nhắn SMS thông thường (không có OTP).</summary>
     public static void PlaySms()
     {
-        if (!SettingsService.Current.EnableSoundAlert) return;
+        if (!SettingsService.Current.EnableSoundAlert || !SettingsService.Current.SoundOnSms) return;
         Play(SettingsService.Current.SoundSmsPath, SystemSounds.Asterisk);
     }
 
     /// <summary>Phát âm khi có cuộc gọi đến.</summary>
     public static void PlayCall()
     {
-        if (!SettingsService.Current.EnableSoundAlert) return;
+        if (!SettingsService.Current.EnableSoundAlert || !SettingsService.Current.SoundOnCall) return;
         Play(SettingsService.Current.SoundCallPath, SystemSounds.Question);
     }
 

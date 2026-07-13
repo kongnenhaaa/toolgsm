@@ -1,0 +1,225 @@
+@using gsm.Models
+@using gsm.Services
+@using MudBlazor
+@inject ISnackbar Snackbar
+@inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.IGsmModemService ModemService
+
+<MudDialog Style="min-width: 500px; max-width: 600px; border-radius: 12px;">
+    <TitleContent>
+        <MudText Typo="Typo.h6" Style="font-weight: 700;">
+            <MudIcon Icon="@Icons.Material.Filled.Settings" Class="mr-2" />
+            Cấu hình Cột & Cổng
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudTabs Elevation="0" Rounded="true" ApplyEffectsToContainer="true" Class="mt-2">
+            <!-- TAB 1: ẨN / HIỆN CỔNG COM -->
+            <MudTabPanel Text="Cổng COM (Ẩn/Hiện)">
+                <MudText Typo="Typo.body2" Class="my-3" Style="color:#64748B;">
+                    Bỏ chọn các cổng COM bạn muốn ẩn khỏi giao diện hiển thị của phần mềm.
+                </MudText>
+                
+                <MudPaper Outlined="true" Class="pa-2" Style="max-height: 300px; overflow-y: auto; border-radius: 8px;">
+                    @if (!_allPorts.Any())
+                    {
+                        <MudText Typo="Typo.body2" Class="pa-4 text-center" Style="color:#94A3B8;">
+                            Không phát hiện cổng COM nào trong hệ thống.
+                        </MudText>
+                    }
+                    else
+                    {
+                        <MudGrid Spacing="1">
+                            @foreach (var port in _allPorts)
+                            {
+                                <MudItem xs="4">
+                                    <MudCheckBox T="bool" 
+                                                 Value="@(!_hiddenPorts.Contains(port))" 
+                                                 ValueChanged="@((val) => TogglePortVisibility(port, val))"
+                                                 Label="@port" 
+                                                 Color="Color.Primary" 
+                                                 Dense="true" />
+                                </MudItem>
+                            }
+                        </MudGrid>
+                    }
+                </MudPaper>
+            </MudTabPanel>
+
+            <!-- TAB 2: THỨ TỰ & HIỂN THỊ CỘT -->
+            <MudTabPanel Text="Cấu hình Cột (Sắp xếp)">
+                <MudText Typo="Typo.body2" Class="my-3" Style="color:#64748B;">
+                    Bật/Tắt các cột và sử dụng nút <b>Lên (▲)</b> / <b>Xuống (▼)</b> để thay đổi thứ tự hiển thị của các cột.
+                </MudText>
+
+                <MudPaper Outlined="true" Class="pa-2" Style="max-height: 300px; overflow-y: auto; border-radius: 8px;">
+                    <MudList T="string">
+                        @for (int i = 0; i < _columns.Count; i++)
+                        {
+                            var index = i;
+                            var col = _columns[index];
+                            <MudListItem Icon="@Icons.Material.Filled.DragHandle" IconColor="Color.Default" Dense="true">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Style="width:100%;">
+                                    <MudCheckBox T="bool" 
+                                                 Value="@col.Visible" 
+                                                 ValueChanged="@((v) => col.Visible = v)" 
+                                                 Label="@col.Header" 
+                                                 Color="Color.Primary" 
+                                                 Dense="true" />
+                                    
+                                    <MudStack Row="true" Spacing="1">
+                                        <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" 
+                                                       Size="Size.Small" 
+                                                       Disabled="@(index == 0)"
+                                                       OnClick="@(() => MoveColumnUp(index))" />
+                                        
+                                        <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" 
+                                                       Size="Size.Small" 
+                                                       Disabled="@(index == _columns.Count - 1)"
+                                                       OnClick="@(() => MoveColumnDown(index))" />
+                                    </MudStack>
+                                </MudStack>
+                            </MudListItem>
+                        }
+                    </MudList>
+                </MudPaper>
+            </MudTabPanel>
+        </MudTabs>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Variant="Variant.Text">Hủy</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Save" Variant="Variant.Filled">Lưu cấu hình</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private List<string> _allPorts = new();
+    private HashSet<string> _hiddenPorts = new();
+    private List<ColumnItem> _columns = new();
+
+    protected override void OnInitialized()
+    {
+        // 1. Thu thập tất cả các cổng COM
+        var sysPorts = ModemService.GetAvailablePorts() ?? new List<string>();
+        var vmPorts = Vm.Ports?.Select(p => p.PortName) ?? Enumerable.Empty<string>();
+        _allPorts = sysPorts.Concat(vmPorts).Distinct().OrderBy(p => p).ToList();
+
+        // 2. Load cấu hình ẩn cổng COM
+        var cfg = SettingsService.Current;
+        if (cfg.HiddenComPorts != null)
+        {
+            _hiddenPorts = new HashSet<string>(cfg.HiddenComPorts);
+        }
+
+        // 3. Khởi tạo danh sách cột khả dụng
+        var allColTemplates = GetDefaultColumns();
+        
+        // Sắp xếp cột theo thứ tự đã lưu (hoặc mặc định)
+        var savedOrder = cfg.ColumnOrder ?? new List<string>();
+        var orderedTemplates = new List<ColumnItem>();
+
+        foreach (var colName in savedOrder)
+        {
+            var match = allColTemplates.FirstOrDefault(c => c.Name == colName);
+            if (match != null)
+            {
+                orderedTemplates.Add(match);
+                allColTemplates.Remove(match);
+            }
+        }
+        // Thêm các cột còn thiếu vào cuối
+        orderedTemplates.AddRange(allColTemplates);
+
+        // Đọc cấu hình các cột bị ẩn
+        var hiddenCols = new HashSet<string>(cfg.HiddenColumns ?? new List<string>());
+        foreach (var col in orderedTemplates)
+        {
+            col.Visible = !hiddenCols.Contains(col.Name);
+        }
+
+        _columns = orderedTemplates;
+    }
+
+    private void TogglePortVisibility(string port, bool isVisible)
+    {
+        if (isVisible)
+            _hiddenPorts.Remove(port);
+        else
+            _hiddenPorts.Add(port);
+    }
+
+    private void MoveColumnUp(int index)
+    {
+        if (index <= 0) return;
+        var temp = _columns[index];
+        _columns[index] = _columns[index - 1];
+        _columns[index - 1] = temp;
+    }
+
+    private void MoveColumnDown(int index)
+    {
+        if (index >= _columns.Count - 1) return;
+        var temp = _columns[index];
+        _columns[index] = _columns[index + 1];
+        _columns[index + 1] = temp;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save()
+    {
+        try
+        {
+            var cfg = SettingsService.Current;
+            
+            // 1. Lưu cổng COM ẩn
+            cfg.HiddenComPorts = _hiddenPorts.ToList();
+
+            // 2. Lưu thứ tự cột
+            cfg.ColumnOrder = _columns.Select(c => c.Name).ToList();
+
+            // 3. Lưu danh sách cột ẩn
+            cfg.HiddenColumns = _columns.Where(c => !c.Visible).Select(c => c.Name).ToList();
+
+            // 4. Ghi xuống file JSON
+            SettingsService.SaveSettings(cfg);
+
+            Snackbar.Add("Đã áp dụng và lưu cấu hình cột/cổng thành công", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Lỗi lưu cấu hình: " + ex.Message, Severity.Error);
+        }
+    }
+
+    private List<ColumnItem> GetDefaultColumns()
+    {
+        return new List<ColumnItem>
+        {
+            new() { Name = "PortName", Header = "Cổng" },
+            new() { Name = "Status", Header = "Trạng thái" },
+            new() { Name = "NetworkProvider", Header = "Nhà mạng" },
+            new() { Name = "Balance", Header = "Số dư" },
+            new() { Name = "PhoneNumber", Header = "Số điện thoại" },
+            new() { Name = "Imei", Header = "IMEI" },
+            new() { Name = "Serial", Header = "CCID" },
+            new() { Name = "ExpiryDate", Header = "HSD" },
+            new() { Name = "SimRegDate", Header = "Ngày ĐK SIM" },
+            new() { Name = "Lock1C", Header = "Khóa 1C" },
+            new() { Name = "Lock2C", Header = "Khóa 2C" },
+            new() { Name = "VnptStatus", Header = "Trạng thái VNPT" },
+            new() { Name = "Otp", Header = "OTP" },
+            new() { Name = "LastMessageContent", Header = "Nội dung" }
+        };
+    }
+
+    public class ColumnItem
+    {
+        public string Name { get; set; } = "";
+        public string Header { get; set; } = "";
+        public bool Visible { get; set; } = true;
+    }
+}

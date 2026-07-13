@@ -356,6 +356,14 @@
     protected override void OnInitialized()
     {
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+        var settings = gsm.Services.SettingsService.Current;
+        if (settings != null)
+        {
+            _notifySms = settings.SoundOnSms;
+            _notifyCall = settings.SoundOnCall;
+            _notifyOtp = settings.SoundOnOtp;
+            _notifyTelegram = settings.TelegramOnOtp;
+        }
     }
 
     // =====================================================
@@ -600,9 +608,17 @@
 
                     try
                     {
-                        await ModemService.SendSmsAsync(port, phone, _spamContent);
-                        sent++;
-                        _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} OK\n";
+                        var res = await ModemService.SendSmsAsync(port, phone, _spamContent);
+                        if (res.Contains("ERROR"))
+                        {
+                            fail++;
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} LỖI: {res}\n";
+                        }
+                        else
+                        {
+                            sent++;
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} OK\n";
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -657,22 +673,38 @@
             try
             {
                 // Gọi
-                await ModemService.SendCommandAsync(port, $"ATD{_checkCallPhone};", 10000);
-                await Task.Delay(_checkCallDuration * 1000);
-
-                // Dập
-                await ModemService.SendCommandAsync(port, "ATH", 3000);
-
-                _callCheckHistory.Insert(0, new CallCheckItem
+                var resp = await ModemService.SendCommandAsync(port, $"ATD{_checkCallPhone};", 10000);
+                if (resp.Contains("ERROR") || resp.Contains("NO CARRIER") || resp.Contains("NO DIALTONE") || resp.Contains("BUSY"))
                 {
-                    Time = DateTime.Now,
-                    Port = port,
-                    Phone = _checkCallPhone,
-                    Duration = _checkCallDuration,
-                    Success = true,
-                    Result = "OK"
-                });
-                Snackbar.Add($"[{port}] Check gọi xong", Severity.Success);
+                    _callCheckHistory.Insert(0, new CallCheckItem
+                    {
+                        Time = DateTime.Now,
+                        Port = port,
+                        Phone = _checkCallPhone,
+                        Duration = 0,
+                        Success = false,
+                        Result = resp.Trim()
+                    });
+                    Snackbar.Add($"[{port}] Lỗi gọi: {resp.Trim()}", Severity.Error);
+                }
+                else
+                {
+                    await Task.Delay(_checkCallDuration * 1000);
+
+                    // Dập
+                    await ModemService.SendCommandAsync(port, "ATH", 3000);
+
+                    _callCheckHistory.Insert(0, new CallCheckItem
+                    {
+                        Time = DateTime.Now,
+                        Port = port,
+                        Phone = _checkCallPhone,
+                        Duration = _checkCallDuration,
+                        Success = true,
+                        Result = "OK"
+                    });
+                    Snackbar.Add($"[{port}] Check gọi xong", Severity.Success);
+                }
             }
             catch (Exception ex)
             {
@@ -745,8 +777,17 @@
     {
         try
         {
-            // Tạm thời lưu local (bạn thay bằng service thật)
-            Snackbar.Add("Đã lưu cài đặt thông báo", Severity.Success);
+            var settings = gsm.Services.SettingsService.Current;
+            if (settings != null)
+            {
+                settings.SoundOnSms = _notifySms;
+                settings.SoundOnCall = _notifyCall;
+                settings.SoundOnOtp = _notifyOtp;
+                settings.TelegramOnOtp = _notifyTelegram;
+                
+                gsm.Services.SettingsService.SaveSettings(settings);
+                Snackbar.Add("Đã lưu cài đặt thông báo", Severity.Success);
+            }
         }
         catch (Exception ex)
         {

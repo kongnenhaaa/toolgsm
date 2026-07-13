@@ -72,6 +72,14 @@
 
     <MudTabPanel Text="Lịch sử Cuộc gọi">
         <MudPaper Elevation="0" Class="mt-2" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
+            <MudStack Row="true" Class="pa-3" Spacing="2" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:600;">Lịch sử cuộc gọi thực hiện</MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteSweep" OnClick="ClearCallHistory"
+                           Disabled="@(!_callHistory.Any())">
+                    Xóa lịch sử cuộc gọi
+                </MudButton>
+            </MudStack>
             <MudTable Items="@_callHistory" Dense="true" Hover="true" Elevation="0" Height="420px">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
@@ -225,26 +233,26 @@
     // =====================================================
     // 1. GỌI NGAY (1 / Selected / All) – FIX THẬT 100%
     // =====================================================
-    async Task MakeCall()
+    async Task<bool> MakeCall()
     {
         if (string.IsNullOrWhiteSpace(_phone))
         {
             Snackbar.Add("Nhập số điện thoại", Severity.Warning);
-            return;
+            return false;
         }
 
         var ports = GetTargetPorts();
         if (!ports.Any())
         {
             Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
-            return;
+            return false;
         }
 
         if (ports.Count > 5)
         {
             var ok = await DialogService.ShowMessageBox("Xác nhận",
                 $"Gọi {_phone} trên {ports.Count} cổng?", yesText: "Gọi", cancelText: "Hủy");
-            if (ok != true) return;
+            if (ok != true) return false;
         }
 
         _isCalling = true;
@@ -333,6 +341,7 @@
         _isCalling = false;
         _callStatus = $"Hoàn tất: {okCount} OK, {failCount} lỗi";
         Snackbar.Add(_callStatus, failCount == 0 ? Severity.Success : Severity.Warning);
+        return failCount == 0;
     }
 
     // =====================================================
@@ -485,8 +494,8 @@
 
             try
             {
-                await MakeCall(); // tái sử dụng logic gọi
-                item.Status = "Xong";
+                bool isOk = await MakeCall(); // tái sử dụng logic gọi
+                item.Status = isOk ? "Xong" : "Lỗi";
             }
             catch
             {
@@ -516,14 +525,42 @@
         Snackbar.Add("Đã xóa hàng đợi", Severity.Normal);
     }
 
+    async Task ClearCallHistory()
+    {
+        var ok = await DialogService.ShowMessageBox("Xác nhận",
+            "Xóa toàn bộ lịch sử cuộc gọi?", yesText: "Xóa", cancelText: "Hủy");
+        if (ok == true)
+        {
+            _callHistory.Clear();
+            Snackbar.Add("Đã xóa lịch sử cuộc gọi", Severity.Success);
+        }
+    }
+
     // =====================================================
     // 6. CHỌN FILE WAV (UI)
     // =====================================================
     async Task BrowseWav()
     {
-        // Trong WPF Blazor Hybrid có thể dùng OpenFileDialog qua JS/Interop hoặc service
-        // Tạm thời để user nhập path, hoặc tích hợp IFilePicker
-        Snackbar.Add("Nhập đường dẫn file WAV (mono 8kHz 16-bit khuyến nghị)", Severity.Info);
+        try
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                var dlg = new Microsoft.Win32.OpenFileDialog
+                {
+                    Filter = "WAV Files (*.wav)|*.wav|All Files (*.*)|*.*",
+                    Title = "Chọn file âm thanh WAV"
+                };
+                if (dlg.ShowDialog() == true)
+                {
+                    _wavPath = dlg.FileName;
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Không mở được hộp thoại: " + ex.Message, Severity.Error);
+        }
     }
 
     // =====================================================

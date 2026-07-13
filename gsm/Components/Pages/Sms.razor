@@ -51,6 +51,14 @@
 
     <MudTabPanel Text="Tin nhắn tới">
         <MudPaper Elevation="0" Class="mt-2" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
+            <MudStack Row="true" Class="pa-3" Spacing="2" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:600;">Lịch sử tin nhắn nhận được</MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteSweep" OnClick="ClearHistory"
+                           Disabled="@(!IncomingSms.Any())">
+                    Xóa lịch sử tin nhắn
+                </MudButton>
+            </MudStack>
             <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0" Height="420px">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
@@ -73,6 +81,8 @@
                     <MudTd>
                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
                                        OnClick="@(() => CopyText(context.Content))" title="Copy" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Small" Color="Color.Primary"
+                                       OnClick="@(() => ResendSms(context))" title="Gửi lại" />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
                                        OnClick="@(() => DeleteSms(context))" />
                     </MudTd>
@@ -155,7 +165,7 @@
                             <MudText Style="flex:1; font-size:13px;">@tpl</MudText>
                             <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" OnClick="@(() => CopyText(tpl))" />
                             <MudIconButton Icon="@Icons.Material.Filled.Send" Size="Size.Small" Color="Color.Primary" OnClick="@(() => UseTemplate(tpl))" />
-                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => _templates.Remove(tpl))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error" OnClick="@(() => RemoveTemplate(tpl))" />
                         </MudStack>
                     </MudListItem>
                 }
@@ -253,13 +263,22 @@
                 try
                 {
                     // Ưu tiên QueueSmsAsync nếu có, fallback SendSmsAsync
+                    string res;
                     if (Vm.GetType().GetMethod("QueueSmsAsync") != null)
-                        await Vm.QueueSmsAsync(port, phone, _message);
+                        res = await Vm.QueueSmsAsync(port, phone, _message);
                     else
-                        await ModemService.SendSmsAsync(port, phone, _message);
+                        res = await ModemService.SendSmsAsync(port, phone, _message);
 
-                    sent++;
-                    Snackbar.Add($"[{port}] → {phone} OK", Severity.Success);
+                    if (res != null && res.Contains("ERROR"))
+                    {
+                        fail++;
+                        Snackbar.Add($"[{port}] → {phone} Lỗi: {res}", Severity.Error);
+                    }
+                    else
+                    {
+                        sent++;
+                        Snackbar.Add($"[{port}] → {phone} OK", Severity.Success);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -355,15 +374,26 @@
                 try
                 {
                     // Gửi thật
+                    string res;
                     if (Vm.GetType().GetMethod("QueueSmsAsync") != null)
-                        await Vm.QueueSmsAsync(item.PortId, item.Recipient, item.Content);
+                        res = await Vm.QueueSmsAsync(item.PortId, item.Recipient, item.Content);
                     else
-                        await ModemService.SendSmsAsync(item.PortId, item.Recipient, item.Content);
+                        res = await ModemService.SendSmsAsync(item.PortId, item.Recipient, item.Content);
 
-                    item.Status = "Xong";
-                    item.Result = "OK";
-                    ok++;
-                    _queueLog += $"[{DateTime.Now:HH:mm:ss}] {item.PortId} → {item.Recipient} OK\n";
+                    if (res != null && res.Contains("ERROR"))
+                    {
+                        item.Status = "Lỗi";
+                        item.Result = res;
+                        fail++;
+                        _queueLog += $"[{DateTime.Now:HH:mm:ss}] {item.PortId} → {item.Recipient} LỖI: {res}\n";
+                    }
+                    else
+                    {
+                        item.Status = "Xong";
+                        item.Result = "OK";
+                        ok++;
+                        _queueLog += $"[{DateTime.Now:HH:mm:ss}] {item.PortId} → {item.Recipient} OK\n";
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -435,8 +465,15 @@
                 return;
             }
 
-            await ModemService.SendSmsAsync(port, sms.Sender, sms.Content);
-            Snackbar.Add($"[{port}] Đã gửi lại tới {sms.Sender}", Severity.Success);
+            var res = await ModemService.SendSmsAsync(port, sms.Sender, sms.Content);
+            if (res != null && res.Contains("ERROR"))
+            {
+                Snackbar.Add($"[{port}] Resend lỗi: {res}", Severity.Error);
+            }
+            else
+            {
+                Snackbar.Add($"[{port}] Đã gửi lại tới {sms.Sender}", Severity.Success);
+            }
         }
         catch (Exception ex)
         {

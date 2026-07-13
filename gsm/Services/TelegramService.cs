@@ -47,7 +47,10 @@ public static class TelegramService
             {
                 var tokensRaw = SettingsService.Current.TelegramBotToken;
                 var token = string.IsNullOrWhiteSpace(tokensRaw) ? null : tokensRaw.Split(',')[0].Trim();
-                var chatIds = SettingsService.Current.TelegramChatIds?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                var idsRaw = !string.IsNullOrWhiteSpace(SettingsService.Current.TelegramChatIds) 
+                    ? SettingsService.Current.TelegramChatIds 
+                    : SettingsService.Current.TelegramChatId;
+                var chatIds = idsRaw?.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
 
                 if (string.IsNullOrWhiteSpace(token) || chatIds == null || chatIds.Length == 0)
                 {

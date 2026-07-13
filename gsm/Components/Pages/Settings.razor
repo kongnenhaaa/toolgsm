@@ -46,33 +46,7 @@
     <!-- ========== CỘT TRÁI ========== -->
     <MudItem xs="12" md="6">
 
-        <!-- BẢO MẬT SIM / IMEI -->
-        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
-                <MudIcon Icon="@Icons.Material.Filled.Security" Class="mr-1" Size="Size.Small" />
-                Bảo mật SIM / IMEI
-            </MudText>
 
-            <MudSwitch T="bool" @bind-Value="_newSimIntake" Label="Bật New SIM Intake Mode" Color="Color.Primary" Class="mb-2" />
-            <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B;">
-                CFUN=4 khi cắm SIM mới, chờ user chấp nhận mới tráng IMEI
-            </MudText>
-
-            <MudSwitch T="bool" @bind-Value="_autoRestoreImei" Label="Tự động Restore IMEI từ backup" Color="Color.Primary" Class="mb-2" />
-            <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B;">
-                Khi cắm lại SIM cũ → tự lấy IMEI đã gán trước đó
-            </MudText>
-
-            <MudSwitch T="bool" @bind-Value="_blockUnknown" Label="Chặn SIM lạ (Block Unknown)" Color="Color.Primary" Class="mb-2" />
-            <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B;">
-                Không cho SIM chưa có trong backup hoạt động
-            </MudText>
-
-            <MudSwitch T="bool" @bind-Value="_autoAccept" Label="Tự động Accept SIM mới (không khuyến nghị)" Color="Color.Warning" Class="mb-2" />
-            <MudText Typo="Typo.caption" Class="mb-1 ml-10" Style="color:#D97706;">
-                Tự tráng IMEI ngay khi phát hiện SIM mới (nguy hiểm)
-            </MudText>
-        </MudPaper>
 
         <!-- MẠNG & TÍN HIỆU -->
         <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
@@ -187,6 +161,24 @@
             </MudButton>
         </MudPaper>
 
+        <!-- FIREBASE (ĐỒNG BỘ TOOLWEB) -->
+        <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+            <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudIcon Icon="@Icons.Material.Filled.CloudSync" Class="mr-1" Size="Size.Small" />
+                Firebase (Đồng bộ ToolWeb)
+            </MudText>
+
+            <MudTextField @bind-Value="_firebaseUrl" Label="Firebase Database URL" 
+                          Placeholder="https://your-project-default-rtdb.firebaseio.com/"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudTextField @bind-Value="_machineId" Label="Machine ID (Tên máy)" 
+                          Placeholder="machine-1"
+                          Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+
+            <MudSwitch T="bool" @bind-Value="_writeOtpToFirebase" Label="Tự động đồng bộ OTP/Ports lên Firebase" Color="Color.Primary" Class="mb-2" />
+        </MudPaper>
+
         <!-- ÂM THANH -->
         <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
             <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
@@ -272,6 +264,9 @@
     private bool _showToken = false;
     private string _otpWebhookUrl = "";
     private bool _pushOtpToWeb = false;
+    private string _firebaseUrl = "";
+    private string _machineId = "machine-1";
+    private bool _writeOtpToFirebase = true;
     private string _soundSmsPath = "";
     private string _soundCallPath = "";
     private string _soundOtpPath = "";
@@ -281,11 +276,8 @@
     private bool _autoConnectOnStart = false;
     private bool _minimizeToTray = true;
 
-    private string _settingsPath = "";
-
     protected override void OnInitialized()
     {
-        _settingsPath = Path.Combine(AppContext.BaseDirectory, "settings.json");
         LoadSettings();
     }
 
@@ -293,46 +285,46 @@
     {
         try
         {
-            var cfg = new AppConfig
-            {
-                NewSimIntake = _newSimIntake,
-                AutoRestoreImei = _autoRestoreImei,
-                BlockUnknown = _blockUnknown,
-                AutoAccept = _autoAccept,
-                Prefer4G = _prefer4G,
-                EnableVolte = _enableVolte,
-                AutoRecovery = _autoRecovery,
-                ForceCfun1AfterReboot = _forceCfun1AfterReboot,
-                RecoveryThreshold = _recoveryThreshold,
-                WatchdogSeconds = _watchdogSeconds,
-                AutoCheckBalanceAfterSms = _autoCheckBalanceAfterSms,
-                AutoUssdOnNetwork = _autoUssdOnNetwork,
-                UssdRetrySeconds = _ussdRetrySeconds,
-                SmsTimeout = _smsTimeout,
-                SoundOnSms = _soundOnSms,
-                SoundOnCall = _soundOnCall,
-                SoundOnOtp = _soundOnOtp,
-                TelegramOnOtp = _telegramOnOtp,
-                TelegramOnSms = _telegramOnSms,
-                TelegramOnCall = _telegramOnCall,
-                TelegramOnError = _telegramOnError,
-                TelegramBotToken = _telegramBotToken,
-                TelegramChatId = _telegramChatId,
-                OtpWebhookUrl = _otpWebhookUrl,
-                PushOtpToWeb = _pushOtpToWeb,
-                SoundSmsPath = _soundSmsPath,
-                SoundCallPath = _soundCallPath,
-                SoundOtpPath = _soundOtpPath,
-                BaudRate = _baudRate,
-                CommandTimeout = _commandTimeout,
-                EnableLog = _enableLog,
-                AutoConnectOnStart = _autoConnectOnStart,
-                MinimizeToTray = _minimizeToTray
-            };
+            var cfg = gsm.Services.SettingsService.Current;
+            cfg.NewSimIntake = _newSimIntake;
+            cfg.AutoRestoreImei = _autoRestoreImei;
+            cfg.BlockUnknown = _blockUnknown;
+            cfg.AutoAccept = _autoAccept;
+            cfg.Prefer4G = _prefer4G;
+            cfg.EnableVolte = _enableVolte;
+            cfg.AutoRecovery = _autoRecovery;
+            cfg.ForceCfun1AfterReboot = _forceCfun1AfterReboot;
+            cfg.RecoveryThreshold = _recoveryThreshold;
+            cfg.WatchdogSeconds = _watchdogSeconds;
+            cfg.AutoCheckBalanceAfterSms = _autoCheckBalanceAfterSms;
+            cfg.AutoUssdOnNetwork = _autoUssdOnNetwork;
+            cfg.UssdRetrySeconds = _ussdRetrySeconds;
+            cfg.SmsTimeout = _smsTimeout;
+            cfg.SoundOnSms = _soundOnSms;
+            cfg.SoundOnCall = _soundOnCall;
+            cfg.SoundOnOtp = _soundOnOtp;
+            cfg.TelegramOnOtp = _telegramOnOtp;
+            cfg.TelegramOnSms = _telegramOnSms;
+            cfg.TelegramOnCall = _telegramOnCall;
+            cfg.TelegramOnError = _telegramOnError;
+            cfg.TelegramBotToken = _telegramBotToken;
+            cfg.TelegramChatId = _telegramChatId;
+            cfg.OtpWebhookUrl = _otpWebhookUrl;
+            cfg.PushOtpToWeb = _pushOtpToWeb;
+            cfg.FirebaseUrl = _firebaseUrl;
+            cfg.MachineId = _machineId;
+            cfg.WriteOtpToFirebase = _writeOtpToFirebase;
+            cfg.SoundSmsPath = _soundSmsPath;
+            cfg.SoundCallPath = _soundCallPath;
+            cfg.SoundOtpPath = _soundOtpPath;
+            cfg.BaudRate = _baudRate;
+            cfg.CommandTimeout = _commandTimeout;
+            cfg.EnableLog = _enableLog;
+            cfg.AutoConnectOnStart = _autoConnectOnStart;
+            cfg.MinimizeToTray = _minimizeToTray;
 
-            var json = System.Text.Json.JsonSerializer.Serialize(cfg, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            await File.WriteAllTextAsync(_settingsPath, json);
-            Snackbar.Add("Đã lưu cài đặt thành công", Severity.Success);
+            gsm.Services.SettingsService.SaveSettings(cfg);
+            Snackbar.Add("Đã lưu cài đặt thành công và áp dụng cho ứng dụng", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -344,9 +336,7 @@
     {
         try
         {
-            if (!File.Exists(_settingsPath)) return;
-            var json = File.ReadAllText(_settingsPath);
-            var cfg = System.Text.Json.JsonSerializer.Deserialize<AppConfig>(json);
+            var cfg = gsm.Services.SettingsService.Current;
             if (cfg == null) return;
 
             _newSimIntake = cfg.NewSimIntake;
@@ -374,6 +364,9 @@
             _telegramChatId = cfg.TelegramChatId ?? "";
             _otpWebhookUrl = cfg.OtpWebhookUrl ?? "";
             _pushOtpToWeb = cfg.PushOtpToWeb;
+            _firebaseUrl = cfg.FirebaseUrl ?? "";
+            _machineId = cfg.MachineId ?? "machine-1";
+            _writeOtpToFirebase = cfg.WriteOtpToFirebase;
             _soundSmsPath = cfg.SoundSmsPath ?? "";
             _soundCallPath = cfg.SoundCallPath ?? "";
             _soundOtpPath = cfg.SoundOtpPath ?? "";
@@ -413,6 +406,9 @@
         _telegramChatId = "";
         _otpWebhookUrl = "";
         _pushOtpToWeb = false;
+        _firebaseUrl = "";
+        _machineId = "machine-1";
+        _writeOtpToFirebase = true;
         _soundSmsPath = "";
         _soundCallPath = "";
         _soundOtpPath = "";
@@ -429,10 +425,11 @@
         try
         {
             await SaveAll();
-            var path = FileDialog.SaveFile($"settings_{DateTime.Now:yyyyMMdd_HHmmss}.json", "JSON files (*.json)|*.json");
+            var path = FileDialog.SaveFile($"appsettings_{DateTime.Now:yyyyMMdd_HHmmss}.json", "JSON files (*.json)|*.json");
             if (string.IsNullOrEmpty(path)) return;
 
-            File.Copy(_settingsPath, path, true);
+            var json = System.Text.Json.JsonSerializer.Serialize(gsm.Services.SettingsService.Current, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(path, json);
             Snackbar.Add($"Đã export: {path}", Severity.Success);
         }
         catch (Exception ex)
@@ -448,7 +445,15 @@
             var path = FileDialog.OpenFile("JSON files (*.json)|*.json");
             if (string.IsNullOrEmpty(path)) return;
 
-            File.Copy(path, _settingsPath, true);
+            var json = await File.ReadAllTextAsync(path);
+            var cfg = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json);
+            if (cfg == null)
+            {
+                Snackbar.Add("File cấu hình rỗng hoặc lỗi", Severity.Warning);
+                return;
+            }
+
+            gsm.Services.SettingsService.SaveSettings(cfg);
             LoadSettings();
             Snackbar.Add("Đã import + load cấu hình thành công", Severity.Success);
         }
@@ -537,40 +542,4 @@
         catch (Exception ex) { Snackbar.Add("Lỗi xóa: " + ex.Message, Severity.Error); }
     }
 
-    public class AppConfig
-    {
-        public bool NewSimIntake { get; set; } = true;
-        public bool AutoRestoreImei { get; set; } = true;
-        public bool BlockUnknown { get; set; } = false;
-        public bool AutoAccept { get; set; } = false;
-        public bool Prefer4G { get; set; } = true;
-        public bool EnableVolte { get; set; } = false;
-        public bool AutoRecovery { get; set; } = true;
-        public bool ForceCfun1AfterReboot { get; set; } = true;
-        public int RecoveryThreshold { get; set; } = 12;
-        public int WatchdogSeconds { get; set; } = 50;
-        public bool AutoCheckBalanceAfterSms { get; set; } = true;
-        public bool AutoUssdOnNetwork { get; set; } = true;
-        public int UssdRetrySeconds { get; set; } = 35;
-        public int SmsTimeout { get; set; } = 30000;
-        public bool SoundOnSms { get; set; } = true;
-        public bool SoundOnCall { get; set; } = true;
-        public bool SoundOnOtp { get; set; } = true;
-        public bool TelegramOnOtp { get; set; } = true;
-        public bool TelegramOnSms { get; set; } = false;
-        public bool TelegramOnCall { get; set; } = true;
-        public bool TelegramOnError { get; set; } = true;
-        public string TelegramBotToken { get; set; } = "";
-        public string TelegramChatId { get; set; } = "";
-        public string OtpWebhookUrl { get; set; } = "";
-        public bool PushOtpToWeb { get; set; } = false;
-        public string SoundSmsPath { get; set; } = "";
-        public string SoundCallPath { get; set; } = "";
-        public string SoundOtpPath { get; set; } = "";
-        public int BaudRate { get; set; } = 115200;
-        public int CommandTimeout { get; set; } = 10000;
-        public bool EnableLog { get; set; } = true;
-        public bool AutoConnectOnStart { get; set; } = false;
-        public bool MinimizeToTray { get; set; } = true;
-    }
 }

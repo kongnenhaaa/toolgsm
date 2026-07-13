@@ -6,7 +6,9 @@ public class SimBackupEntry
     public string Imei { get; set; } = string.Empty;
     public string PhoneNumber { get; set; } = string.Empty;
     public string CreatedAt { get; set; } = string.Empty;
-    public string LicenseKeySuffix { get; set; } = string.Empty;
-    public string KeyMismatch { get; set; } = string.Empty;
+
     public string SourceFile { get; set; } = string.Empty;
+    public string SimRegDate { get; set; } = string.Empty;
+    public string Lock1C { get; set; } = string.Empty;
+    public string Lock2C { get; set; } = string.Empty;
 }

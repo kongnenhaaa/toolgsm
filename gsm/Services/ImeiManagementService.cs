@@ -176,9 +176,14 @@ public class ImeiManagementService
         try
         {
             var cachedEntry = getBackupEntry(ccid);
+            bool hasValidBackup = cachedEntry != null && IsValidImei(NormalizeImei(cachedEntry.Imei));
+            bool isHardwareImeiValid = IsValidImei(NormalizeImei(currentImei));
 
-            // [FIX LOGIC]: Đưa ưu tiên chặn SIM lạ lên hàng đầu (Tính năng 3)
-            if (cachedEntry == null && !port.IsRebooting && !forceAccept)
+            // Quyết định xem SIM này có cần được xử lý như SIM mới (chờ chấp nhận để tráng IMEI mới) hay không
+            bool treatAsNewSim = (cachedEntry == null) || (!isHardwareImeiValid && !hasValidBackup);
+
+            // 1. Kiểm tra chặn/chờ duyệt đối với SIM mới
+            if (treatAsNewSim && !port.IsRebooting && !forceAccept)
             {
                 if (settings.EnableNewSimIntakeMode)
                 {
@@ -192,7 +197,7 @@ public class ImeiManagementService
                 }
                 else if (settings.BlockUnknownSims)
                 {
-                    Log($"[{portName}] SIM mới chưa có trong kho IMEI. Đã chặn, chờ chấp thuận thủ công.", "WARNING");
+                    Log($"[{portName}] SIM mới chưa được đăng ký trong hệ thống. Đã chặn, chờ duyệt thủ công.", "WARNING");
                     return new ImeiProcessResult
                     {
                         Status = ImeiProcessStatus.SecurityBlocked,
@@ -201,75 +206,67 @@ public class ImeiManagementService
                 }
             }
 
-            // Ưu tiên 2: Phục hồi từ backup nếu có (và nếu tính năng Restore được bật)
-            if (settings.EnableImeiRestore && cachedEntry != null)
+            // 2. Xác định IMEI mục tiêu (targetImei)
+            if (settings.EnableImeiRestore && hasValidBackup)
             {
-                string candidateImei = NormalizeImei(cachedEntry.Imei);
+                // Tráng phục hồi từ file backup cũ
+                string candidateImei = NormalizeImei(cachedEntry!.Imei);
+                targetImei = candidateImei;
+                targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
                 
-                dispatcherInvoke(() => port.DeviceName = GetDeviceNameFromImei(candidateImei));
-
-                if (IsValidImei(candidateImei))
+                dispatcherInvoke(() =>
                 {
-                    targetImei = candidateImei;
-                    targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
-                    
-                    dispatcherInvoke(() =>
+                    port.DeviceName = GetDeviceNameFromImei(candidateImei);
+                    if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
                     {
-                        if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
-                        {
-                            port.PhoneNumber = cachedEntry.PhoneNumber;
-                        }
-                        port.CreatedAt = cachedEntry.CreatedAt;
-                        port.LicenseKeySuffix = cachedEntry.LicenseKeySuffix;
-                        port.KeyMismatch = cachedEntry.KeyMismatch;
-                    });
-                }
-                else
-                {
-                    Log($"[{portName}] Bản Backup IMEI không hợp lệ ({candidateImei}). Bỏ qua Restore để bảo vệ thiết bị.", "ERROR");
-                }
+                        port.PhoneNumber = cachedEntry.PhoneNumber;
+                    }
+                    port.CreatedAt = cachedEntry.CreatedAt;
+                });
             }
-            // Mặc định (GSM Modem) khi Restore IMEI không áp dụng
             else
             {
+                // Giữ nguyên thiết bị UI hiển thị theo IMEI hiện tại
                 dispatcherInvoke(() => port.DeviceName = GetDeviceNameFromImei(currentImei));
 
                 if (cachedEntry != null && !settings.EnableImeiRestore)
                 {
-                    Log($"[{portName}] Đã có bản Backup IMEI nhưng tính năng Khôi phục (Restore) đang tắt. Giữ nguyên IMEI gốc trên mạch.");
+                    Log($"[{portName}] Đã có bản Backup IMEI nhưng tính năng Khôi phục đang tắt. Giữ nguyên IMEI gốc.");
                 }
-                else if (cachedEntry == null)
+                else if (cachedEntry == null && isHardwareImeiValid)
                 {
-                    if (!IsValidImei(NormalizeImei(currentImei)))
+                    // SIM mới cắm lần đầu, có IMEI gốc hợp lệ -> Lưu lại IMEI gốc của mạch để làm backup
+                    var newEntry = new SimBackupEntry
                     {
-                        Log($"[{portName}] IMEI gốc hiện tại ({currentImei}) không hợp lệ (sai độ dài hoặc checksum). Từ chối tạo bản Backup tự động.", "WARNING");
-                    }
-                    else
-                    {
-                        var newEntry = new SimBackupEntry
-                        {
-                            Ccid = ccid,
-                            Imei = currentImei,
-                            PhoneNumber = port.PhoneNumber,
-                            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                            LicenseKeySuffix = string.Empty,
-                            KeyMismatch = "false",
-                            SourceFile = "auto-learn"
-                        };
-                        saveBackupEntry(newEntry);
-                        
-                        Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+                        Ccid = ccid,
+                        Imei = currentImei,
+                        PhoneNumber = port.PhoneNumber,
+                        CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        SourceFile = "auto-learn",
+                        SimRegDate = port.SimRegDate
+                    };
+                    saveBackupEntry(newEntry);
+                    
+                    Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc hợp lệ: {currentImei} vào file backup.", "SUCCESS");
 
-                        dispatcherInvoke(() =>
-                        {
-                            port.CreatedAt = newEntry.CreatedAt;
-                            port.LicenseKeySuffix = newEntry.LicenseKeySuffix;
-                            port.KeyMismatch = newEntry.KeyMismatch;
-                        });
-                    }
+                    dispatcherInvoke(() =>
+                    {
+                        port.CreatedAt = newEntry.CreatedAt;
+                    });
                 }
             }
 
+            // 3. Nếu cần tráng IMEI mới (SIM mới được chấp nhận hoặc IMEI hiện tại bị hỏng/lỗi mà không có backup)
+            if (string.IsNullOrEmpty(targetImei) && (forceAccept || !settings.EnableNewSimIntakeMode))
+            {
+                // Tạo IMEI ngẫu nhiên hợp lệ đầu 35 hoặc 86
+                string randomImei = GenerateRandomImei();
+                targetImei = randomImei;
+                targetSource = "auto-generation";
+                Log($"[{portName}] Sinh IMEI ngẫu nhiên mới để tráng: {targetImei} (Nguồn: {targetSource})", "SUCCESS");
+            }
+
+            // 4. Nếu cuối cùng không có targetImei (ví dụ SIM bị chặn chưa được duyệt), giữ nguyên IMEI hiện tại
             if (string.IsNullOrEmpty(targetImei))
             {
                 targetImei = currentImei;
@@ -277,6 +274,7 @@ public class ImeiManagementService
 
             expectedImei = targetImei;
 
+            // 5. Tiến hành ghi IMEI lên modem nếu khác với IMEI hiện tại
             if (!string.IsNullOrEmpty(targetImei) && targetImei != currentImei)
             {
                 Log($"[{portName}] [IMEI_TARGET] source={targetSource} CCID={ccid} target_imei={targetImei}");
@@ -285,7 +283,7 @@ public class ImeiManagementService
                 string cfun0 = await _modemService.SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true);
                 if (!cfun0.Contains("OK"))
                 {
-                    Log($"[{portName}] Tắt sóng (AT+CFUN=0) thất bại. Ngừng quá trình ghi IMEI để đảm bảo an toàn.", "ERROR");
+                    Log($"[{portName}] Tắt sóng (AT+CFUN=0) thất bại. Hủy ghi IMEI.", "ERROR");
                     return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOffFailed };
                 }
                 
@@ -326,11 +324,23 @@ public class ImeiManagementService
                         dispatcherInvoke(() => port.Imei = targetImei);
                         Log($"[{portName}] Ghi đè IMEI thành công ở lần thử {attempt}: {targetImei}", "SUCCESS");
 
-                        Log($"[{portName}] Đã gửi lệnh khởi động lại modem (AT+CFUN=1,1) để áp dụng IMEI mới triệt để vào Baseband.", "INFO");
-                        string cfun1 = await _modemService.SendCommandAsync(portName, "AT+CFUN=1,1", 30000, silent: true);
+                        var newEntry = new SimBackupEntry
+                        {
+                            Ccid = ccid,
+                            Imei = targetImei,
+                            PhoneNumber = port.PhoneNumber,
+                            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                            SourceFile = targetSource,
+                            SimRegDate = port.SimRegDate
+                        };
+                        saveBackupEntry(newEntry);
+
+                        Log($"[{portName}] Đã gửi lệnh tắt/bật sóng (AT+CFUN=0 -> CFUN=1) để áp dụng IMEI mới...", "INFO");
+                        await _modemService.SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true);
+                        await Task.Delay(1000);
+                        await _modemService.SendCommandAsync(portName, "AT+CFUN=1", 12000, silent: true);
                         
-                        // Trả về Applied ngay lập tức, vì modem sẽ mất kết nối USB khi khởi động lại
-                        return new ImeiProcessResult { Status = ImeiProcessStatus.Applied, FinalImei = targetImei };
+                        return new ImeiProcessResult { Status = ImeiProcessStatus.Matched, FinalImei = targetImei };
                     }
                     else
                     {
@@ -341,19 +351,19 @@ public class ImeiManagementService
                         }
                         else if (isUnsupported)
                         {
-                            Log($"[{portName}] Cả AT+EGMR và AT+SIMEI đều trả về ERROR. Module bị khóa Firmware (Unsupported). Hủy Retry.", "ERROR");
+                            Log($"[{portName}] Mạch không hỗ trợ ghi IMEI (Unsupported). Hủy Retry.", "ERROR");
                             break; 
                         }
                         else
                         {
-                            Log($"[{portName}] Ghi đè IMEI thất bại ở lần thử {attempt} (Đọc lại: {finalImei}). Giữ sóng tắt an toàn.", "ERROR");
+                            Log($"[{portName}] Ghi đè IMEI thất bại ở lần thử {attempt} (Đọc lại: {finalImei}). Giữ sóng tắt.", "ERROR");
                         }
                     }
                 }
 
                 if (!success)
                 {
-                    Log($"[{portName}] Đã thử ghi IMEI 3 lần nhưng không thành công.", "ERROR");
+                    Log($"[{portName}] Đã thử ghi IMEI 3 lần không thành công.", "ERROR");
                     string errorMsg = isUnsupported ? "Mạch không hỗ trợ đổi IMEI (Khóa Firmware)" : "Ghi đè IMEI thất bại";
                     return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = errorMsg };
                 }

@@ -4,12 +4,19 @@
 @inject ISnackbar Snackbar
 
 <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF;">
-    @if (SelectedItems.Any())
-    {
         <MudToolBar Dense="true" Style="background:#F1F5F9; border-bottom:1px solid #E2E8F0;">
-            <MudText Typo="Typo.subtitle2" Style="color:#1D4ED8; font-weight:600;" Class="mr-4">
-                Đã chọn @SelectedItems.Count cổng
-            </MudText>
+            @if (SelectedItems.Any())
+            {
+                <MudText Typo="Typo.subtitle2" Style="color:#1D4ED8; font-weight:600;" Class="mr-4">
+                    Đã chọn @SelectedItems.Count cổng
+                </MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle2" Style="color:#64748B; font-weight:600;" Class="mr-4">
+                    Tất cả cổng (@Ports.Count())
+                </MudText>
+            }
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.CreditCard" Class="mr-2"
@@ -18,7 +25,8 @@
                        Variant="Variant.Outlined" Color="Color.Warning" OnClick="Ussd101Selected">USSD *101#</MudButton>
             
             @{
-                var pendingCount = SelectedItems.Count(IsPendingAccept);
+                var pendingList = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
+                var pendingCount = pendingList.Count(IsPendingAccept);
             }
             @if (pendingCount > 0)
             {
@@ -30,65 +38,96 @@
                 </MudButton>
             }
 
-            <MudSpacer />
-            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
-                       Variant="Variant.Text" Color="Color.Default" OnClick="() => SelectedItems.Clear()">Bỏ chọn</MudButton>
+                  <MudSpacer />
+            @if (SelectedItems.Any())
+            {
+                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
+                           Variant="Variant.Text" Color="Color.Default" OnClick="() => SelectedItems.Clear()">Bỏ chọn</MudButton>
+            }
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Settings" 
+                       Variant="Variant.Text" Color="Color.Default" OnClick="OpenSettingsDialog">Cấu hình Cột/Cổng</MudButton>
         </MudToolBar>
-    }
 
-    <MudTable Items="@Ports" Hover="true" Dense="true" Elevation="0" Striped="true"
+    <MudTable Items="@VisiblePorts" Hover="true" Dense="true" Elevation="0" Striped="true"
               MultiSelection="true" @bind-SelectedItems="SelectedItems"
               Style="background:#FFFFFF; color:#1E293B;"
               FixedHeader="true" Height="calc(100vh - 280px)"
               Breakpoint="Breakpoint.None">
         <HeaderContent>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Cổng</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Trạng thái</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Nhà mạng</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Số dư</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Số điện thoại</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">CCID</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">HSD</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">OTP</MudTh>
-            <MudTh Style="background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Nội dung</MudTh>
-            <MudTh Style="width:120px; text-align:center; background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B;">Thao tác</MudTh>
+            @foreach (var col in VisibleColumns)
+            {
+                var minWidth = col.Name == "LastMessageContent" ? "min-width: 250px;" : "";
+                <MudTh Style="@($"background:#F8FAFC; border-bottom:1px solid #E2E8F0; color:#64748B; white-space: nowrap; {minWidth}")">@col.Header</MudTh>
+            }
         </HeaderContent>
         <RowTemplate>
-            <MudTd Style="font-weight:600; border-bottom:1px solid #F1F5F9; color:#1E293B;">@context.PortName</MudTd>
-            <MudTd Style="border-bottom:1px solid #F1F5F9;">
-                <StatusBadge Status="@context.Status" />
-            </MudTd>
-            <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569;">@(context.NetworkProvider ?? "—")</MudTd>
-            <MudTd Style="color:#16A34A; font-weight:600; border-bottom:1px solid #F1F5F9;">
-                @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
-            </MudTd>
-            <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569;">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
-            <MudTd Style="font-family:monospace; font-size:11px; max-width:120px; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid #F1F5F9; color:#64748B;" title="@context.Serial">
-                @(context.Serial ?? "—")
-            </MudTd>
-            <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B;">@(context.ExpiryDate ?? "—")</MudTd>
-            <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#2563EB;">
-                @(string.IsNullOrEmpty(context.Otp) ? "—" : context.Otp)
-            </MudTd>
-            <MudTd Style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; border-bottom:1px solid #F1F5F9; color:#475569;" title="@context.LastMessageContent">
-                @(context.LastMessageContent ?? "—")
-            </MudTd>
-            <MudTd Style="text-align:center; white-space:nowrap; border-bottom:1px solid #F1F5F9;">
-                @if (IsPendingAccept(context))
+            @foreach (var col in VisibleColumns)
+            {
+                @if (col.Name == "PortName")
                 {
-                    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
-                               StartIcon="@Icons.Material.Filled.CheckCircle"
-                               OnClick="@(() => AcceptOne(context))"
-                               Disabled="@_accepting.Contains(context.PortName)">
-                        @(_accepting.Contains(context.PortName) ? "..." : "Chấp nhận")
-                    </MudButton>
+                    <MudTd Style="font-weight:600; border-bottom:1px solid #F1F5F9; color:#1E293B; white-space: nowrap;">@context.PortName</MudTd>
                 }
-                else
+                else if (col.Name == "Status")
                 {
-                    <MudIconButton Icon="@Icons.Material.Filled.Refresh" Size="Size.Small"
-                                   title="Refresh" OnClick="@(() => RefreshOne(context))" />
+                    <MudTd Style="border-bottom:1px solid #F1F5F9; white-space: nowrap;">
+                        <StatusBadge Status="@context.Status" />
+                    </MudTd>
                 }
-            </MudTd>
+                else if (col.Name == "NetworkProvider")
+                {
+                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap;">@(context.NetworkProvider ?? "—")</MudTd>
+                }
+                else if (col.Name == "Balance")
+                {
+                    <MudTd Style="color:#16A34A; font-weight:600; border-bottom:1px solid #F1F5F9; white-space: nowrap;">
+                        @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
+                    </MudTd>
+                }
+                else if (col.Name == "PhoneNumber")
+                {
+                    <MudTd Style="@("border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
+                }
+                else if (col.Name == "Imei")
+                {
+                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@(context.Imei ?? "—")</MudTd>
+                }
+                else if (col.Name == "Serial")
+                {
+                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@(context.Serial ?? "—")</MudTd>
+                }
+                else if (col.Name == "ExpiryDate")
+                {
+                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@(context.ExpiryDate ?? "—")</MudTd>
+                }
+                else if (col.Name == "SimRegDate")
+                {
+                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@(context.SimRegDate ?? "—")</MudTd>
+                }
+                else if (col.Name == "Lock1C")
+                {
+                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#991B1B; white-space: nowrap;">@(context.Lock1C ?? "—")</MudTd>
+                }
+                else if (col.Name == "Lock2C")
+                {
+                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#991B1B; white-space: nowrap;">@(context.Lock2C ?? "—")</MudTd>
+                }
+                else if (col.Name == "VnptStatus")
+                {
+                    <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#E11D48; white-space: nowrap;">@(string.IsNullOrEmpty(context.VnptStatus) ? "—" : context.VnptStatus)</MudTd>
+                }
+                else if (col.Name == "Otp")
+                {
+                    <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#2563EB; white-space: nowrap;">
+                        @(string.IsNullOrEmpty(context.Otp) ? "—" : context.Otp)
+                    </MudTd>
+                }
+                else if (col.Name == "LastMessageContent")
+                {
+                    <MudTd Style="word-break:break-word; font-size:12px; border-bottom:1px solid #F1F5F9; color:#475569;">
+                        @(context.LastMessageContent ?? "—")
+                    </MudTd>
+                }
+            }
         </RowTemplate>
         <NoRecordsContent>
             <div class="pa-16 text-center" style="color:#64748B;">
@@ -163,10 +202,10 @@
 
     async Task AcceptSelectedPending()
     {
-        var list = SelectedItems.Where(IsPendingAccept).ToList();
+        var list = SelectedItems.Any() ? SelectedItems.Where(IsPendingAccept).ToList() : Ports.Where(IsPendingAccept).ToList();
         if (!list.Any())
         {
-            Snackbar.Add("Không có cổng nào đang Chờ Accept trong selection", Severity.Warning);
+            Snackbar.Add("Không có cổng nào đang Chờ Accept", Severity.Warning);
             return;
         }
 
@@ -180,28 +219,24 @@
         }
 
         _bulkAccepting = true;
-        int okN = 0, failN = 0;
         try
         {
-            foreach (var port in list)
+            var tasks = list.Select(async port =>
             {
                 try
                 {
                     if (OnAccept.HasDelegate)
                     {
                         await OnAccept.InvokeAsync(port);
-                        okN++;
-                        await Task.Delay(600);
                     }
                 }
                 catch (Exception ex)
                 {
-                    failN++;
                     Snackbar.Add($"[{port.PortName}] Lỗi: {ex.Message}", Severity.Error);
                 }
-            }
-            if (okN > 0 || failN > 0)
-                Snackbar.Add($"Accept xong: {okN} OK, {failN} lỗi", failN == 0 ? Severity.Success : Severity.Warning);
+            });
+            await Task.WhenAll(tasks);
+            Snackbar.Add($"Đã hoàn thành gửi lệnh chấp nhận cho {list.Count} cổng.", Severity.Success);
         }
         finally
         {
@@ -211,7 +246,7 @@
 
     async Task RefreshSelected()
     {
-        var ports = SelectedItems.ToList();
+        var ports = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
         Snackbar.Add($"Đang làm mới {ports.Count} cổng...", Severity.Info);
         foreach (var p in ports)
         {
@@ -225,7 +260,7 @@
 
     async Task CheckTkcSelected()
     {
-        var ports = SelectedItems.ToList();
+        var ports = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
         Snackbar.Add($"Đang kiểm tra tài khoản {ports.Count} cổng...", Severity.Info);
         foreach (var p in ports)
         {
@@ -243,5 +278,78 @@
         Snackbar.Add("Đang quét kết nối...", Severity.Info);
         string result = ModemService.ConnectAll(115200);
         Snackbar.Add(result, result.Contains("Lỗi") ? Severity.Warning : Severity.Success);
+    }
+
+    private IEnumerable<SimPort> VisiblePorts
+    {
+        get
+        {
+            var hidden = SettingsService.Current.HiddenComPorts ?? new List<string>();
+            return Ports.Where(p => !hidden.Contains(p.PortName));
+        }
+    }
+
+    private List<ColumnItem> VisibleColumns
+    {
+        get
+        {
+            var cfg = SettingsService.Current;
+            var savedOrder = cfg.ColumnOrder ?? new List<string>();
+            var hiddenCols = new HashSet<string>(cfg.HiddenColumns ?? new List<string>());
+
+            var defaultCols = GetDefaultColumns();
+            var ordered = new List<ColumnItem>();
+
+            foreach (var colName in savedOrder)
+            {
+                var match = defaultCols.FirstOrDefault(c => c.Name == colName);
+                if (match != null)
+                {
+                    ordered.Add(match);
+                    defaultCols.Remove(match);
+                }
+            }
+            ordered.AddRange(defaultCols);
+
+            return ordered.Where(c => !hiddenCols.Contains(c.Name)).ToList();
+        }
+    }
+
+    private List<ColumnItem> GetDefaultColumns()
+    {
+        return new List<ColumnItem>
+        {
+            new() { Name = "PortName", Header = "Cổng" },
+            new() { Name = "Status", Header = "Trạng thái" },
+            new() { Name = "NetworkProvider", Header = "Nhà mạng" },
+            new() { Name = "Balance", Header = "Số dư" },
+            new() { Name = "PhoneNumber", Header = "Số điện thoại" },
+            new() { Name = "Imei", Header = "IMEI" },
+            new() { Name = "Serial", Header = "CCID" },
+            new() { Name = "ExpiryDate", Header = "HSD" },
+            new() { Name = "SimRegDate", Header = "Ngày ĐK SIM" },
+            new() { Name = "Lock1C", Header = "Khóa 1C" },
+            new() { Name = "Lock2C", Header = "Khóa 2C" },
+            new() { Name = "VnptStatus", Header = "Trạng thái VNPT" },
+            new() { Name = "Otp", Header = "OTP" },
+            new() { Name = "LastMessageContent", Header = "Nội dung" }
+        };
+    }
+
+    async Task OpenSettingsDialog()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+        var dialog = DialogService.Show<ComSettingsDialog>("Cấu hình hiển thị Cột & Cổng", options);
+        var result = await dialog.Result;
+        if (!result.Canceled)
+        {
+            StateHasChanged();
+        }
+    }
+
+    public class ColumnItem
+    {
+        public string Name { get; set; } = "";
+        public string Header { get; set; } = "";
     }
 }

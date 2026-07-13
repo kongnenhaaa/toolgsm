@@ -155,9 +155,17 @@
             {
                 // Gửi SMS thật
                 rawResponse = await ModemService.SendSmsAsync(port, _ezNumber.Trim(), _ezCommand.Trim());
-                success = true;
-                okCount++;
-                Snackbar.Add($"[{port}] Đăng ký OK", Severity.Success);
+                if (rawResponse != null && rawResponse.Contains("ERROR"))
+                {
+                    failCount++;
+                    Snackbar.Add($"[{port}] Lỗi: {rawResponse}", Severity.Error);
+                }
+                else
+                {
+                    success = true;
+                    okCount++;
+                    Snackbar.Add($"[{port}] Đăng ký OK", Severity.Success);
+                }
             }
             catch (Exception ex)
             {

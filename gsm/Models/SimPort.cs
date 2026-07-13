@@ -144,10 +144,15 @@ public partial class SimPort : ObservableObject
     private string _createdAt = string.Empty;
 
     [ObservableProperty]
-    private string _licenseKeySuffix = string.Empty;
+    private string _simRegDate = string.Empty;
 
     [ObservableProperty]
-    private string _keyMismatch = string.Empty;
+    private string _lock1C = string.Empty;
+
+    [ObservableProperty]
+    private string _lock2C = string.Empty;
+
+    
     
     // New Pro Features
     [ObservableProperty]

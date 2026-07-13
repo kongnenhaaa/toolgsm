@@ -570,9 +570,6 @@ public class GsmModemService : IGsmModemService
             await SendCommandAsync(portName, "AT+QSIMSTAT=1", 10000, silent: true); // Bật báo cáo trạng thái SIM URC
             await SendCommandAsync(portName, "AT&W", 10000, silent: true); // Lưu cấu hình vào bộ nhớ profile modem
             await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
-            // Bật xuất âm thanh cuộc gọi ra cổng USB (UAC) cho Quectel EC20
-            await SendCommandAsync(portName, "AT+QPCMV=0,0", 30000); 
-            await SendCommandAsync(portName, "AT+QAUDMOD=0", 30000); 
         }
         
         string imei = await SendCommandAsync(portName, "AT+CGSN", 30000);
@@ -703,8 +700,6 @@ public class GsmModemService : IGsmModemService
             await SendCommandAsync(portName, "AT+QSIMSTAT=1", 5000, silent: true); // Bật báo cáo trạng thái SIM URC
             await SendCommandAsync(portName, "AT&W", 5000, silent: true);
             await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true); // Bật bộ phát hiện âm tần DTMF
-            await SendCommandAsync(portName, "AT+QPCMV=0,0", 5000, silent: true);
-            await SendCommandAsync(portName, "AT+QAUDMOD=0", 5000, silent: true); 
         } 
         await SendCommandAsync(portName, "AT+CMGD=1,4", 10000, silent: true); 
         
@@ -2228,28 +2223,16 @@ public class GsmModemService : IGsmModemService
         if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(phoneNumber))
             return false;
 
-        string? remoteFileName = null;
-
         try
         {
-            // ---------- 1. Upload WAV nếu có ----------
-            if (!string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath))
-            {
-                remoteFileName = await UploadWavAsync(portName, wavPath, ct);
-                if (remoteFileName == null)
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Upload WAV thất bại → gọi không audio" });
-                }
-            }
-
-            // ---------- 2. Bật CLIP / báo trạng thái (tuỳ chọn) ----------
+            // Bật CLIP để hiện số gọi đến (Caller ID)
             await SendCommandAsync(portName, "AT+CLIP=1", 2000, silent: true);
-            await SendCommandAsync(portName, "AT+CRC=1", 2000, silent: true);
 
-            // ---------- 3. Gọi ----------
-            // ATDxxx;  (dấu ; = voice call)
+            // LOGIC CŨ (89d5927ce9d396916b87e083e81b663dfdf666ca):
+            // Gửi ATDxxx; và chờ
             string cleanPhone = (phoneNumber.StartsWith("+") ? "+" : "") + new string(phoneNumber.Where(char.IsDigit).ToArray());
             var dialResp = await SendCommandAsync(portName, $"ATD{cleanPhone};", 15000);
+            
             if (dialResp.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
                 dialResp.Contains("NO CARRIER", StringComparison.OrdinalIgnoreCase))
             {
@@ -2257,67 +2240,19 @@ public class GsmModemService : IGsmModemService
                 return false;
             }
 
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đang gọi {phoneNumber}..." });
-
-            // ---------- 4. Chờ nhấc máy (CLCC) hoặc timeout ----------
-            bool answered = await WaitForAnswerAsync(portName, timeoutSeconds: 45, ct);
-            if (!answered)
+            // Giữ cuộc gọi theo duration
+            try
             {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Không nhấc máy / timeout → ATH" });
-                await SendCommandAsync(portName, "ATH", 3000, silent: true);
-                return false;
+                await Task.Delay(TimeSpan.FromSeconds(durationSeconds), ct);
+            }
+            catch (TaskCanceledException)
+            {
+                // Gọi có thể bị ngắt sớm từ UI
             }
 
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đã kết nối" });
-
-            // ---------- 5. Phát WAV nếu đã upload ----------
-            if (!string.IsNullOrEmpty(remoteFileName))
-            {
-                await PlayWavAsync(portName, remoteFileName, ct);
-            }
-
-            // ---------- 6. (Tuỳ chọn) Bắt đầu ghi âm ----------
-            if (record)
-            {
-                try
-                {
-                    await SendCommandAsync(portName, "AT+QAUDRD=1,\"call_rec.wav\",1", 3000, silent: true);
-                }
-                catch { /* ignore nếu không hỗ trợ */ }
-            }
-
-            // ---------- 7. Giữ cuộc gọi theo duration ----------
-            var end = DateTime.UtcNow.AddSeconds(Math.Max(5, durationSeconds));
-            while (DateTime.UtcNow < end && !ct.IsCancellationRequested)
-            {
-                // Kiểm tra còn trong cuộc gọi không
-                var clcc = await SendCommandAsync(portName, "AT+CLCC", 2000, silent: true);
-                if (!clcc.Contains("+CLCC:"))
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Cuộc gọi đã kết thúc sớm" });
-                    break;
-                }
-                await Task.Delay(1000, ct);
-            }
-
-            // ---------- 8. Dập máy ----------
-            await SendCommandAsync(portName, "ATH", 5000);
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đã dập máy" });
-
-            // ---------- 9. Dọn file trên modem (tuỳ chọn) ----------
-            if (!string.IsNullOrEmpty(remoteFileName))
-            {
-                try
-                {
-                    await SendCommandAsync(portName, $"AT+QFDEL=\"{remoteFileName}\"", 3000, silent: true);
-                }
-                catch { }
-            }
-
-            if (record)
-            {
-                try { await SendCommandAsync(portName, "AT+QAUDRD=0", 2000, silent: true); } catch { }
-            }
+            // Dập máy
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Hết thời gian {durationSeconds}s → Dập máy (ATH)" });
+            await SendCommandAsync(portName, "ATH", 3000, silent: true);
 
             return true;
         }

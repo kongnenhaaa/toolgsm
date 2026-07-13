@@ -328,6 +328,7 @@
                 else
                 {
                     errCount++;
+                    Vm.AddLog($"[{p.PortName}] Thiết lập chuyển tiếp thất bại. Phản hồi từ modem: {res.Trim()}", "ERROR");
                 }
             }
             catch (Exception ex)
@@ -378,6 +379,7 @@
                 else
                 {
                     errCount++;
+                    Vm.AddLog($"[{p.PortName}] Hủy chuyển tiếp thất bại. Phản hồi từ modem: {res.Trim()}", "ERROR");
                 }
             }
             catch (Exception ex)
@@ -420,17 +422,25 @@
                 StateHasChanged();
 
                 string res = await ModemService.SendCommandAsync(p.PortName, "AT+CCFC=0,2", timeoutMs: 8000);
-                var match = System.Text.RegularExpressions.Regex.Match(res, @"\+CCFC:\s*1,\s*\d+,\s*""([^""]+)""");
                 
-                if (match.Success)
+                if (res.Contains("ERROR"))
                 {
-                    p.ForwardedTo = match.Groups[1].Value;
-                    activeCount++;
+                    errCount++;
+                    Vm.AddLog($"[{p.PortName}] Kiểm tra chuyển tiếp thất bại: {res.Trim()}", "ERROR");
                 }
                 else
                 {
-                    p.ForwardedTo = string.Empty;
-                    inactiveCount++;
+                    var match = System.Text.RegularExpressions.Regex.Match(res, @"\+CCFC:\s*1,\s*\d+,\s*""([^""]+)""");
+                    if (match.Success)
+                    {
+                        p.ForwardedTo = match.Groups[1].Value;
+                        activeCount++;
+                    }
+                    else
+                    {
+                        p.ForwardedTo = string.Empty;
+                        inactiveCount++;
+                    }
                 }
             }
             catch (Exception ex)

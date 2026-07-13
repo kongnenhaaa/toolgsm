@@ -1,4 +1,4 @@
-@page "/call"
+﻿@page "/call"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -182,6 +182,71 @@
                 <NoRecordsContent>
                     <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Hàng đợi trống</MudText>
                 </NoRecordsContent>
+                        </MudTable>
+        </MudPaper>
+    </MudTabPanel>
+
+    <MudTabPanel Text="Chuyển tiếp Cuộc gọi">
+        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:600;" Class="mb-3">Cấu hình chuyển tiếp cuộc gọi (AT+CCFC)</MudText>
+            
+            <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center" Class="mb-4">
+                <MudTextField @bind-Value="_forwardPhone" Label="Số điện thoại nhận chuyển tiếp" Placeholder="09xxxxxxxx"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width:240px;" />
+                
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Forward" OnClick="SetForwardingSelected"
+                           Disabled="@_isProcessingForward">
+                    Thiết lập
+                </MudButton>
+                
+                <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.Block" OnClick="CancelForwardingSelected"
+                           Disabled="@_isProcessingForward">
+                    Hủy chuyển tiếp
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.YoutubeSearchedFor" OnClick="CheckForwardingStatusSelected"
+                           Disabled="@_isProcessingForward">
+                    Kiểm tra trạng thái
+                </MudButton>
+            </MudStack>
+
+            <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
+                * Lưu ý: Hãy chọn các cổng ở tab <b>Danh sách Cổng</b> trước khi thực hiện. Số cổng đang chọn: <b>@_selectedPorts.Count</b>
+            </MudText>
+
+            @if (_isProcessingForward)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3">
+                    <MudProgressCircular Size="Size.Small" Color="Color.Primary" Indeterminate="true" />
+                    <MudText Typo="Typo.caption">@_forwardStatusText</MudText>
+                </MudStack>
+            }
+
+            <MudTable Items="@FilteredPorts" Dense="true" Hover="true" Elevation="0" Height="300px">
+                <HeaderContent>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>SĐT SIM</MudTh>
+                    <MudTh>Nhà mạng</MudTh>
+                    <MudTh>Chuyển hướng đến</MudTh>
+                    <MudTh>Trạng thái</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="font-weight:600;">@context.PortName</MudTd>
+                    <MudTd>@context.PhoneNumber</MudTd>
+                    <MudTd>@context.NetworkProvider</MudTd>
+                    <MudTd Style="color:#2563EB; font-weight:600;">
+                        @(string.IsNullOrEmpty(context.ForwardedTo) ? "Không có" : context.ForwardedTo)
+                    </MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small" 
+                                 Color="@(string.IsNullOrEmpty(context.ForwardedTo) ? Color.Default : Color.Success)">
+                            @(string.IsNullOrEmpty(context.ForwardedTo) ? "Tắt" : "Đang bật")
+                        </MudChip>
+                    </MudTd>
+                </RowTemplate>
             </MudTable>
         </MudPaper>
     </MudTabPanel>
@@ -215,9 +280,172 @@
     private string _queueWav = "";
     private int _queueDuration = 30;
     private bool _queueRecord = true;
-    private List<CallQueueItem> _callQueue = new();
+        private List<CallQueueItem> _callQueue = new();
     private bool _isRunningQueue = false;
     private CancellationTokenSource? _queueCts;
+
+    private string _forwardPhone = "";
+    private bool _isProcessingForward = false;
+    private string _forwardStatusText = "";
+
+    private async Task SetForwardingSelected()
+    {
+        if (string.IsNullOrWhiteSpace(_forwardPhone))
+        {
+            Snackbar.Add("Vui lòng điền số điện thoại nhận chuyển tiếp", Severity.Warning);
+            return;
+        }
+
+        var ports = _selectedPorts.ToList();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Vui lòng chọn ít nhất 1 cổng ở tab Danh sách Cổng", Severity.Warning);
+            return;
+        }
+
+        _isProcessingForward = true;
+        _forwardStatusText = $"Đang thiết lập chuyển tiếp cho {ports.Count} cổng...";
+        StateHasChanged();
+
+        int okCount = 0;
+        int errCount = 0;
+
+        foreach (var p in ports)
+        {
+            try
+            {
+                _forwardStatusText = $"[{p.PortName}] Đang gửi lệnh chuyển tiếp đến {_forwardPhone}...";
+                StateHasChanged();
+
+                string fwdDialType = _forwardPhone.StartsWith("+") ? "145" : "129";
+                string res = await ModemService.SendCommandAsync(p.PortName, $"AT+CCFC=0,1,\"{_forwardPhone}\",{fwdDialType}", timeoutMs: 8000);
+                
+                if (res.Contains("OK"))
+                {
+                    p.ForwardedTo = _forwardPhone;
+                    okCount++;
+                }
+                else
+                {
+                    errCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                errCount++;
+                Vm.AddLog($"[{p.PortName}] Lỗi thiết lập chuyển tiếp: {ex.Message}", "ERROR");
+            }
+            await Task.Delay(200);
+        }
+
+        _isProcessingForward = false;
+        _forwardStatusText = "";
+        Snackbar.Add($"Hoàn tất: Thiết lập thành công {okCount} cổng, thất bại {errCount} cổng.", 
+                     errCount == 0 ? Severity.Success : Severity.Warning);
+        StateHasChanged();
+    }
+
+    private async Task CancelForwardingSelected()
+    {
+        var ports = _selectedPorts.ToList();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Vui lòng chọn ít nhất 1 cổng ở tab Danh sách Cổng", Severity.Warning);
+            return;
+        }
+
+        _isProcessingForward = true;
+        _forwardStatusText = $"Đang hủy chuyển tiếp cho {ports.Count} cổng...";
+        StateHasChanged();
+
+        int okCount = 0;
+        int errCount = 0;
+
+        foreach (var p in ports)
+        {
+            try
+            {
+                _forwardStatusText = $"[{p.PortName}] Đang gửi lệnh hủy chuyển tiếp...";
+                StateHasChanged();
+
+                string res = await ModemService.SendCommandAsync(p.PortName, "AT+CCFC=0,4", timeoutMs: 8000);
+                
+                if (res.Contains("OK"))
+                {
+                    p.ForwardedTo = string.Empty;
+                    okCount++;
+                }
+                else
+                {
+                    errCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                errCount++;
+                Vm.AddLog($"[{p.PortName}] Lỗi hủy chuyển tiếp: {ex.Message}", "ERROR");
+            }
+            await Task.Delay(200);
+        }
+
+        _isProcessingForward = false;
+        _forwardStatusText = "";
+        Snackbar.Add($"Hoàn tất: Hủy thành công {okCount} cổng, thất bại {errCount} cổng.", 
+                     errCount == 0 ? Severity.Success : Severity.Warning);
+        StateHasChanged();
+    }
+
+    private async Task CheckForwardingStatusSelected()
+    {
+        var ports = _selectedPorts.ToList();
+        if (!ports.Any())
+        {
+            Snackbar.Add("Vui lòng chọn ít nhất 1 cổng ở tab Danh sách Cổng", Severity.Warning);
+            return;
+        }
+
+        _isProcessingForward = true;
+        _forwardStatusText = $"Đang kiểm tra chuyển tiếp cho {ports.Count} cổng...";
+        StateHasChanged();
+
+        int activeCount = 0;
+        int inactiveCount = 0;
+        int errCount = 0;
+
+        foreach (var p in ports)
+        {
+            try
+            {
+                _forwardStatusText = $"[{p.PortName}] Đang kiểm tra trạng thái...";
+                StateHasChanged();
+
+                string res = await ModemService.SendCommandAsync(p.PortName, "AT+CCFC=0,2", timeoutMs: 8000);
+                var match = System.Text.RegularExpressions.Regex.Match(res, @"\+CCFC:\s*1,\s*\d+,\s*""([^""]+)""");
+                
+                if (match.Success)
+                {
+                    p.ForwardedTo = match.Groups[1].Value;
+                    activeCount++;
+                }
+                else
+                {
+                    p.ForwardedTo = string.Empty;
+                    inactiveCount++;
+                }
+            }
+            catch (Exception ex)
+            {
+                errCount++;
+                Vm.AddLog($"[{p.PortName}] Lỗi kiểm tra chuyển tiếp: {ex.Message}", "ERROR");
+            }
+            await Task.Delay(200);
+        }
+
+        _isProcessingForward = false;
+        _forwardStatusText = "";
+        Snackbar.Add($"Kiểm tra xong: {activeCount} đang bật, {inactiveCount} tắt, {errCount} lỗi.", Severity.Info);
+        StateHasChanged();
+    }
 
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);

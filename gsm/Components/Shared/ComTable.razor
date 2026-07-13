@@ -117,6 +117,10 @@
                 {
                     <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#991B1B; white-space: nowrap;">@(context.Lock2C ?? "—")</MudTd>
                 }
+                else if (col.Name == "ForwardedTo")
+                {
+                    <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#2563EB; white-space: nowrap;">@(string.IsNullOrEmpty(context.ForwardedTo) ? "—" : context.ForwardedTo)</MudTd>
+                }
                 else if (col.Name == "VnptStatus")
                 {
                     <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#E11D48; white-space: nowrap;">@(string.IsNullOrEmpty(context.VnptStatus) ? "—" : context.VnptStatus)</MudTd>
@@ -344,6 +348,7 @@
             new() { Name = "SimRegDate", Header = "Ngày ĐK SIM" },
             new() { Name = "Lock1C", Header = "Khóa 1C" },
             new() { Name = "Lock2C", Header = "Khóa 2C" },
+            new() { Name = "ForwardedTo", Header = "Chuyển tiếp" },
             new() { Name = "VnptStatus", Header = "Trạng thái VNPT" },
             new() { Name = "Otp", Header = "OTP" },
             new() { Name = "LastMessageContent", Header = "Nội dung" }

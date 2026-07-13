@@ -2295,13 +2295,35 @@ public class GsmModemService : IGsmModemService
     async Task<bool> WaitForAnswerAsync(string portName, int timeoutSeconds, CancellationToken ct)
     {
         var end = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+        bool callSeen = false;
+        int noCallCount = 0;
+
         while (DateTime.UtcNow < end && !ct.IsCancellationRequested)
         {
-            var clcc = await SendCommandAsync(portName, "AT+CLCC", 2000, silent: true);
-            if (clcc.Contains("+CLCC:"))
+            var clcc = await SendCommandAsync(portName, "AT+CLCC", 2000, silent: false);
+            bool hasClcc = clcc.Contains("+CLCC:");
+
+            if (hasClcc)
             {
-                if (clcc.Contains(",0,0,") || Regex.IsMatch(clcc, @"\+CLCC:\s*\d+,\d+,0,"))
+                callSeen = true;
+                noCallCount = 0;
+
+                if (Regex.IsMatch(clcc, @"\+CLCC:\s*\d+,\d+,0,"))
+                {
                     return true;
+                }
+            }
+            else
+            {
+                if (callSeen)
+                {
+                    noCallCount++;
+                    if (noCallCount >= 2)
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Cuộc gọi bị cúp máy trước khi trả lời" });
+                        return false;
+                    }
+                }
             }
             await Task.Delay(800, ct);
         }

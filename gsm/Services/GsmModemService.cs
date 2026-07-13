@@ -67,6 +67,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, bool> _activeCalls = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _pollingCts = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _keepAliveCts = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _simMonitorCts = new();
+    private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
     private readonly object _connectLock = new object();
 
     // ===================== SMS DECODE + MULTIPART =====================
@@ -410,6 +412,9 @@ public class GsmModemService : IGsmModemService
                         
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Đã kết nối thành công {p} (Baud: {baudRate})" });
                         
+                        // Khởi động luồng giám sát SIM nền tảng toàn cầu (Global SIM Monitor) đảm bảo theo dõi 100% thời gian thực
+                        StartGlobalSimMonitor(p);
+                        
                         newlyOpenedPorts.Add(p);
                     }
                     catch (Exception ex)
@@ -726,6 +731,64 @@ public class GsmModemService : IGsmModemService
         
         // Để thiết bị tự động quét mạng theo mặc định của Baseband, không ngắt tiến trình attach tự nhiên
         StartPollingNetwork(portName);
+    }
+
+    public void StartGlobalSimMonitor(string portName)
+    {
+        CancellationToken token;
+        lock (_simMonitorCts)
+        {
+            if (_simMonitorCts.TryGetValue(portName, out var oldCts))
+            {
+                try { oldCts.Cancel(); oldCts.Dispose(); } catch {}
+            }
+            var newCts = new CancellationTokenSource();
+            _simMonitorCts[portName] = newCts;
+            token = newCts.Token;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            // Chờ 20 giây để quá trình Initialize ban đầu hoàn tất, tránh xung đột
+            try { await Task.Delay(20000, token); } catch { return; }
+
+            while (!token.IsCancellationRequested)
+            {
+                try { await Task.Delay(5000, token); } catch { break; } // Quét mỗi 5 giây
+                if (!_serialPorts.ContainsKey(portName)) break;
+
+                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
+                bool isSimPresent = !cpin.Contains("ERROR") && (cpin.Contains("READY") || cpin.Contains("SIM PIN") || cpin.Contains("SIM PUK"));
+                
+                // Nếu không có CPIN, kiểm tra thêm bằng CCID để chắc chắn
+                if (!isSimPresent && !cpin.Contains("ERROR"))
+                {
+                     string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
+                     isSimPresent = !pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp);
+                }
+
+                _lastSimState.TryGetValue(portName, out bool lastState);
+
+                if (isSimPresent && !lastState)
+                {
+                    _lastSimState[portName] = true;
+                    // Bổ trợ cho Option 1: Nếu URC bị trượt, vòng lặp này sẽ bắt lại
+                    _ = Task.Run(() => HandleSimInsertedAsync(portName));
+                }
+                else if (!isSimPresent && lastState)
+                {
+                    _lastSimState[portName] = false;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (Quét nền)!" });
+                    _ = SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+                    StartHotplugWaitLoop(portName);
+                }
+                
+                if (!_lastSimState.ContainsKey(portName))
+                {
+                    _lastSimState[portName] = isSimPresent; // Lần đầu gán giá trị khởi tạo
+                }
+            }
+        });
     }
 
     public void StartHotplugWaitLoop(string portName)
@@ -1780,6 +1843,11 @@ public class GsmModemService : IGsmModemService
             {
                 try { kCts.Cancel(); kCts.Dispose(); } catch {}
             }
+            if (_simMonitorCts.TryRemove(portName, out var smCts))
+            {
+                try { smCts.Cancel(); smCts.Dispose(); } catch {}
+            }
+            _lastSimState.TryRemove(portName, out _);
         }
     }
 

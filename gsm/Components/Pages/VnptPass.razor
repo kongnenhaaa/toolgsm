@@ -108,7 +108,6 @@
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
     private bool _isSetting = false;
-    private CancellationTokenSource? _cts;
 
 
 
@@ -193,7 +192,6 @@
 
     void StopSetPassword()
     {
-        _cts?.Cancel();
         _isSetting = false;
         Snackbar.Add("Đã dừng", Severity.Normal);
     }
@@ -219,8 +217,6 @@
     public void Dispose()
     {
         _timer?.Dispose();
-        _cts?.Cancel();
-        _cts?.Dispose();
     }
 
 

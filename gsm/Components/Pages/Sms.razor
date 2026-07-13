@@ -1,4 +1,4 @@
-﻿@page "/sms"
+@page "/sms"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -59,7 +59,7 @@
                     Xóa lịch sử tin nhắn
                 </MudButton>
             </MudStack>
-            <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0" Height="420px">
+            <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>

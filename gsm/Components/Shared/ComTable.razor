@@ -171,6 +171,20 @@
     {
         if (p == null) return false;
         var s = p.Status?.ToString() ?? "";
+        
+        // Loại trừ tuyệt đối các trạng thái không thể chấp nhận
+        if (s == "Chờ cắm SIM" || 
+            s == "Không phản hồi" || 
+            s == "No Response" || 
+            s == "Connecting" || 
+            s == gsm.Models.SimStatus.Connecting || 
+            s == gsm.Models.SimStatus.NoResponse || 
+            s == gsm.Models.SimStatus.Active || 
+            s == "Đang hoạt động")
+        {
+            return false;
+        }
+
         var err = p.LastError?.ToLowerInvariant() ?? "";
         return s == gsm.Models.SimStatus.SecurityBlocked
             || s.Contains("Pending", StringComparison.OrdinalIgnoreCase)
@@ -362,9 +376,9 @@
     async Task OpenSettingsDialog()
     {
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-        var dialog = DialogService.Show<ComSettingsDialog>("Cấu hình hiển thị Cột & Cổng", options);
+        var dialog = await DialogService.ShowAsync<ComSettingsDialog>("Cấu hình hiển thị Cột & Cổng", options);
         var result = await dialog.Result;
-        if (!result.Canceled)
+        if (result != null && !result.Canceled)
         {
             StateHasChanged();
         }

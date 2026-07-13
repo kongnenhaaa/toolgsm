@@ -29,7 +29,8 @@ public interface IGsmModemService
     Task<bool> AcceptNewSimAndPaintImeiAsync(string portName, string targetImei);
     Task<bool> CallWithAudioAsync(string portName, string phoneNumber, string? wavPath, int durationSeconds = 30, bool record = false, CancellationToken ct = default);
 
-    
+    Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
+
     // Events
     event EventHandler<GsmDataEventArgs> SmsReceived;
     event EventHandler<GsmDataEventArgs> LogMessage;
@@ -70,6 +71,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _simMonitorCts = new();
     private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
     private readonly object _connectLock = new object();
+
+    public Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
 
     // ===================== SMS DECODE + MULTIPART =====================
     static readonly Regex OtpRegex = new(
@@ -589,6 +592,7 @@ public class GsmModemService : IGsmModemService
 
         if (!ccid.Contains("ERROR"))
         {
+            _lastSimState[portName] = true;
             // Xóa toàn bộ SMS cũ trong SIM để tránh bị đầy bộ nhớ khiến không nhận được CMTI mới
             await SendCommandAsync(portName, "AT+CMGD=1,4", 30000); 
             
@@ -612,20 +616,9 @@ public class GsmModemService : IGsmModemService
         }
         else
         {
+            _lastSimState[portName] = false;
             if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
-            
-            // Lấy cài đặt
-            var settings = gsm.Services.SettingsService.Current;
-            if (settings != null && settings.EnableNewSimIntakeMode)
-            {
-                // Không tự động tráng IMEI. Đẩy vào luồng chờ chấp nhận
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_WAITING_ACCEPT] SIM mới – đang chờ user chấp nhận" });
-                StartHotplugWaitLoop(portName);
-                return;
-            }
-
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
-
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Không đọc được SIM" });
             StartHotplugWaitLoop(portName);
         }
     }
@@ -753,13 +746,22 @@ public class GsmModemService : IGsmModemService
                 if (!_serialPorts.ContainsKey(portName)) break;
 
                 string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
-                bool isSimPresent = !cpin.Contains("ERROR") && (cpin.Contains("READY") || cpin.Contains("SIM PIN") || cpin.Contains("SIM PUK"));
                 
-                // Nếu không có CPIN, kiểm tra thêm bằng CCID để chắc chắn
-                if (!isSimPresent && !cpin.Contains("ERROR"))
+                // Nếu timeout (modem đang bận gọi điện) thì bỏ qua vòng lặp này
+                if (string.IsNullOrWhiteSpace(cpin)) continue;
+
+                bool isSimPresent = cpin.Contains("READY") || cpin.Contains("SIM PIN") || cpin.Contains("SIM PUK");
+                bool isSimRemoved = cpin.Contains("NOT INSERTED") || cpin.Contains("NOT READY") || 
+                                    cpin.Contains("ERROR: 10") || cpin.Contains("ERROR: 13") || cpin.Contains("ERROR: 14");
+
+                // Quectel sometimes returns generic ERROR when SIM is removed if CMEE=2 drops
+                if (!isSimPresent && !isSimRemoved && cpin.Contains("ERROR"))
                 {
-                     string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
-                     isSimPresent = !pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp);
+                    string qsimstat = await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true);
+                    if (qsimstat.Contains(",0")) 
+                    {
+                        isSimRemoved = true;
+                    }
                 }
 
                 _lastSimState.TryGetValue(portName, out bool lastState);
@@ -767,10 +769,9 @@ public class GsmModemService : IGsmModemService
                 if (isSimPresent && !lastState)
                 {
                     _lastSimState[portName] = true;
-                    // Bổ trợ cho Option 1: Nếu URC bị trượt, vòng lặp này sẽ bắt lại
                     _ = Task.Run(() => HandleSimInsertedAsync(portName));
                 }
-                else if (!isSimPresent && lastState)
+                else if (isSimRemoved && lastState)
                 {
                     _lastSimState[portName] = false;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (Quét nền)!" });
@@ -780,7 +781,7 @@ public class GsmModemService : IGsmModemService
                 
                 if (!_lastSimState.ContainsKey(portName))
                 {
-                    _lastSimState[portName] = isSimPresent; // Lần đầu gán giá trị khởi tạo
+                    _lastSimState[portName] = isSimPresent || !isSimRemoved; // Giá trị khởi tạo
                 }
             }
         });
@@ -843,24 +844,33 @@ public class GsmModemService : IGsmModemService
 
                         // Đọc IMEI hiện tại (vẫn offline)
                         string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
+                        string cleanImei = "";
                         if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
                         {
+                            cleanImei = currentImei.Replace("OK", "").Trim();
                             LogMessage?.Invoke(this, new GsmDataEventArgs 
                             { 
                                 PortName = portName, 
-                                Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" 
+                                Data = $"[PARSE_IMEI] {cleanImei}" 
                             });
                         }
 
+                        string ccid = pollResp.Replace("OK", "").Trim();
                         LogMessage?.Invoke(this, new GsmDataEventArgs 
                         { 
                             PortName = portName, 
-                            Data = $"[PARSE_CCID] {pollResp.Replace("OK", "").Trim()}" 
+                            Data = $"[PARSE_CCID] {ccid}" 
                         });
+
+                        bool isNewSim = true;
+                        if (RequiresSimAcceptanceCheck != null)
+                        {
+                            isNewSim = RequiresSimAcceptanceCheck(ccid, cleanImei);
+                        }
 
                         // Quan trọng: Báo cho UI biết đây là SIM mới đang chờ chấp nhận
                         var settings = gsm.Services.SettingsService.Current;
-                        if (settings != null && settings.EnableNewSimIntakeMode)
+                        if (settings != null && settings.EnableNewSimIntakeMode && isNewSim)
                         {
                             isWaitingForAcceptance = true;
                             LogMessage?.Invoke(this, new GsmDataEventArgs 
@@ -909,9 +919,11 @@ public class GsmModemService : IGsmModemService
 
         // Đọc IMEI hiện tại
         string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
+        string cleanImei = "";
         if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
         {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" });
+            cleanImei = currentImei.Replace("OK", "").Trim();
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
         }
 
         // Đọc CCID
@@ -920,10 +932,17 @@ public class GsmModemService : IGsmModemService
 
         if (hasSim)
         {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {pollResp.Replace("OK", "").Trim()}" });
+            string ccid = pollResp.Replace("OK", "").Trim();
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid}" });
+
+            bool isNewSim = true;
+            if (RequiresSimAcceptanceCheck != null)
+            {
+                isNewSim = RequiresSimAcceptanceCheck(ccid, cleanImei);
+            }
 
             var settings = gsm.Services.SettingsService.Current;
-            if (settings != null && settings.EnableNewSimIntakeMode)
+            if (settings != null && settings.EnableNewSimIntakeMode && isNewSim)
             {
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_WAITING_ACCEPT] SIM mới đã cắm – CHỜ USER CHẤP NHẬN" });
             }
@@ -1660,8 +1679,13 @@ public class GsmModemService : IGsmModemService
                 buffer.Replace("+QSIMSTAT: 1,1", "");
                 currentData = buffer.ToString();
                 
-                // Khởi động luồng đọc CCID và IMEI, sau đó báo UI
-                _ = Task.Run(() => HandleSimInsertedAsync(portName));
+                _lastSimState.TryGetValue(portName, out bool lastState);
+                if (!lastState)
+                {
+                    _lastSimState[portName] = true;
+                    // Khởi động luồng đọc CCID và IMEI, sau đó báo UI
+                    _ = Task.Run(() => HandleSimInsertedAsync(portName));
+                }
             }
 
             if (currentData.Contains("+CPIN: NOT READY") || currentData.Contains("+CPIN: NOT INSERTED") || currentData.Contains("+QSIMSTAT: 1,0"))
@@ -1671,6 +1695,8 @@ public class GsmModemService : IGsmModemService
                 buffer.Replace("+CPIN: NOT INSERTED", "");
                 buffer.Replace("+QSIMSTAT: 1,0", "");
                 currentData = buffer.ToString();
+                
+                _lastSimState[portName] = false;
                 
                 // Tắt sóng (AT+CFUN=4) để an toàn
                 _ = SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);

@@ -1034,6 +1034,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ExportColumns.Add(new ExportColumnItem("Khóa 2C", "Lock2C"));
 
         _modemService = new GsmModemService();
+        _modemService.RequiresSimAcceptanceCheck = (ccid, imei) =>
+        {
+            string normCcid = NormalizeCcid(ccid);
+            if (string.IsNullOrEmpty(normCcid)) return true;
+            _imeiCache.TryGetValue(normCcid, out var entry);
+            
+            bool hasValidBackup = entry != null && 
+                                  !string.IsNullOrWhiteSpace(entry.Imei) && 
+                                  entry.Imei.Length >= 14 && 
+                                  !entry.Imei.Contains("ERROR");
+                                  
+            bool isHardwareImeiValid = !string.IsNullOrWhiteSpace(imei) && 
+                                       imei.Length >= 14 && 
+                                       !imei.Contains("ERROR") && 
+                                       !Services.ImeiManagementService.IsFakeImei(imei);
+            
+            bool treatAsNewSim = (entry == null) || (!isHardwareImeiValid && !hasValidBackup);
+            return treatAsNewSim;
+        };
         _imeiManagementService = new Services.ImeiManagementService(_modemService, (msg, level) => AddLog(msg, level));
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
@@ -1172,46 +1191,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }, lifetimeToken);
 
-        // Tự động kiểm tra phát hiện rút SIM (Hot-plug Auto-Airplane)
-        _ = Task.Run(async () =>
-        {
-            while (!lifetimeToken.IsCancellationRequested)
-            {
-                try { await Task.Delay(TimeSpan.FromSeconds(3), lifetimeToken); }
-                catch (OperationCanceledException) { break; }
-
-                var portsCopy = GetPortsSnapshot();
-                foreach (var p in portsCopy)
-                {
-                    if (lifetimeToken.IsCancellationRequested) break;
-                    
-                    if (p.Status == SimStatus.Active || p.Status == SimStatus.NoResponse || p.Status == SimStatus.SecurityBlocked)
-                    {
-                        // Kiểm tra trạng thái SIM qua cổng COM
-                        string pinStatus = await _modemService.SendCommandAsync(p.PortName, "AT+CPIN?", 3000, silent: true);
-                        
-                        bool isSystemError = pinStatus.Contains("Timeout") || pinStatus.Contains("ERROR: Another command is already in progress");
-                        
-                        if (!isSystemError && (pinStatus.Contains("ERROR") || pinStatus.Contains("+CME ERROR: 10")))
-                        {
-                            // Phát hiện SIM bị rút ra, lập tức khóa sóng
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                AddLog($"[{p.PortName}] Phát hiện thẻ SIM bị rút ra. Tự động chuyển cổng về chế độ Tắt sóng (AT+CFUN=4)...");
-                                p.Status = SimStatus.Connecting;
-                                p.PhoneNumber = string.Empty;
-                                p.Serial = string.Empty;
-                                p.Imei = string.Empty; // Xoá IMEI trên UI để lần cắm sau tự đọc lại IMEI thật
-                                UpdateDashboard();
-                            });
-                            
-                            // Gọi vòng lặp chờ SIM (trong vòng lặp này nó sẽ liên tục gửi AT+CFUN=4)
-                            _modemService.StartHotplugWaitLoop(p.PortName);
-                        }
-                    }
-                }
-            }
-        }, lifetimeToken);
 
         // Tự động phục hồi (Watchdog)
         _ = Task.Run(async () =>
@@ -2054,7 +2033,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (e.Data.StartsWith("[WAITING_FOR_SIM]"))
             {
-                port.Status = SimStatus.Connecting;
+                port.Status = "Chờ cắm SIM";
                 port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
                 port.PhoneNumber = string.Empty;
                 port.Imei = string.Empty;
@@ -2075,6 +2054,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.LastImeiResult = string.Empty;
                 port.LastDataResult = string.Empty;
                 port.LastDelayResult = string.Empty;
+                port.LastError = string.Empty;
+                UpdateDashboard();
             }
             else if (e.Data.StartsWith("Lỗi kết nối"))
             {
@@ -2098,6 +2079,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.Otp = string.Empty;
                 port.LastMessageContent = string.Empty;
                 port.SignalStrength = 0;
+                port.LastError = string.Empty;
+                UpdateDashboard();
             }
             else if (e.Data.Contains("+CSQ:"))
             {

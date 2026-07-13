@@ -1,4 +1,4 @@
-@page "/call"
+﻿@page "/call"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -277,7 +277,19 @@
                 // Ưu tiên method đầy đủ của ViewModel (hỗ trợ WAV + ghi âm)
                 if (HasMethod(Vm, "ExecuteCallFromUiAsync"))
                 {
-                    await (Task)Vm.GetType().GetMethod("ExecuteCallFromUiAsync")!.Invoke(Vm, new object[] { port, _phone, _wavPath ?? "", _duration, _recordCall })!;
+                    var callTask = (Task)Vm.GetType().GetMethod("ExecuteCallFromUiAsync")!.Invoke(Vm, new object[] { port, _phone, _wavPath ?? "", _duration, _recordCall })!;
+                    
+                    int maxSeconds = _duration + 45; 
+                    for (int i = 0; i < maxSeconds; i++)
+                    {
+                        if (_callCts.Token.IsCancellationRequested || callTask.IsCompleted) break;
+                        _elapsedSeconds = i + 1;
+                        _progressPercent = Math.Min(100.0, (_elapsedSeconds * 100.0) / _duration);
+                        StateHasChanged();
+                        try { await Task.Delay(1000, _callCts.Token); } catch { break; }
+                    }
+                    
+                    await callTask;
                     success = true;
                     resultMsg = "OK";
                 }
@@ -611,3 +623,4 @@
         public string Status { get; set; } = "Chờ";
     }
 }
+

@@ -1,4 +1,4 @@
-<Window x:Class="gsm.MainWindow"
+﻿<Window x:Class="gsm.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -10,6 +10,7 @@
         Height="920" Width="1480"
         MinHeight="700" MinWidth="1100"
         WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
         Background="White">
 
     <Grid>

@@ -1,4 +1,4 @@
-namespace gsm.Models;
+﻿namespace gsm.Models;
 
 public static class SimStatus
 {

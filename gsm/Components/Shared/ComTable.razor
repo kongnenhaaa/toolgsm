@@ -1,4 +1,4 @@
-@using gsm.Models
+﻿@using gsm.Models
 @using gsm.Components.Shared
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -75,29 +75,29 @@
                 }
                 else if (col.Name == "NetworkProvider")
                 {
-                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap;">@(context.NetworkProvider ?? "—")</MudTd>
+                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap;">@RenderLoadingOrValue(context, context.NetworkProvider)</MudTd>
                 }
                 else if (col.Name == "Balance")
                 {
                     <MudTd Style="color:#16A34A; font-weight:600; border-bottom:1px solid #F1F5F9; white-space: nowrap;">
-                        @(string.IsNullOrEmpty(context.Balance) ? "—" : context.Balance)
+                        @RenderLoadingOrValue(context, context.Balance)
                     </MudTd>
                 }
                 else if (col.Name == "PhoneNumber")
                 {
-                    <MudTd Style="@("border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
+                    <MudTd Style="@("border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.PhoneNumber)</MudTd>
                 }
                 else if (col.Name == "Imei")
                 {
-                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@(context.Imei ?? "—")</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.Imei)</MudTd>
                 }
                 else if (col.Name == "Serial")
                 {
-                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@(context.Serial ?? "—")</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.Serial)</MudTd>
                 }
                 else if (col.Name == "ExpiryDate")
                 {
-                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@(context.ExpiryDate ?? "—")</MudTd>
+                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@RenderLoadingOrValue(context, context.ExpiryDate)</MudTd>
                 }
                 else if (col.Name == "SimRegDate")
                 {
@@ -352,4 +352,15 @@
         public string Name { get; set; } = "";
         public string Header { get; set; } = "";
     }
+    private RenderFragment RenderLoadingOrValue(gsm.Models.SimPort context, string value, string fallback = "—") => __builder =>
+    {
+        if ((string.IsNullOrEmpty(value) || value.Contains("Chưa")) && (context.Status == "Active" || context.Status == "Đang kết nối..."))
+        {
+            <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
+        }
+        else
+        {
+            @(!string.IsNullOrEmpty(value) ? value : fallback)
+        }
+    };
 }

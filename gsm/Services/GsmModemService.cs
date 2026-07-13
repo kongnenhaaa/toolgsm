@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -121,6 +121,19 @@ public class GsmModemService : IGsmModemService
 
     static string DecodeUcs2Hex(string hex)
     {
+        // Loại bỏ User Data Header (UDH) của tin nhắn ghép nối trong chế độ Text
+        // UDH 8-bit ref: 05 00 03 [Ref] [Total] [Seq] -> 6 bytes = 12 hex chars
+        if (hex.StartsWith("050003", StringComparison.OrdinalIgnoreCase) && hex.Length >= 12)
+        {
+            hex = hex.Substring(12);
+        }
+        // UDH 16-bit ref: 06 08 04 [RefHi] [RefLo] [Total] [Seq] -> 7 bytes = 14 hex chars
+        // Lưu ý: Nếu UDH lẻ byte (7 bytes), hệ thống SMS thường thêm 1 byte padding (lên 8 bytes = 16 hex chars) để căn lề UCS2
+        else if (hex.StartsWith("060804", StringComparison.OrdinalIgnoreCase) && hex.Length >= 14)
+        {
+            hex = hex.Substring(hex.Length % 4 == 2 ? 14 : 16); // tự động bù padding
+        }
+
         var bytes = new byte[hex.Length / 2];
         for (int i = 0; i < bytes.Length; i++)
             bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
@@ -151,7 +164,7 @@ public class GsmModemService : IGsmModemService
                 _multipartBuffer.TryRemove(kv.Key, out _);
         }
 
-        bool looksLikePart = partContent.Length < 140 &&
+        bool looksLikePart = partContent.Length <= 160 &&
                              (partContent.EndsWith("...") ||
                               partContent.EndsWith("…") ||
                               (!partContent.EndsWith(".") && !partContent.EndsWith("!") && !partContent.EndsWith("?") && partContent.Length > 50));
@@ -191,6 +204,7 @@ public class GsmModemService : IGsmModemService
             string val = m.Groups[1].Value.Trim();
             if (IsHexString(val))
             {
+                if (Regex.IsMatch(val, @"^\d+$") && !Regex.IsMatch(val, @"^(00[2-7][0-9])+$")) return val;
                 try { return DecodeUcs2Hex(val); } catch { }
             }
             return val;
@@ -678,6 +692,18 @@ public class GsmModemService : IGsmModemService
 
     public void StartHotplugWaitLoop(string portName)
     {
+        CancellationToken token;
+        lock (_pollingCts)
+        {
+            if (_pollingCts.TryGetValue(portName, out var oldCts))
+            {
+                try { oldCts.Cancel(); oldCts.Dispose(); } catch {}
+            }
+            var newCts = new CancellationTokenSource();
+            _pollingCts[portName] = newCts;
+            token = newCts.Token;
+        }
+
         _ = Task.Run(async () =>
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs 
@@ -690,9 +716,11 @@ public class GsmModemService : IGsmModemService
             await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
 
             int cfunCheckCounter = 0;
-            while (true)
+            bool isWaitingForAcceptance = false;
+
+            while (!token.IsCancellationRequested)
             {
-                await Task.Delay(2000);
+                try { await Task.Delay(2000, token); } catch { break; }
                 if (!_serialPorts.ContainsKey(portName)) break;
 
                 // Kiểm tra CFUN mỗi 10 giây
@@ -708,48 +736,66 @@ public class GsmModemService : IGsmModemService
                 }
 
                 string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
-                if (!pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp))
+                bool hasSim = !pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp);
+
+                if (hasSim)
                 {
-                    // Có SIM rồi → ép tắt sóng lần nữa
-                    await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
-
-                    // Đọc IMEI hiện tại (vẫn offline)
-                    string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
-                    if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
+                    if (!isWaitingForAcceptance)
                     {
+                        // Có SIM rồi → ép tắt sóng lần nữa
+                        await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+
+                        // Đọc IMEI hiện tại (vẫn offline)
+                        string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
+                        if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
+                        {
+                            LogMessage?.Invoke(this, new GsmDataEventArgs 
+                            { 
+                                PortName = portName, 
+                                Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" 
+                            });
+                        }
+
                         LogMessage?.Invoke(this, new GsmDataEventArgs 
                         { 
                             PortName = portName, 
-                            Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" 
+                            Data = $"[PARSE_CCID] {pollResp.Replace("OK", "").Trim()}" 
                         });
+
+                        // Quan trọng: Báo cho UI biết đây là SIM mới đang chờ chấp nhận
+                        var settings = gsm.Services.SettingsService.Current;
+                        if (settings != null && settings.EnableNewSimIntakeMode)
+                        {
+                            isWaitingForAcceptance = true;
+                            LogMessage?.Invoke(this, new GsmDataEventArgs 
+                            { 
+                                PortName = portName, 
+                                Data = "[STATUS_WAITING_ACCEPT] SIM mới đã cắm – CHỜ USER CHẤP NHẬN" 
+                            });
+                        }
+                        else 
+                        {
+                            LogMessage?.Invoke(this, new GsmDataEventArgs 
+                            { 
+                                PortName = portName, 
+                                Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận diện SIM thay nóng, đang cấu hình..." 
+                            });
+                            break; // Thoát vòng lặp, nhường cho tiến trình xử lý auto
+                        }
                     }
-
-                    LogMessage?.Invoke(this, new GsmDataEventArgs 
-                    { 
-                        PortName = portName, 
-                        Data = $"[PARSE_CCID] {pollResp.Replace("OK", "").Trim()}" 
-                    });
-
-                    // Quan trọng: Báo cho UI biết đây là SIM mới đang chờ chấp nhận
-                    var settings = gsm.Services.SettingsService.Current;
-                    if (settings != null && settings.EnableNewSimIntakeMode)
+                }
+                else
+                {
+                    if (isWaitingForAcceptance)
                     {
+                        // Đang chờ chấp nhận nhưng SIM lại bị rút ra!
+                        isWaitingForAcceptance = false;
                         LogMessage?.Invoke(this, new GsmDataEventArgs 
                         { 
                             PortName = portName, 
-                            Data = "[STATUS_WAITING_ACCEPT] SIM mới đã cắm – CHỜ USER CHẤP NHẬN" 
+                            Data = "[WAITING_FOR_SIM] SIM đã bị rút ra!" 
                         });
                     }
-                    else 
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs 
-                        { 
-                            PortName = portName, 
-                            Data = "[STATUS_WAITING_ACCEPT] SIM lạ – CHỜ CHẤP NHẬN HOẶC ĐĂNG KÝ VÀO BACKUP" 
-                        });
-                    }
-
-                    break; // Thoát vòng lặp, giữ CFUN=4
                 }
             }
         });
@@ -921,11 +967,13 @@ public class GsmModemService : IGsmModemService
                 string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
                 if (vendor.Contains("QUECTEL"))
                 {
+                    await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
                     await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
                     await SendCommandAsync(portName, "AT+QCSQ", 5000, silent: true);
                 }
                 else
                 {
+                    await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
                     await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
                     await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true);
                 }
@@ -1646,6 +1694,10 @@ public class GsmModemService : IGsmModemService
             {
                 sp.Open();
                 if (sp.IsOpen) return true;
+                
+                // NẾU Open() KHÔNG throw lỗi nhưng IsOpen VẪN false (Lỗi driver Windows ảo)
+                Disconnect(portName);
+                PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Lỗi ngầm: Không thể mở cổng dù driver không báo lỗi!" });
             }
             catch (Exception ex)
             {
@@ -2579,4 +2631,6 @@ public class GsmModemService : IGsmModemService
         }
     }
 }
+
+
 

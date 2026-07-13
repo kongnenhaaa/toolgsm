@@ -1,4 +1,4 @@
-namespace gsm.MockModels
+﻿namespace gsm.MockModels
 {
     public enum SimStatus
     {

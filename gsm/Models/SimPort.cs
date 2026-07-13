@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace gsm.Models;
 
@@ -29,8 +29,31 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _phoneNumber = string.Empty;
     
-    [ObservableProperty]
     private string _networkProvider = string.Empty;
+    public string NetworkProvider
+    {
+        get => _networkProvider;
+        set
+        {
+            string val = value ?? string.Empty;
+            string upper = val.ToUpperInvariant();
+            
+            if (upper.Contains("VINAPHONE VINAPHONE")) val = "VinaPhone";
+            else if (upper.Contains("VINAPHONE") || upper.Contains("VINA")) val = "VinaPhone";
+            else if (upper.Contains("VIETTEL")) val = "Viettel";
+            else if (upper.Contains("MOBIFONE") || upper.Contains("MOBI")) val = "MobiFone";
+            else if (upper.Contains("VIETNAMOBILE") || upper.Contains("VNM")) val = "Vietnamobile";
+            else if (upper.Contains("GMOBILE")) val = "Gmobile";
+            else if (upper.Contains("WINTEL")) val = "Wintel";
+            else if (upper.Contains("ITELECOM") || upper.Contains("ITEL")) val = "iTel";
+            else if (val == "45204") val = "Viettel";
+            else if (val == "45202") val = "VinaPhone";
+            else if (val == "45201") val = "MobiFone";
+            else if (val == "45205") val = "Vietnamobile";
+            
+            SetProperty(ref _networkProvider, val);
+        }
+    }
     [ObservableProperty]
     private string _lastReceivedTime = string.Empty;
     
@@ -50,7 +73,7 @@ public partial class SimPort : ObservableObject
     private string _sender = string.Empty;
     
     [ObservableProperty]
-    private string _status = "Active"; // Active, Inactive, Error
+    private string _status = "Chờ cắm SIM"; // Active, Inactive, Error
 
     [ObservableProperty]
     private string _lastCommandResult = string.Empty;

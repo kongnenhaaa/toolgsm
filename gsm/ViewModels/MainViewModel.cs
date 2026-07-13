@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -377,10 +377,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO");
                         });
 
-                        // Bắt đầu đếm ngược 60 giây chờ OTP
+                        // Bắt đầu đếm ngược 120 giây chờ OTP
                         _ = Task.Run(async () =>
                         {
-                            await Task.Delay(60000);
+                            await Task.Delay(120000);
                             if (_pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _))
                             {
                                 Application.Current.Dispatcher.Invoke(() => 
@@ -1967,7 +1967,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 if (e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]") || e.Data.StartsWith("[NETWORK_RECOVERY]") || e.Data.StartsWith("[NETWORK_FAILED]") || e.Data.StartsWith("Lỗi kết nối"))
                 {
-                    port = new SimPort { PortName = e.PortName, Status = SimStatus.Active, SignalStrength = 0 };
+                    port = new SimPort { PortName = e.PortName, Status = "Chờ cắm SIM", SignalStrength = 0 };
                     port.PhysicalIndex = _modemService.GetAvailablePorts().IndexOf(e.PortName);
                     if (port.PhysicalIndex < 0) port.PhysicalIndex = int.MaxValue;
                     port.ReconnectCount++;
@@ -2025,11 +2025,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.DeviceName = "Đang khôi phục sóng...";
                 port.Status = SimStatus.Connecting;
             }
-            else if (e.Data.StartsWith("[NETWORK_FAILED]"))
+            else if (e.Data.Contains("[NETWORK_FAILED]") || e.Data.Contains("+CME ERROR: 10") || e.Data.Contains("+CME ERROR: 13") || e.Data.Contains("+CME ERROR: 11") || e.Data.Contains("+CPIN: NOT INSERTED") || e.Data.Contains("+CPIN: NOT READY") || e.Data.Contains("SIM not inserted"))
             {
-                port.DeviceName = "SIM hỏng hoặc không có sóng";
-                port.Status = SimStatus.NoResponse;
-                port.NetworkProvider = "MẤT SÓNG";
+                port.Status = "Chờ cắm SIM";
+                port.NetworkProvider = "NO SIM";
+                port.PhoneNumber = string.Empty;
+                port.Balance = string.Empty;
+                port.ExpiryDate = string.Empty;
+                port.Serial = string.Empty;
+                port.Otp = string.Empty;
+                port.LastMessageContent = string.Empty;
+                port.SignalStrength = 0;
             }
             else if (e.Data.Contains("+CSQ:"))
             {
@@ -2167,20 +2173,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (match.Success)
                 {
                     string provider = match.Groups[1].Value.Trim();
-                    if (provider == "45204") provider = "VIETTEL";
-                    else if (provider == "45202") provider = "VINAPHONE";
-                    else if (provider == "45201") provider = "MOBIFONE";
-                    else if (provider == "45205") provider = "VIETNAMOBILE";
-                    else if (provider == "45207") provider = "GMOBILE";
-                    else if (provider == "45208") provider = "I-TELECOM";
-                    else if (provider == "45209") provider = "WINTEL";
+                    if (provider == "45204") provider = "Viettel";
+                    else if (provider == "45202") provider = "VinaPhone";
+                    else if (provider == "45201") provider = "MobiFone";
+                    else if (provider == "45205") provider = "Vietnamobile";
+                    else if (provider == "45207") provider = "Gmobile";
+                    else if (provider == "45208") provider = "iTel";
+                    else if (provider == "45209") provider = "Wintel";
+                    else
+                    {
+                        string pUpper = provider.ToUpperInvariant();
+                        if (pUpper.Contains("VINAPHONE") || pUpper.Contains("VINA")) provider = "VinaPhone";
+                        else if (pUpper.Contains("VIETTEL")) provider = "Viettel";
+                        else if (pUpper.Contains("MOBIFONE") || pUpper.Contains("MOBI")) provider = "MobiFone";
+                        else if (pUpper.Contains("VIETNAMOBILE") || pUpper.Contains("VNM")) provider = "Vietnamobile";
+                        else if (pUpper.Contains("GMOBILE")) provider = "Gmobile";
+                        else if (pUpper.Contains("WINTEL")) provider = "Wintel";
+                        else if (pUpper.Contains("ITELECOM") || pUpper.Contains("ITEL")) provider = "iTel";
+                    }
 
                     port.NetworkProvider = provider;
                     port.Status = SimStatus.Active;
                     port.DeviceName = Services.ImeiManagementService.GetDeviceNameFromImei(port.Imei);
 
                     // Chỉ hiển thị SĐT & TKC sau khi đã hiện Nhà mạng thành công
-                    string cachedPhone = null;
+                    string? cachedPhone = null;
                     if (!string.IsNullOrEmpty(port.Serial))
                     {
                         _simCache.TryGetValue(port.Serial, out cachedPhone);
@@ -2504,6 +2521,77 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.LastError = "Chờ chấp nhận SIM mới";
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
+            }
+            else if (e.Data.StartsWith("[STATUS_HOTPLUG_SIM_DETECTED]"))
+            {
+                // Khi thay SIM nóng (không rút USB), tự động chạy luồng xử lý IMEI như lúc cắm USB
+                if (_imeiManagementService != null)
+                {
+                    port.Status = SimStatus.Connecting;
+                    port.DeviceName = "Đang cấu hình SIM mới...";
+                    UpdateDashboard();
+                    
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(1500); // Đợi parse CCID/IMEI hoàn tất vào model
+                        string ccid = port.Serial ?? "";
+                        string currentImei = port.Imei ?? "";
+                        
+                        var result = await _imeiManagementService.ProcessImeiAsync(
+                            port,
+                            ccid,
+                            currentImei,
+                            AppSettings,
+                            (queryCcid) => 
+                            {
+                                _imeiCache.TryGetValue(queryCcid, out var entry);
+                                return entry;
+                            },
+                            (newEntry) => AddNewImeiCacheEntry(newEntry),
+                            (action) => Application.Current.Dispatcher.Invoke(action),
+                            forceAccept: false
+                        );
+
+                        Application.Current.Dispatcher.Invoke(() => 
+                        {
+                            if (result.Status == Services.ImeiProcessStatus.Matched)
+                            {
+                                port.IsRebooting = false;
+                                port.Imei = result.FinalImei;
+                                MarkPortActiveAfterInit(port.PortName);
+                                _ = _modemService.ReinitializeSettingsAsync(port.PortName);
+                            }
+                            else if (result.Status == Services.ImeiProcessStatus.Applied)
+                            {
+                                port.IsRebooting = true;
+                                port.Imei = result.FinalImei;
+                                port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
+                                port.Status = SimStatus.Connecting;
+                                
+                                _ = Task.Run(async () =>
+                                {
+                                    await Task.Delay(15000);
+                                    if (port.IsRebooting)
+                                    {
+                                        Application.Current.Dispatcher.Invoke(() => 
+                                        {
+                                            port.IsRebooting = false;
+                                            AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
+                                            _modemService.StartHotplugWaitLoop(port.PortName);
+                                        });
+                                    }
+                                });
+                            }
+                            else
+                            {
+                                port.Status = SimStatus.SecurityBlocked;
+                                port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? "Lỗi khi xử lý IMEI" : result.ErrorMessage;
+                                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                                UpdateDashboard();
+                            }
+                        });
+                    });
+                }
             }
         });
     }
@@ -5336,11 +5424,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            // Kiểm tra xem có phải chuỗi HEX không và độ dài phải chia hết cho 4
-            if (!Regex.IsMatch(hexString, @"^[0-9A-Fa-f]+$") || hexString.Length % 4 != 0)
+            // Loại bỏ User Data Header (UDH) nếu đây là SMS ghép nối bị lỗi mode Text
+            if (hexString.StartsWith("050003", StringComparison.OrdinalIgnoreCase) && hexString.Length >= 12)
             {
-                return hexString; // Không phải UCS2
+                hexString = hexString.Substring(12);
             }
+            else if (hexString.StartsWith("060804", StringComparison.OrdinalIgnoreCase) && hexString.Length >= 14)
+            {
+                hexString = hexString.Substring(hexString.Length % 4 == 2 ? 14 : 16);
+            }
+
+            // Kiểm tra xem có phải chuỗi HEX không và độ dài phải chia hết cho 4
+            if (!Regex.IsMatch(hexString, @"^[0-9A-Fa-f]+$") || hexString.Length % 4 != 0) { return hexString; }
+            if (Regex.IsMatch(hexString, @"^\d+$") && !Regex.IsMatch(hexString, @"^(00[2-7][0-9])+$")) { return hexString; }
 
             StringBuilder sb = new StringBuilder();
             for (int i = 0; i < hexString.Length; i += 4)
@@ -6394,4 +6490,5 @@ public partial class ExportColumnItem : ObservableObject
         IsSelected = isSelected;
     }
 }
+
 

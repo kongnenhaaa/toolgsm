@@ -79,10 +79,10 @@ public class AppSettings
 
 
     // ========== IMEI BACKUP & RESTORE ==========
-    public bool BlockUnknownSims { get => true; set { } }
+    public bool BlockUnknownSims { get => BlockUnknown; set => BlockUnknown = value; }
 
-    public bool EnableImeiRestore { get => true; set { } }
-    public bool EnableNewSimIntakeMode { get => true; set { } }
+    public bool EnableImeiRestore { get => AutoRestoreImei; set => AutoRestoreImei = value; }
+    public bool EnableNewSimIntakeMode { get => NewSimIntake; set => NewSimIntake = value; }
 
     // ========== COLUMN VISIBILITY SETTINGS ==========
     public bool ShowColStt { get; set; } = true;

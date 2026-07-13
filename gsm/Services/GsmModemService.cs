@@ -561,7 +561,8 @@ public class GsmModemService : IGsmModemService
             var settings = gsm.Services.SettingsService.Current;
             int imsVal = (settings != null && settings.EnableVolte) ? 1 : 0;
             await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 10000, silent: true); // Cấu hình VoLTE theo Settings
-            await SendCommandAsync(portName, "AT+QSIMDET=0,0", 10000, silent: true); // Tắt phát hiện chân SIM vật lý (ép đọc SIM)
+            await SendCommandAsync(portName, "AT+QSIMDET=1,0", 10000, silent: true); // Bật phát hiện chân SIM vật lý
+            await SendCommandAsync(portName, "AT+QSIMSTAT=1", 10000, silent: true); // Bật báo cáo trạng thái SIM URC
             await SendCommandAsync(portName, "AT&W", 10000, silent: true); // Lưu cấu hình vào bộ nhớ profile modem
             await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
             // Bật xuất âm thanh cuộc gọi ra cổng USB (UAC) cho Quectel EC20
@@ -693,7 +694,8 @@ public class GsmModemService : IGsmModemService
             var settings = gsm.Services.SettingsService.Current;
             int imsVal = (settings != null && settings.EnableVolte) ? 1 : 0;
             await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 5000, silent: true); // Cấu hình VoLTE theo Settings
-            await SendCommandAsync(portName, "AT+QSIMDET=0,0", 5000, silent: true); // Tắt phát hiện SIM vật lý
+            await SendCommandAsync(portName, "AT+QSIMDET=1,0", 5000, silent: true); // Bật phát hiện SIM vật lý
+            await SendCommandAsync(portName, "AT+QSIMSTAT=1", 5000, silent: true); // Bật báo cáo trạng thái SIM URC
             await SendCommandAsync(portName, "AT&W", 5000, silent: true);
             await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true); // Bật bộ phát hiện âm tần DTMF
             await SendCommandAsync(portName, "AT+QPCMV=0,0", 5000, silent: true);
@@ -835,6 +837,47 @@ public class GsmModemService : IGsmModemService
                 }
             }
         });
+    }
+
+    public async Task HandleSimInsertedAsync(string portName)
+    {
+        if (!_serialPorts.ContainsKey(portName)) return;
+
+        // Đợi 2 giây để thẻ SIM khởi động bên trong modem
+        await Task.Delay(2000);
+        
+        // Đảm bảo tắt sóng trước khi làm việc với CCID/IMEI
+        await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+
+        // Đọc IMEI hiện tại
+        string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
+        if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {currentImei.Replace("OK", "").Trim()}" });
+        }
+
+        // Đọc CCID
+        string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
+        bool hasSim = !pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp);
+
+        if (hasSim)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {pollResp.Replace("OK", "").Trim()}" });
+
+            var settings = gsm.Services.SettingsService.Current;
+            if (settings != null && settings.EnableNewSimIntakeMode)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_WAITING_ACCEPT] SIM mới đã cắm – CHỜ USER CHẤP NHẬN" });
+            }
+            else 
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận diện SIM thay nóng qua URC, đang cấu hình..." });
+            }
+        }
+        else
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Không đọc được SIM (Lỗi phần cứng hoặc SIM hỏng)" });
+        }
     }
 
     public async Task<bool> AcceptNewSimAndPaintImeiAsync(string portName, string targetImei)
@@ -1552,16 +1595,29 @@ public class GsmModemService : IGsmModemService
             }
 
             // ---------------------------------------------------------
-            // 1.4. BẮT RÚT SIM (HOT-UNPLUG)
+            // 1.4. BẮT RÚT SIM VÀ CẮM SIM (HOT-PLUG)
             // ---------------------------------------------------------
-            if (currentData.Contains("+CPIN: NOT READY") || currentData.Contains("+CPIN: NOT INSERTED"))
+            if (currentData.Contains("+QSIMSTAT: 1,1"))
+            {
+                buffer.Replace("+QSIMSTAT: 1,1", "");
+                currentData = buffer.ToString();
+                
+                // Khởi động luồng đọc CCID và IMEI, sau đó báo UI
+                _ = Task.Run(() => HandleSimInsertedAsync(portName));
+            }
+
+            if (currentData.Contains("+CPIN: NOT READY") || currentData.Contains("+CPIN: NOT INSERTED") || currentData.Contains("+QSIMSTAT: 1,0"))
             {
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra!" });
                 buffer.Replace("+CPIN: NOT READY", "");
                 buffer.Replace("+CPIN: NOT INSERTED", "");
+                buffer.Replace("+QSIMSTAT: 1,0", "");
                 currentData = buffer.ToString();
                 
-                // Khởi động lại luồng chờ SIM
+                // Tắt sóng (AT+CFUN=4) để an toàn
+                _ = SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+                
+                // Khởi động lại luồng chờ SIM (để UI tiếp tục theo dõi nếu hụt URC)
                 StartHotplugWaitLoop(portName);
             }
 

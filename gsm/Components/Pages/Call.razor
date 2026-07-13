@@ -1,4 +1,4 @@
-﻿@page "/call"
+@page "/call"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -277,21 +277,28 @@
                 // Ưu tiên method đầy đủ của ViewModel (hỗ trợ WAV + ghi âm)
                 if (HasMethod(Vm, "ExecuteCallFromUiAsync"))
                 {
-                    var callTask = (Task)Vm.GetType().GetMethod("ExecuteCallFromUiAsync")!.Invoke(Vm, new object[] { port, _phone, _wavPath ?? "", _duration, _recordCall })!;
+                    var callTask = Vm.GetType().GetMethod("ExecuteCallFromUiAsync")!.Invoke(Vm, new object[] { port, _phone, _wavPath ?? "", _duration, _recordCall })!;
                     
                     int maxSeconds = _duration + 45; 
                     for (int i = 0; i < maxSeconds; i++)
                     {
-                        if (_callCts.Token.IsCancellationRequested || callTask.IsCompleted) break;
+                        if (_callCts.Token.IsCancellationRequested || ((Task)callTask).IsCompleted) break;
                         _elapsedSeconds = i + 1;
                         _progressPercent = Math.Min(100.0, (_elapsedSeconds * 100.0) / _duration);
                         StateHasChanged();
                         try { await Task.Delay(1000, _callCts.Token); } catch { break; }
                     }
                     
-                    await callTask;
-                    success = true;
-                    resultMsg = "OK";
+                    if (callTask is Task<bool> boolTask)
+                    {
+                        success = await boolTask;
+                    }
+                    else
+                    {
+                        await (Task)callTask;
+                        success = true;
+                    }
+                    resultMsg = success ? "OK" : "Lỗi kết nối / Không nhấc máy";
                 }
                 else
                 {
@@ -322,8 +329,16 @@
                     resultMsg = "OK";
                 }
 
-                okCount++;
-                Snackbar.Add($"[{port}] Gọi xong", Severity.Success);
+                if (success)
+                {
+                    okCount++;
+                    Snackbar.Add($"[{port}] Gọi xong", Severity.Success);
+                }
+                else
+                {
+                    failCount++;
+                    Snackbar.Add($"[{port}] Gọi thất bại: {resultMsg}", Severity.Warning);
+                }
             }
             catch (Exception ex)
             {

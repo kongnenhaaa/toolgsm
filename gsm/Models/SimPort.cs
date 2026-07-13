@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace gsm.Models;
 
@@ -72,8 +72,19 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _sender = string.Empty;
     
-    [ObservableProperty]
-    private string _status = "Chờ cắm SIM"; // Active, Inactive, Error
+    private string _status = "Chờ cắm SIM";
+    public string Status
+    {
+        get => _status;
+        set
+        {
+            if (SetProperty(ref _status, value))
+            {
+                StatusChangedAt = DateTime.Now;
+            }
+        }
+    }
+    public DateTime StatusChangedAt { get; set; } = DateTime.Now;
 
     [ObservableProperty]
     private string _lastCommandResult = string.Empty;

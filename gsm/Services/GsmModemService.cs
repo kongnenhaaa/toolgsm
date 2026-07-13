@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -145,6 +145,7 @@ public class GsmModemService : IGsmModemService
         public string Port { get; set; } = "";
         public string Sender { get; set; } = "";
         public List<string> Parts { get; set; } = new();
+        public List<string> MsgIndices { get; set; } = new();
         public DateTime LastAt { get; set; } = DateTime.Now;
         public string? Combined => Parts.Count == 0 ? null : string.Join("", Parts);
     }
@@ -153,15 +154,41 @@ public class GsmModemService : IGsmModemService
     private static readonly TimeSpan MultipartTimeout = TimeSpan.FromSeconds(45);
     string MultipartKey(string port, string sender) => $"{port}|{sender}";
 
-    string? TryAssembleMultipart(string port, string sender, string partContent)
+    string? TryAssembleMultipart(string port, string sender, string partContent, string msgIndex, out List<string> indicesToDelete)
     {
+        indicesToDelete = new List<string>();
         var key = MultipartKey(port, sender);
         var now = DateTime.Now;
 
         foreach (var kv in _multipartBuffer.ToArray())
         {
             if (now - kv.Value.LastAt > MultipartTimeout)
-                _multipartBuffer.TryRemove(kv.Key, out _);
+            {
+                if (_multipartBuffer.TryRemove(kv.Key, out var timedOut))
+                {
+                    string? fullText = timedOut.Combined;
+                    if (!string.IsNullOrEmpty(fullText))
+                    {
+                        string? otp = ExtractOtp(fullText);
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = timedOut.Port, Data = $"[MULTIPART] Ghép nối tin dài từ {timedOut.Sender} quá hạn, tự động xuất phần đã nhận." });
+                        
+                        // Xóa các phần tin nhắn cũ trên SIM
+                        foreach (var idx in timedOut.MsgIndices)
+                        {
+                            _ = SendCommandAsync(timedOut.Port, $"AT+CMGD={idx}", 3000, silent: true);
+                        }
+
+                        SmsReceived?.Invoke(this, new GsmDataEventArgs 
+                        { 
+                            PortName = timedOut.Port, 
+                            Data = fullText, 
+                            MsgIndex = "", 
+                            Sender = timedOut.Sender,
+                            Otp = otp ?? ""
+                        });
+                    }
+                }
+            }
         }
 
         bool looksLikePart = partContent.Length <= 160 &&
@@ -171,21 +198,26 @@ public class GsmModemService : IGsmModemService
 
         if (!_multipartBuffer.TryGetValue(key, out var pending))
         {
-            if (!looksLikePart) return partContent;
+            if (!looksLikePart)
+            {
+                if (!string.IsNullOrEmpty(msgIndex)) indicesToDelete.Add(msgIndex);
+                return partContent;
+            }
             pending = new PendingMultipart { Port = port, Sender = sender };
             _multipartBuffer[key] = pending;
         }
 
         pending.Parts.Add(partContent);
+        if (!string.IsNullOrEmpty(msgIndex)) pending.MsgIndices.Add(msgIndex);
         pending.LastAt = now;
 
         bool looksComplete = partContent.EndsWith(".") || partContent.EndsWith("!") ||
-                             partContent.EndsWith("?") || partContent.Length < 40 ||
-                             ExtractOtp(partContent) != null;
+                             partContent.EndsWith("?") || partContent.Length < 40;
 
         if (looksComplete || pending.Parts.Count >= 5)
         {
             _multipartBuffer.TryRemove(key, out _);
+            indicesToDelete.AddRange(pending.MsgIndices);
             return string.Join("", pending.Parts);
         }
 
@@ -1311,7 +1343,7 @@ public class GsmModemService : IGsmModemService
                                 string body = DecodeSmsBody(smsContent);
                                 string senderInfo = ParseSenderFromCmgr(smsContent);
                                 
-                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body);
+                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body, msgIndex, out var indicesToDelete);
                                 if (fullContent == null)
                                 {
                                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
@@ -1320,7 +1352,10 @@ public class GsmModemService : IGsmModemService
                                 
                                 string? otp = ExtractOtp(fullContent);
                                 
-                                _ = SendCommandAsync(portName, $"AT+CMGD={msgIndex}", 3000, silent: true);
+                                foreach (var idx in indicesToDelete)
+                                {
+                                    _ = SendCommandAsync(portName, $"AT+CMGD={idx}", 3000, silent: true);
+                                }
 
                                 SmsReceived?.Invoke(this, new GsmDataEventArgs 
                                 { 
@@ -1389,7 +1424,7 @@ public class GsmModemService : IGsmModemService
                                 string body = DecodeSmsBody(smsContent);
                                 string senderInfo = ParseSenderFromCmgr(smsContent);
                                 
-                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body);
+                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body, msgIndex, out var indicesToDelete);
                                 if (fullContent == null)
                                 {
                                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
@@ -1398,7 +1433,10 @@ public class GsmModemService : IGsmModemService
                                 
                                 string? otp = ExtractOtp(fullContent);
                                 
-                                _ = SendCommandAsync(portName, $"AT+CMGD={msgIndex}", 3000, silent: true);
+                                foreach (var idx in indicesToDelete)
+                                {
+                                    _ = SendCommandAsync(portName, $"AT+CMGD={idx}", 3000, silent: true);
+                                }
 
                                 SmsReceived?.Invoke(this, new GsmDataEventArgs 
                                 { 

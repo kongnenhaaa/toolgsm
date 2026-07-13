@@ -63,7 +63,13 @@
         <RowTemplate>
             @foreach (var col in VisibleColumns)
             {
-                @if (col.Name == "PortName")
+                @if (col.Name == "Stt")
+                {
+                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#64748B; font-size:12px; white-space: nowrap;">
+                        @(VisiblePorts.ToList().IndexOf(context) + 1)
+                    </MudTd>
+                }
+                else if (col.Name == "PortName")
                 {
                     <MudTd Style="font-weight:600; border-bottom:1px solid #F1F5F9; color:#1E293B; white-space: nowrap;">@context.PortName</MudTd>
                 }
@@ -300,6 +306,13 @@
             var defaultCols = GetDefaultColumns();
             var ordered = new List<ColumnItem>();
 
+            var sttCol = defaultCols.FirstOrDefault(c => c.Name == "Stt");
+            if (sttCol != null && !savedOrder.Contains("Stt"))
+            {
+                ordered.Add(sttCol);
+                defaultCols.Remove(sttCol);
+            }
+
             foreach (var colName in savedOrder)
             {
                 var match = defaultCols.FirstOrDefault(c => c.Name == colName);
@@ -319,6 +332,7 @@
     {
         return new List<ColumnItem>
         {
+            new() { Name = "Stt", Header = "STT" },
             new() { Name = "PortName", Header = "Cổng" },
             new() { Name = "Status", Header = "Trạng thái" },
             new() { Name = "NetworkProvider", Header = "Nhà mạng" },

@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -75,6 +75,51 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             });
         }
+    }
+
+    public System.Collections.ObjectModel.ObservableCollection<gsm.Models.VnptResultItem> VnptResults { get; } = new();
+
+    private void AddVnptResult(string port, string phone, bool success, string response)
+    {
+        string newPass = "";
+        try
+        {
+            string passPath = gsm.Services.AppPaths.ForRuntimeFile("dat_passvnpt.txt");
+            if (System.IO.File.Exists(passPath))
+            {
+                newPass = System.IO.File.ReadAllText(passPath).Trim();
+            }
+        }
+        catch {}
+
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            VnptResults.Insert(0, new gsm.Models.VnptResultItem
+            {
+                Time = DateTime.Now,
+                Port = port,
+                Phone = phone,
+                PasswordMasked = newPass,
+                Success = success,
+                Response = response
+            });
+            if (VnptResults.Count > 300)
+            {
+                VnptResults.RemoveAt(VnptResults.Count - 1);
+            }
+        });
+    }
+
+    public void ClearVnptResults()
+    {
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            VnptResults.Clear();
+            VnptSuccessCount = 0;
+            VnptFailCount = 0;
+            VnptTotalActiveCount = 0;
+            VnptSummaryText = string.Empty;
+        });
     }
 
     private readonly object _logFileLock = new();
@@ -392,6 +437,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     }
                                 });
                                 DecrementVnptActiveCount(false); // Tính là thất bại do hết hạn
+                                AddVnptResult(port.PortName, port.PhoneNumber, false, "Hết hạn OTP (Timeout)");
                             }
                         });
                     }
@@ -417,6 +463,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             AddLog($"[{port.PortName}] Gửi yêu cầu OTP thất bại: {responseContent}", "ERROR");
                         });
                         DecrementVnptActiveCount(false);
+                        AddVnptResult(port.PortName, port.PhoneNumber, false, errorMsg);
                     }
                 }
                 catch (Exception ex)
@@ -424,14 +471,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // Hủy đăng ký pending do ngoại lệ
                     _pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _);
 
+                    string friendlyErr = Services.MyVnptService.GetFriendlyExceptionMessage(ex);
                     Application.Current.Dispatcher.Invoke(() => 
                     {
-                        string friendlyErr = Services.MyVnptService.GetFriendlyExceptionMessage(ex);
                         port.VnptStatus = friendlyErr;
                         port.LastMessageContent = friendlyErr;
                         AddLog($"[{port.PortName}] Lỗi gửi yêu cầu OTP: {ex.Message}", "ERROR");
                     });
                     DecrementVnptActiveCount(false);
+                    AddVnptResult(port.PortName, port.PhoneNumber, false, friendlyErr);
                 }
             });
             await Task.Delay(500); // Tránh gửi request quá nhanh
@@ -1173,12 +1221,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 try { await Task.Delay(TimeSpan.FromSeconds(60), lifetimeToken); }
                 catch (OperationCanceledException) { break; }
 
-                if (!IsWatchdogEnabled) continue;
-
                 var portsCopy = GetPortsSnapshot();
                 foreach (var p in portsCopy)
                 {
                     if (lifetimeToken.IsCancellationRequested) break;
+
+                    // 1. Kiểm tra timeout kết nối (2 phút)
+                    if (p.Status == SimStatus.Connecting && DateTime.Now - p.StatusChangedAt > TimeSpan.FromMinutes(2))
+                    {
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            p.Status = SimStatus.NoResponse;
+                            p.LastError = "Kết nối quá hạn (Timeout 2p)";
+                            AddLog($"[{p.PortName}] Kết nối quá hạn (Timeout 2 phút), chuyển về trạng thái Không phản hồi.", "WARN");
+                            UpdateDashboard();
+                        });
+                        continue;
+                    }
+
+                    if (!IsWatchdogEnabled) continue;
+
                     if (p.Status == SimStatus.NoResponse || p.Status == "Offline" || p.Status == "Error")
                     {
                         // Bỏ qua watchdog reset đối với các lỗi bảo mật nghiêm trọng
@@ -3073,7 +3135,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
-                if (extractedOtp == "N/A" && TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port, receiveAll))
+                if (TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port, receiveAll))
                 {
                     AddLog($"[{e.PortName}] Da ghep doan SMS tiep theo tu {senderPhone} vao tin truoc.", "INFO");
                     if (!string.IsNullOrEmpty(e.MsgIndex))
@@ -3235,6 +3297,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     });
                                 }
                                 DecrementVnptActiveCount(isSuccess);
+                                AddVnptResult(e.PortName, receiverPhone, isSuccess, message);
                             });
                         }
                         else
@@ -5212,14 +5275,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // Network & Sim methods removed
     
-    public async Task ExecuteCallFromUiAsync(
+    public async Task<bool> ExecuteCallFromUiAsync(
         string port,
         string phone,
         string wavPath,
         int duration,
         bool record = false)
     {
-        await _modemService.CallWithAudioAsync(
+        return await _modemService.CallWithAudioAsync(
             port,
             phone,
             string.IsNullOrWhiteSpace(wavPath) ? null : wavPath,

@@ -1,4 +1,4 @@
-﻿@page "/vnpt-pass"
+@page "/vnpt-pass"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -68,8 +68,9 @@
                 </MudButton>
             </MudStack>
 
-            <MudTable Items="@_vnptResults" Dense="true" Hover="true" Elevation="0" Height="380px">
+            <MudTable Items="@Vm.VnptResults" Dense="true" Hover="true" Elevation="0" Height="380px">
                 <HeaderContent>
+                    <MudTh>STT</MudTh>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT</MudTh>
@@ -78,6 +79,7 @@
                     <MudTh>Phản hồi</MudTh>
                 </HeaderContent>
                 <RowTemplate>
+                    <MudTd Style="font-size:12px;">@(Vm.VnptResults.IndexOf(context) + 1)</MudTd>
                     <MudTd Style="font-size:12px;">@context.Time.ToString("HH:mm:ss")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@context.Phone</MudTd>
@@ -108,7 +110,7 @@
     private bool _isSetting = false;
     private CancellationTokenSource? _cts;
 
-    private List<VnptResultItem> _vnptResults = new();
+
 
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
@@ -198,7 +200,7 @@
 
     void ClearVnptResults()
     {
-        _vnptResults.Clear();
+        Vm.ClearVnptResults();
         Snackbar.Add("Đã xóa kết quả", Severity.Normal);
     }
 
@@ -221,13 +223,5 @@
         _cts?.Dispose();
     }
 
-    public class VnptResultItem
-    {
-        public DateTime Time { get; set; }
-        public string Port { get; set; } = "";
-        public string Phone { get; set; } = "";
-        public string PasswordMasked { get; set; } = "";
-        public bool Success { get; set; }
-        public string Response { get; set; } = "";
-    }
+
 }

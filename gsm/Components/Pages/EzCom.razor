@@ -37,6 +37,12 @@
 
         <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
                    OnClick="ClearEzResults">Xóa kết quả</MudButton>
+
+        <MudSpacer />
+        <div class="d-flex align-center gap-3">
+            <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Text" Style="font-weight:600;">Thành công: <b>@(_ezResults.Count(r => r.Success))</b></MudChip>
+            <MudChip T="string" Color="Color.Error" Size="Size.Small" Variant="Variant.Text" Style="font-weight:600;">Thất bại: <b>@(_ezResults.Count(r => !r.Success))</b></MudChip>
+        </div>
     </MudStack>
 </MudPaper>
 

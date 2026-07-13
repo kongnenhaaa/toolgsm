@@ -76,22 +76,11 @@
          PanelClass="pa-0" Class="mx-3"
          Style="background:transparent;"
          @bind-ActivePanelIndex="_subTab">
-    <MudTabPanel Text="Danh sách Cổng" />
-    <MudTabPanel Text="Tin nhắn tới" />
-    <MudTabPanel Text="Spam SMS" />
-    <MudTabPanel Text="Spam/Check Gọi" />
-    <MudTabPanel Text="DTMF (Call)" />
-    <MudTabPanel Text="Thông báo" />
-</MudTabs>
-
-<!-- ========== CONTENT THEO SUB-TAB ========== -->
-<div class="mx-3 mt-1">
-    @if (_subTab == 0)
-    {
+    <MudTabPanel Text="Danh sách Cổng">
         <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" OnAccept="HandleAcceptOne" />
-    }
-    else if (_subTab == 1) // Tin nhắn tới
-    {
+    </MudTabPanel>
+
+    <MudTabPanel Text="Tin nhắn tới">
         <MudPaper Elevation="0" Class="mt-2" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
             <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0" Height="420px">
                 <HeaderContent>
@@ -127,9 +116,9 @@
                 </NoRecordsContent>
             </MudTable>
         </MudPaper>
-    }
-    else if (_subTab == 2) // Spam SMS
-    {
+    </MudTabPanel>
+
+    <MudTabPanel Text="Spam SMS">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Spam SMS hàng loạt</MudText>
             
@@ -161,9 +150,9 @@
                 </MudItem>
             </MudGrid>
         </MudPaper>
-    }
-    else if (_subTab == 3) // Spam / Check Gọi
-    {
+    </MudTabPanel>
+
+    <MudTabPanel Text="Spam/Check Gọi">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Spam / Check cuộc gọi</MudText>
             
@@ -204,9 +193,9 @@
                 </NoRecordsContent>
             </MudTable>
         </MudPaper>
-    }
-    else if (_subTab == 4) // DTMF (Call)
-    {
+    </MudTabPanel>
+
+    <MudTabPanel Text="DTMF (Call)">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">DTMF / Nhấn phím trong cuộc gọi</MudText>
             
@@ -229,9 +218,9 @@
                 Lưu ý: Chỉ gửi được khi cổng đang trong cuộc gọi (CLCC active).
             </MudText>
         </MudPaper>
-    }
-    else if (_subTab == 5) // Thông báo
-    {
+    </MudTabPanel>
+
+    <MudTabPanel Text="Thông báo">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Cài đặt thông báo</MudText>
             
@@ -244,8 +233,8 @@
                 Lưu cài đặt thông báo
             </MudButton>
         </MudPaper>
-    }
-</div>
+    </MudTabPanel>
+</MudTabs>
 
 @code {
     // ========== BINDINGS ==========

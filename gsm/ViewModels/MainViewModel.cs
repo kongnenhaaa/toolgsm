@@ -40,9 +40,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
     private readonly ConcurrentDictionary<string, bool> _pendingMyVnptPasswordPorts = new();
     
-    private int _vnptTotalActiveCount = 0;
-    private int _vnptSuccessCount = 0;
-    private int _vnptFailCount = 0;
+    [ObservableProperty] private int _vnptTotalActiveCount = 0;
+    [ObservableProperty] private int _vnptSuccessCount = 0;
+    [ObservableProperty] private int _vnptFailCount = 0;
     private readonly object _vnptLock = new object();
 
     [ObservableProperty]
@@ -52,15 +52,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         lock (_vnptLock)
         {
-            if (isSuccess) _vnptSuccessCount++;
-            else _vnptFailCount++;
+            if (isSuccess) VnptSuccessCount++;
+            else VnptFailCount++;
 
-            _vnptTotalActiveCount--;
-            if (_vnptTotalActiveCount < 0) _vnptTotalActiveCount = 0;
+            VnptTotalActiveCount--;
+            if (VnptTotalActiveCount < 0) VnptTotalActiveCount = 0;
 
-            int success = _vnptSuccessCount;
-            int fail = _vnptFailCount;
-            int remaining = _vnptTotalActiveCount;
+            int success = VnptSuccessCount;
+            int fail = VnptFailCount;
+            int remaining = VnptTotalActiveCount;
 
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
@@ -284,12 +284,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         int count = 0;
         lock (_vnptLock)
         {
-            _vnptSuccessCount = 0;
-            _vnptFailCount = 0;
-            _vnptTotalActiveCount = targetPorts.Count(p => !string.IsNullOrWhiteSpace(p.PhoneNumber) && p.PhoneNumber != "Chưa lấy được số");
-            if (_vnptTotalActiveCount > 0)
+            VnptSuccessCount = 0;
+            VnptFailCount = 0;
+            VnptTotalActiveCount = targetPorts.Count(p => !string.IsNullOrWhiteSpace(p.PhoneNumber) && p.PhoneNumber != "Chưa lấy được số");
+            if (VnptTotalActiveCount > 0)
             {
-                VnptSummaryText = $"MyVNPT: Đang chạy (Thành công: 0, Thất bại: 0, Còn lại: {_vnptTotalActiveCount})";
+                VnptSummaryText = $"MyVNPT: Đang chạy (Thành công: 0, Thất bại: 0, Còn lại: {VnptTotalActiveCount})";
             }
             else
             {

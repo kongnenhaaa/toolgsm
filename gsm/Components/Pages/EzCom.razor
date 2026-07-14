@@ -1,4 +1,4 @@
-﻿@page "/ezcom"
+@page "/ezcom"
 @inject gsm.ViewModels.MainViewModel Vm
 @inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
@@ -7,22 +7,41 @@
 @using gsm.Components.Shared
 @implements IDisposable
 
-<MudPaper Class="pa-3 mb-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
-        <MudTextField @bind-Value="_ezCommand" Label="Lệnh" Placeholder="DK EZ"
-                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:140px;" />
-        <MudTextField @bind-Value="_ezNumber" Label="Số nhận" Placeholder="888"
-                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:120px;" />
-        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined"
-                   Margin="Margin.Dense" Style="width:150px;" Label="Gửi tới">
+<!-- ========== ACTION FORM ========== -->
+<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0"
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+        <MudTextField @bind-Value="_ezCommand"
+                      Label="Lệnh SMS"
+                      Placeholder="DK EZ"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="width:160px;" />
+
+        <MudTextField @bind-Value="_ezNumber"
+                      Label="Số nhận"
+                      Placeholder="888"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Style="width:120px;" />
+
+        <MudSelect T="string" @bind-Value="_sendMode" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense"
+                   Style="width:150px;" Label="Gửi tới">
             <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
             <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
         </MudSelect>
 
+        <MudNumericField @bind-Value="_delayMs"
+                         Label="Delay (ms)"
+                         Min="300" Max="5000"
+                         Variant="Variant.Outlined" Margin="Margin.Dense"
+                         Style="width:110px;"
+                         HelperText="giữa mỗi cổng" />
+
         @if (!_isRegistering)
         {
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Send" OnClick="RegisterEzCom"
+                       StartIcon="@Icons.Material.Filled.Send"
+                       OnClick="RegisterEzCom"
                        Disabled="@(string.IsNullOrWhiteSpace(_ezCommand) || string.IsNullOrWhiteSpace(_ezNumber))">
                 Đăng ký
             </MudButton>
@@ -30,83 +49,125 @@
         else
         {
             <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Stop" OnClick="StopRegister">
-                Dừng
+                       StartIcon="@Icons.Material.Filled.Stop"
+                       OnClick="StopRegister">
+                ⏹ Dừng
             </MudButton>
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
         }
 
         <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
-                   OnClick="ClearEzResults">Xóa kết quả</MudButton>
+                   OnClick="ClearEzResults"
+                   Disabled="@(!_ezResults.Any())">
+            Xóa kết quả
+        </MudButton>
 
         <MudSpacer />
-        <div class="d-flex align-center gap-3">
-            <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Text" Style="font-weight:600;">Thành công: <b>@(_ezResults.Count(r => r.Success))</b></MudChip>
-            <MudChip T="string" Color="Color.Error" Size="Size.Small" Variant="Variant.Text" Style="font-weight:600;">Thất bại: <b>@(_ezResults.Count(r => !r.Success))</b></MudChip>
-        </div>
+
+        <MudChip T="string" Color="Color.Success" Size="Size.Small"
+                 Variant="Variant.Text" Style="font-weight:600;">
+            Thành công: <b>@_ezResults.Count(r => r.Success)</b>
+        </MudChip>
+        <MudChip T="string" Color="Color.Error" Size="Size.Small"
+                 Variant="Variant.Text" Style="font-weight:600;">
+            Thất bại: <b>@_ezResults.Count(r => !r.Success)</b>
+        </MudChip>
     </MudStack>
+
+    @if (_isRegistering)
+    {
+        <MudStack Class="mt-2" Spacing="1">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">@_progressText</MudText>
+            <MudProgressLinear Color="Color.Primary" Value="@_progressPercent" />
+        </MudStack>
+    }
 </MudPaper>
 
 <!-- ========== SUB TABS ========== -->
-<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
-         PanelClass="pa-0" Class="mx-3 mt-2"
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true"
+         PanelClass="pa-0" Class="mx-3 mt-1"
          Style="background:transparent;"
          @bind-ActivePanelIndex="_subTab">
+
+    <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" OnAccept="HandleAcceptOne" />
     </MudTabPanel>
 
-    <MudTabPanel Text="Kết quả Đăng ký">
-        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-3">
-                <MudText Typo="Typo.subtitle1" Style="font-weight:600;">Kết quả đăng ký EZ COM</MudText>
-                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="ClearEzResults">
+    <!-- TAB 2: KẾT QUẢ ĐĂNG KÝ -->
+    <MudTabPanel Text="@($"Kết quả ({_ezResults.Count})")">
+        <MudPaper Class="pa-4 mt-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:600;">
+                    Kết quả đăng ký EZ COM
+                </MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteSweep"
+                           OnClick="ClearEzResults"
+                           Disabled="@(!_ezResults.Any())">
                     Xóa kết quả
                 </MudButton>
             </MudStack>
 
-            <MudTable Items="@_ezResults" Dense="true" Hover="true" Elevation="0" Height="380px">
+            <MudTable Items="@_ezResults" Dense="true" Hover="true" Elevation="0"
+                      Height="430px" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT</MudTh>
                     <MudTh>Lệnh</MudTh>
+                    <MudTh>Số nhận</MudTh>
                     <MudTh>Trạng thái</MudTh>
                     <MudTh>Phản hồi</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="font-size:12px;">@context.Time.ToString("HH:mm:ss")</MudTd>
+                    <MudTd Style="font-size:12px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@context.Phone</MudTd>
                     <MudTd Style="font-family:monospace;">@context.Command</MudTd>
+                    <MudTd>@context.Number</MudTd>
                     <MudTd>
-                        <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.Success ? Color.Success : Color.Error)">
                             @(context.Success ? "Thành công" : "Lỗi")
                         </MudChip>
                     </MudTd>
-                    <MudTd Style="max-width:220px; overflow:hidden; text-overflow:ellipsis; font-size:12px;" title="@context.Response">
+                    <MudTd Style="max-width:240px; overflow:hidden; text-overflow:ellipsis; font-size:12px; white-space:nowrap;"
+                           title="@context.Response">
                         @context.Response
                     </MudTd>
                 </RowTemplate>
                 <NoRecordsContent>
-                    <MudText Class="pa-10 text-center" Style="color:#94A3B8;">Chưa có kết quả đăng ký</MudText>
+                    <div class="pa-12 text-center" style="color:#94A3B8;">
+                        <MudIcon Icon="@Icons.Material.Outlined.Sms" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
+                        <div>Chưa có kết quả đăng ký</div>
+                    </div>
                 </NoRecordsContent>
             </MudTable>
         </MudPaper>
     </MudTabPanel>
+
 </MudTabs>
 
 @code {
     // ========== BINDINGS ==========
     private string _ezCommand = "DK EZ";
     private string _ezNumber = "888";
-    private string _sendMode = "selected"; // selected | all
+    private string _sendMode = "selected";
+    private int _delayMs = 800;
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
+
+    // State
     private bool _isRegistering = false;
     private CancellationTokenSource? _cts;
+    private string _progressText = "";
+    private double _progressPercent = 0;
 
     private List<EzResultItem> _ezResults = new();
 
+    // ========== DATA ==========
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
     private List<SimPort> FilteredPorts => Ports;
@@ -118,14 +179,35 @@
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
     }
 
-    // =====================================================
-    // ĐĂNG KÝ EZ COM (1 / Selected / All) – 100%
-    // =====================================================
+    // ========== HELPERS ==========
+    List<string> GetTargetPorts()
+    {
+        if (_sendMode == "all")
+            return ActivePorts.Select(p => p.PortName).ToList();
+        if (_selectedPorts.Any())
+            return _selectedPorts.Select(p => p.PortName).ToList();
+        return ActivePorts.Select(p => p.PortName).ToList();
+    }
+
+    // ========== 1. ACCEPT SIM ==========
+    async Task HandleAcceptOne(SimPort port)
+    {
+        try
+        {
+            await Vm.AcceptNewSimAsync(port.PortName);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"[{port.PortName}] Accept lỗi: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ========== 2. ĐĂNG KÝ EZ COM ==========
     async Task RegisterEzCom()
     {
         if (string.IsNullOrWhiteSpace(_ezCommand) || string.IsNullOrWhiteSpace(_ezNumber))
         {
-            Snackbar.Add("Nhập lệnh và số nhận (888)", Severity.Warning);
+            Snackbar.Add("Nhập lệnh và số nhận (VD: DK EZ → 888)", Severity.Warning);
             return;
         }
 
@@ -139,38 +221,46 @@
         if (targets.Count > 5)
         {
             var ok = await DialogService.ShowMessageBox("Xác nhận",
-                $"Đăng ký EZ COM trên {targets.Count} cổng?\nLệnh: {_ezCommand} → {_ezNumber}",
+                $"Gửi SMS đăng ký EZ COM trên {targets.Count} cổng?\nLệnh: {_ezCommand} → {_ezNumber}",
                 yesText: "Đăng ký", cancelText: "Hủy");
             if (ok != true) return;
         }
 
         _isRegistering = true;
         _cts = new CancellationTokenSource();
+        _progressPercent = 0;
         int okCount = 0, failCount = 0;
 
-        Snackbar.Add($"Đang đăng ký EZ COM {targets.Count} cổng...", Severity.Info);
+        Snackbar.Add($"Đang đăng ký EZ COM trên {targets.Count} cổng...", Severity.Info);
+        _subTab = 1; // Chuyển sang tab kết quả
 
-        foreach (var port in targets)
+        for (int i = 0; i < targets.Count; i++)
         {
             if (_cts.Token.IsCancellationRequested) break;
 
+            string port = targets[i];
             string rawResponse = "";
             bool success = false;
 
+            _progressText = $"[{i + 1}/{targets.Count}] {port} → Đang gửi...";
+            _progressPercent = ((i + 1) * 100.0) / targets.Count;
+            StateHasChanged();
+
             try
             {
-                // Gửi SMS thật
+                // Gửi SMS: lệnh đăng ký tới số dịch vụ
                 rawResponse = await ModemService.SendSmsAsync(port, _ezNumber.Trim(), _ezCommand.Trim());
-                if (rawResponse != null && rawResponse.Contains("ERROR"))
+
+                if (rawResponse != null && (rawResponse.Contains("ERROR") || rawResponse.Contains("TIMEOUT")))
                 {
                     failCount++;
-                    Snackbar.Add($"[{port}] Lỗi: {rawResponse}", Severity.Error);
+                    Snackbar.Add($"[{port}] Lỗi: {rawResponse.Trim()}", Severity.Error);
                 }
                 else
                 {
                     success = true;
                     okCount++;
-                    Snackbar.Add($"[{port}] Đăng ký OK", Severity.Success);
+                    Snackbar.Add($"[{port}] ✓ Đã gửi đăng ký EZ COM", Severity.Success);
                 }
             }
             catch (Exception ex)
@@ -181,46 +271,54 @@
             }
 
             // Lấy SĐT của cổng nếu có
-            var phone = Ports.FirstOrDefault(p => p.PortName == port)?.PhoneNumber ?? "—";
+            string phone = Ports.FirstOrDefault(p => p.PortName == port)?.PhoneNumber ?? "—";
 
             _ezResults.Insert(0, new EzResultItem
             {
                 Time = DateTime.Now,
                 Port = port,
                 Phone = phone,
-                Command = _ezCommand,
+                Command = _ezCommand.Trim(),
+                Number = _ezNumber.Trim(),
                 Success = success,
-                Response = string.IsNullOrEmpty(rawResponse) ? (success ? "Đã gửi SMS thành công" : "Lỗi") : rawResponse
+                Response = string.IsNullOrEmpty(rawResponse)
+                    ? (success ? "Đã gửi SMS" : "Lỗi không xác định")
+                    : rawResponse.Trim()
             });
 
-            if (_ezResults.Count > 200) _ezResults.RemoveRange(200, _ezResults.Count - 200);
+            if (_ezResults.Count > 300)
+                _ezResults.RemoveRange(300, _ezResults.Count - 300);
+
             StateHasChanged();
-            await Task.Delay(800, _cts.Token);
+
+            // Delay an toàn giữa các cổng (có CancellationToken)
+            try { await Task.Delay(_delayMs, _cts.Token); }
+            catch (TaskCanceledException) { break; }
         }
 
         _isRegistering = false;
-        Snackbar.Add($"Hoàn tất: {okCount} thành công, {failCount} lỗi",
+        _progressText = "";
+        _progressPercent = 0;
+
+        Snackbar.Add($"Hoàn tất EZ COM: {okCount} thành công, {failCount} lỗi",
             failCount == 0 ? Severity.Success : Severity.Warning);
+        StateHasChanged();
     }
 
+    // ========== 3. DỪNG ==========
     void StopRegister()
     {
         _cts?.Cancel();
         _isRegistering = false;
-        Snackbar.Add("Đã dừng", Severity.Normal);
+        _progressText = "Đã dừng";
+        Snackbar.Add("Đã dừng đăng ký", Severity.Normal);
     }
 
+    // ========== 4. XÓA KẾT QUẢ ==========
     void ClearEzResults()
     {
         _ezResults.Clear();
         Snackbar.Add("Đã xóa kết quả", Severity.Normal);
-    }
-
-    List<string> GetTargetPorts()
-    {
-        if (_sendMode == "all" || !_selectedPorts.Any())
-            return ActivePorts.Select(p => p.PortName).ToList();
-        return _selectedPorts.Select(p => p.PortName).ToList();
     }
 
     public void Dispose()
@@ -230,12 +328,14 @@
         _cts?.Dispose();
     }
 
+    // ========== MODEL ==========
     public class EzResultItem
     {
         public DateTime Time { get; set; }
         public string Port { get; set; } = "";
         public string Phone { get; set; } = "";
         public string Command { get; set; } = "";
+        public string Number { get; set; } = "";
         public bool Success { get; set; }
         public string Response { get; set; } = "";
     }

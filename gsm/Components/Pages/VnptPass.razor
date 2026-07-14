@@ -9,68 +9,106 @@
 @using System.IO
 @implements IDisposable
 
-<MudPaper Class="pa-3 mb-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mb-2">
-        <MudTextField @bind-Value="_vnptPassword" Label="Mật khẩu mới" 
-                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:200px;"
-                      InputType="InputType.Text" />
-    </MudStack>
+<!-- ========== ACTION FORM ========== -->
+<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0"
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
+    <MudGrid Spacing="2" Class="mb-2">
+        <MudItem xs="12" md="4">
+            <MudTextField @bind-Value="_vnptPassword"
+                          Label="Mật khẩu mới"
+                          Placeholder="VD: P@ssw0rd123"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          InputType="InputType.Text"
+                          HelperText="Từ 4–20 ký tự"
+                          FullWidth="true" />
+        </MudItem>
+        <MudItem xs="12" md="8">
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.End" Wrap="Wrap.Wrap">
+                <MudSelect T="string" @bind-Value="_sendMode" Dense="true"
+                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                           Style="width:150px;" Label="Gửi tới">
+                    <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
+                    <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
+                </MudSelect>
 
-    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
-        <MudSelect T="string" @bind-Value="_sendMode" Dense="true" Variant="Variant.Outlined"
-                   Margin="Margin.Dense" Style="width:150px;" Label="Gửi tới">
-            <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
-            <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
-        </MudSelect>
+                @if (!_isSetting)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Lock"
+                               OnClick="SetVnptPassword"
+                               Disabled="@(string.IsNullOrWhiteSpace(_vnptPassword))">
+                        Đặt mật khẩu
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Stop"
+                               OnClick="StopSetPassword">
+                        ⏹ Dừng
+                    </MudButton>
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+                }
 
-        @if (!_isSetting)
-        {
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Lock" OnClick="SetVnptPassword"
-                       Disabled="@(string.IsNullOrWhiteSpace(_vnptPassword))">
-                Đặt mật khẩu
-            </MudButton>
-        }
-        else
-        {
-            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
-                       StartIcon="@Icons.Material.Filled.Stop" OnClick="StopSetPassword">
-                Dừng
-            </MudButton>
-        }
+                <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                           OnClick="ClearVnptResults"
+                           Disabled="@(!Vm.VnptResults.Any())">
+                    Xóa kết quả
+                </MudButton>
 
-        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
-                   OnClick="ClearVnptResults">Xóa kết quả</MudButton>
+                <MudSpacer />
 
-        <MudSpacer />
-        <div class="d-flex align-center gap-3">
-            <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Text" Style="font-weight:600;">Thành công: <b>@Vm.VnptSuccessCount</b></MudChip>
-            <MudChip T="string" Color="Color.Error" Size="Size.Small" Variant="Variant.Text" Style="font-weight:600;">Thất bại: <b>@Vm.VnptFailCount</b></MudChip>
-        </div>
-    </MudStack>
+                <MudChip T="string" Color="Color.Success" Size="Size.Small"
+                         Variant="Variant.Text" Style="font-weight:600;">
+                    Thành công: <b>@Vm.VnptSuccessCount</b>
+                </MudChip>
+                <MudChip T="string" Color="Color.Error" Size="Size.Small"
+                         Variant="Variant.Text" Style="font-weight:600;">
+                    Thất bại: <b>@Vm.VnptFailCount</b>
+                </MudChip>
+            </MudStack>
+        </MudItem>
+    </MudGrid>
+
+    @if (_isSetting)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-1">
+            Đang gửi yêu cầu OTP qua API MyVNPT... Hệ thống sẽ tự động đặt mật khẩu khi nhận được SMS OTP.
+        </MudAlert>
+    }
 </MudPaper>
 
 <!-- ========== SUB TABS ========== -->
-<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
-         PanelClass="pa-0" Class="mx-3 mt-2"
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true"
+         PanelClass="pa-0" Class="mx-3 mt-1"
          Style="background:transparent;"
          @bind-ActivePanelIndex="_subTab">
+
+    <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" OnAccept="HandleAcceptOne" />
     </MudTabPanel>
 
-    <MudTabPanel Text="Kết quả Đổi MK">
-        <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudStack Row="true" Justify="Justify.SpaceBetween" Class="mb-3">
-                <MudText Typo="Typo.subtitle1" Style="font-weight:600;">Kết quả đổi mật khẩu My VNPT</MudText>
-                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="ClearVnptResults">
+    <!-- TAB 2: KẾT QUẢ ĐỔI MẬT KHẨU -->
+    <MudTabPanel Text="@($"Kết quả ({Vm.VnptResults.Count})")">
+        <MudPaper Class="pa-4 mt-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:600;">
+                    Kết quả đổi mật khẩu My VNPT
+                </MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteSweep"
+                           OnClick="ClearVnptResults"
+                           Disabled="@(!Vm.VnptResults.Any())">
                     Xóa kết quả
                 </MudButton>
             </MudStack>
 
-            <MudTable Items="@Vm.VnptResults" Dense="true" Hover="true" Elevation="0" Height="380px">
+            <MudTable Items="@Vm.VnptResults" Dense="true" Hover="true" Elevation="0"
+                      Height="450px" FixedHeader="true">
                 <HeaderContent>
-                    <MudTh>STT</MudTh>
+                    <MudTh>#</MudTh>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT</MudTh>
@@ -79,26 +117,64 @@
                     <MudTh>Phản hồi</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="font-size:12px;">@(Vm.VnptResults.IndexOf(context) + 1)</MudTd>
-                    <MudTd Style="font-size:12px;">@context.Time.ToString("HH:mm:ss")</MudTd>
+                    <MudTd Style="font-size:11px; color:#94A3B8;">@(Vm.VnptResults.IndexOf(context) + 1)</MudTd>
+                    <MudTd Style="font-size:12px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
-                    <MudTd>@context.Phone</MudTd>
-                    <MudTd>@context.PasswordMasked</MudTd>
+                    <MudTd>@(context.Phone ?? "—")</MudTd>
+                    <MudTd Style="font-family:monospace; font-size:12px;">@context.PasswordMasked</MudTd>
                     <MudTd>
-                        <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.Success ? Color.Success : Color.Error)">
                             @(context.Success ? "Thành công" : "Lỗi")
                         </MudChip>
                     </MudTd>
-                    <MudTd Style="max-width:260px; overflow:hidden; text-overflow:ellipsis; font-size:12px;" title="@context.Response">
+                    <MudTd Style="max-width:260px; overflow:hidden; text-overflow:ellipsis; font-size:12px; white-space:nowrap;"
+                           title="@context.Response">
                         @context.Response
                     </MudTd>
                 </RowTemplate>
                 <NoRecordsContent>
-                    <MudText Class="pa-10 text-center" Style="color:#94A3B8;">Chưa có kết quả đổi mật khẩu</MudText>
+                    <div class="pa-12 text-center" style="color:#94A3B8;">
+                        <MudIcon Icon="@Icons.Material.Outlined.Lock" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
+                        <div>Chưa có kết quả đổi mật khẩu</div>
+                    </div>
                 </NoRecordsContent>
             </MudTable>
         </MudPaper>
     </MudTabPanel>
+
+    <!-- TAB 3: HƯỚNG DẪN -->
+    <MudTabPanel Text="Hướng dẫn">
+        <MudPaper Class="pa-4 mt-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">
+                Hướng dẫn sử dụng My VNPT Pass
+            </MudText>
+            <MudStack Spacing="2">
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    <b>Điều kiện:</b> SIM phải là SIM VinaPhone, đã có số điện thoại trong cột SĐT.
+                </MudAlert>
+                <MudText Typo="Typo.body2">
+                    <b>1.</b> Nhập mật khẩu mới vào ô "Mật khẩu mới" (tối thiểu 4 ký tự).<br />
+                    <b>2.</b> Chọn cổng cần đặt mật khẩu ở tab Danh sách Cổng.<br />
+                    <b>3.</b> Nhấn <b>Đặt mật khẩu</b>.<br />
+                    <b>4.</b> Hệ thống sẽ:
+                    <ul>
+                        <li>Kiểm tra tài khoản qua API MyVNPT</li>
+                        <li>Gửi yêu cầu nhận OTP</li>
+                        <li>Đợi SMS OTP đến</li>
+                        <li>Tự động xác thực và đặt mật khẩu mới</li>
+                    </ul>
+                    <b>5.</b> Kết quả hiển thị ở tab <b>Kết quả</b>.
+                </MudText>
+                <MudAlert Severity="Severity.Warning" Dense="true">
+                    <b>Lưu ý:</b> SIM phải đang hoạt động (có sóng) và nhận được SMS từ VNPT.
+                    Quá trình có thể mất 30–120 giây tùy tốc độ mạng và SMS.
+                </MudAlert>
+            </MudStack>
+        </MudPaper>
+    </MudTabPanel>
+
 </MudTabs>
 
 @code {
@@ -109,11 +185,12 @@
     private int _subTab = 0;
     private bool _isSetting = false;
 
-
-
+    // ========== DATA ==========
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
-    private List<SimPort> FilteredPorts => Ports.Where(x => (x.NetworkProvider ?? "").Contains("Vina", StringComparison.OrdinalIgnoreCase) || true).ToList();
+
+    /// <summary>Hiển thị tất cả cổng (không filter cứng theo nhà mạng vì user cần thấy toàn bộ).</summary>
+    private List<SimPort> FilteredPorts => Ports;
 
     private System.Threading.Timer? _timer;
 
@@ -122,9 +199,30 @@
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
     }
 
-    // =====================================================
-    // ĐẶT MẬT KHẨU MY VNPT QUA API – TỰ ĐỘNG 100%
-    // =====================================================
+    // ========== HELPERS ==========
+    List<SimPort> GetTargetPortObjects()
+    {
+        if (_sendMode == "all")
+            return ActivePorts.ToList();
+        if (_selectedPorts.Any())
+            return _selectedPorts.ToList();
+        return ActivePorts.ToList();
+    }
+
+    // ========== 1. ACCEPT SIM ==========
+    async Task HandleAcceptOne(SimPort port)
+    {
+        try
+        {
+            await Vm.AcceptNewSimAsync(port.PortName);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"[{port.PortName}] Accept lỗi: {ex.Message}", Severity.Error);
+        }
+    }
+
+    // ========== 2. ĐẶT MẬT KHẨU MY VNPT ==========
     async Task SetVnptPassword()
     {
         if (string.IsNullOrWhiteSpace(_vnptPassword))
@@ -139,31 +237,37 @@
             return;
         }
 
-        var targets = new List<SimPort>();
-        if (_sendMode == "all")
-        {
-            targets = ActivePorts.ToList();
-        }
-        else
-        {
-            targets = _selectedPorts.ToList();
-        }
-
+        var targets = GetTargetPortObjects();
         if (!targets.Any())
         {
             Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
             return;
         }
 
-        if (targets.Count > 5)
+        // Lọc chỉ cổng đã có SĐT để tránh gửi vô nghĩa
+        var validTargets = targets
+            .Where(p => !string.IsNullOrWhiteSpace(p.PhoneNumber) && p.PhoneNumber != "Chưa lấy được số")
+            .ToList();
+
+        if (!validTargets.Any())
+        {
+            Snackbar.Add("Không có cổng nào đã có SĐT. Vui lòng kiểm tra TKC trước.", Severity.Warning);
+            return;
+        }
+
+        int skipCount = targets.Count - validTargets.Count;
+        if (skipCount > 0)
+            Snackbar.Add($"Bỏ qua {skipCount} cổng chưa có SĐT", Severity.Warning);
+
+        if (validTargets.Count > 5)
         {
             var ok = await DialogService.ShowMessageBox("Xác nhận",
-                $"Đặt mật khẩu My VNPT trên {targets.Count} cổng qua API?\nMật khẩu: {_vnptPassword}",
+                $"Đặt mật khẩu My VNPT qua API cho {validTargets.Count} cổng?\nMật khẩu: {_vnptPassword}",
                 yesText: "Đặt mật khẩu", cancelText: "Hủy");
             if (ok != true) return;
         }
 
-        // 1. Ghi mật khẩu vào file dat_passvnpt.txt để MyVnptService sử dụng khi nhận được OTP
+        // Ghi mật khẩu vào file config để MyVnptService sử dụng khi nhận OTP
         try
         {
             string passPath = AppPaths.ForRuntimeFile("dat_passvnpt.txt");
@@ -176,48 +280,43 @@
         }
 
         _isSetting = true;
-        
+        _subTab = 1; // Chuyển sang tab kết quả
+
+        Snackbar.Add($"Đang yêu cầu đặt mật khẩu cho {validTargets.Count} cổng... (OTP sẽ gửi về SIM)", Severity.Info);
+
         try
         {
-            // 2. Gọi API để thực hiện gửi yêu cầu OTP và tự động cấu hình
-            await Vm.SetMyVnptPassword(targets);
+            // Gọi ViewModel — chạy song song cho tất cả cổng (Task.Run bên trong)
+            await Vm.SetMyVnptPassword(validTargets);
+            Snackbar.Add("Đã gửi yêu cầu API. Đang chờ OTP SMS về...", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Lỗi yêu cầu: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Lỗi yêu cầu API: {ex.Message}", Severity.Error);
         }
-        
+
         _isSetting = false;
     }
 
+    // ========== 3. DỪNG ==========
     void StopSetPassword()
     {
+        // SetMyVnptPassword đã chạy song song bằng Task.Run bên trong ViewModel
+        // Không thể cancel các HTTP request đang chạy, nhưng ta reset UI state.
+        // Các request đang chạy sẽ hoàn thành tự nhiên và cập nhật VnptResults.
         _isSetting = false;
-        Snackbar.Add("Đã dừng", Severity.Normal);
+        Snackbar.Add("Đã dừng theo dõi tiến trình (các request đã gửi vẫn tiếp tục xử lý)", Severity.Normal);
     }
 
+    // ========== 4. XÓA KẾT QUẢ ==========
     void ClearVnptResults()
     {
         Vm.ClearVnptResults();
         Snackbar.Add("Đã xóa kết quả", Severity.Normal);
     }
 
-    string MaskPassword(string pass)
-    {
-        return pass;
-    }
-
-    List<string> GetTargetPorts()
-    {
-        if (_sendMode == "all" || !_selectedPorts.Any())
-            return FilteredPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
-        return _selectedPorts.Select(p => p.PortName).ToList();
-    }
-
     public void Dispose()
     {
         _timer?.Dispose();
     }
-
-
 }

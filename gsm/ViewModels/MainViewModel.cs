@@ -4329,6 +4329,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return "ERROR: Cổng không hợp lệ hoặc không có thông tin nhà mạng";
     }
 
+    /// <summary>
+    /// Public wrapper: gửi USSD tùy chỉnh qua hệ thống throttle + decode UCS2 + set LastMessageContent.
+    /// Dùng cho Ussd.razor và các UI component khác cần gọi USSD ngoài CheckBalance.
+    /// </summary>
+    public async Task<string> SendUssdForPortAsync(string portName, string ussdCode)
+    {
+        if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(ussdCode))
+            return "ERROR: Thiếu tham số";
+
+        var port = Ports.FirstOrDefault(p => p.PortName == portName);
+        if (port == null) return "ERROR: Cổng không tìm thấy";
+
+        // Hiển thị trạng thái đang gửi lên cột Nội dung ngay lập tức
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            port.LastMessageContent = $"[USSD] Đang gửi {ussdCode}...";
+            port.Sender = "USSD";
+        });
+
+        return await SendUssdThrottledAsync(portName, ussdCode, "Manual USSD", maxAttempts: 2, logResult: true);
+    }
 
 
     private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxAttempts = 3)

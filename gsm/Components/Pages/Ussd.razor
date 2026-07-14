@@ -12,7 +12,7 @@
 <!-- ========== ACTION FORM ========== -->
 <MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
-    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
         <MudText Typo="Typo.caption" Style="color:#64748B; min-width:70px;">Mã USSD</MudText>
         <MudTextField @bind-Value="_ussdCode" Placeholder="*101#" 
                       Variant="Variant.Outlined" Margin="Margin.Dense" 
@@ -20,13 +20,13 @@
 
         <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small"
                    StartIcon="@Icons.Material.Filled.PlayArrow"
-                   OnClick="SendSelectedOrAll" Disabled="@(string.IsNullOrEmpty(_ussdCode))">
-            Thực hiện
+                   OnClick="SendSelectedOrAll" Disabled="@(string.IsNullOrWhiteSpace(_ussdCode) || _isSendingUssd)">
+            @(_isSendingUssd ? "Đang gửi..." : "Thực hiện")
         </MudButton>
 
         <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
                    StartIcon="@Icons.Material.Filled.AccountBalanceWallet"
-                   OnClick="CheckBalanceSelectedOrAll">
+                   OnClick="CheckBalanceSelectedOrAll" Disabled="@_isSendingUssd">
             Check TKC
         </MudButton>
 
@@ -35,7 +35,7 @@
         }
         @if (pendingCount > 0)
         {
-            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning"
                        StartIcon="@Icons.Material.Filled.CheckCircle"
                        OnClick="AcceptSelectedPending" Disabled="@_bulkAccepting">
                 @(_bulkAccepting ? "Đang chấp nhận..." : $"CHẤP NHẬN ({pendingCount})")
@@ -71,18 +71,64 @@
     </MudStack>
 </MudPaper>
 
+<!-- ========== USSD RESULT PANEL – chỉ hiện khi có kết quả ========== -->
+@if (_ussdResults.Any())
+{
+    <MudPaper Class="pa-3 mx-3 mb-2" Elevation="0"
+              Style="background:#F0FDF4; border:1px solid #86EFAC; border-radius:8px;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2">
+            <MudIcon Icon="@Icons.Material.Filled.Sms" Color="Color.Success" Size="Size.Small" />
+            <MudText Typo="Typo.subtitle2" Style="color:#166534; font-weight:600;">
+                Kết quả USSD (@_ussdResults.Count cổng)
+            </MudText>
+            <MudSpacer />
+            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                           OnClick="@(() => _ussdResults.Clear())" title="Đóng" />
+        </MudStack>
+        <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:8px;">
+            @foreach (var r in _ussdResults)
+            {
+                <MudPaper Class="pa-2" Elevation="0"
+                          Style="background:white; border:1px solid #D1FAE5; border-radius:6px;">
+                    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="1">
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success" Class="mr-1">@r.Port</MudChip>
+                        <MudText Typo="Typo.body2" Style="white-space:pre-wrap; font-size:12px; color:#1F2937;">
+                            @r.Result
+                        </MudText>
+                    </MudStack>
+                </MudPaper>
+            }
+        </div>
+    </MudPaper>
+}
+
 <!-- ========== SUB TABS ========== -->
 <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
          PanelClass="pa-0" Class="mx-3"
          Style="background:transparent;"
          @bind-ActivePanelIndex="_subTab">
+
+    <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
         <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" OnAccept="HandleAcceptOne" />
     </MudTabPanel>
 
+    <!-- TAB 2: TIN NHẮN TỚI -->
     <MudTabPanel Text="Tin nhắn tới">
         <MudPaper Elevation="0" Class="mt-2" Style="border:1px solid #E2E8F0; border-radius:10px; overflow:hidden;">
-            <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Class="pa-2" Spacing="2">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:600;">
+                    Tin nhắn tới (@IncomingSms.Count)
+                </MudText>
+                <MudSpacer />
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteSweep"
+                           OnClick="ClearAllSms"
+                           Disabled="@(!IncomingSms.Any())">
+                    Xóa tất cả
+                </MudButton>
+            </MudStack>
+            <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0" Height="450px" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
@@ -95,7 +141,7 @@
                     <MudTd Style="font-size:12px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@context.Sender</MudTd>
-                    <MudTd Style="max-width:260px; overflow:hidden; text-overflow:ellipsis;" title="@context.Content">
+                    <MudTd Style="max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="@context.Content">
                         @context.Content
                     </MudTd>
                     <MudTd Style="font-family:monospace; color:#2563EB; font-weight:600;">
@@ -118,6 +164,7 @@
         </MudPaper>
     </MudTabPanel>
 
+    <!-- TAB 3: SPAM SMS -->
     <MudTabPanel Text="Spam SMS">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Spam SMS hàng loạt</MudText>
@@ -128,48 +175,68 @@
                                   Variant="Variant.Outlined" Placeholder="0912345678&#10;0987654321" Class="mb-3" />
                     <MudTextField @bind-Value="_spamContent" Label="Nội dung" Lines="3"
                                   Variant="Variant.Outlined" Class="mb-3" />
-                    <MudNumericField @bind-Value="_spamDelay" Label="Delay giữa các tin (ms)" Min="500" Max="10000"
-                                     Variant="Variant.Outlined" Class="mb-3" Style="max-width:200px;" />
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                               StartIcon="@Icons.Material.Filled.Send" OnClick="StartSpamSms"
-                               Disabled="@(string.IsNullOrEmpty(_spamPhone) || string.IsNullOrEmpty(_spamContent))">
-                        Bắt đầu Spam
-                    </MudButton>
-                </MudItem>
-                <MudItem xs="12" md="7">
-                    <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:220px;">
-                        <MudText Typo="Typo.caption" Class="mb-2">Tiến trình</MudText>
-                        <pre style="font-size:12px; white-space:pre-wrap; margin:0;">@_spamLog</pre>
+                    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mb-3">
+                        <MudNumericField @bind-Value="_spamDelay" Label="Delay (ms)" Min="500" Max="10000"
+                                         Variant="Variant.Outlined" Style="max-width:160px;" />
+                        <MudText Typo="Typo.caption" Style="color:#64748B;">giữa mỗi tin</MudText>
+                    </MudStack>
+                    <MudStack Row="true" Spacing="2">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                                   StartIcon="@Icons.Material.Filled.Send" OnClick="StartSpamSms"
+                                   Disabled="@(string.IsNullOrWhiteSpace(_spamPhone) || string.IsNullOrWhiteSpace(_spamContent) || _isSpamming)">
+                            Bắt đầu Spam
+                        </MudButton>
                         @if (_isSpamming)
                         {
-                            <MudButton Variant="Variant.Text" Color="Color.Error" OnClick="StopSpamSms" Size="Size.Small" Class="mt-2">
-                                Dừng Spam
+                            <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="StopSpamSms" Size="Size.Medium">
+                                ⏹ Dừng Spam
                             </MudButton>
                         }
+                    </MudStack>
+                </MudItem>
+                <MudItem xs="12" md="7">
+                    <MudPaper Class="pa-3" Style="background:#F8FAFC; border-radius:8px; min-height:220px; max-height:350px; overflow-y:auto;">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-1">
+                            <MudText Typo="Typo.caption" Style="font-weight:600;">Tiến trình</MudText>
+                            @if (_isSpamming)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+                            }
+                        </MudStack>
+                        <pre style="font-size:11px; white-space:pre-wrap; margin:0; color:#1F2937;">@_spamLog</pre>
                     </MudPaper>
                 </MudItem>
             </MudGrid>
         </MudPaper>
     </MudTabPanel>
 
+    <!-- TAB 4: SPAM/CHECK GỌI -->
     <MudTabPanel Text="Spam/Check Gọi">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Spam / Check cuộc gọi</MudText>
             
-            <MudStack Row="true" Spacing="2" Class="mb-3">
+            <MudStack Row="true" Spacing="2" Class="mb-3" AlignItems="AlignItems.End" Wrap="Wrap.Wrap">
                 <MudTextField @bind-Value="_checkCallPhone" Label="Số cần check / spam" 
                               Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:200px;" />
-                <MudNumericField @bind-Value="_checkCallDuration" Label="Thời lượng (giây)" Min="5" Max="60"
-                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:140px;" />
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartCheckCall">
-                    Gọi Check
+                <MudNumericField @bind-Value="_checkCallDuration" Label="Thời lượng (giây)" Min="5" Max="120"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:150px;" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartCheckCall"
+                           Disabled="@(string.IsNullOrWhiteSpace(_checkCallPhone) || _isCheckingCall)">
+                    @(_isCheckingCall ? "Đang gọi..." : "Gọi Check")
                 </MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Error" OnClick="StopAllCalls">
-                    Dập tất cả
+                    ⏹ Dập tất cả
                 </MudButton>
+                @if (_callCheckHistory.Any())
+                {
+                    <MudButton Variant="Variant.Text" Size="Size.Small"
+                               OnClick="@(() => _callCheckHistory.Clear())">
+                        Xóa lịch sử
+                    </MudButton>
+                }
             </MudStack>
 
-            <MudTable Items="@_callCheckHistory" Dense="true" Hover="true" Elevation="0" Height="300px">
+            <MudTable Items="@_callCheckHistory" Dense="true" Hover="true" Elevation="0" Height="300px" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
@@ -178,15 +245,15 @@
                     <MudTh>Thời lượng</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd>@context.Time.ToString("HH:mm:ss")</MudTd>
-                    <MudTd>@context.Port</MudTd>
+                    <MudTd Style="font-size:12px;">@context.Time.ToString("HH:mm:ss")</MudTd>
+                    <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@context.Phone</MudTd>
                     <MudTd>
                         <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
                             @context.Result
                         </MudChip>
                     </MudTd>
-                    <MudTd>@context.Duration s</MudTd>
+                    <MudTd>@(context.Duration > 0 ? $"{context.Duration}s" : "—")</MudTd>
                 </RowTemplate>
                 <NoRecordsContent>
                     <MudText Class="pa-8 text-center" Style="color:#94A3B8;">Chưa có lịch sử check gọi</MudText>
@@ -195,45 +262,56 @@
         </MudPaper>
     </MudTabPanel>
 
+    <!-- TAB 5: DTMF -->
     <MudTabPanel Text="DTMF (Call)">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">DTMF / Nhấn phím trong cuộc gọi</MudText>
             
-            <MudStack Row="true" Spacing="2" Class="mb-3">
+            <MudStack Row="true" Spacing="2" Class="mb-3" AlignItems="AlignItems.End" Wrap="Wrap.Wrap">
                 <MudSelect T="string" Label="Cổng đang gọi" @bind-Value="_dtmfPort" 
                            Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" Dense="true">
                     @foreach (var p in Ports.Where(x => x.Status == SimStatus.Active))
                     {
-                        <MudSelectItem Value="@p.PortName">@p.PortName</MudSelectItem>
+                        <MudSelectItem Value="@p.PortName">@p.PortName @(string.IsNullOrEmpty(p.PhoneNumber) ? "" : $"({p.PhoneNumber})")</MudSelectItem>
                     }
                 </MudSelect>
                 <MudTextField @bind-Value="_dtmfCode" Label="Mã DTMF" Placeholder="1# hoặc 1234#"
                               Variant="Variant.Outlined" Margin="Margin.Dense" Style="width:160px;" />
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendDtmf">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SendDtmf"
+                           Disabled="@(string.IsNullOrWhiteSpace(_dtmfPort) || string.IsNullOrWhiteSpace(_dtmfCode))">
                     Gửi DTMF
                 </MudButton>
             </MudStack>
 
-            <MudText Typo="Typo.caption" Style="color:#64748B;">
-                Lưu ý: Chỉ gửi được khi cổng đang trong cuộc gọi (CLCC active).
-            </MudText>
+            <MudAlert Severity="Severity.Info" Dense="true">
+                Chỉ gửi được khi cổng đang trong cuộc gọi (trạng thái CLCC active). Dùng AT+VTS (Quectel).
+            </MudAlert>
+
+            @if (!string.IsNullOrEmpty(_dtmfLog))
+            {
+                <MudPaper Class="pa-2 mt-3" Style="background:#F8FAFC; border-radius:8px;">
+                    <pre style="font-size:12px; margin:0;">@_dtmfLog</pre>
+                </MudPaper>
+            }
         </MudPaper>
     </MudTabPanel>
 
+    <!-- TAB 6: THÔNG BÁO -->
     <MudTabPanel Text="Thông báo">
         <MudPaper Class="pa-4 mt-2" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">Cài đặt thông báo</MudText>
             
-            <MudSwitch T="bool" @bind-Value="_notifySms" Label="Thông báo khi có SMS mới" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" @bind-Value="_notifyCall" Label="Thông báo khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" @bind-Value="_notifyOtp" Label="Thông báo khi phát hiện OTP" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_notifySms" Label="Thông báo âm thanh khi có SMS mới" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_notifyCall" Label="Thông báo âm thanh khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
+            <MudSwitch T="bool" @bind-Value="_notifyOtp" Label="Thông báo âm thanh khi phát hiện OTP" Color="Color.Primary" Class="mb-2" />
             <MudSwitch T="bool" @bind-Value="_notifyTelegram" Label="Gửi Telegram khi có OTP" Color="Color.Primary" Class="mb-3" />
             
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="SaveNotifySettings">
-                Lưu cài đặt thông báo
+                💾 Lưu cài đặt thông báo
             </MudButton>
         </MudPaper>
     </MudTabPanel>
+
 </MudTabs>
 
 @code {
@@ -242,6 +320,10 @@
     private string _scanMode = "Auto";
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
+    private bool _isSendingUssd = false;
+
+    // USSD result panel
+    private List<UssdResultItem> _ussdResults = new();
 
     // Spam SMS
     private string _spamPhone = "";
@@ -255,12 +337,65 @@
     private string _checkCallPhone = "";
     private int _checkCallDuration = 15;
     private List<CallCheckItem> _callCheckHistory = new();
-    private bool _isCheckingCall { get; set; } = false;
+    private bool _isCheckingCall = false;
 
     // DTMF
     private string _dtmfPort = "";
     private string _dtmfCode = "";
+    private string _dtmfLog = "";
 
+    // Notify
+    private bool _notifySms = true;
+    private bool _notifyCall = true;
+    private bool _notifyOtp = true;
+    private bool _notifyTelegram = false;
+
+    // Accept
+    private bool _bulkAccepting = false;
+
+    // ========== DATA ==========
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+    private List<SimPort> FilteredPorts => Ports;
+    private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
+
+    private List<IncomingSmsItem> IncomingSms =>
+        Vm.SmsMessages?
+            .Select(x => new IncomingSmsItem
+            {
+                Time = DateTime.TryParse(x.ReceivedTime, out var t) ? t : DateTime.Now,
+                Port = x.PortName,
+                Sender = x.Sender,
+                Content = x.Content,
+                Otp = x.Otp,
+                OriginalMessage = x
+            }).OrderByDescending(x => x.Time).Take(200).ToList()
+        ?? new();
+
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+        var settings = gsm.Services.SettingsService.Current;
+        if (settings != null)
+        {
+            _notifySms = settings.SoundOnSms;
+            _notifyCall = settings.SoundOnCall;
+            _notifyOtp = settings.SoundOnOtp;
+            _notifyTelegram = settings.TelegramOnOtp;
+        }
+    }
+
+    // ========== HELPER: IsPendingAccept ==========
+    /// <summary>Trả về true nếu port đang chờ Accept (WaitingAccept) HOẶC bị chặn bảo mật.</summary>
+    bool IsPendingAccept(SimPort p)
+    {
+        if (p == null) return false;
+        return p.Status == SimStatus.WaitingAccept
+            || p.Status == SimStatus.SecurityBlocked;
+    }
+
+    // ========== 1. ACCEPT ONE ==========
     async Task HandleAcceptOne(SimPort port)
     {
         try
@@ -273,23 +408,7 @@
         }
     }
 
-    bool _bulkAccepting = false;
-
-    bool IsPendingAccept(SimPort p)
-    {
-        if (p == null) return false;
-        var s = p.Status?.ToString() ?? "";
-        var err = p.LastError?.ToLowerInvariant() ?? "";
-        return s == gsm.Models.SimStatus.SecurityBlocked
-            || s.Contains("Pending", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("WaitAccept", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("SecurityBlocked", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("Chặn bảo mật", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("Chờ Accept", StringComparison.OrdinalIgnoreCase)
-            || err.Contains("sim_mới_chờ_chấp_nhận", StringComparison.OrdinalIgnoreCase)
-            || err.Contains("chấp nhận", StringComparison.OrdinalIgnoreCase);
-    }
-
+    // ========== 2. ACCEPT SELECTED PENDING ==========
     async Task AcceptSelectedPending()
     {
         var list = _selectedPorts.Where(IsPendingAccept).ToList();
@@ -320,48 +439,7 @@
         }
     }
 
-    // Notify
-    private bool _notifySms = true;
-    private bool _notifyCall = true;
-    private bool _notifyOtp = true;
-    private bool _notifyTelegram = false;
-
-    // Incoming SMS (bind từ Vm nếu có)
-    private List<IncomingSmsItem> IncomingSms => 
-        Vm.SmsMessages?
-            .Select(x => new IncomingSmsItem
-            {
-                Time = DateTime.TryParse(x.ReceivedTime, out var t) ? t : DateTime.Now,
-                Port = x.PortName,
-                Sender = x.Sender,
-                Content = x.Content,
-                Otp = x.Otp,
-                OriginalMessage = x
-            }).OrderByDescending(x => x.Time).Take(200).ToList()
-        ?? new();
-
-    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
-    private List<SimPort> FilteredPorts => Ports;
-    private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
-
-    private System.Threading.Timer? _timer;
-
-    protected override void OnInitialized()
-    {
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
-        var settings = gsm.Services.SettingsService.Current;
-        if (settings != null)
-        {
-            _notifySms = settings.SoundOnSms;
-            _notifyCall = settings.SoundOnCall;
-            _notifyOtp = settings.SoundOnOtp;
-            _notifyTelegram = settings.TelegramOnOtp;
-        }
-    }
-
-    // =====================================================
-    // 1. GỬI USSD (1 / Selected / All) – ĐÃ TỐT
-    // =====================================================
+    // ========== 3. GỬI USSD (qua ViewModel throttle) ==========
     async Task SendSelectedOrAll()
     {
         if (string.IsNullOrWhiteSpace(_ussdCode)) return;
@@ -372,44 +450,53 @@
 
         if (!targets.Any())
         {
-            Snackbar.Add("Không có cổng nào để gửi USSD", Severity.Warning);
+            Snackbar.Add("Không có cổng Active nào để gửi USSD", Severity.Warning);
             return;
         }
 
-        var confirm = targets.Count > 5
-            ? await DialogService.ShowMessageBox("Xác nhận", 
-                $"Gửi USSD \"{_ussdCode}\" tới {targets.Count} cổng?", 
-                yesText: "Gửi", cancelText: "Hủy")
-            : true;
+        if (targets.Count > 5)
+        {
+            var confirm = await DialogService.ShowMessageBox("Xác nhận",
+                $"Gửi USSD \"{_ussdCode}\" tới {targets.Count} cổng?",
+                yesText: "Gửi", cancelText: "Hủy");
+            if (confirm != true) return;
+        }
 
-        if (confirm != true) return;
-
+        _isSendingUssd = true;
+        _ussdResults.Clear();
         Snackbar.Add($"Đang gửi USSD tới {targets.Count} cổng...", Severity.Info);
 
-        int ok = 0, fail = 0;
-        foreach (var port in targets)
+        // Gửi song song để tiết kiệm thời gian, nhưng throttle được xử lý trong ViewModel
+        var tasks = targets.Select(async portName =>
         {
             try
             {
-                var resp = await ModemService.SendCommandAsync(port, $"AT+CUSD=1,\"{_ussdCode}\",15", 20000);
-                ok++;
-                Snackbar.Add($"[{port}] OK", Severity.Success);
+                // Dùng ViewModel method để có throttle + decode UCS2 + set LastMessageContent
+                string result = await Vm.SendUssdForPortAsync(portName, _ussdCode);
+                return new UssdResultItem { Port = portName, Result = result, Success = !result.StartsWith("ERROR") };
             }
             catch (Exception ex)
             {
-                fail++;
-                Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
+                return new UssdResultItem { Port = portName, Result = $"Lỗi: {ex.Message}", Success = false };
             }
-            await Task.Delay(700);
+        });
+
+        var results = await Task.WhenAll(tasks);
+
+        foreach (var r in results.OrderBy(x => x.Port))
+        {
+            _ussdResults.Add(r);
         }
 
-        Snackbar.Add($"Hoàn tất USSD: {ok} thành công, {fail} lỗi", 
+        int ok = results.Count(r => r.Success);
+        int fail = results.Count(r => !r.Success);
+
+        Snackbar.Add($"USSD xong: {ok} thành công, {fail} lỗi",
             fail == 0 ? Severity.Success : Severity.Warning);
+        _isSendingUssd = false;
     }
 
-    // =====================================================
-    // 2. THAY ĐỔI MỨC SÓNG (ApplyScanMode) – FIX THẬT
-    // =====================================================
+    // ========== 4. THAY ĐỔI MỨC SÓNG ==========
     async Task ApplyScanMode()
     {
         var targets = _selectedPorts.Any()
@@ -424,7 +511,6 @@
 
         // Map mode → AT command Quectel EC20
         // nwscanmode: 0=Auto, 1=GSM, 2=WCDMA, 3=LTE
-        // nwscanseq: 00=Auto, 020301=2G→3G→4G, 030201=4G→3G→2G
         string nwscanmode = _scanMode switch
         {
             "2G" => "1",
@@ -443,15 +529,15 @@
 
         Snackbar.Add($"Đang áp dụng mức sóng {_scanMode} cho {targets.Count} cổng...", Severity.Info);
 
+        int ok = 0;
         foreach (var port in targets)
         {
             try
             {
                 await ModemService.SendCommandAsync(port, $"AT+QCFG=\"nwscanmode\",{nwscanmode}", 5000);
                 await ModemService.SendCommandAsync(port, $"AT+QCFG=\"nwscanseq\",{nwscanseq}", 5000);
-                // Ép radio on
                 await ModemService.SendCommandAsync(port, "AT+CFUN=1", 8000);
-                Snackbar.Add($"[{port}] Đã set {_scanMode}", Severity.Success);
+                ok++;
             }
             catch (Exception ex)
             {
@@ -459,11 +545,11 @@
             }
             await Task.Delay(400);
         }
+
+        Snackbar.Add($"Đã set {_scanMode} cho {ok}/{targets.Count} cổng", ok == targets.Count ? Severity.Success : Severity.Warning);
     }
 
-    // =====================================================
-    // 3. KHÔI PHỤC SÓNG (RecoverSignal) – FIX THẬT
-    // =====================================================
+    // ========== 5. KHÔI PHỤC SÓNG ==========
     async Task RecoverSignal()
     {
         var targets = _selectedPorts.Any()
@@ -477,25 +563,20 @@
         }
 
         Snackbar.Add($"Đang khôi phục sóng {targets.Count} cổng...", Severity.Info);
+        int ok = 0;
 
         foreach (var port in targets)
         {
             try
             {
-                // 1. Force full functionality
-                await ModemService.SendCommandAsync(port, "AT+CFUN=1,1", 12000); // soft reset radio
+                await ModemService.SendCommandAsync(port, "AT+CFUN=1,1", 12000);
                 await Task.Delay(1500);
-
-                // 2. Re-apply scan (ưu tiên 4G)
                 await ModemService.SendCommandAsync(port, "AT+QCFG=\"nwscanmode\",0", 4000);
                 await ModemService.SendCommandAsync(port, "AT+QCFG=\"nwscanseq\",030201", 4000);
-
-                // 3. Auto register
                 await ModemService.SendCommandAsync(port, "AT+COPS=0", 8000);
-
-                // 4. Check signal
                 var csq = await ModemService.SendCommandAsync(port, "AT+CSQ", 3000);
-                Snackbar.Add($"[{port}] Recover xong • CSQ: {csq}", Severity.Success);
+                ok++;
+                Snackbar.Add($"[{port}] Recover xong • CSQ: {csq.Trim()}", Severity.Success);
             }
             catch (Exception ex)
             {
@@ -503,12 +584,13 @@
             }
             await Task.Delay(800);
         }
+
+        if (ok == targets.Count)
+            Snackbar.Add("Khôi phục sóng hoàn tất!", Severity.Success);
     }
 
-    // =====================================================
-    // 4. CONNECT ALL
-    // =====================================================
-    async Task ConnectAll()
+    // ========== 6. CONNECT ALL ==========
+    void ConnectAll()
     {
         Snackbar.Add("Đang Connect All...", Severity.Info);
         try
@@ -522,9 +604,7 @@
         }
     }
 
-    // =====================================================
-    // 5. CHECK TKC (thêm nút nếu cần)
-    // =====================================================
+    // ========== 7. CHECK TKC ==========
     async Task CheckBalanceSelectedOrAll()
     {
         var targets = _selectedPorts.Any()
@@ -533,18 +613,19 @@
 
         if (!targets.Any())
         {
-            Snackbar.Add("Không có cổng", Severity.Warning);
+            Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
             return;
         }
 
         Snackbar.Add($"Đang check TKC {targets.Count} cổng...", Severity.Info);
+        int ok = 0;
 
         foreach (var port in targets)
         {
             try
             {
                 await Vm.CheckBalanceForPortAsync(port);
-                Snackbar.Add($"[{port}] Đã gửi *101#", Severity.Success);
+                ok++;
             }
             catch (Exception ex)
             {
@@ -552,11 +633,11 @@
             }
             await Task.Delay(900);
         }
+
+        Snackbar.Add($"Check TKC xong: {ok}/{targets.Count} cổng", Severity.Success);
     }
 
-    // =====================================================
-    // 6. SPAM SMS – FIX THẬT
-    // =====================================================
+    // ========== 8. SPAM SMS ==========
     async Task StartSpamSms()
     {
         if (string.IsNullOrWhiteSpace(_spamPhone) || string.IsNullOrWhiteSpace(_spamContent))
@@ -570,7 +651,7 @@
 
         if (!phones.Any())
         {
-            Snackbar.Add("Không có số hợp lệ", Severity.Warning);
+            Snackbar.Add("Không có số hợp lệ (tối thiểu 9 chữ số)", Severity.Warning);
             return;
         }
 
@@ -582,6 +663,14 @@
         {
             Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
             return;
+        }
+
+        if (phones.Count * ports.Count > 50)
+        {
+            var ok = await DialogService.ShowMessageBox("Xác nhận",
+                $"Gửi {phones.Count} số × {ports.Count} cổng = {phones.Count * ports.Count} tin?\nThao tác này có thể mất nhiều thời gian.",
+                yesText: "Bắt đầu", cancelText: "Hủy");
+            if (ok != true) return;
         }
 
         _isSpamming = true;
@@ -602,31 +691,34 @@
                     try
                     {
                         var res = await ModemService.SendSmsAsync(port, phone, _spamContent);
-                        if (res.Contains("ERROR"))
+                        if (res.Contains("ERROR") || res.Contains("TIMEOUT"))
                         {
                             fail++;
-                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} LỖI: {res}\n";
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✗ {res.Trim()}\n";
                         }
                         else
                         {
                             sent++;
-                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} OK\n";
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✓ OK\n";
                         }
                     }
                     catch (Exception ex)
                     {
                         fail++;
-                        _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} LỖI: {ex.Message}\n";
+                        _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✗ {ex.Message}\n";
                     }
                     StateHasChanged();
                     await Task.Delay(_spamDelay, _spamCts.Token);
                 }
             }
         }
-        catch (TaskCanceledException) { }
+        catch (TaskCanceledException)
+        {
+            _spamLog += $"[{DateTime.Now:HH:mm:ss}] Đã dừng bởi người dùng.\n";
+        }
 
         _isSpamming = false;
-        _spamLog += $"\n[{DateTime.Now:HH:mm:ss}] Xong • Gửi: {sent} • Lỗi: {fail}\n";
+        _spamLog += $"\n[{DateTime.Now:HH:mm:ss}] ✅ Xong • Gửi: {sent} • Lỗi: {fail}\n";
         Snackbar.Add($"Spam xong: {sent} OK, {fail} lỗi", fail == 0 ? Severity.Success : Severity.Warning);
     }
 
@@ -637,9 +729,7 @@
         Snackbar.Add("Đã dừng spam", Severity.Normal);
     }
 
-    // =====================================================
-    // 7. SPAM / CHECK GỌI – FIX THẬT
-    // =====================================================
+    // ========== 9. SPAM / CHECK GỌI ==========
     async Task StartCheckCall()
     {
         if (string.IsNullOrWhiteSpace(_checkCallPhone))
@@ -654,7 +744,7 @@
 
         if (!ports.Any())
         {
-            Snackbar.Add("Không có cổng", Severity.Warning);
+            Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
             return;
         }
 
@@ -665,50 +755,38 @@
         {
             try
             {
-                // Gọi
                 var resp = await ModemService.SendCommandAsync(port, $"ATD{_checkCallPhone};", 10000);
-                if (resp.Contains("ERROR") || resp.Contains("NO CARRIER") || resp.Contains("NO DIALTONE") || resp.Contains("BUSY"))
+                bool callFailed = resp.Contains("ERROR") || resp.Contains("NO CARRIER")
+                               || resp.Contains("NO DIALTONE") || resp.Contains("BUSY");
+
+                if (callFailed)
                 {
                     _callCheckHistory.Insert(0, new CallCheckItem
                     {
-                        Time = DateTime.Now,
-                        Port = port,
-                        Phone = _checkCallPhone,
-                        Duration = 0,
-                        Success = false,
-                        Result = resp.Trim()
+                        Time = DateTime.Now, Port = port, Phone = _checkCallPhone,
+                        Duration = 0, Success = false, Result = resp.Trim()
                     });
                     Snackbar.Add($"[{port}] Lỗi gọi: {resp.Trim()}", Severity.Error);
                 }
                 else
                 {
                     await Task.Delay(_checkCallDuration * 1000);
-
-                    // Dập
                     await ModemService.SendCommandAsync(port, "ATH", 3000);
 
                     _callCheckHistory.Insert(0, new CallCheckItem
                     {
-                        Time = DateTime.Now,
-                        Port = port,
-                        Phone = _checkCallPhone,
-                        Duration = _checkCallDuration,
-                        Success = true,
-                        Result = "OK"
+                        Time = DateTime.Now, Port = port, Phone = _checkCallPhone,
+                        Duration = _checkCallDuration, Success = true, Result = "OK"
                     });
-                    Snackbar.Add($"[{port}] Check gọi xong", Severity.Success);
+                    Snackbar.Add($"[{port}] Check gọi xong ({_checkCallDuration}s)", Severity.Success);
                 }
             }
             catch (Exception ex)
             {
                 _callCheckHistory.Insert(0, new CallCheckItem
                 {
-                    Time = DateTime.Now,
-                    Port = port,
-                    Phone = _checkCallPhone,
-                    Duration = 0,
-                    Success = false,
-                    Result = ex.Message
+                    Time = DateTime.Now, Port = port, Phone = _checkCallPhone,
+                    Duration = 0, Success = false, Result = ex.Message
                 });
                 Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
             }
@@ -716,22 +794,22 @@
         }
 
         _isCheckingCall = false;
-        if (_callCheckHistory.Count > 100) _callCheckHistory.RemoveRange(100, _callCheckHistory.Count - 100);
+        if (_callCheckHistory.Count > 100)
+            _callCheckHistory.RemoveRange(100, _callCheckHistory.Count - 100);
     }
 
     async Task StopAllCalls()
     {
-        foreach (var p in Ports)
+        var tasks = Ports.Select(async p =>
         {
             try { await ModemService.SendCommandAsync(p.PortName, "ATH", 2000); } catch { }
-        }
+        });
+        await Task.WhenAll(tasks);
         _isCheckingCall = false;
         Snackbar.Add("Đã dập tất cả cuộc gọi", Severity.Success);
     }
 
-    // =====================================================
-    // 8. DTMF – FIX THẬT
-    // =====================================================
+    // ========== 10. DTMF ==========
     async Task SendDtmf()
     {
         if (string.IsNullOrWhiteSpace(_dtmfPort) || string.IsNullOrWhiteSpace(_dtmfCode))
@@ -742,31 +820,33 @@
 
         try
         {
-            // Quectel: AT+VTS=<tones>
-            // hoặc AT+QVTS=...
             var cmd = $"AT+VTS=\"{_dtmfCode}\"";
             var resp = await ModemService.SendCommandAsync(_dtmfPort, cmd, 8000);
-            Snackbar.Add($"[{_dtmfPort}] Đã gửi DTMF {_dtmfCode}", Severity.Success);
+
+            if (resp.Contains("ERROR"))
+            {
+                // Fallback: thử AT+QVTS (Quectel specific)
+                resp = await ModemService.SendCommandAsync(_dtmfPort, $"AT+QVTS=\"{_dtmfCode}\"", 8000);
+                if (resp.Contains("ERROR"))
+                {
+                    Snackbar.Add($"[{_dtmfPort}] DTMF lỗi: {resp.Trim()}", Severity.Error);
+                    _dtmfLog += $"[{DateTime.Now:HH:mm:ss}] {_dtmfPort} DTMF {_dtmfCode} → LỖI: {resp.Trim()}\n";
+                    return;
+                }
+            }
+
+            _dtmfLog += $"[{DateTime.Now:HH:mm:ss}] {_dtmfPort} DTMF {_dtmfCode} → OK\n";
+            Snackbar.Add($"[{_dtmfPort}] Đã gửi DTMF: {_dtmfCode}", Severity.Success);
         }
         catch (Exception ex)
         {
-            // Fallback
-            try
-            {
-                await ModemService.SendCommandAsync(_dtmfPort, $"AT+QVTS=\"{_dtmfCode}\"", 8000);
-                Snackbar.Add($"[{_dtmfPort}] DTMF (QVTS) OK", Severity.Success);
-            }
-            catch
-            {
-                Snackbar.Add($"DTMF lỗi: {ex.Message}", Severity.Error);
-            }
+            Snackbar.Add($"DTMF lỗi: {ex.Message}", Severity.Error);
+            _dtmfLog += $"[{DateTime.Now:HH:mm:ss}] {_dtmfPort} DTMF {_dtmfCode} → Exception: {ex.Message}\n";
         }
     }
 
-    // =====================================================
-    // 9. THÔNG BÁO – FIX LƯU THẬT
-    // =====================================================
-    async Task SaveNotifySettings()
+    // ========== 11. THÔNG BÁO ==========
+    void SaveNotifySettings()
     {
         try
         {
@@ -777,7 +857,6 @@
                 settings.SoundOnCall = _notifyCall;
                 settings.SoundOnOtp = _notifyOtp;
                 settings.TelegramOnOtp = _notifyTelegram;
-                
                 gsm.Services.SettingsService.SaveSettings(settings);
                 Snackbar.Add("Đã lưu cài đặt thông báo", Severity.Success);
             }
@@ -788,9 +867,7 @@
         }
     }
 
-    // =====================================================
-    // HELPERS
-    // =====================================================
+    // ========== HELPERS ==========
     async Task CopyText(string? text)
     {
         if (string.IsNullOrEmpty(text)) return;
@@ -812,6 +889,12 @@
             Vm.SmsMessages.Remove(item.OriginalMessage);
             Snackbar.Add("Đã xóa", Severity.Normal);
         }
+    }
+
+    void ClearAllSms()
+    {
+        Vm.SmsMessages.Clear();
+        Snackbar.Add("Đã xóa tất cả tin nhắn", Severity.Normal);
     }
 
     public void Dispose()
@@ -840,5 +923,12 @@
         public int Duration { get; set; }
         public bool Success { get; set; }
         public string Result { get; set; } = "";
+    }
+
+    public class UssdResultItem
+    {
+        public string Port { get; set; } = "";
+        public string Result { get; set; } = "";
+        public bool Success { get; set; }
     }
 }

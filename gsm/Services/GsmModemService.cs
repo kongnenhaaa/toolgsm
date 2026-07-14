@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -511,7 +511,7 @@ public class GsmModemService : IGsmModemService
         bool cfunOffSuccess = false;
         for (int i = 0; i < 5; i++)
         {
-            // Kiểm tra trạng thái hiện tại trước
+            // Kiểm tra trạng thái hiện tại trước - nếu đã CFUN=4 hoặc CFUN=0 thì OK luôn
             string cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
             if (Regex.IsMatch(cfunStatus, @"\+CFUN:\s*[04]"))
             {
@@ -519,22 +519,33 @@ public class GsmModemService : IGsmModemService
                 break;
             }
 
-            string cfunResp = await SendCommandAsync(portName, "AT+CFUN=4", 15000);
-            if (!cfunResp.Contains("ERROR") || cfunResp.Contains("+CME ERROR"))
+            string cfunResp = await SendCommandAsync(portName, "AT+CFUN=4", 15000, silent: true);
+            // FIX: Điều kiện đúng: thành công khi KHÔNG có ERROR (hoặc modem đã ở CFUN=4 rồi)
+            if (!cfunResp.Contains("ERROR"))
             {
                 cfunOffSuccess = true;
                 break;
+            }
+            // Nếu +CME ERROR: 303 (operation not allowed) → modem có thể đã ở CFUN=4 sẵn, kiểm tra lại
+            if (cfunResp.Contains("+CME ERROR"))
+            {
+                string reCheck = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
+                if (Regex.IsMatch(reCheck, @"\+CFUN:\s*[04]"))
+                {
+                    cfunOffSuccess = true;
+                    break;
+                }
             }
             await Task.Delay(1000);
         }
         
         if (!cfunOffSuccess)
         {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "ERROR: Không thể ngắt sóng (AT+CFUN=4 thất bại). Hủy khởi tạo để bảo vệ IMEI." });
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
-            return; // Dừng lập tức, không đọc CCID hay thực hiện gì thêm để đảm bảo an toàn 100%
+            // Không thể xác nhận CFUN=4, nhưng vẫn tiếp tục để đọc CCID/IMEI
+            // (một số modem không hỗ trợ AT+CFUN=4, nhưng vẫn cần xử lý được)
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "WARNING: Không xác nhận được AT+CFUN=4. Tiếp tục với trạng thái hiện tại." });
         }
-        await Task.Delay(1000);
+        await Task.Delay(500);
 
         await SendCommandAsync(portName, "ATE0", 30000); // Turn off echo
         await SendCommandAsync(portName, "AT+CMGF=1", 30000); // Set SMS to text mode
@@ -568,9 +579,21 @@ public class GsmModemService : IGsmModemService
             await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
         }
         
-        string imei = await SendCommandAsync(portName, "AT+CGSN", 30000);
+        string imei = await SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
+        if (!imei.Contains("ERROR") && !string.IsNullOrWhiteSpace(imei))
+        {
+            string cleanImei = imei.Replace("OK", "").Trim();
+            if (!string.IsNullOrWhiteSpace(cleanImei))
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
+        }
         
-        // Thử đọc CCID nhiều lần (SIM có thể cần vài giây để khởi tạo)
+        // QUAN TRỌNG: Bật sóng TẠM THỜI (CFUN=1) để đọc CCID.
+        // Khi CFUN=4, một số modem Quectel không cho phép đọc thông tin SIM → SIM failure.
+        // Sau khi đọc CCID xong, ProcessImeiAsync sẽ tắt sóng lại (CFUN=0) trước khi ghi IMEI.
+        await SendCommandAsync(portName, "AT+CFUN=1", 15000, silent: true);
+        await Task.Delay(3000); // Chờ SIM khởi động và modem ổn định
+
+        // Thử đọc CCID nhiều lần (SIM có thể cần vài giây để khởi tạo sau CFUN=1)
         string ccid = "ERROR";
         for (int i = 0; i < 15; i++)
         {
@@ -586,24 +609,28 @@ public class GsmModemService : IGsmModemService
         if (!ccid.Contains("ERROR"))
         {
             _lastSimState[portName] = true;
+            
+            // Tắt sóng lại TRƯỚC khi ProcessImeiAsync để bảo vệ IMEI (ProcessImei sẽ bật lại sau khi ghi)
+            await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+            await Task.Delay(500);
+            
             // Xóa toàn bộ SMS cũ trong SIM để tránh bị đầy bộ nhớ khiến không nhận được CMTI mới
-            await SendCommandAsync(portName, "AT+CMGD=1,4", 30000); 
+            await SendCommandAsync(portName, "AT+CMGD=1,4", 10000, silent: true); 
             
             // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
-            string cnmi = await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 15000); 
+            string cnmi = await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 10000, silent: true); 
             if (cnmi.Contains("ERROR")) 
             {
-                cnmi = await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 15000);
+                cnmi = await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 10000, silent: true);
                 if (cnmi.Contains("ERROR"))
                 {
-                    await SendCommandAsync(portName, "AT+CNMI=2,2,0,0,0", 15000);
+                    await SendCommandAsync(portName, "AT+CNMI=2,2,0,0,0", 10000, silent: true);
                 }
             } 
             
-            string cnum = await SendCommandAsync(portName, "AT+CNUM", 30000);
+            string cnum = await SendCommandAsync(portName, "AT+CNUM", 10000, silent: true);
 
-            // Gửi thông tin sang ViewModel qua event log với Prefix đặc biệt
-            if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
+            // PARSE_IMEI đã được emit ở trên (trước CFUN=1) - không emit lại ở đây
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
             if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
         }

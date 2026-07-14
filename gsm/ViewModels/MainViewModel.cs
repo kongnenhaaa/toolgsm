@@ -39,6 +39,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, bool> _activeRamRecordings = new();
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
     private readonly ConcurrentDictionary<string, bool> _pendingMyVnptPasswordPorts = new();
+    // Auto-retry SecurityBlocked: track số lần retry theo portName
+    private readonly ConcurrentDictionary<string, int> _securityBlockedRetries = new();
+    private const int MaxSecurityBlockedRetries = 3;
+    private const int SecurityBlockedRetryDelayMs = 7000; // 7 giây giữa các lần retry
     
     [ObservableProperty] private int _vnptTotalActiveCount = 0;
     [ObservableProperty] private int _vnptSuccessCount = 0;
@@ -2483,6 +2487,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                                     UpdateDashboard();
                                     _initializingPorts.TryRemove(e.PortName, out _);
+                                    // Tự động retry nếu có thể
+                                    TriggerAutoRetrySecurityBlocked(port, result.ErrorMessage);
                                 }
                                 else
                                 {
@@ -2746,6 +2752,62 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _ = gsm.Services.FirebaseService.ClearWebStateAsync(portName);
     }
+
+    /// <summary>
+    /// Tự động retry AcceptNewSimAsync khi SIM bị SecurityBlocked do lỗi có thể tự phục hồi.
+    /// Tối đa 3 lần, mỗi lần cách 15 giây. SIM mới hoàn toàn (WaitingAccept) không retry.
+    /// </summary>
+    private void TriggerAutoRetrySecurityBlocked(SimPort port, string errorMessage)
+    {
+        // Chỉ retry các lỗi có thể tự fix
+        bool canAutoRetry = errorMessage == SecurityErrors.WrongImei
+                         || errorMessage == SecurityErrors.ReadCcidFailed
+                         || errorMessage == SecurityErrors.RadioOffFailed
+                         || errorMessage == SecurityErrors.RadioOnFailed
+                         || string.IsNullOrEmpty(errorMessage);
+
+        if (!canAutoRetry) return;
+
+        int retryCount = _securityBlockedRetries.AddOrUpdate(port.PortName, 1, (_, old) => old + 1);
+
+        if (retryCount > MaxSecurityBlockedRetries)
+        {
+            AddLog($"[{port.PortName}] SecurityBlocked: đã retry {MaxSecurityBlockedRetries} lần, dừng auto-retry.", "WARN");
+            _securityBlockedRetries.TryRemove(port.PortName, out _);
+            return;
+        }
+
+        AddLog($"[{port.PortName}] SecurityBlocked ({errorMessage}) — Tự động retry lần {retryCount}/{MaxSecurityBlockedRetries} sau {SecurityBlockedRetryDelayMs / 1000}s...", "INFO");
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(SecurityBlockedRetryDelayMs);
+
+            // Kiểm tra port vẫn còn SecurityBlocked (chưa được tháo/cắm lại)
+            var currentPort = Ports.FirstOrDefault(p => p.PortName == port.PortName);
+            if (currentPort == null || currentPort.Status != SimStatus.SecurityBlocked)
+            {
+                _securityBlockedRetries.TryRemove(port.PortName, out _);
+                return;
+            }
+
+            AddLog($"[{port.PortName}] Auto-retry SecurityBlocked lần {retryCount}...", "INFO");
+            try
+            {
+                await AcceptNewSimAsync(port.PortName);
+                if (currentPort.Status == SimStatus.Active)
+                {
+                    _securityBlockedRetries.TryRemove(port.PortName, out _);
+                    AddLog($"[{port.PortName}] Auto-retry thành công! SIM đã Active.", "SUCCESS");
+                }
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{port.PortName}] Auto-retry lỗi: {ex.Message}", "ERROR");
+            }
+        });
+    }
+
 
     // ---------------------------------------------------------------------
     // THAO TÁC ACCEPT SIM MỚI TỪ UI

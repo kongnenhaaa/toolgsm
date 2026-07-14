@@ -2300,9 +2300,9 @@ public class GsmModemService : IGsmModemService
 
         try
         {
-            // === CHẨN ĐOÁN TRƯỚC KHI GỌI ===
+            // === CHẨN ĐOÁN TRƯỚC KHI GỌI (tối ưu cho Quectel EC20C - LTE/CSFB) ===
 
-            // 1. Kiểm tra và bật radio nếu tắt (cả format có/không có dấu cách)
+            // 1. Kiểm tra và bật radio nếu tắt
             string cfunCheck = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
             bool radioOff = cfunCheck.Contains("+CFUN: 4") || cfunCheck.Contains("+CFUN:4") ||
                             cfunCheck.Contains("+CFUN: 0") || cfunCheck.Contains("+CFUN:0");
@@ -2310,30 +2310,51 @@ public class GsmModemService : IGsmModemService
             {
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[CALL] Radio đang tắt — đang bật lại trước khi gọi..." });
                 await SendCommandAsync(portName, "AT+CFUN=1", 12000, silent: true);
-                await Task.Delay(4000); // Chờ modem đăng ký mạng lại
+                await Task.Delay(4000);
             }
 
-            // 2. Kiểm tra đăng ký mạng — đây là nguyên nhân phổ biến nhất khi "UI chạy mà không rung"
-            string cregResp = await SendCommandAsync(portName, "AT+CREG?", 3000, silent: true);
-            // +CREG: <n>,<stat> — stat: 0=không đăng ký, 1=đăng ký home, 2=đang tìm, 3=từ chối, 5=roaming
-            var cregMatch = System.Text.RegularExpressions.Regex.Match(cregResp, @"\+CREG:\s*\d+,(\d+)");
-            int cregStat = cregMatch.Success && int.TryParse(cregMatch.Groups[1].Value, out int st) ? st : -1;
-            string cregLabel = cregStat switch
-            {
-                0 => "Chưa đăng ký mạng",
-                1 => "Đã đăng ký (Home)",
-                2 => "Đang tìm mạng...",
-                3 => "Bị từ chối đăng ký (SIM bị chặn/khóa)",
-                5 => "Đã đăng ký (Roaming)",
-                _ => $"Không rõ ({cregResp.Trim()})"
-            };
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] Trạng thái mạng: {cregLabel}" });
+            // 2. Đảm bảo network scan mode = AUTO để CSFB (LTE→3G/2G fallback) hoạt động
+            //    AT+QCFG="nwscanmode",0 = AUTO (cho phép fallback xuống 2G/3G khi gọi)
+            //    Không cần nếu đã AUTO, nhưng gọi lại không hại
+            await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0", 3000, silent: true);
 
-            if (cregStat == 0 || cregStat == 2 || cregStat == 3)
+            // 3. Kiểm tra đăng ký mạng — EC20C dùng AT+CEREG (LTE EPS) và AT+CREG (CS domain)
+            //    Cần cả hai: CEREG=1 = LTE data OK, CREG=1 = CS voice OK (cho CSFB)
+            
+            // Enable CREG unsolicited reporting rồi query
+            await SendCommandAsync(portName, "AT+CREG=2", 2000, silent: true);
+            string cregResp = await SendCommandAsync(portName, "AT+CREG?", 3000, silent: true);
+            var cregMatch = System.Text.RegularExpressions.Regex.Match(cregResp, @"\+CREG:\s*\d+,(\d+)");
+            int cregStat = cregMatch.Success && int.TryParse(cregMatch.Groups[1].Value, out int st1) ? st1 : -1;
+
+            // Query LTE EPS registration (quan trọng với EC20C)
+            string ceregResp = await SendCommandAsync(portName, "AT+CEREG?", 3000, silent: true);
+            var ceregMatch = System.Text.RegularExpressions.Regex.Match(ceregResp, @"\+CEREG:\s*\d+,(\d+)");
+            int ceregStat = ceregMatch.Success && int.TryParse(ceregMatch.Groups[1].Value, out int st2) ? st2 : -1;
+
+            // Query loại mạng hiện tại (EC20C specific)
+            string qnwInfo = await SendCommandAsync(portName, "AT+QNWINFO", 3000, silent: true);
+            // AT+QNWINFO trả: +QNWINFO: "LTE","46001","LTE BAND 3",1850 hoặc "WCDMA"/"GSM"
+            bool isOnLte = qnwInfo.Contains("LTE", StringComparison.OrdinalIgnoreCase);
+            bool isOnWcdma = qnwInfo.Contains("WCDMA", StringComparison.OrdinalIgnoreCase) || qnwInfo.Contains("HSPA", StringComparison.OrdinalIgnoreCase);
+            bool isOnGsm = qnwInfo.Contains("GSM", StringComparison.OrdinalIgnoreCase) || qnwInfo.Contains("EDGE", StringComparison.OrdinalIgnoreCase);
+            string netType = isOnLte ? "LTE (sẽ CSFB xuống 3G/2G khi gọi)" : isOnWcdma ? "WCDMA/3G" : isOnGsm ? "GSM/2G" : "Không rõ";
+
+            string cregLabel = cregStat switch { 1 => "CS đã đăng ký (Home)", 5 => "CS đã đăng ký (Roaming)", 0 => "CS chưa đăng ký", 2 => "CS đang tìm mạng", 3 => "CS bị từ chối", _ => $"CS={cregStat}" };
+            string ceregLabel = ceregStat switch { 1 => "LTE OK (Home)", 5 => "LTE OK (Roaming)", 0 => "LTE chưa đăng ký", _ => $"LTE={ceregStat}" };
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] Mạng: {netType} | {cregLabel} | {ceregLabel}" });
+
+            // Nếu cả CS và LTE đều chưa đăng ký → không gọi được
+            bool csOk  = cregStat  == 1 || cregStat  == 5;
+            bool lteOk = ceregStat == 1 || ceregStat == 5;
+            if (!csOk && !lteOk && cregStat != -1) // Chỉ chặn nếu có dữ liệu rõ ràng
             {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] ⚠️ Không thể gọi — SIM chưa đăng ký mạng ({cregLabel}). Đây là lý do điện thoại không rung!" });
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] ⚠️ Không thể gọi — SIM chưa đăng ký mạng ({cregLabel}, {ceregLabel})" });
                 return false;
             }
+
+            // Nếu đang trên LTE: cần CSFB → chờ thêm sau ATD để modem rớt xuống 3G/2G
+            int csfbWaitMs = isOnLte ? 5000 : 0; // Chờ 5s cho CSFB nếu đang LTE
 
             // Bật CLIP để hiện số gọi đến (Caller ID)
             await SendCommandAsync(portName, "AT+CLIP=1", 2000, silent: true);
@@ -2370,62 +2391,118 @@ public class GsmModemService : IGsmModemService
 
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] ATD gửi thành công → Đang chờ kết nối tới {cleanPhone}..." });
 
+            // Nếu đang LTE: chờ CSFB fallback xuống 3G/2G trước khi poll CLCC
+            if (csfbWaitMs > 0)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] Đang LTE → Chờ CSFB fallback xuống 3G/2G ({csfbWaitMs / 1000}s)..." });
+                await Task.Delay(csfbWaitMs, ct);
+            }
+
             // Polling AT+CLCC để xác nhận cuộc gọi thực sự đang rung chuông hoặc đã kết nối
-            bool callConfirmed = false;
-            bool answered = false;
+            bool callConfirmed  = false; // Đã từng thấy CLCC có dữ liệu
+            bool seenRinging    = false; // Đã từng thấy stat=2 (Dialing) hoặc stat=3 (Alerting = rung)
+            bool answered       = false;
             var clccDeadline = DateTime.UtcNow.AddSeconds(45); // tối đa 45s chờ bắt máy
             while (DateTime.UtcNow < clccDeadline)
             {
                 ct.ThrowIfCancellationRequested();
                 await Task.Delay(800, ct);
                 string clcc = await SendCommandAsync(portName, "AT+CLCC", 2000, silent: true);
+
+                // Log raw để debug nếu chưa confirmed
+                if (!callConfirmed)
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL][CLCC] {clcc.Trim()}" });
+
                 if (clcc.Contains("+CLCC:"))
                 {
                     callConfirmed = true;
-                    var clccLine = clcc.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-                                       .FirstOrDefault(l => l.Contains("+CLCC:"));
+                    var clccLines = clcc.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                       .Where(l => l.Contains("+CLCC:")).ToList();
+
+                    // [FIX] Chỉ lấy entry MO (outgoing, dir=0) — KHÔNG fallback sang dir=1 (incoming)
+                    // Nếu chỉ còn entry dir=1 mà dir=0 biến mất → cuộc gọi MO đã kết thúc
+                    // Format: +CLCC: <idx>,<dir>,<stat>,<mode>,<mpty>[,<number>,<type>]
+                    string? clccLine = clccLines
+                        .FirstOrDefault(l =>
+                        {
+                            var p = l.Replace("+CLCC:", "").Trim().Split(',');
+                            return p.Length > 1 && p[1].Trim() == "0"; // dir=0 = MO (outgoing)
+                        });
+
+                    if (clccLine == null)
+                    {
+                        // Có CLCC nhưng không có entry MO (dir=0) → cuộc gọi đi đã kết thúc
+                        if (seenRinging)
+                        {
+                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[CALL] Cuộc gọi kết thúc — không bắt máy." });
+                            await SendCommandAsync(portName, "ATH", 2000, silent: true);
+                            return false;
+                        }
+                        continue; // Chưa thấy ringing, tiếp tục chờ
+                    }
+
                     if (clccLine != null)
                     {
                         var parts = clccLine.Replace("+CLCC:", "").Trim().Split(',');
+                        int dir = parts.Length > 1 && int.TryParse(parts[1].Trim(), out int d) ? d : -1;
                         int callStatus = parts.Length > 2 && int.TryParse(parts[2].Trim(), out int s) ? s : -1;
-                        // 0=Active (đối phương bắt máy), 2=Dialing, 3=Alerting (đang rung)
-                        if (callStatus == 0)
+
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL][CLCC] dir={dir} stat={callStatus} raw={clccLine}" });
+
+                        // stat: 0=Active, 2=Dialing (MO), 3=Alerting (đang rung ở đầu kia)
+                        if (callStatus == 2 || callStatus == 3)
                         {
-                            answered = true;
-                            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đối phương đã nhấc máy!" });
-                            if (remoteWavName != null)
-                                await PlayWavAsync(portName, remoteWavName, ct);
-                            break;
+                            if (!seenRinging)
+                            {
+                                seenRinging = true;
+                                string statusText = callStatus == 3 ? "Đang rung ở đầu kia..." : "Đang quay số...";
+                                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] {statusText}" });
+                            }
+                            continue; // Tiếp tục poll
                         }
-                        else if (callStatus == 3 || callStatus == 2)
+                        else if (callStatus == 0)
                         {
-                            // Đang rung hoặc quay số — tiếp tục poll
-                            continue;
+                            // stat=0 (Active) chỉ tin là nhấc máy THẬT nếu đã từng thấy ringing trước
+                            if (seenRinging)
+                            {
+                                answered = true;
+                                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[CALL] Đối phương đã nhấc máy!" });
+                                if (remoteWavName != null)
+                                    await PlayWavAsync(portName, remoteWavName, ct);
+                                break;
+                            }
+                            else
+                            {
+                                // Modem trả stat=0 ngay mà chưa qua ringing
+                                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL][WARN] stat=0 ngay (chưa qua ringing, dir={dir}) — chờ thêm..." });
+                                seenRinging = true;
+                                continue;
+                            }
                         }
                     }
                 }
                 else if (clcc.Contains("NO CARRIER") || clcc.Contains("BUSY"))
                 {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Cuộc gọi kết thúc sớm: {clcc.Trim()}" });
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[CALL] Cuộc gọi kết thúc sớm: {clcc.Trim()}" });
                     return false;
                 }
                 else if (callConfirmed)
                 {
-                    // Đã từng thấy CLCC, giờ không còn → máy bị dập từ đầu bên kia
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Cuộc gọi đã kết thúc từ phía đối phương." });
+                    // Đã từng thấy CLCC, giờ không còn → đầu kia dập máy
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[CALL] Cuộc gọi đã kết thúc từ phía đối phương." });
                     return answered;
                 }
             }
 
             if (!callConfirmed)
             {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[CALL] Không xác nhận được cuộc gọi qua AT+CLCC — có thể lệnh ATD không đi qua mạng!" });
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[CALL] ⚠️ AT+CLCC không trả về cuộc gọi nào — ATD có thể không ra mạng! (Kiểm tra SIM/anten)" });
                 await SendCommandAsync(portName, "ATH", 3000, silent: true);
                 return false;
             }
 
             if (!answered)
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Không có phản hồi trong 45s — tiếp tục giữ máy..." });
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[CALL] Không ai nhấc máy trong 45s — tiếp tục giữ theo duration..." });
 
             // Giữ cuộc gọi theo duration
             try

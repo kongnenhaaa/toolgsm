@@ -45,6 +45,9 @@
                 <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
                            Variant="Variant.Text" Color="Color.Default" OnClick="() => SelectedItems.Clear()">Bỏ chọn</MudButton>
             }
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.TableView"
+                       Variant="Variant.Outlined" Color="Color.Success" OnClick="CopyToExcel"
+                       title="Copy đúng cột vào Excel (TSV)">Copy Excel</MudButton>
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Settings" 
                        Variant="Variant.Text" Color="Color.Default" OnClick="OpenSettingsDialog">Cấu hình Cột/Cổng</MudButton>
         </MudToolBar>
@@ -395,4 +398,51 @@
             @(!string.IsNullOrEmpty(value) ? value : fallback)
         }
     };
+    void CopyToExcel()
+    {
+        var cols = VisibleColumns;
+        var rows = SelectedItems.Any() ? SelectedItems.Cast<SimPort>().ToList() : VisiblePorts.ToList();
+
+        var sb = new System.Text.StringBuilder();
+
+        // Header row
+        sb.AppendLine(string.Join("\t", cols.Select(c => c.Header)));
+
+        // Data rows
+        int stt = 1;
+        foreach (var p in rows)
+        {
+            var values = cols.Select(col => col.Name switch
+            {
+                "Stt"                => (stt++).ToString(),
+                "PortName"           => p.PortName ?? "",
+                "Status"             => p.Status?.ToString() ?? "",
+                "NetworkProvider"    => p.NetworkProvider ?? "",
+                "Balance"            => p.Balance ?? "",
+                "PhoneNumber"        => p.PhoneNumber ?? "",
+                "Imei"               => p.Imei ?? "",
+                "Serial"             => p.Serial ?? "",
+                "ExpiryDate"         => p.ExpiryDate ?? "",
+                "SimRegDate"         => p.SimRegDate ?? "",
+                "Lock1C"             => p.Lock1C ?? "",
+                "Lock2C"             => p.Lock2C ?? "",
+                "ForwardedTo"        => p.ForwardedTo ?? "",
+                "VnptStatus"         => p.VnptStatus ?? "",
+                "Otp"                => p.Otp ?? "",
+                "LastMessageContent" => p.LastMessageContent ?? "",
+                _                    => ""
+            });
+            // Escape tab/newline trong ô để không bị lệch cột
+            sb.AppendLine(string.Join("\t", values.Select(v => v.Replace("\t", " ").Replace("\r\n", " ").Replace("\n", " "))));
+        }
+
+        // Dùng System.Windows.Clipboard (WPF) để đặt text Unicode — đây là clipboard đúng cho Excel
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            System.Windows.Clipboard.SetText(sb.ToString(), System.Windows.TextDataFormat.UnicodeText);
+        });
+
+        int count = rows.Count;
+        Snackbar.Add($"✅ Đã copy {count} dòng vào clipboard — Paste thẳng vào Excel!", Severity.Success);
+    }
 }

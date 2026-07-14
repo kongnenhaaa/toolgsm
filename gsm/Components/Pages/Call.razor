@@ -105,7 +105,7 @@
                 </MudButton>
             </MudStack>
             <MudTable Items="@_callHistory" Dense="true" Hover="true" Elevation="0"
-                      Height="450px" FixedHeader="true">
+                      Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
@@ -224,7 +224,7 @@
             </MudGrid>
 
             <MudTable Items="@_callQueue" Dense="true" Hover="true" Elevation="0"
-                      Height="300px" FixedHeader="true">
+                      Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>SĐT</MudTh>
                     <MudTh>Cổng</MudTh>
@@ -298,7 +298,7 @@
             }
 
             <MudTable Items="@FilteredPorts" Dense="true" Hover="true" Elevation="0"
-                      Height="350px" FixedHeader="true" MultiSelection="true" @bind-SelectedItems="_selectedPorts">
+                      Height="calc(100vh - 280px)" FixedHeader="true" MultiSelection="true" @bind-SelectedItems="_selectedPorts">
                 <HeaderContent>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT SIM</MudTh>

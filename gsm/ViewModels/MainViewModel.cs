@@ -422,10 +422,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO");
                         });
 
-                        // Bắt đầu đếm ngược 120 giây chờ OTP
+                        // Bắt đầu đếm ngược 180 giây chờ OTP
                         _ = Task.Run(async () =>
                         {
-                            await Task.Delay(120000);
+                            await Task.Delay(180000);
                             if (_pendingMyVnptPasswordPorts.TryRemove(port.PortName, out _))
                             {
                                 Application.Current.Dispatcher.Invoke(() => 

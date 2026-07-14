@@ -85,7 +85,7 @@
                 </MudStack>
             </MudStack>
             <MudTable Items="@IncomingSms" Dense="true" Hover="true" Elevation="0"
-                      Height="450px" FixedHeader="true" Filter="FilterSms">
+                      Height="calc(100vh - 280px)" FixedHeader="true" Filter="FilterSms">
                 <ToolBarContent>
                     <MudTextField @bind-Value="_smsFilter" Placeholder="Lọc theo số/nội dung..."
                                   Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
@@ -169,7 +169,7 @@
                 }
             </MudStack>
             <MudTable Items="@SmsQueue" Dense="true" Hover="true" Elevation="0"
-                      Height="400px" FixedHeader="true">
+                      Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT</MudTh>

@@ -49,28 +49,34 @@
             <!-- TAB 2: THỨ TỰ & HIỂN THỊ CỘT -->
             <MudTabPanel Text="Cấu hình Cột (Sắp xếp)">
                 <MudText Typo="Typo.body2" Class="my-3" Style="color:#64748B;">
-                    Bật/Tắt các cột và <b>kéo thả</b> để thay đổi thứ tự hiển thị của các cột.
+                    Bật/Tắt các cột và sử dụng nút <b>Lên (▲)</b> / <b>Xuống (▼)</b> để thay đổi thứ tự hiển thị của các cột.
                 </MudText>
 
                 <MudPaper Outlined="true" Class="pa-2" Style="max-height: 300px; overflow-y: auto; border-radius: 8px;">
-                    <MudDropContainer T="ColumnItem" Items="_columns" ItemsSelector="@((item,dropzone) => true)" ItemDropped="ItemUpdated" Class="d-flex flex-column flex-grow-1">
-                        <ChildContent>
-                            <MudDropZone T="ColumnItem" Identifier="columns" AllowReorder="true" Class="flex-grow-1" />
-                        </ChildContent>
-                        <ItemRenderer>
-                            <MudPaper Elevation="0" Class="pa-2 ma-1" Style="border: 1px solid #E2E8F0; cursor: move; border-radius: 6px;">
-                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
-                                    <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Color="Color.Default" />
-                                    <MudCheckBox T="bool" 
-                                                 Value="@context.Visible" 
-                                                 ValueChanged="@((v) => context.Visible = v)" 
-                                                 Label="@context.Header" 
-                                                 Color="Color.Primary" 
-                                                 Dense="true" />
-                                </MudStack>
-                            </MudPaper>
-                        </ItemRenderer>
-                    </MudDropContainer>
+                    @for (int i = 0; i < _columns.Count; i++)
+                    {
+                        var index = i;
+                        var col = _columns[index];
+                        <MudPaper Elevation="0" Class="pa-2 ma-1" Style="border: 1px solid #E2E8F0; border-radius: 6px;">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+                                <MudCheckBox T="bool" 
+                                             Value="@col.Visible" 
+                                             ValueChanged="@((v) => col.Visible = v)" 
+                                             Label="@col.Header" 
+                                             Color="Color.Primary" 
+                                             Dense="true" />
+                                <MudSpacer />
+                                <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" 
+                                               Size="Size.Small" 
+                                               Disabled="@(index == 0)"
+                                               OnClick="@(() => MoveColumnUp(index))" />
+                                <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" 
+                                               Size="Size.Small" 
+                                               Disabled="@(index == _columns.Count - 1)"
+                                               OnClick="@(() => MoveColumnDown(index))" />
+                            </MudStack>
+                        </MudPaper>
+                    }
                 </MudPaper>
             </MudTabPanel>
         </MudTabs>
@@ -141,13 +147,20 @@
 
 
 
-    private void ItemUpdated(MudItemDropInfo<ColumnItem> dropItem)
+    private void MoveColumnUp(int index)
     {
-        if (dropItem.Item != null)
-        {
-            _columns.Remove(dropItem.Item);
-            _columns.Insert(dropItem.IndexInZone, dropItem.Item);
-        }
+        if (index <= 0) return;
+        var temp = _columns[index];
+        _columns[index] = _columns[index - 1];
+        _columns[index - 1] = temp;
+    }
+
+    private void MoveColumnDown(int index)
+    {
+        if (index >= _columns.Count - 1) return;
+        var temp = _columns[index];
+        _columns[index] = _columns[index + 1];
+        _columns[index + 1] = temp;
     }
 
     private void Cancel() => MudDialog.Cancel();

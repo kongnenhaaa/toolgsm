@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Threading.Tasks;
 using gsm.Models;
 
@@ -8,7 +8,10 @@ public enum ImeiProcessStatus
 {
     Matched,
     Applied,
+    /// <summary>SIM bị chặn bảo mật (IMEI sai, lỗi xác thực).</summary>
     SecurityBlocked,
+    /// <summary>SIM mới chưa có trong kho backup, đang chờ user chấp nhận thủ công.</summary>
+    WaitingAccept,
     Error
 }
 
@@ -187,11 +190,11 @@ public class ImeiManagementService
             {
                 if (settings.EnableNewSimIntakeMode)
                 {
-                    // Chế độ nạp SIM mới: Trả về trạng thái chờ UI chấp nhận
+                    // Chế độ nạp SIM mới: Trả về WaitingAccept (đợi user duyệt thủ công)
                     return new ImeiProcessResult
                     {
-                        Status = ImeiProcessStatus.SecurityBlocked,
-                        ErrorMessage = "SIM_MỚI_CHỜ_CHẤP_NHẬN",
+                        Status = ImeiProcessStatus.WaitingAccept,
+                        ErrorMessage = "SIM mới chưa trong hệ thống, đang chờ chấp nhận",
                         FinalImei = currentImei
                     };
                 }

@@ -2340,10 +2340,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     string ccid = NormalizeCcid(match.Groups[1].Value);
 
-                    // Chống trùng lặp hoặc khởi tạo song song cho cùng một cổng/CCID đã hoạt động ổn định
+                    // Chống trùng lặp: nếu CCID giống và đang Active có SĐT rồi thì bỏ qua
                     if (port.Serial == ccid && port.Status == SimStatus.Active && !string.IsNullOrEmpty(port.PhoneNumber))
                     {
-                        return; // Đã khởi tạo thành công rồi, bỏ qua
+                        return;
                     }
 
                     if (!_initializingPorts.TryAdd(e.PortName, true))
@@ -2351,10 +2351,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         return; // Đang chạy khởi tạo rồi, bỏ qua
                     }
 
-                    port.Status = SimStatus.Active;
-                    if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug).")
+                    // Set Connecting (không phải Active) khi nhận CCID – chưa verify IMEI
+                    port.Status = SimStatus.Connecting;
+                    if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug)." || string.IsNullOrWhiteSpace(port.DeviceName))
                     {
-                        port.DeviceName = "Đã nhận SIM, đang khởi tạo...";
+                        port.DeviceName = "Đã nhận SIM, đang kiểm tra IMEI...";
                     }
 
                     port.Serial = ccid;
@@ -2393,85 +2394,96 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             {
                                 AddLog($"[{e.PortName}] Không lấy được IMEI phần cứng để so sánh.", "WARNING");
                                 _initializingPorts.TryRemove(e.PortName, out _);
+                                return;
                             }
-                            else
+
+                            var result = await _imeiManagementService.ProcessImeiAsync(
+                                port,
+                                ccid,
+                                currentImei,
+                                AppSettings,
+                                (queryCcid) =>
+                                {
+                                    _imeiCache.TryGetValue(queryCcid, out var ent2);
+                                    return ent2;
+                                },
+                                (newEntry) => AddNewImeiCacheEntry(newEntry),
+                                (action) => Application.Current.Dispatcher.Invoke(action)
+                            );
+
+                            bool isMatched = false;
+                            Application.Current.Dispatcher.Invoke(() =>
                             {
-                                var result = await _imeiManagementService.ProcessImeiAsync(
-                                    port,
-                                    ccid,
-                                    currentImei,
-                                    AppSettings,
-                                    (queryCcid) => 
-                                    {
-                                        _imeiCache.TryGetValue(queryCcid, out var entry);
-                                        return entry;
-                                    },
-                                    (newEntry) => AddNewImeiCacheEntry(newEntry),
-                                    (action) => Application.Current.Dispatcher.Invoke(action)
-                                );
-
-                                bool isMatched = false;
-                                Application.Current.Dispatcher.Invoke(() => 
+                                if (result.Status == Services.ImeiProcessStatus.Matched)
                                 {
-                                    if (result.Status == Services.ImeiProcessStatus.Matched)
+                                    port.IsRebooting = false;
+                                    port.Imei = result.FinalImei;
+                                    MarkPortActiveAfterInit(e.PortName);
+                                    isMatched = true;
+                                }
+                                else if (result.Status == Services.ImeiProcessStatus.Applied)
+                                {
+                                    port.IsRebooting = true;
+                                    port.Imei = result.FinalImei;
+                                    port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
+                                    port.Status = SimStatus.Connecting;
+                                    _initializingPorts.TryRemove(e.PortName, out _);
+
+                                    // Fallback: nếu modem không tự ngắt USB sau khi ghi IMEI
+                                    _ = Task.Run(async () =>
                                     {
-                                        port.IsRebooting = false;
-                                        port.Imei = result.FinalImei;
-                                        MarkPortActiveAfterInit(e.PortName);
-                                        isMatched = true;
-                                    }
-                                    else if (result.Status == Services.ImeiProcessStatus.Applied)
-                                    {
-                                        port.IsRebooting = true;
-                                        port.Imei = result.FinalImei;
-                                        port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
-                                        port.Status = SimStatus.Connecting;
-                                        _initializingPorts.TryRemove(e.PortName, out _);
-                                        
-                                        // [FIX] Handle modems with separate USB bridge chips that don't drop USB on AT+CFUN=1,1
-                                        _ = Task.Run(async () =>
+                                        await Task.Delay(15000);
+                                        if (port.IsRebooting)
                                         {
-                                            await Task.Delay(15000);
-                                            if (port.IsRebooting)
+                                            Application.Current.Dispatcher.Invoke(() =>
                                             {
-                                                Application.Current.Dispatcher.Invoke(() => 
-                                                {
-                                                    port.IsRebooting = false;
-                                                    AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
-                                                    _modemService.StartHotplugWaitLoop(port.PortName);
-                                                });
-                                            }
-                                        });
-                                    }
-                                    else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
-                                    {
-                                        UpdateImeiCacheEntry(port.Serial, entry => entry.PhoneNumber = "Unknown");
-                                        port.Status = SimStatus.SecurityBlocked;
-                                        port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? SecurityErrors.WrongImei : result.ErrorMessage;
-                                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                                        UpdateDashboard();
-                                        _initializingPorts.TryRemove(e.PortName, out _);
-                                    }
-                                    else
-                                    {
-                                        port.Status = SimStatus.NoResponse;
-                                        port.LastError = "Lỗi xử lý IMEI";
-                                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                                        UpdateDashboard();
-                                        _initializingPorts.TryRemove(e.PortName, out _);
-                                    }
-                                });
-
-                                if (isMatched)
+                                                port.IsRebooting = false;
+                                                AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
+                                                _modemService.StartHotplugWaitLoop(port.PortName);
+                                            });
+                                        }
+                                    });
+                                }
+                                else if (result.Status == Services.ImeiProcessStatus.WaitingAccept)
                                 {
-                                    try
-                                    {
-                                        await _modemService.ReinitializeSettingsAsync(port.PortName);
-                                    }
-                                    finally
-                                    {
-                                        _initializingPorts.TryRemove(e.PortName, out _);
-                                    }
+                                    // SIM mới chưa trong hệ thống → chờ user bấm ACCEPT
+                                    port.Status = SimStatus.WaitingAccept;
+                                    port.LastError = result.ErrorMessage;
+                                    port.DeviceName = "SIM mới – bấm ACCEPT để kích hoạt";
+                                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                                    UpdateDashboard();
+                                    _initializingPorts.TryRemove(e.PortName, out _);
+                                }
+                                else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
+                                {
+                                    // SIM bị chặn bảo mật thực sự (IMEI sai / không được phép)
+                                    UpdateImeiCacheEntry(port.Serial, ent => ent.PhoneNumber = "Unknown");
+                                    port.Status = SimStatus.SecurityBlocked;
+                                    port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? SecurityErrors.WrongImei : result.ErrorMessage;
+                                    port.DeviceName = "Bị chặn bảo mật";
+                                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                                    UpdateDashboard();
+                                    _initializingPorts.TryRemove(e.PortName, out _);
+                                }
+                                else
+                                {
+                                    port.Status = SimStatus.NoResponse;
+                                    port.LastError = "Lỗi xử lý IMEI";
+                                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                                    UpdateDashboard();
+                                    _initializingPorts.TryRemove(e.PortName, out _);
+                                }
+                            });
+
+                            if (isMatched)
+                            {
+                                try
+                                {
+                                    await _modemService.ReinitializeSettingsAsync(port.PortName);
+                                }
+                                finally
+                                {
+                                    _initializingPorts.TryRemove(e.PortName, out _);
                                 }
                             }
                         }

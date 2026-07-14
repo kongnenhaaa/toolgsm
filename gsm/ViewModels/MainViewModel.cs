@@ -1809,7 +1809,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         
         if (obj?.ToString() == "AllBlocked")
         {
-            targetPorts = Ports.Where(p => p.Status == SimStatus.SecurityBlocked).ToList();
+            // Lấy cả WaitingAccept (SIM mới chờ duyệt) lẫn SecurityBlocked (bị chặn thực sự)
+            targetPorts = Ports.Where(p => p.Status == SimStatus.SecurityBlocked || p.Status == SimStatus.WaitingAccept).ToList();
         }
         else if (obj is SimPort clickedPort)
         {
@@ -2642,8 +2643,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     }
                                 });
                             }
+                            else if (result.Status == Services.ImeiProcessStatus.WaitingAccept)
+                            {
+                                // SIM mới (thay nóng) chưa trong hệ thống → chờ user ACCEPT
+                                port.Status = SimStatus.WaitingAccept;
+                                port.LastError = result.ErrorMessage;
+                                port.DeviceName = "SIM mới – bấm ACCEPT để kích hoạt";
+                                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                                UpdateDashboard();
+                            }
                             else
                             {
+                                // SecurityBlocked hoặc Error: SIM bị chặn thực sự
                                 port.Status = SimStatus.SecurityBlocked;
                                 port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? "Lỗi khi xử lý IMEI" : result.ErrorMessage;
                                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
@@ -2671,9 +2682,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.LastError = string.Empty;
         
         // Cập nhật tên thiết bị thực tế dựa trên IMEI
-        if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug)." 
+        // Liệt kê đầy đủ mọi chuỗi trạng thái tạm thời có thể được set trước đó
+        if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug)."
             || port.DeviceName == "Đã nhận SIM, đang khởi tạo..."
+            || port.DeviceName == "Đã nhận SIM, đang kiểm tra IMEI..."
             || port.DeviceName == "Đang xử lý chấp nhận..."
+            || port.DeviceName == "Đang cấu hình SIM mới..."
+            || port.DeviceName == "SIM mới – bấm ACCEPT để kích hoạt"
+            || port.DeviceName == "Đang tráng IMEI Fake..."
             || string.IsNullOrWhiteSpace(port.DeviceName))
         {
             port.DeviceName = Services.ImeiManagementService.GetDeviceNameFromImei(port.Imei);

@@ -3230,9 +3230,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 // ---------- 2. WEBHOOK / TOOLWEB ----------
-                if (cfg.PushOtpToWeb && !string.IsNullOrWhiteSpace(cfg.OtpWebhookUrl))
+                // PushOtpToWeb = true  → chỉ đẩy khi có OTP
+                // PushOtpToWeb = false → đẩy tất cả SMS (cả không OTP) nếu URL đã cấu hình
+                if (!string.IsNullOrWhiteSpace(cfg.OtpWebhookUrl))
                 {
-                    if (extractedOtp != "N/A" || cfg.PushOtpToWeb)
+                    bool shouldPush = cfg.PushOtpToWeb
+                        ? extractedOtp != "N/A"          // OTP-only mode: chỉ khi có OTP
+                        : !string.IsNullOrWhiteSpace(cleanContent); // All-SMS mode: khi có nội dung
+
+                    if (shouldPush)
                     {
                         var payload = new
                         {
@@ -3533,13 +3539,49 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             _ = Task.Run(async () =>
             {
-                if (SettingsService.Current.EnableTelegramNotification)
+                // Dùng _notifyService (với token đã lưu trong Settings) thay vì TelegramService static cũ
+                var cfg2 = SettingsService.Current;
+                bool hasTgToken = !string.IsNullOrWhiteSpace(cfg2.TelegramBotToken) &&
+                                  !string.IsNullOrWhiteSpace(cfg2.TelegramChatId);
+
+                if (hasTgToken && cfg2.TelegramOnOtp)
                 {
-                    await TelegramService.SendMessageAsync($"📩 <b>OTP MỚI TỪ GHÉP SMS</b>\n📱 Số SIM: {simPhone}\nCổng: {portName}\n👤 Từ: {senderPhone}\n🔑 OTP: <code>{newOtp}</code>\n📝 Nội dung: {existing.Content}");
+                    string tgText =
+                        $"🔐 <b>OTP MỚI (ghép SMS)</b>\n" +
+                        $"Port: {portName}\n" +
+                        $"SĐT: {simPhone}\n" +
+                        $"Từ: {System.Net.WebUtility.HtmlEncode(senderPhone)}\n" +
+                        $"OTP: <b>{newOtp}</b>\n" +
+                        $"Nội dung: {System.Net.WebUtility.HtmlEncode(TrimStr(existing.Content, 300))}\n" +
+                        $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                    await _notifyService.SendTelegramAsync(cfg2.TelegramBotToken, cfg2.TelegramChatId, tgText);
                 }
-                foreach (var rule in SettingsService.Current.WebhookRules.Where(r => r.Enabled))
+
+                // Webhook rules
+                foreach (var rule in cfg2.WebhookRules.Where(r => r.Enabled))
                 {
                     await WebhookService.TriggerAsync(rule, portName, simPhone, senderPhone, newOtp, existing.Content);
+                }
+
+                // Global webhook URL (PushOtpToWeb)
+                if (!string.IsNullOrWhiteSpace(cfg2.OtpWebhookUrl))
+                {
+                    bool shouldPush2 = cfg2.PushOtpToWeb ? (newOtp != "N/A") : true;
+                    if (shouldPush2)
+                    {
+                        var wPayload = new
+                        {
+                            event_type = "otp",
+                            port = portName,
+                            phone = simPhone,
+                            sender = senderPhone,
+                            otp = newOtp,
+                            content = existing.Content,
+                            time = DateTime.Now.ToString("o"),
+                            timestamp = DateTimeOffset.Now.ToUnixTimeSeconds()
+                        };
+                        await _notifyService.PushWebhookAsync(cfg2.OtpWebhookUrl, wPayload);
+                    }
                 }
             });
         }
@@ -3550,9 +3592,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
             _ = Task.Run(async () =>
             {
-                if (SettingsService.Current.EnableTelegramNotification)
+                var cfg2 = SettingsService.Current;
+                bool hasTgToken = !string.IsNullOrWhiteSpace(cfg2.TelegramBotToken) &&
+                                  !string.IsNullOrWhiteSpace(cfg2.TelegramChatId);
+
+                if (hasTgToken && cfg2.TelegramOnSms)
                 {
-                    await TelegramService.SendMessageAsync($"📩 <b>Tin Nhắn Ghép (Toàn Văn) Từ {portName}</b>\n📱 SĐT: {simPhone}\n👤 Từ: {safeSender}\n📝 Nội dung: <i>{safeContent}</i>");
+                    string tgText =
+                        $"📩 <b>Tin nhắn ghép từ {portName}</b>\n" +
+                        $"SĐT: {simPhone}\n" +
+                        $"Từ: {safeSender}\n" +
+                        $"Nội dung: <i>{safeContent}</i>\n" +
+                        $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                    await _notifyService.SendTelegramAsync(cfg2.TelegramBotToken, cfg2.TelegramChatId, tgText);
                 }
             });
         }

@@ -26,6 +26,7 @@ public interface IGsmModemService
     void StartHotplugWaitLoop(string portName);
     Task ReinitializeSettingsAsync(string portName);
     Task<bool> ResetNetworkAsync(string portName);
+    Task ReloadSimAsync(string portName);
     Task<bool> AcceptNewSimAndPaintImeiAsync(string portName, string targetImei);
     Task<bool> CallWithAudioAsync(string portName, string phoneNumber, string? wavPath, int durationSeconds = 30, bool record = false, CancellationToken ct = default);
 
@@ -680,6 +681,15 @@ public class GsmModemService : IGsmModemService
         string respOn = await SendCommandAsync(portName, "AT+CFUN=1", 10000);
         
         return !respOn.Contains("ERROR");
+    }
+
+    public async Task ReloadSimAsync(string portName)
+    {
+        if (!_serialPorts.ContainsKey(portName)) return;
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[INFO] Đang khởi động lại phần cứng để nhận SIM..." });
+        
+        // Gửi lệnh khởi động lại mềm (Reset module)
+        await SendCommandAsync(portName, "AT+CFUN=1,1", 10000);
     }
 
     public async Task ReinitializeSettingsAsync(string portName)

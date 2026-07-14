@@ -19,6 +19,8 @@
             }
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.SimCard" Class="mr-2"
+                       Variant="Variant.Outlined" Color="Color.Error" OnClick="ReloadSimSelected">Tải lại SIM</MudButton>
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.CreditCard" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Success" OnClick="CheckTkcSelected">Check TKC</MudButton>
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Dialpad" Class="mr-2"
@@ -217,6 +219,19 @@
             await Task.Delay(500);
             ModemService.ConnectAll(115200);
         }
+    }
+
+    async Task ReloadSimSelected()
+    {
+        var list = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
+        if (!list.Any()) return;
+
+        foreach (var p in list)
+        {
+            _ = ModemService.ReloadSimAsync(p.PortName);
+        }
+        Snackbar.Add($"Đang tải lại phần cứng (SIM) cho {list.Count} cổng...", Severity.Info);
+        SelectedItems.Clear();
     }
 
     [Inject] private IDialogService DialogService { get; set; } = default!;

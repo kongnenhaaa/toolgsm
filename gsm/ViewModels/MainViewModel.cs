@@ -1453,6 +1453,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    private async Task ReloadSimAsync(string portName)
+    {
+        if (string.IsNullOrEmpty(portName)) return;
+        await ModemService.ReloadSimAsync(portName);
+        SnackbarMessageQueue.Enqueue($"Đã gửi lệnh tải lại SIM cho cổng {portName}.");
+    }
+
+    [RelayCommand]
     private void CopyAllLogs()
     {
         var logsToCopy = string.IsNullOrWhiteSpace(_logFilter)

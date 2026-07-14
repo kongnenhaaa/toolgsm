@@ -3818,12 +3818,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 UpdateDashboard();
             }
 
-            // Gửi thông báo qua Telegram nếu có cấu hình
-            _ = TelegramService.SendMessageAsync(
-                $"🎹 <b>Phím DTMF [{e.PortName}]</b>\n" +
-                $"📱 SIM nhận: {receiverPhone}\n" +
-                $"Pressed: <b>{e.Data}</b>"
-            );
+            // Gửi thông báo Telegram qua _notifyService (dùng token đã lưu trong Settings)
+            var dtmfCfg = SettingsService.Current;
+            if (dtmfCfg != null &&
+                !string.IsNullOrWhiteSpace(dtmfCfg.TelegramBotToken) &&
+                !string.IsNullOrWhiteSpace(dtmfCfg.TelegramChatId) &&
+                dtmfCfg.TelegramOnCall)
+            {
+                string dtmfText =
+                    $"🎹 <b>Phím DTMF [{e.PortName}]</b>\n" +
+                    $"📱 SIM nhận: {receiverPhone}\n" +
+                    $"Pressed: <b>{e.Data}</b>\n" +
+                    $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                _ = _notifyService.SendTelegramAsync(dtmfCfg.TelegramBotToken, dtmfCfg.TelegramChatId, dtmfText);
+            }
         });
     }
 
@@ -3908,7 +3916,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
                     await _notifyService.SendTelegramAsync(cfg.TelegramBotToken, cfg.TelegramChatId, text);
                 }
-                else if (cfg.TelegramOnSms) // Using SMS setting for generic call if TelegramOnCall doesn't exist
+                // Cuộc gọi đến (không có OTP)
+                else if (cfg.TelegramOnCall)
                 {
                     var text =
                         $"📞 Cuộc gọi đến\n" +

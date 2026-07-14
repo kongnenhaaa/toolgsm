@@ -198,18 +198,22 @@ public class GsmModemService : IGsmModemService
             }
         }
 
-        bool looksLikePart = partContent.Length <= 160 &&
-                             (partContent.EndsWith("...") ||
-                              partContent.EndsWith("…") ||
-                              (!partContent.EndsWith(".") && !partContent.EndsWith("!") && !partContent.EndsWith("?") && partContent.Length > 50));
+        // SMS Text mode: nếu không có UDH thì mỗi phần tối đa 160 GSM7 hoặc 70 UCS2 ký tự.
+        // Chỉ buffer lại khi content đúng bằng 160 hoặc 70 ký tự (full segment → còn phần tiếp).
+        // Nếu ngắn hơn → đây là phần cuối hoặc tin nhắn đơn bình thường → xuất ngay.
+        const int MaxGsm7Segment = 160;
+        const int MaxUcs2Segment = 70;
+        bool isFullSegment = partContent.Length == MaxGsm7Segment || partContent.Length == MaxUcs2Segment;
 
         if (!_multipartBuffer.TryGetValue(key, out var pending))
         {
-            if (!looksLikePart)
+            if (!isFullSegment)
             {
+                // Tin đơn, không phải multipart
                 if (!string.IsNullOrEmpty(msgIndex)) indicesToDelete.Add(msgIndex);
                 return partContent;
             }
+            // Đây là phần đầu của multipart → bắt đầu buffer
             pending = new PendingMultipart { Port = port, Sender = sender };
             _multipartBuffer[key] = pending;
         }
@@ -218,10 +222,8 @@ public class GsmModemService : IGsmModemService
         if (!string.IsNullOrEmpty(msgIndex)) pending.MsgIndices.Add(msgIndex);
         pending.LastAt = now;
 
-        bool looksComplete = partContent.EndsWith(".") || partContent.EndsWith("!") ||
-                             partContent.EndsWith("?") || partContent.Length < 40;
-
-        if (looksComplete || pending.Parts.Count >= 5)
+        // Phần hiện tại ngắn hơn max segment → đây là phần cuối cùng → ghép và xuất
+        if (!isFullSegment || pending.Parts.Count >= 10)
         {
             _multipartBuffer.TryRemove(key, out _);
             indicesToDelete.AddRange(pending.MsgIndices);
@@ -1403,9 +1405,11 @@ public class GsmModemService : IGsmModemService
             
             string currentData = buffer.ToString();
             
-            if (buffer.Length > 2000)
+            // Buffer giới hạn 32 KB — đủ chứa cả PDU SMS Unicode dài nhất (thường < 600 hex chars/phần)
+            // Không reset buffer khi còn dữ liệu hợp lệ đang được xử lý. Chỉ reset khi thực sự overflow.
+            if (buffer.Length > 32000)
             {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[WARNING] Buffer overflow ({buffer.Length} chars). Cleaning up..." });
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[WARNING] Buffer overflow ({buffer.Length} chars) — có thể bị mất dữ liệu. Đang làm sạch..." });
                 buffer.Clear();
                 currentData = "";
             }
@@ -2276,8 +2280,20 @@ public class GsmModemService : IGsmModemService
             // Bật CLIP để hiện số gọi đến (Caller ID)
             await SendCommandAsync(portName, "AT+CLIP=1", 2000, silent: true);
 
-            // LOGIC CŨ (89d5927ce9d396916b87e083e81b663dfdf666ca):
-            // Gửi ATDxxx; và chờ
+            // Upload WAV lên modem TRƯỚC khi dial (tránh delay sau khi bắt máy)
+            string? remoteWavName = null;
+            bool hasWav = !string.IsNullOrWhiteSpace(wavPath) && File.Exists(wavPath);
+            if (hasWav)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đang upload WAV ({Path.GetFileName(wavPath)}) lên modem..." });
+                remoteWavName = await UploadWavAsync(portName, wavPath!, ct);
+                if (remoteWavName == null)
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Upload WAV thất bại — cuộc gọi vẫn tiến hành (không có nhạc)." });
+                else
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Upload WAV OK: {remoteWavName}" });
+            }
+
+            // Gửi ATDxxx; để quay số
             string cleanPhone = (phoneNumber.StartsWith("+") ? "+" : "") + new string(phoneNumber.Where(char.IsDigit).ToArray());
             var dialResp = await SendCommandAsync(portName, $"ATD{cleanPhone};", 15000);
             
@@ -2288,15 +2304,50 @@ public class GsmModemService : IGsmModemService
                 return false;
             }
 
+            // Chờ đối phương nhấc máy bằng AT+CLCC polling (tối đa 30s)
+            bool answered = false;
+            if (remoteWavName != null)
+            {
+                var answerDeadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < answerDeadline)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    await Task.Delay(800, ct);
+                    string clcc = await SendCommandAsync(portName, "AT+CLCC", 2000, silent: true);
+                    if (clcc.Contains("+CLCC:"))
+                    {
+                        // Phân tích trạng thái cuộc gọi: field thứ 3 (0=active, 2=dialing, 3=alerting)
+                        var clccLine = clcc.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                           .FirstOrDefault(l => l.Contains("+CLCC:"));
+                        if (clccLine != null)
+                        {
+                            var parts = clccLine.Replace("+CLCC:", "").Trim().Split(',');
+                            if (parts.Length > 2 && parts[2].Trim() == "0") // 0 = Active
+                            {
+                                answered = true;
+                                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đối phương đã nhấc máy — bắt đầu phát WAV..." });
+                                await PlayWavAsync(portName, remoteWavName, ct);
+                                break;
+                            }
+                        }
+                    }
+                    else if (clcc.Contains("NO CARRIER") || clcc.Contains("BUSY"))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Cuộc gọi kết thúc sớm: {clcc.Trim()}" });
+                        return false;
+                    }
+                }
+
+                if (!answered)
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Không có phản hồi trong 30s — tiếp tục giữ máy..." });
+            }
+
             // Giữ cuộc gọi theo duration
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(durationSeconds), ct);
             }
-            catch (TaskCanceledException)
-            {
-                // Gọi có thể bị ngắt sớm từ UI
-            }
+            catch (TaskCanceledException) { }
 
             // Dập máy
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Hết thời gian {durationSeconds}s → Dập máy (ATH)" });

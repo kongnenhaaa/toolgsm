@@ -343,7 +343,9 @@ public class ImeiManagementService
                         await Task.Delay(1000);
                         await _modemService.SendCommandAsync(portName, "AT+CFUN=1", 12000, silent: true);
                         
-                        return new ImeiProcessResult { Status = ImeiProcessStatus.Matched, FinalImei = targetImei };
+                        // Tr? v? Applied (không phải Matched) vì IMEI đã thành công được thay đổi
+                        // Caller (ViewModel) sẽ gọi ReinitializeSettingsAsync sau khi Applied
+                        return new ImeiProcessResult { Status = ImeiProcessStatus.Applied, FinalImei = targetImei };
                     }
                     else
                     {
@@ -371,16 +373,17 @@ public class ImeiManagementService
                     return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = errorMsg };
                 }
             }
-            else
-            {
-                if (targetImei == currentImei && !string.IsNullOrEmpty(currentImei))
+                else
                 {
-                    Log($"[{portName}] IMEI khớp với mục tiêu: {currentImei}", "SUCCESS");
+                    if (targetImei == currentImei && !string.IsNullOrEmpty(currentImei))
+                    {
+                        Log($"[{portName}] IMEI khớp với mục tiêu: {currentImei}", "SUCCESS");
+                    }
+                    // QUAN TRỌNG: Không gọi AT+CFUN=1 ở đây.
+                    // Caller (ViewModel.MarkPortActiveAfterInit) sẽ gọi ReinitializeSettingsAsync
+                    // để setup đầy đủ CMGF/CSCS/CLIP/CNMI trước khi bật CFUN=1.
+                    // Gọi CFUN=1 ở đây sẽ gây bật sóng 2 lần liên tiếp (dư thừa và gây ngắt mạng).
                 }
-                Log($"[{portName}] Đang bật sóng (AT+CFUN=1)...");
-                await _modemService.SendCommandAsync(portName, "AT+CFUN=1", 30000);
-                await Task.Delay(1500);
-            }
 
             string checkFinalImei = string.Empty;
             for (int i = 0; i < 3; i++)

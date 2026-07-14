@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -851,23 +851,24 @@ public class GsmModemService : IGsmModemService
                             });
                         }
 
-                        string ccid = pollResp.Replace("OK", "").Trim();
+                        string cleanCcid = pollResp.Replace("OK", "").Trim();
                         LogMessage?.Invoke(this, new GsmDataEventArgs 
                         { 
                             PortName = portName, 
-                            Data = $"[PARSE_CCID] {ccid}" 
+                            Data = $"[PARSE_CCID] {cleanCcid}" 
                         });
 
                         bool isNewSim = true;
                         if (RequiresSimAcceptanceCheck != null)
                         {
-                            isNewSim = RequiresSimAcceptanceCheck(ccid, cleanImei);
+                            isNewSim = RequiresSimAcceptanceCheck(cleanCcid, cleanImei);
                         }
 
-                        // Quan trọng: Báo cho UI biết đây là SIM mới đang chờ chấp nhận
-                        var settings = gsm.Services.SettingsService.Current;
-                        if (settings != null && settings.EnableNewSimIntakeMode && isNewSim)
+                        // Quyết định xử lý: SIM mới + intake mode → chờ ACCEPT; ngược lại → auto process
+                        var hotplugSettings = gsm.Services.SettingsService.Current;
+                        if (hotplugSettings != null && hotplugSettings.EnableNewSimIntakeMode && isNewSim)
                         {
+                            // SIM mới + intake mode bật: chờ user ACCEPT thủ công (không break, tiếp tục polling)
                             isWaitingForAcceptance = true;
                             LogMessage?.Invoke(this, new GsmDataEventArgs 
                             { 
@@ -875,14 +876,17 @@ public class GsmModemService : IGsmModemService
                                 Data = "[STATUS_WAITING_ACCEPT] SIM mới đã cắm – CHỜ USER CHẤP NHẬN" 
                             });
                         }
-                        else 
+                        else
                         {
+                            // SIM đã biết hoặc không cần intake: tự động xử lý
+                            // [PARSE_IMEI] và [PARSE_CCID] đã phát ở trên, chờ ViewModel parse xong
+                            await Task.Delay(1000);
                             LogMessage?.Invoke(this, new GsmDataEventArgs 
                             { 
                                 PortName = portName, 
                                 Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận diện SIM thay nóng, đang cấu hình..." 
                             });
-                            break; // Thoát vòng lặp, nhường cho tiến trình xử lý auto
+                            break; // Thoát vòng lặp, nhường cho ViewModel xử lý auto
                         }
                     }
                 }
@@ -910,8 +914,8 @@ public class GsmModemService : IGsmModemService
         // Guard: nếu đang trong quá trình InitializeModemAsync thì bỏ qua, tránh chạy song song
         if (_simInitInProgress.ContainsKey(portName)) return;
 
-        // Đợi 2 giây để thẻ SIM khởi động bên trong modem
-        await Task.Delay(2000);
+        // Đợi 3 giây để thẻ SIM khởi động bên trong modem và URC QSIMSTAT đến tay handler
+        await Task.Delay(3000);
         
         // Đảm bảo tắt sóng trước khi làm việc với CCID/IMEI
         await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);

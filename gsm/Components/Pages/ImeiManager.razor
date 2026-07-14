@@ -1,4 +1,4 @@
-﻿@page "/imei"
+@page "/imei"
 @inject MainViewModel Vm
 @inject ImeiManagementService ImeiService
 @inject ISnackbar Snackbar
@@ -455,8 +455,9 @@
                 };
                 Vm.AddNewImeiCacheEntry(entry);
                 
-                // Re-initialize settings
-                await Vm.ModemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 12000);
+                // Re-initialize settings đầy đủ (CMGF/CSCS/CLIP/CNMI) thay vì chỉ gọi CFUN=1
+                // để modem có thể nhận được SMS và Call ngay sau khi tráng IMEI
+                await Vm.ModemService.ReinitializeSettingsAsync(port.PortName);
                 
                 Snackbar.Add($"[{port.PortName}] Tráng IMEI {targetImei} thành công!", Severity.Success);
             }

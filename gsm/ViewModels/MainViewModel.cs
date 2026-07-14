@@ -2603,9 +2603,43 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     
                     _ = Task.Run(async () =>
                     {
-                        await Task.Delay(1500); // Đợi parse CCID/IMEI hoàn tất vào model
+                        // Chờ để ViewModel xử lý [PARSE_CCID] và [PARSE_IMEI] events trước
+                        await Task.Delay(3000);
                         string ccid = port.Serial ?? "";
                         string currentImei = port.Imei ?? "";
+                        
+                        // Fallback: đọc trực tiếp từ modem nếu chưa có CCID/IMEI
+                        if (string.IsNullOrWhiteSpace(ccid))
+                        {
+                            string rawCcid = await _modemService.SendCommandAsync(port.PortName, "AT+QCCID", 5000, silent: true);
+                            if (rawCcid.Contains("ERROR") || string.IsNullOrWhiteSpace(rawCcid))
+                                rawCcid = await _modemService.SendCommandAsync(port.PortName, "AT+CCID", 5000, silent: true);
+                            if (!rawCcid.Contains("ERROR") && !string.IsNullOrWhiteSpace(rawCcid))
+                            {
+                                var ccidMatch = System.Text.RegularExpressions.Regex.Match(rawCcid, @"\b([A-Za-z0-9]{18,22})\b");
+                                if (ccidMatch.Success)
+                                    ccid = NormalizeCcid(ccidMatch.Groups[1].Value);
+                            }
+                        }
+                        if (string.IsNullOrWhiteSpace(currentImei))
+                        {
+                            string rawImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 5000, silent: true);
+                            if (!rawImei.Contains("ERROR") && !string.IsNullOrWhiteSpace(rawImei))
+                                currentImei = NormalizeImei(rawImei);
+                        }
+                        
+                        if (string.IsNullOrWhiteSpace(ccid))
+                        {
+                            AddLog($"[{port.PortName}] Hotplug: Không đọc được CCID, hủy ProcessImei.", "WARN");
+                            Application.Current.Dispatcher.Invoke(() => port.Status = Models.SimStatus.NoResponse);
+                            return;
+                        }
+                        
+                        // Cập nhật lại UI nếu đọc fallback thành công
+                        if (!string.IsNullOrWhiteSpace(ccid) && string.IsNullOrWhiteSpace(port.Serial))
+                            Application.Current.Dispatcher.Invoke(() => port.Serial = ccid);
+                        if (!string.IsNullOrWhiteSpace(currentImei) && string.IsNullOrWhiteSpace(port.Imei))
+                            Application.Current.Dispatcher.Invoke(() => port.Imei = currentImei);
                         
                         var result = await _imeiManagementService.ProcessImeiAsync(
                             port,
@@ -2633,24 +2667,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             }
                             else if (result.Status == Services.ImeiProcessStatus.Applied)
                             {
-                                port.IsRebooting = true;
+                                // IMEI đã được ghi thành công và CFUN=0→1 đã xảy ra trong ProcessImeiAsync.
+                                // Không cần chờ USB ngắt. Gọi ReinitializeSettingsAsync để setup
+                                // CMGF/CSCS/CLIP/CNMI đầy đủ và bật sóng lại đúng cách.
+                                port.IsRebooting = false;
                                 port.Imei = result.FinalImei;
-                                port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
-                                port.Status = SimStatus.Connecting;
-                                
-                                _ = Task.Run(async () =>
-                                {
-                                    await Task.Delay(15000);
-                                    if (port.IsRebooting)
-                                    {
-                                        Application.Current.Dispatcher.Invoke(() => 
-                                        {
-                                            port.IsRebooting = false;
-                                            AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
-                                            _modemService.StartHotplugWaitLoop(port.PortName);
-                                        });
-                                    }
-                                });
+                                MarkPortActiveAfterInit(port.PortName);
+                                _ = _modemService.ReinitializeSettingsAsync(port.PortName);
                             }
                             else if (result.Status == Services.ImeiProcessStatus.WaitingAccept)
                             {
@@ -2766,24 +2789,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (result.Status == Services.ImeiProcessStatus.Applied)
             {
-                port.IsRebooting = true;
-                port.Imei = result.FinalImei;
-                port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
-                port.Status = SimStatus.Connecting;
-                
-                _ = Task.Run(async () =>
+                // IMEI đã ghi thành công. Setup lại modem đầy đủ.
+                Application.Current.Dispatcher.Invoke(() => 
                 {
-                    await Task.Delay(15000);
-                    if (port.IsRebooting)
-                    {
-                        Application.Current.Dispatcher.Invoke(() => 
-                        {
-                            port.IsRebooting = false;
-                            AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
-                            _modemService.StartHotplugWaitLoop(port.PortName);
-                        });
-                    }
+                    port.IsRebooting = false;
+                    port.Imei = result.FinalImei;
+                    MarkPortActiveAfterInit(port.PortName);
                 });
+                _ = _modemService.ReinitializeSettingsAsync(port.PortName);
             }
             else
             {

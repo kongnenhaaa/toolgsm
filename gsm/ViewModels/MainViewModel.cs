@@ -1833,7 +1833,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             if (port == null) continue;
             
-            if (port.Status != SimStatus.SecurityBlocked)
+            // Chấp nhận cả WaitingAccept (SIM mới chờ duyệt) lẫn SecurityBlocked (SIM bị chặn)
+            if (port.Status != SimStatus.SecurityBlocked && port.Status != SimStatus.WaitingAccept)
             {
                 continue;
             }
@@ -2562,8 +2563,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (e.Data.StartsWith("[STATUS_WAITING_ACCEPT]"))
             {
-                port.Status = SimStatus.SecurityBlocked;
-                port.LastError = "Chờ chấp nhận SIM mới";
+                // Trạng thái riêng biệt: SIM mới đang CHỜ user chấp nhận thủ công
+                // KHÔNG dùng SecurityBlocked để tránh nhầm lẫn với SIM bị chặn bảo mật thực sự
+                port.Status = SimStatus.WaitingAccept;
+                port.LastError = "SIM mới – chờ user chấp nhận";
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
             }
@@ -2646,8 +2649,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var port = Ports.FirstOrDefault(p => p.PortName == portName);
         if (port == null) return;
 
-        // Bắt buộc bật sóng rõ ràng sau khi Init/Matched (đảm bảo không kẹt ở CFUN=4)
-        _ = _modemService.SendCommandAsync(portName, "AT+CFUN=1", 10000, silent: true);
+        // KHÔNG gọi AT+CFUN=1 ở đây vì ReinitializeSettingsAsync (được gọi ngay sau hàm này)
+        // đã gọi AT+CFUN=1 ở cuối luồng của nó. Gọi 2 lần sẽ tạo xung đột lệnh AT.
 
         port.Status = SimStatus.Active;
         port.TimeoutCount = 0;
@@ -2656,7 +2659,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.LastError = string.Empty;
         
         // Cập nhật tên thiết bị thực tế dựa trên IMEI
-        if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug)." || port.DeviceName == "Đã nhận SIM, đang khởi tạo..." || string.IsNullOrWhiteSpace(port.DeviceName))
+        if (port.DeviceName == "Đang chờ cắm SIM (Hot-plug)." 
+            || port.DeviceName == "Đã nhận SIM, đang khởi tạo..."
+            || port.DeviceName == "Đang xử lý chấp nhận..."
+            || string.IsNullOrWhiteSpace(port.DeviceName))
         {
             port.DeviceName = Services.ImeiManagementService.GetDeviceNameFromImei(port.Imei);
         }
@@ -2668,8 +2674,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             sms.Status = SimStatus.Active;
         }
-
-
 
         _ = gsm.Services.FirebaseService.ClearWebStateAsync(portName);
     }

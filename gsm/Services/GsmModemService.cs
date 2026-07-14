@@ -70,6 +70,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _keepAliveCts = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _simMonitorCts = new();
     private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
+    /// <summary>Guard chống race condition: đánh dấu port đang trong quá trình khởi tạo SIM đầu tiên.</summary>
+    private readonly ConcurrentDictionary<string, bool> _simInitInProgress = new();
     private readonly object _connectLock = new object();
 
     public Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
@@ -494,6 +496,20 @@ public class GsmModemService : IGsmModemService
 
     private async Task InitializeModemAsync(string portName)
     {
+        // Guard: Đánh dấu cổng đang trong quá trình khởi tạo, ngăn GlobalSimMonitor gọi HandleSimInsertedAsync song song
+        _simInitInProgress[portName] = true;
+        try
+        {
+            await InitializeModemCoreAsync(portName);
+        }
+        finally
+        {
+            _simInitInProgress.TryRemove(portName, out _);
+        }
+    }
+
+    private async Task InitializeModemCoreAsync(string portName)
+    {
         // [SECURITY] Gửi lệnh ngắt sóng NGAY LẬP TỨC ngay khi mở cổng COM, không chờ đợi PING AT.
         // Ngăn chặn tối đa việc modem kịp đăng ký vào mạng bằng IMEI phần cứng khi vừa khởi động.
         await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
@@ -768,6 +784,9 @@ public class GsmModemService : IGsmModemService
 
                 if (isSimPresent && !lastState)
                 {
+                    // Guard: Nếu InitializeModemAsync đang chạy (trong 20s đầu) hoặc đang handle SIM khác → bỏ qua
+                    if (_simInitInProgress.ContainsKey(portName)) continue;
+
                     _lastSimState[portName] = true;
                     _ = Task.Run(() => HandleSimInsertedAsync(portName));
                 }
@@ -910,6 +929,9 @@ public class GsmModemService : IGsmModemService
     public async Task HandleSimInsertedAsync(string portName)
     {
         if (!_serialPorts.ContainsKey(portName)) return;
+
+        // Guard: nếu đang trong quá trình InitializeModemAsync thì bỏ qua, tránh chạy song song
+        if (_simInitInProgress.ContainsKey(portName)) return;
 
         // Đợi 2 giây để thẻ SIM khởi động bên trong modem
         await Task.Delay(2000);

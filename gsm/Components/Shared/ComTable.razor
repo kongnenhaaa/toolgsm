@@ -28,6 +28,7 @@
                 var pendingList = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
                 var pendingCount = pendingList.Count(IsPendingAccept);
             }
+            
             @if (pendingCount > 0)
             {
                 <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" Class="mr-2"
@@ -170,30 +171,21 @@
     bool IsPendingAccept(SimPort p)
     {
         if (p == null) return false;
-        var s = p.Status?.ToString() ?? "";
-        
+        var s = p.Status ?? "";
+
         // Loại trừ tuyệt đối các trạng thái không thể chấp nhận
-        if (s == "Chờ cắm SIM" || 
-            s == "Không phản hồi" || 
-            s == "No Response" || 
-            s == "Connecting" || 
-            s == gsm.Models.SimStatus.Connecting || 
-            s == gsm.Models.SimStatus.NoResponse || 
-            s == gsm.Models.SimStatus.Active || 
-            s == "Đang hoạt động")
+        if (s == gsm.Models.SimStatus.Active
+            || s == gsm.Models.SimStatus.Connecting
+            || s == gsm.Models.SimStatus.NoResponse
+            || s == "Chờ cắm SIM")
         {
             return false;
         }
 
-        var err = p.LastError?.ToLowerInvariant() ?? "";
-        return s == gsm.Models.SimStatus.SecurityBlocked
-            || s.Contains("Pending", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("WaitAccept", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("SecurityBlocked", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("Chặn bảo mật", StringComparison.OrdinalIgnoreCase)
-            || s.Contains("Chờ Accept", StringComparison.OrdinalIgnoreCase)
-            || err.Contains("sim_mới_chờ_chấp_nhận", StringComparison.OrdinalIgnoreCase)
-            || err.Contains("chấp nhận", StringComparison.OrdinalIgnoreCase);
+        // Chỉ cho phép Accept khi đang WaitingAccept (SIM mới chưa duyệt)
+        // hoặc SecurityBlocked (SIM bị chặn bảo mật cần tráng lại IMEI)
+        return s == gsm.Models.SimStatus.WaitingAccept
+            || s == gsm.Models.SimStatus.SecurityBlocked;
     }
 
     async Task AcceptOne(SimPort port)
@@ -391,7 +383,10 @@
     }
     private RenderFragment RenderLoadingOrValue(gsm.Models.SimPort context, string value, string fallback = "—") => __builder =>
     {
-        if ((string.IsNullOrEmpty(value) || value.Contains("Chưa")) && (context.Status == "Active" || context.Status == "Đang kết nối..."))
+        bool isLoading = (string.IsNullOrEmpty(value) || value.Contains("Chưa"))
+                         && (context.Status == gsm.Models.SimStatus.Connecting
+                             || context.Status == gsm.Models.SimStatus.Active);
+        if (isLoading)
         {
             <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" />
         }

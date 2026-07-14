@@ -2101,9 +2101,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     
                     // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
                     ussdContent = DecodeUcs2(ussdContent);
+
+                    // Lưu kết quả USSD vào LastUssdResult (dùng cho tab USSD trong CommandPanel)
                     port.LastUssdResult = ussdContent;
                     port.UpdateDisplayResult(CommandPanelTab);
-                    System.IO.File.AppendAllText("ussd_debug.txt", $"[{DateTime.Now}] [{e.PortName}] {ussdContent}\n");
+
+                    // Hiển thị kết quả USSD trên cột "Nội dung" trong bảng COM ngay lập tức
+                    string ussdShort = ussdContent.Length > 120
+                        ? ussdContent.Substring(0, 120).TrimEnd() + "..."
+                        : ussdContent;
+                    port.LastMessageContent = "[USSD] " + ussdShort;
+                    port.Sender = "USSD";
+                    port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
 
                     var phoneMatch = Regex.Match(ussdContent, @"(?:thuê bao|thue bao|so tb|số tb|msisdn|sim)[^\d]{0,15}(0\d{9,10}|84\d{9,10})", RegexOptions.IgnoreCase);
                     if (!phoneMatch.Success)
@@ -6471,7 +6480,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 else
                 {
-                    if (cmdType == "USSD") port.LastUssdResult = finalResult;
+                    if (cmdType == "USSD")
+                    {
+                        port.LastUssdResult = finalResult;
+                        // Hiển thị kết quả USSD từ CommandPanel lên cột "Nội dung"
+                        // (kết quả từ +CUSD URC đã được set bởi handler bên trên, trường hợp này là fallback khi finalResult có nội dung)
+                        if (!finalResult.Contains("Đang") && !string.IsNullOrWhiteSpace(finalResult))
+                        {
+                            string ussdFinalShort = finalResult.Length > 120
+                                ? finalResult.Substring(0, 120).TrimEnd() + "..."
+                                : finalResult;
+                            port.LastMessageContent = "[USSD] " + ussdFinalShort;
+                            port.Sender = "USSD";
+                            port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                        }
+                    }
                     else if (cmdType == "SMS") port.LastSmsResult = finalResult;
                     else if (cmdType == "Call") port.LastCallResult = finalResult;
                     else if (cmdType == "MMS") port.LastMmsResult = finalResult;

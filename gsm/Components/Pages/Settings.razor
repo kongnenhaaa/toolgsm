@@ -591,6 +591,10 @@
             cfg.AutoAccept = _autoAccept;
 
             gsm.Services.SettingsService.SaveSettings(cfg);
+
+            // Áp dụng cài đặt (sync AppSettings + call forwarding) ngay lập tức
+            _ = Task.Run(async () => await Vm.ApplySettingsAsync());
+
             Snackbar.Add("✓ Đã lưu tất cả cài đặt và áp dụng ngay", Severity.Success);
         }
         catch (Exception ex)

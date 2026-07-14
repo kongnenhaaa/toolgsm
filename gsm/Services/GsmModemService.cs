@@ -198,39 +198,14 @@ public class GsmModemService : IGsmModemService
             }
         }
 
-        // SMS Text mode: nếu không có UDH thì mỗi phần tối đa 160 GSM7 hoặc 70 UCS2 ký tự.
-        // Chỉ buffer lại khi content đúng bằng 160 hoặc 70 ký tự (full segment → còn phần tiếp).
-        // Nếu ngắn hơn → đây là phần cuối hoặc tin nhắn đơn bình thường → xuất ngay.
-        const int MaxGsm7Segment = 160;
-        const int MaxUcs2Segment = 70;
-        bool isFullSegment = partContent.Length == MaxGsm7Segment || partContent.Length == MaxUcs2Segment;
-
-        if (!_multipartBuffer.TryGetValue(key, out var pending))
-        {
-            if (!isFullSegment)
-            {
-                // Tin đơn, không phải multipart
-                if (!string.IsNullOrEmpty(msgIndex)) indicesToDelete.Add(msgIndex);
-                return partContent;
-            }
-            // Đây là phần đầu của multipart → bắt đầu buffer
-            pending = new PendingMultipart { Port = port, Sender = sender };
-            _multipartBuffer[key] = pending;
-        }
-
-        pending.Parts.Add(partContent);
-        if (!string.IsNullOrEmpty(msgIndex)) pending.MsgIndices.Add(msgIndex);
-        pending.LastAt = now;
-
-        // Phần hiện tại ngắn hơn max segment → đây là phần cuối cùng → ghép và xuất
-        if (!isFullSegment || pending.Parts.Count >= 10)
-        {
-            _multipartBuffer.TryRemove(key, out _);
-            indicesToDelete.AddRange(pending.MsgIndices);
-            return string.Join("", pending.Parts);
-        }
-
-        return null;
+        // KHÔNG dùng heuristic ghép tin text-mode.
+        // Lý do: mỗi AT+CMGR trả về 1 tin hoàn chỉnh đã được modem decode.
+        // Multipart PDU thật (UDH header) được xử lý đúng bởi MainViewModel.TryBufferConcatenatedSms.
+        // Heuristic length==160 gây lỗi: 2 tin riêng biệt từ cùng sender (tin 1 đúng 160 ký tự)
+        // sẽ bị buffer rồi merge sai thành 1 tin.
+        // → Mỗi tin đọc từ AT+CMGR là 1 tin độc lập, trả về ngay lập tức.
+        if (!string.IsNullOrEmpty(msgIndex)) indicesToDelete.Add(msgIndex);
+        return partContent;
     }
 
     static readonly Regex CmgrHeaderRegex = new(
@@ -2108,8 +2083,8 @@ public class GsmModemService : IGsmModemService
                 return $"ERROR: Gửi thất bại ở đoạn {i + 1}/{total} - {resp}";
             }
 
-            // Chờ giữa các đoạn để tránh nhà mạng xáo trộn thứ tự nhận
-            if (i < total - 1) await Task.Delay(3000);
+            // Chờ 1.5s giữa các đoạn để mạng có thể nhận đúng thứ tự
+            if (i < total - 1) await Task.Delay(1500);
         }
 
         return $"OK (Đã gửi {total} đoạn thành công)";
@@ -2245,11 +2220,12 @@ public class GsmModemService : IGsmModemService
             if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
                 _commandTcs.TryRemove(portName, out _);
 
-            // Trả lại UCS2 charset để đọc tin nhắn tiếng Việt và DCS=8 cho UCS2
+            // Restore CSCS về UCS2 để nhận tin nhắn tiếng Việt đúng
+            // KHÔNG reset AT+CSMP vì CSMP ảnh hưởng cả nhận tin (DCS field).
+            // Modem init đã set CMGF=1 + CSCS=UCS2 là đủ cho receive.
             if (_serialPorts.TryGetValue(portName, out var sp2) && sp2.IsOpen)
             {
-                await SendInnerAsync("AT+CSCS=\"UCS2\"");
-                await SendInnerAsync("AT+CSMP=17,167,0,8");
+                await SendInnerAsync("AT+CSCS=\"UCS2\""); // Restore charset để nhận đúng tiếng Việt
             }
 
             semaphore.Release();

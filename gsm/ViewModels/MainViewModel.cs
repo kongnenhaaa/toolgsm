@@ -4886,7 +4886,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Áp dụng cài đặt mới (từ Settings.razor) ngay lập tức:
+    /// sync AppSettings + apply call forwarding.
+    /// </summary>
+    public async Task ApplySettingsAsync()
+    {
+        var saved = SettingsService.Current;
+        if (saved != null) AppSettings = saved;
 
+        if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))
+        {
+            AddLog("[Settings] Đang áp dụng chuyển hướng cuộc gọi...", "INFO");
+            var activePorts = GetPortsSnapshot().Where(p => p.Status == Models.SimStatus.Active).ToList();
+            foreach (var port in activePorts)
+            {
+                string rndFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
+                if (string.IsNullOrEmpty(rndFwd)) continue;
+                string dialType = rndFwd.StartsWith("+") ? "145" : "129";
+                string res = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{rndFwd}\",{dialType}", timeoutMs: 5000);
+                if (res.Contains("OK"))
+                {
+                    Application.Current.Dispatcher.Invoke(() => { port.ForwardedTo = rndFwd; port.ForwardCount++; });
+                    AddLog($"[{port.PortName}] Chuyển hướng → {rndFwd} OK", "SUCCESS");
+                }
+                await Task.Delay(300);
+            }
+        }
+        else if (AppSettings != null && !AppSettings.EnableAutoCallForwarding)
+        {
+            var activePorts = GetPortsSnapshot().Where(p => p.Status == Models.SimStatus.Active).ToList();
+            foreach (var port in activePorts)
+            {
+                await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
+                Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
+                await Task.Delay(300);
+            }
+        }
+    }
 
     [RelayCommand]
     private void CopyOtp(SmsMessage? sms)

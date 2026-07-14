@@ -260,7 +260,7 @@
                 Cấu hình chuyển tiếp cuộc gọi (AT+CCFC)
             </MudText>
             <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
-                Chọn cổng ở tab <b>Danh sách Cổng</b> trước khi thực hiện. Đang chọn: <b>@_selectedPorts.Count</b> cổng.
+                Chọn các cổng cần thực hiện từ bảng bên dưới. Đang chọn: <b>@_selectedPorts.Count</b> cổng.
             </MudText>
 
             <MudStack Row="true" Spacing="2" AlignItems="AlignItems.End" Wrap="Wrap.Wrap" Class="mb-3">
@@ -298,7 +298,7 @@
             }
 
             <MudTable Items="@FilteredPorts" Dense="true" Hover="true" Elevation="0"
-                      Height="350px" FixedHeader="true">
+                      Height="350px" FixedHeader="true" MultiSelection="true" @bind-SelectedItems="_selectedPorts">
                 <HeaderContent>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT SIM</MudTh>

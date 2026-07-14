@@ -2107,10 +2107,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.UpdateDisplayResult(CommandPanelTab);
 
                     // Hiển thị kết quả USSD trên cột "Nội dung" trong bảng COM ngay lập tức
-                    string ussdShort = ussdContent.Length > 120
-                        ? ussdContent.Substring(0, 120).TrimEnd() + "..."
-                        : ussdContent;
-                    port.LastMessageContent = "[USSD] " + ussdShort;
+                    port.LastMessageContent = "[USSD] " + ussdContent;
                     port.Sender = "USSD";
                     port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
 
@@ -6639,10 +6636,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         // (kết quả từ +CUSD URC đã được set bởi handler bên trên, trường hợp này là fallback khi finalResult có nội dung)
                         if (!finalResult.Contains("Đang") && !string.IsNullOrWhiteSpace(finalResult))
                         {
-                            string ussdFinalShort = finalResult.Length > 120
-                                ? finalResult.Substring(0, 120).TrimEnd() + "..."
-                                : finalResult;
-                            port.LastMessageContent = "[USSD] " + ussdFinalShort;
+                            port.LastMessageContent = "[USSD] " + finalResult;
                             port.Sender = "USSD";
                             port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                         }

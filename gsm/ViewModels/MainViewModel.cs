@@ -3203,6 +3203,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (hasToken)
                 {
                     // OTP
+                    // Telegram: gửi OTP nếu TelegramOnOtp bật
                     if (cfg.TelegramOnOtp && extractedOtp != "N/A")
                     {
                         var text =
@@ -3216,7 +3217,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         _ = _notifyService.SendTelegramAsync(cfg.TelegramBotToken, cfg.TelegramChatId, text);
                     }
                     // Full SMS (kể cả không OTP)
-                    else if (cfg.TelegramOnSms || receiveAll)
+                    // Telegram: gửi SMS thường nếu TelegramOnSms bật (không phụ thuộc receiveAll)
+                    else if (cfg.TelegramOnSms)
                     {
                         var text =
                             $"📩 SMS mới\n" +
@@ -3680,11 +3682,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Services.SoundAlertService.PlayCall();
 
             string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
-            _ = TelegramService.SendMessageAsync(
-                $"📞 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
-                $"📱 SIM nhận: {receiverPhone}\n" +
-                $"☎️ Người gọi: <code>{safeCallerHtml}</code>"
-            );
+            // Thông báo Telegram cuộc gọi đến (kiểm tra TelegramOnCall trước khi gửi)
+            var clipCfg = SettingsService.Current;
+            if (clipCfg != null &&
+                !string.IsNullOrWhiteSpace(clipCfg.TelegramBotToken) &&
+                !string.IsNullOrWhiteSpace(clipCfg.TelegramChatId) &&
+                clipCfg.TelegramOnCall)
+            {
+                string callText =
+                    $"📞 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
+                    $"📱 SIM nhận: {receiverPhone}\n" +
+                    $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
+                    $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                _ = _notifyService.SendTelegramAsync(clipCfg.TelegramBotToken, clipCfg.TelegramChatId, callText);
+            }
 
             // Tự động nhận cuộc gọi và ghi âm
             if (IsAutoAnswerEnabled)
@@ -4044,13 +4055,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
             string safeContent = System.Net.WebUtility.HtmlEncode(content);
             string safeFileName = System.Net.WebUtility.HtmlEncode(fileName);
-            _ = TelegramService.SendMessageAsync(
-                $"🎙 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
-                $"📱 SIM nhận: {receiverPhone}\n" +
-                $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
-                $"📝 Nội dung: <i>{safeContent}</i>\n" +
-                $"💾 File: <code>{safeFileName}</code>"
-            );
+            // Thông báo Telegram khi cuộc gọi kết thúc (check TelegramOnCall)
+            var callEndCfg = SettingsService.Current;
+            if (callEndCfg != null &&
+                !string.IsNullOrWhiteSpace(callEndCfg.TelegramBotToken) &&
+                !string.IsNullOrWhiteSpace(callEndCfg.TelegramChatId) &&
+                callEndCfg.TelegramOnCall)
+            {
+                string endText =
+                    $"🎙 <b>Cuộc gọi kết thúc [{e.PortName}]</b>\n" +
+                    $"📱 SIM nhận: {receiverPhone}\n" +
+                    $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
+                    $"📝 Nội dung: <i>{safeContent}</i>\n" +
+                    $"💾 File: <code>{safeFileName}</code>\n" +
+                    $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                _ = _notifyService.SendTelegramAsync(callEndCfg.TelegramBotToken, callEndCfg.TelegramChatId, endText);
+            }
         });
     }
     [RelayCommand]

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -803,7 +803,14 @@ namespace gsm.Services
                     }
 
                     string errorMsg = GetHumanReadableError(result);
-                    _ = TelegramService.SendMessageAsync($"⚠️ <b>Lỗi Gửi SMS Từ {portId}</b>\n📱 Tới: {recipient}\n📝 Nội dung: {content}\n❌ Chi tiết: <code>{errorMsg}</code>");
+                    var fbCfg = SettingsService.Current;
+                    if (fbCfg != null && fbCfg.TelegramOnError &&
+                        !string.IsNullOrWhiteSpace(fbCfg.TelegramBotToken) &&
+                        !string.IsNullOrWhiteSpace(fbCfg.TelegramChatId))
+                    {
+                        string errText = $"⚠️ <b>Lỗi Gửi SMS Từ {portId}</b>\n📱 Tới: {recipient}\n📝 Nội dung: {content}\n❌ Chi tiết: <code>{errorMsg}</code>";
+                        _ = TelegramService.SendMessageAsync(errText); // TelegramService tự lấy token từ Settings
+                    }
                 }
 
                 return result;

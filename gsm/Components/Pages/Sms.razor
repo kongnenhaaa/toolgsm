@@ -101,14 +101,14 @@
                     <MudTh Style="width:100px;">Thao tác</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="font-size:12px; white-space:nowrap;">@context.ReceivedTime</MudTd>
+                    <MudTd Style="font-size:16px; white-space:nowrap;">@context.ReceivedTime</MudTd>
                     <MudTd Style="font-weight:600;">@context.PortName</MudTd>
-                    <MudTd>@context.Sender</MudTd>
-                    <MudTd Style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                    <MudTd Style="font-size:16px;">@context.Sender</MudTd>
+                    <MudTd Style="font-size:16px; word-break:break-word; white-space:pre-wrap; min-width:400px; max-width:1000px;"
                            title="@context.Content">
                         @context.Content
                     </MudTd>
-                    <MudTd Style="font-family:monospace; color:#2563EB; font-weight:600;">
+                    <MudTd Style="font-size:16px; font-family:monospace; color:#2563EB; font-weight:600;">
                         @(context.Otp ?? "—")
                     </MudTd>
                     <MudTd>
@@ -181,7 +181,7 @@
                 <RowTemplate>
                     <MudTd Style="font-weight:600;">@context.PortId</MudTd>
                     <MudTd>@context.Recipient</MudTd>
-                    <MudTd Style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
+                    <MudTd Style="word-break:break-word; white-space:pre-wrap; min-width:400px; max-width:1000px;"
                            title="@context.Content">@context.Content</MudTd>
                     <MudTd>
                         <MudChip T="string" Size="Size.Small"

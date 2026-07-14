@@ -66,7 +66,7 @@
             {
                 @if (col.Name == "Stt")
                 {
-                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#64748B; font-size:12px; white-space: nowrap;">
+                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#64748B; font-size:16px; white-space: nowrap;">
                         @(VisiblePorts.ToList().IndexOf(context) + 1)
                     </MudTd>
                 }
@@ -76,65 +76,65 @@
                 }
                 else if (col.Name == "Status")
                 {
-                    <MudTd Style="border-bottom:1px solid #F1F5F9; white-space: nowrap;">
+                    <MudTd Style="border-bottom:1px solid #F1F5F9; white-space: nowrap; font-size:16px;">
                         <StatusBadge Status="@context.Status" />
                     </MudTd>
                 }
                 else if (col.Name == "NetworkProvider")
                 {
-                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap;">@RenderLoadingOrValue(context, context.NetworkProvider)</MudTd>
+                    <MudTd Style="border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap; font-size:16px;">@RenderLoadingOrValue(context, context.NetworkProvider)</MudTd>
                 }
                 else if (col.Name == "Balance")
                 {
-                    <MudTd Style="color:#16A34A; font-weight:600; border-bottom:1px solid #F1F5F9; white-space: nowrap;">
+                    <MudTd Style="color:#16A34A; font-weight:600; border-bottom:1px solid #F1F5F9; white-space: nowrap; font-size:16px;">
                         @RenderLoadingOrValue(context, context.Balance)
                     </MudTd>
                 }
                 else if (col.Name == "PhoneNumber")
                 {
-                    <MudTd Style="@("border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.PhoneNumber)</MudTd>
+                    <MudTd Style="@("border-bottom:1px solid #F1F5F9; color:#475569; white-space: nowrap; mso-number-format: '\\@'; font-size:16px;")">@RenderLoadingOrValue(context, context.PhoneNumber)</MudTd>
                 }
                 else if (col.Name == "Imei")
                 {
-                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.Imei)</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:16px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.Imei)</MudTd>
                 }
                 else if (col.Name == "Serial")
                 {
-                    <MudTd Style="@("font-family:monospace; font-size:13px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.Serial)</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:16px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@RenderLoadingOrValue(context, context.Serial)</MudTd>
                 }
                 else if (col.Name == "ExpiryDate")
                 {
-                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@RenderLoadingOrValue(context, context.ExpiryDate)</MudTd>
+                    <MudTd Style="font-size:16px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@RenderLoadingOrValue(context, context.ExpiryDate)</MudTd>
                 }
                 else if (col.Name == "SimRegDate")
                 {
-                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@(context.SimRegDate ?? "—")</MudTd>
+                    <MudTd Style="font-size:16px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@(context.SimRegDate ?? "—")</MudTd>
                 }
                 else if (col.Name == "Lock1C")
                 {
-                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#991B1B; white-space: nowrap;">@(context.Lock1C ?? "—")</MudTd>
+                    <MudTd Style="font-size:16px; border-bottom:1px solid #F1F5F9; color:#991B1B; white-space: nowrap;">@(context.Lock1C ?? "—")</MudTd>
                 }
                 else if (col.Name == "Lock2C")
                 {
-                    <MudTd Style="font-size:12px; border-bottom:1px solid #F1F5F9; color:#991B1B; white-space: nowrap;">@(context.Lock2C ?? "—")</MudTd>
+                    <MudTd Style="font-size:16px; border-bottom:1px solid #F1F5F9; color:#991B1B; white-space: nowrap;">@(context.Lock2C ?? "—")</MudTd>
                 }
                 else if (col.Name == "ForwardedTo")
                 {
-                    <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#2563EB; white-space: nowrap;">@(string.IsNullOrEmpty(context.ForwardedTo) ? "—" : context.ForwardedTo)</MudTd>
+                    <MudTd Style="font-weight:600; font-size:16px; border-bottom:1px solid #F1F5F9; color:#2563EB; white-space: nowrap;">@(string.IsNullOrEmpty(context.ForwardedTo) ? "—" : context.ForwardedTo)</MudTd>
                 }
                 else if (col.Name == "VnptStatus")
                 {
-                    <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#E11D48; white-space: nowrap;">@(string.IsNullOrEmpty(context.VnptStatus) ? "—" : context.VnptStatus)</MudTd>
+                    <MudTd Style="font-weight:600; font-size:16px; border-bottom:1px solid #F1F5F9; color:#E11D48; white-space: nowrap;">@(string.IsNullOrEmpty(context.VnptStatus) ? "—" : context.VnptStatus)</MudTd>
                 }
                 else if (col.Name == "Otp")
                 {
-                    <MudTd Style="font-weight:600; font-size:12px; border-bottom:1px solid #F1F5F9; color:#2563EB; white-space: nowrap;">
+                    <MudTd Style="font-weight:600; font-size:16px; border-bottom:1px solid #F1F5F9; color:#2563EB; white-space: nowrap;">
                         @(string.IsNullOrEmpty(context.Otp) ? "—" : context.Otp)
                     </MudTd>
                 }
                 else if (col.Name == "LastMessageContent")
                 {
-                    <MudTd Style="word-break:break-word; font-size:12px; border-bottom:1px solid #F1F5F9; color:#475569;">
+                    <MudTd Style="word-break:break-word; font-size:16px; border-bottom:1px solid #F1F5F9; color:#475569;">
                         @(context.LastMessageContent ?? "—")
                     </MudTd>
                 }

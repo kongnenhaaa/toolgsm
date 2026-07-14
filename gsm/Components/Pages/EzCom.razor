@@ -1,6 +1,5 @@
 @page "/ezcom"
 @inject gsm.ViewModels.MainViewModel Vm
-@inject gsm.Services.IGsmModemService ModemService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @using gsm.Models
@@ -249,7 +248,7 @@
             try
             {
                 // Gửi SMS: lệnh đăng ký tới số dịch vụ
-                rawResponse = await ModemService.SendSmsAsync(port, _ezNumber.Trim(), _ezCommand.Trim());
+                rawResponse = await Vm.ModemService.SendSmsAsync(port, _ezNumber.Trim(), _ezCommand.Trim());
 
                 if (rawResponse != null && (rawResponse.Contains("ERROR") || rawResponse.Contains("TIMEOUT")))
                 {

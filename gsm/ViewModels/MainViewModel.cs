@@ -2297,19 +2297,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             {
                                 string fwdDialType = randomFwd.StartsWith("+") ? "145" : "129";
                                 AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
-                                string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",{fwdDialType}", timeoutMs: 8000);
-                                if (ccfcResult.Contains("OK"))
+                                
+                                // Retry tối đa 3 lần (mạng vừa đăng ký có thể chưa sẵn sàng ngay)
+                                bool fwdOk = false;
+                                for (int attempt = 1; attempt <= 3 && !fwdOk; attempt++)
                                 {
-                                    Application.Current.Dispatcher.Invoke(() =>
+                                    string ccfcResult = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{randomFwd}\",{fwdDialType}", timeoutMs: 8000);
+                                    if (ccfcResult.Contains("OK"))
                                     {
-                                        port.ForwardCount++;
-                                        port.ForwardedTo = randomFwd;
-                                    });
-                                    AddLog($"[{port.PortName}] Chuyển hướng thành công → {randomFwd} (Tổng: {port.ForwardCount})", "SUCCESS");
-                                }
-                                else
-                                {
-                                    AddLog($"[{port.PortName}] Thiết lập chuyển hướng đến {randomFwd} thất bại! (Lỗi từ mạng/SIM)", "ERROR");
+                                        fwdOk = true;
+                                        Application.Current.Dispatcher.Invoke(() =>
+                                        {
+                                            port.ForwardCount++;
+                                            port.ForwardedTo = randomFwd;
+                                        });
+                                        AddLog($"[{port.PortName}] Chuyển hướng thành công → {randomFwd} (lần {attempt}, Tổng: {port.ForwardCount})", "SUCCESS");
+                                    }
+                                    else if (attempt < 3)
+                                    {
+                                        AddLog($"[{port.PortName}] Chuyển hướng thất bại lần {attempt}, thử lại sau 5s...", "WARN");
+                                        await Task.Delay(5000);
+                                    }
+                                    else
+                                    {
+                                        AddLog($"[{port.PortName}] Thiết lập chuyển hướng đến {randomFwd} thất bại sau 3 lần thử! (Lỗi từ mạng/SIM)", "ERROR");
+                                    }
                                 }
                             }
                         }
@@ -3407,6 +3419,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly List<MultipartSmsBuffer> _multipartSmsBuffers = new();
     private static readonly TimeSpan MultipartSmsBufferTimeout = TimeSpan.FromMinutes(10);
 
+    // Debounce timer cho việc gửi Telegram khi SMS đa phần được nối — key = "port|sender"
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Threading.CancellationTokenSource> _multipartTelegramDebounce = new();
+
     // Gom một phần (part) của tin nhắn dài vào buffer theo đúng số thứ tự (seq) khai báo trong UDH.
     // Trả về true và xuất nội dung đã ghép đủ khi đã nhận được toàn bộ concatTotal phần.
     private bool TryBufferConcatenatedSms(string portName, string senderPhone, int concatRef, int concatTotal, int concatSeq, string partContent, out string assembledContent)
@@ -3599,26 +3614,45 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         else if (receiveAll)
         {
+            // Debounce: chờ 3 giây sau đoạn cuối cùng rồi mới gửi Telegram 1 lần duy nhất
+            string debounceKey = $"{portName}|{senderPhone}";
             string simPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
-            string safeContent = System.Net.WebUtility.HtmlEncode(existing.Content);
-            string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
+
+            // Hủy timer cũ (nếu được đặt từ đoạn trước)
+            if (_multipartTelegramDebounce.TryRemove(debounceKey, out var oldCts))
+                oldCts.Cancel();
+
+            var cts = new System.Threading.CancellationTokenSource();
+            _multipartTelegramDebounce[debounceKey] = cts;
+            string capturedContent = existing.Content;
+
             _ = Task.Run(async () =>
             {
-                var cfg2 = SettingsService.Current;
-                bool hasTgToken = !string.IsNullOrWhiteSpace(cfg2.TelegramBotToken) &&
-                                  !string.IsNullOrWhiteSpace(cfg2.TelegramChatId);
-
-                if (hasTgToken && cfg2.TelegramOnSms)
+                try
                 {
-                    string tgText =
-                        $"📩 <b>Tin nhắn ghép từ {portName}</b>\n" +
-                        $"SĐT: {simPhone}\n" +
-                        $"Từ: {safeSender}\n" +
-                        $"Nội dung: <i>{safeContent}</i>\n" +
-                        $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                    await _notifyService.SendTelegramAsync(cfg2.TelegramBotToken, cfg2.TelegramChatId, tgText);
+                    // Chờ 3 giây — nếu có đoạn mới đến, timer này sẽ bị hủy
+                    await Task.Delay(3000, cts.Token);
+                    _multipartTelegramDebounce.TryRemove(debounceKey, out _);
+
+                    var cfg2 = SettingsService.Current;
+                    bool hasTgToken = !string.IsNullOrWhiteSpace(cfg2.TelegramBotToken) &&
+                                      !string.IsNullOrWhiteSpace(cfg2.TelegramChatId);
+
+                    if (hasTgToken && cfg2.TelegramOnSms)
+                    {
+                        string safeContent = System.Net.WebUtility.HtmlEncode(TrimStr(capturedContent, 500));
+                        string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
+                        string tgText =
+                            $"📩 <b>Tin nhắn ghép từ {portName}</b>\n" +
+                            $"SĐT: {simPhone}\n" +
+                            $"Từ: {safeSender}\n" +
+                            $"Nội dung: <i>{safeContent}</i>\n" +
+                            $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                        await _notifyService.SendTelegramAsync(cfg2.TelegramBotToken, cfg2.TelegramChatId, tgText);
+                    }
                 }
-            });
+                catch (TaskCanceledException) { } // Bị hủy vì có đoạn mới đến — bình thường
+            }, cts.Token);
         }
 
         SmsMessages.Remove(existing);
@@ -3639,19 +3673,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private string ExtractOtp(string content)
     {
-        string textForOtp = Regex.Replace(content, @"\*+\d+", "");
-
-        var otpMatch = Regex.Match(textForOtp, @"(?:mã|code|otp|là|la|zalo|whatsapp|viber|telegram|facebook|google|apple|tiktok|tinder|xac nhan|verification|verify|pin|mat khau)[^\d]{0,30}?(\d{3}\s*[- ]\s*\d{3}|\d{4,8})", RegexOptions.IgnoreCase);
-        
-        if (!otpMatch.Success)
-        {
-            // Mở lại Fallback để bắt các số OTP đứng độc lập
-            otpMatch = Regex.Match(textForOtp, @"(?<![\w:/])(?!1900|1800)\b(\d{3}\s*[- ]\s*\d{3}|\d{4,8})\b(?![\w:/])", RegexOptions.IgnoreCase);
-        }
-
-        return otpMatch.Success && otpMatch.Groups.Count > 1 && !string.IsNullOrEmpty(otpMatch.Groups[1].Value) 
-            ? Regex.Replace(otpMatch.Groups[1].Value, @"\D", "") 
-            : (otpMatch.Success ? Regex.Replace(otpMatch.Value, @"\D", "") : "N/A");
+        // Dùng chung một implementation thống nhất từ GsmModemService
+        return gsm.Services.GsmModemService.ExtractOtp(content) ?? "N/A";
     }
 
     private bool IsRecentSmsTime(string receivedTime, DateTime now)
@@ -4879,7 +4902,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             
             Task.Run(async () =>
             {
-                var activePorts = GetPortsSnapshot();
+                // Chỉ gửi lệnh cho các cổng đang Active — bỏ qua cổng lỗi/chờ SIM
+                var activePorts = GetPortsSnapshot().Where(p => p.Status == Models.SimStatus.Active).ToList();
                 foreach (var port in activePorts)
                 {
                     string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
@@ -4892,9 +4916,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         Application.Current.Dispatcher.Invoke(() =>
                         {
-                            port.ForwardedTo = randomFwd; // #4: Cập nhật cột hiển thị
+                            port.ForwardedTo = randomFwd;
                             port.ForwardCount++;
                         });
+                        AddLog($"[{port.PortName}] Chuyển hướng → {randomFwd} OK", "SUCCESS");
+                    }
+                    else
+                    {
+                        AddLog($"[{port.PortName}] Thiết lập chuyển hướng thất bại: {res.Trim()}", "ERROR");
                     }
                     await Task.Delay(500); // Tránh nghẽn lệnh
                 }
@@ -5453,14 +5482,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string phone,
         string wavPath,
         int duration,
-        bool record = false)
+        bool record = false,
+        Action<string>? onStatusUpdate = null)
     {
-        return await _modemService.CallWithAudioAsync(
-            port,
-            phone,
-            string.IsNullOrWhiteSpace(wavPath) ? null : wavPath,
-            duration,
-            record);
+        // Đăng ký lắng nghe LogMessage của modem để truyền trạng thái realtime lên UI
+        void OnLog(object? s, GsmDataEventArgs e)
+        {
+            if (e.PortName == port && e.Data != null)
+                onStatusUpdate?.Invoke(e.Data);
+        }
+
+        if (onStatusUpdate != null)
+            _modemService.LogMessage += OnLog;
+
+        try
+        {
+            return await _modemService.CallWithAudioAsync(
+                port,
+                phone,
+                string.IsNullOrWhiteSpace(wavPath) ? null : wavPath,
+                duration,
+                record);
+        }
+        finally
+        {
+            if (onStatusUpdate != null)
+                _modemService.LogMessage -= OnLog;
+        }
     }
     // Phân tích User Data Header (UDH) để lấy thông tin ghép tin nhắn dài (concatenated SMS).
     // udHex: chuỗi hex của phần User Data (bắt đầu bằng UDHL nếu hasUdh = true).

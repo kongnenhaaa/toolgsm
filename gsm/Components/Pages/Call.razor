@@ -460,8 +460,25 @@
 
             try
             {
-                // Gọi trực tiếp qua Vm.ExecuteCallFromUiAsync (đã public, không cần Reflection)
-                var callTask = Vm.ExecuteCallFromUiAsync(port, cleanPhone, _wavPath ?? "", _duration, _recordCall);
+                // Gọi trực tiếp qua Vm.ExecuteCallFromUiAsync, truyền callback để nhận trạng thái realtime
+                var callTask = Vm.ExecuteCallFromUiAsync(port, cleanPhone, _wavPath ?? "", _duration, _recordCall,
+                    statusMsg =>
+                    {
+                        // Lọc các trạng thái quan trọng để hiển thị lên UI
+                        if (statusMsg.Contains("[CALL]") || statusMsg.Contains("Đang bật lại") ||
+                            statusMsg.Contains("ATD") || statusMsg.Contains("rung") ||
+                            statusMsg.Contains("nhấc máy") || statusMsg.Contains("Dập máy") ||
+                            statusMsg.Contains("thất bại") || statusMsg.Contains("kết thúc"))
+                        {
+                            // Chuyển thành message ngắn gọn cho UI
+                            string uiMsg = statusMsg
+                                .Replace("[CALL] ", "")
+                                .Replace("[FIX] ", "");
+                            if (uiMsg.Length > 60) uiMsg = uiMsg.Substring(0, 57) + "...";
+                            _callStatus = $"[{port}] {uiMsg}";
+                            InvokeAsync(StateHasChanged);
+                        }
+                    });
 
                 // Cập nhật progress trong khi chờ
                 int maxTick = _duration + 60;

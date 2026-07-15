@@ -58,10 +58,42 @@ public sealed class GsmUssdService : IGsmUssdService
                 {
                     if (!IsCurrent(session)) return SessionChangedError;
                     await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
+                    bool forcedGsm = false;
                     try
                     {
                         if (!IsCurrent(session)) return SessionChangedError;
-                        result = await _modem.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
+                        // Một số thuê bao EC20 đăng ký LTE/CS đầy đủ nhưng tổng đài không trả
+                        // USSD qua fallback. Lần cuối tạm ép GSM/2G, rồi luôn khôi phục Auto.
+                        if (attempt >= 3 && !_modem.IsCallInProgress(portName))
+                        {
+                            string force = await _modem.SendCommandAsync(
+                                portName, "AT+QCFG=\"nwscanmode\",1,0", 10000, true);
+                            forcedGsm = !force.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
+                            if (forcedGsm)
+                            {
+                                for (int probe = 0; probe < 8; probe++)
+                                {
+                                    await _delay.WaitAsync(TimeSpan.FromSeconds(probe == 0 ? 5 : 3), token);
+                                    string reg = await CommandAsync(session, "AT+CREG?", 5000, token);
+                                    if (IsNetworkRegistered(reg)) break;
+                                }
+                            }
+                        }
+
+                        string cusdCommand = attempt switch
+                        {
+                            1 => $"AT+CUSD=1,\"{ussdCode}\",15",
+                            2 => $"AT+CUSD=1,\"{ussdCode}\",0",
+                            _ => $"AT+CUSD=1,\"{ussdCode}\""
+                        };
+                        result = await _modem.SendCommandAsync(portName, cusdCommand);
+                        // Một số SIM/firmware chỉ trả OK sau khi nhận lệnh nhưng tổng đài
+                        // không mở phiên USSD. Không được coi OK trần là thành công.
+                        if (!result.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase)
+                            && !result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                        {
+                            result = $"ERROR: Modem accepted USSD but network returned no +CUSD (attempt {attempt})";
+                        }
                         await _delay.WaitAsync(TimeSpan.FromSeconds(3.5), token);
                     }
                     finally
@@ -70,12 +102,19 @@ public sealed class GsmUssdService : IGsmUssdService
                         {
                             try { await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }
+                            if (forcedGsm)
+                            {
+                                try { await _modem.SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,0", 10000, true); }
+                                catch { /* Watchdog vẫn có thể khôi phục Auto sau đó. */ }
+                            }
                         }
                     }
                 }
 
                 if (!IsFailure(result)) return result;
                 if (attempt >= maxAttempts || _sms.IsInProgress(portName)) return result;
+                // Đóng phiên im lặng trước khi thử DCS tiếp theo.
+                await _modem.SendCommandAsync(portName, "AT+CUSD=2", 5000, true);
                 await _delay.WaitAsync(TimeSpan.FromSeconds(Math.Min(3 + (attempt - 1) * 2, 30)), token);
             }
             return result;

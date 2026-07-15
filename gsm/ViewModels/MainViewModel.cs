@@ -141,7 +141,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ConcurrentDictionary<string, bool> SmsInProgressPorts => _smsService.InProgressPorts;
 
     // Đánh dấu cổng nào đang trong quá trình khởi tạo SIM/IMEI để tránh khởi tạo song song
-    private readonly ConcurrentDictionary<string, bool> _initializingPorts = new();
+    // Lease riêng cho từng lần khởi tạo. Dùng bool khiến tác vụ cũ bị hủy có thể để
+    // lại khóa vĩnh viễn hoặc xóa nhầm khóa của phiên SIM mới.
+    private readonly ConcurrentDictionary<string, Guid> _initializingPorts = new();
+    private readonly ConcurrentDictionary<string, int> _portRecoveryAttempts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _portRecoveryInProgress = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _quarantinedPorts = new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxAutomaticRecoveryAttempts = 3;
     // Mỗi lần cắm/rút SIM tạo một epoch mới. Mọi tác vụ IMEI/Accept phải giữ đúng
     // epoch + CCID; tác vụ của SIM cũ không được phép cập nhật SIM mới trên cùng COM.
 
@@ -1082,6 +1088,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ussdService = ussdService;
         _callService = callService;
         _backgroundSupervisor = backgroundSupervisor;
+        // Backend phải dùng cấu hình đã lưu ngay từ lúc khởi động. Trước đây AppSettings giữ
+        // object mặc định cho tới khi người dùng mở/lưu dialog Settings, làm AutoAccept và
+        // một số tùy chọn GSM không có hiệu lực trong lần startup đầu tiên.
+        AppSettings = SettingsService.Current;
         _modemService.RequiresSimAcceptanceCheck = (ccid, imei) =>
         {
             string normCcid = NormalizeCcid(ccid);
@@ -1171,11 +1181,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             MarkConnectionTimeout = port => Application.Current.Dispatcher.Invoke(() =>
             {
                 port.Status = SimStatus.NoResponse;
-                port.LastError = "Kết nối quá hạn (Timeout 2p)";
-                AddLog($"[{port.PortName}] Kết nối quá hạn (Timeout 2 phút), chuyển về trạng thái Không phản hồi.", "WARN");
+                port.LastError = "Kết nối quá hạn (Timeout 60s)";
+                AddLog($"[{port.PortName}] Đang xử lý quá 60 giây; kích hoạt cứu sống cổng ngay.", "WARN");
                 UpdateDashboard();
             }),
             InvalidateSession = InvalidateSimSession,
+            RecoverFaultedPortAsync = AutoRecoverFaultedPortAsync,
             Log = AddLog
         }, _lifetimeCts.Token);
     }
@@ -1881,7 +1892,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .ToList();
         if (names.Count == 0) return;
 
-        foreach (string name in names) InvalidateSimSession(name);
+        foreach (string name in names)
+        {
+            // Refresh thủ công đồng nghĩa người dùng muốn thử cứu lại cổng đã cách ly.
+            _quarantinedPorts.TryRemove(name, out _);
+            _portRecoveryAttempts.TryRemove(name, out _);
+            InvalidateSimSession(name);
+        }
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
             foreach (var port in Ports.Where(p => names.Contains(p.PortName, StringComparer.OrdinalIgnoreCase)).ToList())
@@ -1912,6 +1929,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _portSessions.Invalidate(portName);
         _initializingPorts.TryRemove(portName, out _);
+    }
+
+    private bool TryBeginPortInitialization(string portName, out Guid lease)
+    {
+        lease = Guid.NewGuid();
+        return _initializingPorts.TryAdd(portName, lease);
+    }
+
+    private void EndPortInitialization(string portName, Guid lease)
+    {
+        // Remove theo cả key + lease để tác vụ cũ không xóa khóa của phiên mới.
+        ((ICollection<KeyValuePair<string, Guid>>)_initializingPorts)
+            .Remove(new KeyValuePair<string, Guid>(portName, lease));
     }
 
     private bool IsSimSessionCurrent(string portName, string ccid, long epoch)
@@ -1991,6 +2021,119 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private async Task AutoRecoverFaultedPortAsync(SimPort faultedPort)
+    {
+        string portName = faultedPort.PortName;
+        if (!AppSettings.AutoRecovery || _quarantinedPorts.ContainsKey(portName)) return;
+        if (!_portRecoveryInProgress.TryAdd(portName, 0)) return;
+
+        try
+        {
+            int attempt = _portRecoveryAttempts.AddOrUpdate(portName, 1, (_, old) => old + 1);
+            if (attempt > MaxAutomaticRecoveryAttempts)
+            {
+                await QuarantinePortAsync(portName, MaxAutomaticRecoveryAttempts);
+                return;
+            }
+
+            AddLog($"[AUTO-RECOVERY] {portName}: bắt đầu cứu cổng bước {attempt}/{MaxAutomaticRecoveryAttempts}.", "WARN");
+            InvalidateSimSession(portName);
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                var current = Ports.FirstOrDefault(p => p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                if (current == null) return;
+                current.Status = SimStatus.Connecting;
+                current.DeviceName = $"Đang cứu cổng – bước {attempt}/{MaxAutomaticRecoveryAttempts}";
+                current.LastError = string.Empty;
+                UpdateDashboard();
+            });
+
+            if (attempt == 1)
+            {
+                // Mức nhẹ: COM còn trả AT thì chỉ dựng lại state machine SIM.
+                string ping = await _modemService.SendCommandAsync(portName, "AT", 4000, silent: true);
+                if (ping.Contains("OK", StringComparison.OrdinalIgnoreCase))
+                    _modemService.StartHotplugWaitLoop(portName);
+            }
+            else if (attempt == 2)
+            {
+                // Mức vừa: reboot riêng module EC20, không ảnh hưởng COM khác.
+                await _modemService.ReloadSimAsync(portName);
+                await Task.Delay(8000, _lifetimeCts.Token);
+                _modemService.StartHotplugWaitLoop(portName);
+            }
+            else
+            {
+                // Mức cuối: đóng/mở lại đúng SerialPort rồi để pipeline nhận dạng từ đầu.
+                _modemService.Disconnect(portName);
+                await Task.Delay(2000, _lifetimeCts.Token);
+                _modemService.ConnectAll(AppSettings.BaudRate > 0 ? AppSettings.BaudRate : 115200);
+            }
+
+            bool recovered = false;
+            for (int i = 0; i < 45 && !_lifetimeCts.IsCancellationRequested; i++)
+            {
+                await Task.Delay(2000, _lifetimeCts.Token);
+                var current = GetPortsSnapshot().FirstOrDefault(p =>
+                    p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                if (current == null) continue;
+
+                recovered = current.Status == SimStatus.Active
+                    || current.Status == SimStatus.WaitingAccept
+                    || current.Status == SimStatus.SecurityBlocked
+                    || current.Status == "Chờ cắm SIM";
+                if (recovered) break;
+            }
+
+            if (recovered)
+            {
+                _portRecoveryAttempts.TryRemove(portName, out _);
+                _quarantinedPorts.TryRemove(portName, out _);
+                AddLog($"[AUTO-RECOVERY] {portName}: cổng đã sống lại.", "SUCCESS");
+            }
+            else if (attempt >= MaxAutomaticRecoveryAttempts)
+            {
+                await QuarantinePortAsync(portName, attempt);
+            }
+            else
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    var current = Ports.FirstOrDefault(p => p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                    if (current == null) return;
+                    current.Status = SimStatus.NoResponse;
+                    current.LastError = $"Recovery bước {attempt} chưa thành công";
+                    UpdateDashboard();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            AddLog($"[AUTO-RECOVERY] {portName}: {ex.Message}", "ERROR");
+        }
+        finally
+        {
+            _portRecoveryInProgress.TryRemove(portName, out _);
+        }
+    }
+
+    private async Task QuarantinePortAsync(string portName, int attempts)
+    {
+        _quarantinedPorts[portName] = 0;
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            var current = Ports.FirstOrDefault(p => p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+            if (current == null) return;
+            current.Status = SimStatus.Quarantined;
+            current.DeviceName = "Đã cách ly – không ảnh hưởng COM khác";
+            current.LastError = $"Tự cứu thất bại sau {attempts} bước; bấm Refresh để thử lại";
+            current.SignalStrength = 0;
+            UpdateDashboard();
+        });
+        AddLog($"[AUTO-RECOVERY] {portName}: đã cách ly sau {attempts} bước thất bại.", "ERROR");
+    }
+
     private async Task<string> ReadLiveCcidAsync(string portName, CancellationToken ct, bool allowBriefRadioEnable)
     {
         ct.ThrowIfCancellationRequested();
@@ -2004,12 +2147,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // EC20C có firmware chỉ cho đọc CCID khi SIM stack hoạt động. Bật trong thời
         // gian ngắn để xác minh rồi lập tức đưa về airplane mode trước khi xử lý IMEI.
-        string qsim = await _modemService.SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true);
-        if (!Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1"))
-            return string.Empty;
-
+        // EC20C có thể trả QSIMSTAT=0 khi CFUN=4 dù SIM vẫn cắm. Không dùng QSIMSTAT
+        // radio-off làm cổng chặn; bật stack ngắn hạn và xác minh trực tiếp bằng CCID.
         await _modemService.SendCommandAsync(portName, "AT+CFUN=1", 8000, silent: true);
-        await Task.Delay(1000, ct);
+        await Task.Delay(1800, ct);
         raw = await _modemService.SendCommandAsync(portName, "AT+QCCID", 5000, silent: true);
         if (raw.Contains("ERROR") || string.IsNullOrWhiteSpace(raw))
             raw = await _modemService.SendCommandAsync(portName, "AT+CCID", 5000, silent: true);
@@ -2022,7 +2163,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return false;
 
-        string cfunOff = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=0", 10000, silent: true);
+        string cfunOff = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 10000, silent: true);
         if (cfunOff.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
         {
             await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
@@ -2031,13 +2172,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         async Task<(bool Valid, string Imei)> VerifyIdentityAsync()
         {
-            string liveCcid = await ReadLiveCcidAsync(port.PortName, token, allowBriefRadioEnable: false);
+            string liveCcid = await ReadLiveCcidAsync(port.PortName, token, allowBriefRadioEnable: true);
             string rawImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 8000, silent: true);
             string liveImei = NormalizeImei(rawImei);
-            string cpin = await _modemService.SendCommandAsync(port.PortName, "AT+CPIN?", 5000, silent: true);
             bool valid = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
                       && string.Equals(liveImei, NormalizeImei(expectedImei), StringComparison.Ordinal)
-                      && cpin.Contains("READY", StringComparison.OrdinalIgnoreCase)
                       && IsSimSessionCurrent(port.PortName, ccid, epoch);
             return (valid, liveImei);
         }
@@ -2136,10 +2275,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string portName, string ccid, long epoch, CancellationToken token)
     {
         if (!IsSimSessionCurrent(portName, ccid, epoch)) return false;
-        string liveCcid = await ReadLiveCcidAsync(portName, token, allowBriefRadioEnable: false);
+        string liveCcid = await ReadLiveCcidAsync(portName, token, allowBriefRadioEnable: true);
         if (!string.IsNullOrWhiteSpace(liveCcid))
-            return string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
+        {
+            bool matches = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
                 && IsSimSessionCurrent(portName, ccid, epoch);
+            if (!matches)
+                AddLog($"[{portName}] [SESSION_VERIFY_FAILED] expected_ccid={NormalizeCcid(ccid)} live_ccid={liveCcid} epoch={epoch}", "WARN");
+            return matches;
+        }
 
         // CFUN=0 trên một số EC20 không cho đọc CCID. Khi đó chỉ chấp nhận tiếp tục
         // nếu cảm biến vật lý vẫn báo SIM có mặt và epoch chưa bị invalidated bởi URC.
@@ -2150,9 +2294,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task ProcessCurrentSimSessionAsync(
         SimPort port, string ccid, bool forceAccept, long epoch, CancellationToken token,
-        string? explicitTargetImei = null)
+        Guid initializationLease, string? explicitTargetImei = null)
     {
         string portName = port.PortName;
+        using var initializationCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        initializationCts.CancelAfter(TimeSpan.FromMinutes(2));
+        CancellationToken initializationToken = initializationCts.Token;
         try
         {
             if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
@@ -2167,19 +2314,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (string.IsNullOrEmpty(currentImei) || !IsSimSessionCurrent(portName, ccid, epoch))
             {
                 AddLog($"[{portName}] Không đọc được IMEI hoặc phiên SIM đã thay đổi.", "WARN");
+                if (IsSimSessionCurrent(portName, ccid, epoch))
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        port.Status = SimStatus.NoResponse;
+                        port.LastError = "Không đọc được IMEI khi khởi tạo";
+                        port.DeviceName = "Khởi tạo thất bại – chờ recovery";
+                        UpdateDashboard();
+                    });
+                }
                 return;
             }
 
-            if (!await ValidateSessionIdentityAsync(portName, ccid, epoch, token))
+            if (!await ValidateSessionIdentityAsync(portName, ccid, epoch, initializationToken))
             {
                 AddLog($"[{portName}] Bỏ qua event CCID cũ vì SIM không còn hiện diện.", "WARN");
                 InvalidateSimSession(portName);
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
+                    ClearSimScopedState(port);
                     port.Status = "Chờ cắm SIM";
                     port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
-                    port.Serial = string.Empty;
-                    port.Imei = string.Empty;
                     UpdateDashboard();
                 });
                 _modemService.StartHotplugWaitLoop(portName);
@@ -2197,12 +2353,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 newEntry => AddNewImeiCacheEntry(newEntry),
                 action => Application.Current.Dispatcher.Invoke(action),
                 forceAccept,
-                token,
-                () => ValidateSessionIdentityAsync(portName, ccid, epoch, token),
+                initializationToken,
+                () => ValidateSessionIdentityAsync(portName, ccid, epoch, initializationToken),
                 candidate => _imeiCache.Values.Any(entry =>
                     !string.Equals(NormalizeCcid(entry.Ccid), NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
                     && string.Equals(NormalizeImei(entry.Imei), candidate, StringComparison.Ordinal)),
                 explicitTargetImei);
+
+            AddLog($"[{portName}] [IMEI_RESULT] status={result.Status} forceAccept={forceAccept} message={result.ErrorMessage}",
+                result.Status is Services.ImeiProcessStatus.Matched or Services.ImeiProcessStatus.Applied ? "SUCCESS" : "INFO");
 
             if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
 
@@ -2217,7 +2376,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     UpdateDashboard();
                 });
 
-                bool active = await CompletePortInitializationAsync(port, ccid, result.FinalImei, epoch, token);
+                bool active = await CompletePortInitializationAsync(port, ccid, result.FinalImei, epoch, initializationToken);
                 if (!active && IsSimSessionCurrent(portName, ccid, epoch))
                 {
                     await Application.Current.Dispatcher.InvokeAsync(() =>
@@ -2252,7 +2411,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     UpdateDashboard();
                 });
             }
-            else if (!token.IsCancellationRequested)
+            else if (!initializationToken.IsCancellationRequested)
             {
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
@@ -2263,17 +2422,79 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 });
             }
         }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            AddLog($"[{portName}] Khởi tạo SIM quá hạn 2 phút; giải phóng khóa và chuyển recovery.", "WARN");
+            if (IsSimSessionCurrent(portName, ccid, epoch))
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    port.Status = SimStatus.NoResponse;
+                    port.LastError = "Khởi tạo SIM quá hạn 2 phút";
+                    port.DeviceName = "Khởi tạo quá hạn – chờ recovery";
+                    UpdateDashboard();
+                });
+            }
+        }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             if (IsSimSessionCurrent(portName, ccid, epoch))
+            {
                 AddLog($"[{portName}] Lỗi xử lý phiên SIM: {ex.Message}", "ERROR");
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    port.Status = SimStatus.NoResponse;
+                    port.LastError = ex.Message;
+                    port.DeviceName = "Khởi tạo lỗi – chờ recovery";
+                    UpdateDashboard();
+                });
+            }
         }
         finally
         {
-            if (_portSessions.IsEpochCurrent(portName, epoch))
-                _initializingPorts.TryRemove(portName, out _);
+            EndPortInitialization(portName, initializationLease);
         }
+    }
+
+    private static void ClearSimScopedState(SimPort port)
+    {
+        // Chỉ giữ thông tin vật lý của COM (PortName/HardwareName/STT và bộ đếm health).
+        // Mọi dữ liệu dưới đây thuộc SIM cũ và tuyệt đối không được hiển thị sau khi rút/thay SIM.
+        port.IsRebooting = false;
+        port.PhoneNumber = string.Empty;
+        port.NetworkProvider = string.Empty;
+        port.Imei = string.Empty;
+        port.Serial = string.Empty;
+        port.Balance = string.Empty;
+        port.IsBalanceLoading = false;
+        port.PromotionBalance = string.Empty;
+        port.ExpiryDate = string.Empty;
+        port.CreatedAt = string.Empty;
+        port.UpdatedAt = string.Empty;
+        port.SimRegDate = string.Empty;
+        port.Lock1C = string.Empty;
+        port.Lock2C = string.Empty;
+        port.ForwardedTo = string.Empty;
+        port.ForwardCount = 0;
+        port.CallCount = 0;
+        port.SignalStrength = 0;
+        port.Otp = string.Empty;
+        port.Sender = string.Empty;
+        port.LastMessageContent = string.Empty;
+        port.LastReceivedTime = string.Empty;
+        port.LastSweepTime = string.Empty;
+        port.LastSmsSentAt = string.Empty;
+        port.VnptStatus = string.Empty;
+        port.LastCommandResult = string.Empty;
+        port.LastUssdResult = string.Empty;
+        port.LastSmsResult = string.Empty;
+        port.LastCallResult = string.Empty;
+        port.LastMmsResult = string.Empty;
+        port.LastImeiResult = string.Empty;
+        port.LastDataResult = string.Empty;
+        port.LastDelayResult = string.Empty;
+        port.LastError = string.Empty;
     }
 
     private void ModemService_LogMessage(object? sender, GsmDataEventArgs e)
@@ -2314,6 +2535,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (e.Data == "[PORT_OPENED]")
             {
+                ClearSimScopedState(port);
                 port.Status = SimStatus.Connecting;
                 port.DeviceName = "Đang kiểm tra modem/SIM...";
                 port.SignalStrength = 0;
@@ -2322,6 +2544,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             else if (e.Data.StartsWith("[STATUS_SIM_LOCKED]"))
             {
                 InvalidateSimSession(e.PortName);
+                ClearSimScopedState(port);
                 port.Status = e.Data.Contains("PUK", StringComparison.OrdinalIgnoreCase) ? "SIM yêu cầu PUK" : "SIM yêu cầu PIN";
                 port.DeviceName = "SIM đang bị khóa";
                 port.LastError = port.Status;
@@ -2331,28 +2554,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             else if (e.Data.StartsWith("[WAITING_FOR_SIM]"))
             {
                 InvalidateSimSession(e.PortName);
+                ClearSimScopedState(port);
                 port.Status = "Chờ cắm SIM";
                 port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
-                port.PhoneNumber = string.Empty;
-                port.Imei = string.Empty;
-                port.Serial = string.Empty;
-                port.NetworkProvider = string.Empty;
-                port.Balance = string.Empty;
-                port.ExpiryDate = string.Empty;
-                port.Otp = string.Empty;
-                port.LastMessageContent = string.Empty;
-                port.Sender = string.Empty;
-                port.SignalStrength = 0;
-                port.VnptStatus = string.Empty;
-                port.LastCommandResult = string.Empty;
-                port.LastUssdResult = string.Empty;
-                port.LastSmsResult = string.Empty;
-                port.LastCallResult = string.Empty;
-                port.LastMmsResult = string.Empty;
-                port.LastImeiResult = string.Empty;
-                port.LastDataResult = string.Empty;
-                port.LastDelayResult = string.Empty;
-                port.LastError = string.Empty;
                 UpdateDashboard();
             }
             else if (e.Data.StartsWith("Lỗi kết nối"))
@@ -2361,32 +2565,45 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.DeviceName = "Lỗi kết nối";
                 port.LastError = e.Data;
             }
-            else if (e.Data.StartsWith("[NETWORK_RECOVERY]"))
+            else if (e.Data.StartsWith("[NETWORK_RECOVERY]") && !_modemService.IsCallInProgress(e.PortName))
             {
-                port.DeviceName = "Đang khôi phục sóng...";
-                port.Status = SimStatus.Connecting;
+                // Mất đăng ký mạng không đồng nghĩa modem/SIM chưa khởi tạo. Nếu phiên SIM
+                // vẫn hợp lệ thì giữ Active, chỉ cập nhật lỗi sóng để không treo UI.
+                if (TryGetCurrentSimSession(e.PortName, out _, out _, out _))
+                {
+                    port.LastError = "Đang thử khôi phục đăng ký nhà mạng";
+                    port.SignalStrength = 0;
+                }
             }
-            else if (e.Data.Contains("[NETWORK_FAILED]"))
+            else if (e.Data.Contains("[NETWORK_FAILED]") && !_modemService.IsCallInProgress(e.PortName))
             {
-                port.Status = SimStatus.NoResponse;
-                port.LastError = "Không đăng ký được mạng";
+                bool simInitialized = TryGetCurrentSimSession(e.PortName, out _, out _, out _)
+                    && !string.IsNullOrWhiteSpace(port.Serial)
+                    && !string.IsNullOrWhiteSpace(port.Imei);
+                port.Status = simInitialized ? SimStatus.Active : SimStatus.NoResponse;
+                port.LastError = simInitialized
+                    ? "SIM đã sẵn sàng nhưng chưa đăng ký được nhà mạng"
+                    : "Không đăng ký được mạng";
                 port.SignalStrength = 0;
                 UpdateDashboard();
             }
-            else if (e.Data.Contains("+CME ERROR: 10") || e.Data.Contains("+CME ERROR: 13") || e.Data.Contains("+CME ERROR: 11") || e.Data.Contains("+CPIN: NOT INSERTED") || e.Data.Contains("+CPIN: NOT READY") || e.Data.Contains("SIM not inserted"))
+            else if (e.Data.StartsWith("[SIM_CONTACT_ERROR]"))
             {
                 InvalidateSimSession(e.PortName);
+                ClearSimScopedState(port);
                 port.Status = "Chờ cắm SIM";
-                port.NetworkProvider = "NO SIM";
-                port.PhoneNumber = string.Empty;
-                port.Balance = string.Empty;
-                port.ExpiryDate = string.Empty;
-                port.Serial = string.Empty;
-                port.Imei = string.Empty;
-                port.Otp = string.Empty;
-                port.LastMessageContent = string.Empty;
+                port.DeviceName = "COM sống – modem không đọc được chip SIM";
+                port.LastError = "Kiểm tra chiều SIM, tiếp điểm hoặc thử SIM khác trên cùng khe";
                 port.SignalStrength = 0;
-                port.LastError = string.Empty;
+                UpdateDashboard();
+            }
+            else if (!_modemService.IsCallInProgress(e.PortName)
+                && (e.Data.Contains("+CME ERROR: 10") || e.Data.Contains("+CME ERROR: 13") || e.Data.Contains("+CME ERROR: 11") || e.Data.Contains("+CPIN: NOT INSERTED") || e.Data.Contains("+CPIN: NOT READY") || e.Data.Contains("SIM not inserted")))
+            {
+                InvalidateSimSession(e.PortName);
+                ClearSimScopedState(port);
+                port.Status = "Chờ cắm SIM";
+                port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
                 _modemService.StartHotplugWaitLoop(e.PortName);
                 UpdateDashboard();
             }
@@ -2400,6 +2617,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (e.Data.Contains("+CUSD:"))
             {
+                port.IsBalanceLoading = false;
                 var match = Regex.Match(e.Data, @"\+CUSD:.*?""(.*?)(?:""|$)", RegexOptions.Singleline);
                 if (match.Success)
                 {
@@ -2588,30 +2806,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         if (!IsSimSessionCurrent(port.PortName, activeCcid, activeEpoch)
                             || port.Status != SimStatus.Active) return;
 
-                        // Theo yêu cầu của người dùng: Tất cả các nhà mạng (Viettel, Vina, Mobi, Vietnamobile...) 
-                        // đều sẽ dùng chung 1 lệnh *101# để vừa lấy SĐT vừa lấy Số dư (TKC).
-                        if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
-                        {
-                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 3);
-                            await Task.Delay(2000, activeToken); // Đợi mạng xử lý xong lệnh trước
-                        }
-                        
-                        // Retry USSD sau 35s nếu vẫn trống (Fix lỗi mạng yếu hoặc rớt USSD lúc mới khởi động)
-                        _ = Task.Run(async () => 
-                        {
-                            try
-                            {
-                                await Task.Delay(35000, activeToken);
-                                if (IsSimSessionCurrent(port.PortName, activeCcid, activeEpoch)
-                                    && port.Status == SimStatus.Active
-                                    && (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance)))
-                                {
-                                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] SĐT/TKC vẫn trống sau 35s, thử gửi lại USSD *101#...", "WARN"));
-                                    await SendUssdThrottledAsync(port.PortName, "*101#", "Retry lấy SĐT & TKC", maxAttempts: 2);
-                                }
-                            }
-                            catch (OperationCanceledException) { }
-                        }, activeToken);
+                        // Chạy độc lập để các tác vụ hậu mạng khác không phải chờ. Hàm này sở hữu
+                        // loading-state và luôn kết thúc spinner kể cả nhà mạng không trả +CUSD.
+                        _ = RunInitialBalanceLookupAsync(port, activeCcid, activeEpoch, activeToken);
 
                         if (!IsSimSessionCurrent(port.PortName, activeCcid, activeEpoch)
                             || port.Status != SimStatus.Active) return;
@@ -2693,7 +2890,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (e.Data.StartsWith("[PARSE_CCID]"))
             {
-                var match = Regex.Match(e.Data, @"\b([A-Za-z0-9]{18,22})\b");
+                var match = Regex.Match(e.Data, @"\b(\d{18,22})\b");
                 if (match.Success)
                 {
                     string ccid = NormalizeCcid(match.Groups[1].Value);
@@ -2708,7 +2905,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         return;
                     }
 
-                    if (!_initializingPorts.TryAdd(e.PortName, true))
+                    if (!TryBeginPortInitialization(e.PortName, out Guid initializationLease))
                     {
                         return; // Đang chạy khởi tạo rồi, bỏ qua
                     }
@@ -2736,14 +2933,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     AddLog($"[{e.PortName}] [IMEI_MODE] Restore={AppSettings.EnableImeiRestore} BlockNew={AppSettings.BlockUnknownSims}");
                     var session = StartSimSession(e.PortName, ccid);
+                    bool autoAccept = AppSettings.AutoAccept;
                     _ = Task.Run(() => ProcessCurrentSimSessionAsync(
-                        port, ccid, forceAccept: false, session.Epoch, session.Token));
+                        port, ccid, forceAccept: autoAccept, session.Epoch, session.Token, initializationLease));
                 }
                 else
                 {
                     AddLog($"[{e.PortName}] Chưa đọc được CCID hợp lệ; giữ radio tắt và tiếp tục chờ SIM.", "WARN");
                     InvalidateSimSession(e.PortName);
+                    ClearSimScopedState(port);
                     port.Status = "Chờ cắm SIM";
+                    port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
                     port.LastError = SecurityErrors.ReadCcidFailed;
                     _modemService.StartHotplugWaitLoop(e.PortName);
                 }
@@ -2828,6 +3028,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var port = Ports.FirstOrDefault(p => p.PortName == portName);
         if (port == null) return;
 
+        _portRecoveryAttempts.TryRemove(portName, out _);
+        _quarantinedPorts.TryRemove(portName, out _);
+
         // Không phát lệnh AT tại đây. CompletePortInitializationAsync đã cấu hình,
         // xác minh hai lần và bật radio trước khi gọi hàm cập nhật UI này.
 
@@ -2871,7 +3074,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string ccid = NormalizeCcid(port?.Serial);
         string target = NormalizeImei(targetImei);
         if (port == null || string.IsNullOrWhiteSpace(ccid) || target.Length != 15) return false;
-        if (!_initializingPorts.TryAdd(portName, true)) return false;
+        if (!TryBeginPortInitialization(portName, out Guid initializationLease)) return false;
 
         (long Epoch, CancellationToken Token) session;
         if (_portSessions.TryGet(portName, out var existingSession)
@@ -2895,7 +3098,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             });
 
             await ProcessCurrentSimSessionAsync(
-                port, ccid, forceAccept: true, session.Epoch, session.Token, explicitTargetImei: target);
+                port, ccid, forceAccept: true, session.Epoch, session.Token,
+                initializationLease, explicitTargetImei: target);
 
             return IsSimSessionCurrent(portName, ccid, session.Epoch)
                 && port.Status == SimStatus.Active
@@ -2903,8 +3107,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            if (_portSessions.IsEpochCurrent(portName, session.Epoch))
-                _initializingPorts.TryRemove(portName, out _);
+            EndPortInitialization(portName, initializationLease);
         }
     }
 
@@ -2920,7 +3123,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (!_initializingPorts.TryAdd(portName, true))
+        if (!TryBeginPortInitialization(portName, out Guid initializationLease))
         {
             AddLog($"[{portName}] Cổng đang có một tác vụ SIM khác; không chạy ACCEPT song song.", "WARN");
             return;
@@ -2948,10 +3151,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 InvalidateSimSession(portName);
                 Application.Current.Dispatcher.Invoke(() =>
                 {
+                    ClearSimScopedState(port);
                     port.Status = "Chờ cắm SIM";
                     port.LastError = "SIM đã thay đổi trong lúc Accept";
-                    port.Serial = string.Empty;
-                    port.Imei = string.Empty;
+                    port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
                     UpdateDashboard();
                 });
                 _modemService.StartHotplugWaitLoop(portName);
@@ -2966,12 +3169,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 UpdateDashboard();
             });
 
-            await ProcessCurrentSimSessionAsync(port, ccid, forceAccept: true, session.Epoch, session.Token);
+            await ProcessCurrentSimSessionAsync(
+                port, ccid, forceAccept: true, session.Epoch, session.Token, initializationLease);
         }
         finally
         {
-            if (_portSessions.IsEpochCurrent(portName, session.Epoch))
-                _initializingPorts.TryRemove(portName, out _);
+            EndPortInitialization(portName, initializationLease);
         }
     }
 
@@ -4400,8 +4603,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
 
             // Gọi bất đồng bộ không chờ (để throttler bên trong hàm tự động xếp hàng)
-            balanceTasks.Add(SendUssdThrottledAsync(
-                port.PortName, ussdCode, "Kiểm tra số dư", maxAttempts: 3, logResult: true));
+            balanceTasks.Add(RunBalanceLookupAsync(
+                port, ussdCode, "Kiểm tra số dư", maxAttempts: 3, logResult: true));
         }
         await Task.WhenAll(balanceTasks);
     }
@@ -4624,7 +4827,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
             AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
-            return await SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra TKC", maxAttempts: 3, logResult: true);
+            return await RunBalanceLookupAsync(port, ussdCode, "Kiểm tra TKC", maxAttempts: 3, logResult: true);
         }
         return "ERROR: Cổng không hợp lệ hoặc không có thông tin nhà mạng";
     }
@@ -4653,6 +4856,70 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return await SendUssdThrottledAsync(portName, ussdCode, "Manual USSD", maxAttempts: 2, logResult: true);
     }
 
+
+    private async Task RunInitialBalanceLookupAsync(
+        SimPort port, string ccid, long epoch, CancellationToken token)
+    {
+        if (!IsSimSessionCurrent(port.PortName, ccid, epoch)
+            || port.Status != SimStatus.Active
+            || (!string.IsNullOrWhiteSpace(port.PhoneNumber) && !string.IsNullOrWhiteSpace(port.Balance)))
+            return;
+
+        using var lookupCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        // Ba biến thể USSD có thể cần tới ~45 giây/biến thể khi modem chỉ trả OK
+        // nhưng tổng đài không gửi +CUSD. Cho phép hoàn tất cả DCS 15, DCS 0 và no-DCS.
+        lookupCts.CancelAfter(TimeSpan.FromSeconds(180));
+        CancellationToken lookupToken = lookupCts.Token;
+        await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
+        try
+        {
+            await SendUssdThrottledAsync(
+                port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 3);
+
+            // SendCommandAsync đã chờ +CUSD cho từng biến thể; chỉ dành thêm một khoảng
+            // ngắn cho firmware phát URC trễ sau khi lệnh kết thúc.
+            await Task.Delay(10000, lookupToken);
+            if (IsSimSessionCurrent(port.PortName, ccid, epoch)
+                && port.Status == SimStatus.Active
+                && (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance)))
+            {
+                AddLog($"[{port.PortName}] SĐT/TKC vẫn trống sau cả 3 biến thể USSD (DCS 15/0/no-DCS); tiếp tục giữ Active và cho phép thử lại thủ công.", "WARN");
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            AddLog($"[{port.PortName}] Lấy SĐT/TKC tự động lỗi: {ex.Message}", "WARN");
+        }
+        finally
+        {
+            if (IsSimSessionCurrent(port.PortName, ccid, epoch))
+                await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = false);
+        }
+    }
+
+    private async Task<string> RunBalanceLookupAsync(
+        SimPort port, string ussdCode, string reason, int maxAttempts, bool logResult)
+    {
+        await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
+        try
+        {
+            string result = await SendUssdThrottledAsync(
+                port.PortName, ussdCode, reason, maxAttempts: maxAttempts, logResult: logResult);
+            // Chờ ngắn cho +CUSD bất đồng bộ; quá hạn UI sẽ hiện dấu —.
+            if (!result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                await Task.Delay(10000, _lifetimeCts.Token);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            return "ERROR: USSD operation cancelled";
+        }
+        finally
+        {
+            await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = false);
+        }
+    }
 
     private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxAttempts = 3)
     {
@@ -6034,17 +6301,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private static string NormalizeCcid(string? ccid)
     {
         if (string.IsNullOrWhiteSpace(ccid)) return string.Empty;
-        var match = Regex.Match(ccid, @"\b([A-Za-z0-9]{18,22})\b");
+        // ICCID is numeric. Accepting arbitrary alphanumeric text here caused modem errors such
+        // as "+CME ERROR: SIM failure" to become a fake non-empty CCID ("+CME:SIMfailure"),
+        // skipping the CFUN=1 retry and invalidating a SIM that was physically still inserted.
+        var match = Regex.Match(ccid, @"\b(\d{18,22})\b");
         if (match.Success) return match.Groups[1].Value;
-        string clean = ccid.Replace("+CCID:", "")
-                           .Replace("+QCCID:", "")
-                           .Replace("OK", "")
-                           .Replace("ERROR", "")
-                           .Replace("\r", "")
-                           .Replace("\n", "")
-                           .Trim();
-        clean = Regex.Replace(clean, @"\s+", "");
-        return clean;
+        return string.Empty;
     }
 
     private static string[] ParseCsvLine(string line)

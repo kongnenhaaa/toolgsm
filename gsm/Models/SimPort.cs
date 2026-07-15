@@ -167,6 +167,9 @@ public partial class SimPort : ObservableObject
     
     [ObservableProperty]
     private string _balance = string.Empty;
+
+    [ObservableProperty]
+    private bool _isBalanceLoading;
     
     [ObservableProperty]
     private string _expiryDate = string.Empty;

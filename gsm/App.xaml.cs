@@ -58,14 +58,16 @@ namespace gsm
             Resources.Add("services", serviceCollection.BuildServiceProvider());
         }
 
-        protected override async void OnStartup(StartupEventArgs e)
+        protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
 
             if (Resources["services"] is ServiceProvider sp)
             {
                 var api = sp.GetRequiredService<ApiHostService>();
-                await api.StartAsync();
+                // Không await trước khi StartupUri tạo MainWindow. Nếu port API bị Windows
+                // giữ/chặn, WPF vẫn phải khởi động UI và toàn bộ luồng GSM bình thường.
+                _ = api.StartAsync();
             }
 
             // Bắt lỗi trên luồng UI

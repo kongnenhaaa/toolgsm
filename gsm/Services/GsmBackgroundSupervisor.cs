@@ -14,6 +14,7 @@ public sealed class GsmBackgroundSupervisorContext
     public required Action<SimPort> MarkSmsSweep { get; init; }
     public required Action<SimPort> MarkConnectionTimeout { get; init; }
     public required Action<string> InvalidateSession { get; init; }
+    public required Func<SimPort, Task> RecoverFaultedPortAsync { get; init; }
     public required Action<string, string> Log { get; init; }
 }
 
@@ -77,6 +78,7 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
             foreach (var port in ports)
             {
                 if (token.IsCancellationRequested) return;
+                if (_modem.IsCallInProgress(port.PortName)) continue;
                 try
                 {
                     await context.SendBalanceUssdAsync(port, "Làm mới số dư tự động");
@@ -95,6 +97,7 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
             foreach (var port in context.GetPorts().Where(context.IsActive))
             {
                 if (token.IsCancellationRequested) return;
+                if (_modem.IsCallInProgress(port.PortName)) continue;
                 try
                 {
                     if (!_sessions.TryGet(port.PortName, out var session)) continue;
@@ -116,7 +119,9 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
             foreach (var port in context.GetPorts())
             {
                 if (token.IsCancellationRequested) return;
-                if (port.Status != SimStatus.Active || context.IsSmsInProgress(port.PortName)) continue;
+                if (port.Status != SimStatus.Active
+                    || context.IsSmsInProgress(port.PortName)
+                    || _modem.IsCallInProgress(port.PortName)) continue;
                 try
                 {
                     if (!_sessions.TryGet(port.PortName, out var session)) continue;
@@ -133,15 +138,17 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
 
     private async Task RunWatchdogLoopAsync(GsmBackgroundSupervisorContext context, CancellationToken token)
     {
-        while (await WaitNextAsync(TimeSpan.FromMinutes(1), token))
+        while (await WaitNextAsync(TimeSpan.FromSeconds(20), token))
         {
             foreach (var port in context.GetPorts())
             {
                 if (token.IsCancellationRequested) return;
+                if (_modem.IsCallInProgress(port.PortName)) continue;
                 if (port.Status == SimStatus.Connecting
-                    && DateTime.Now - port.StatusChangedAt > TimeSpan.FromMinutes(2))
+                    && DateTime.Now - port.StatusChangedAt > TimeSpan.FromMinutes(1))
                 {
                     context.MarkConnectionTimeout(port);
+                    _ = context.RecoverFaultedPortAsync(port);
                     continue;
                 }
 
@@ -150,10 +157,9 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
 
                 try
                 {
-                    context.Log($"[WATCHDOG] Cổng {port.PortName} lỗi. Khởi động lại nhận diện SIM ở chế độ radio-off...", "WARN");
-                    context.InvalidateSession(port.PortName);
-                    await _modem.SendCommandAsync(port.PortName, "AT+CFUN=4", 8000, true);
-                    _modem.StartHotplugWaitLoop(port.PortName);
+                    // Recovery tự quản lý concurrency và retry theo từng COM; không await để một
+                    // cổng hỏng không chặn watchdog của toàn bộ các cổng còn lại.
+                    _ = context.RecoverFaultedPortAsync(port);
                 }
                 catch (Exception ex)
                 {

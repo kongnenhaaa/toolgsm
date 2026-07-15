@@ -8,10 +8,6 @@
 @using gsm.Components.Shared
 @implements IDisposable
 
-<div class="feature-page-header">
-    <div><span class="feature-eyebrow">Messaging</span><h1>SMS Center</h1><p>Soạn tin, quản lý hàng đợi và theo dõi phản hồi trên các cổng Active.</p></div>
-</div>
-
 <!-- ========== ACTION FORM ========== -->
 <MudPaper Class="pa-3 mx-3 mb-2 feature-toolbar" Elevation="0"
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
@@ -99,6 +95,7 @@
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
+                    <MudTh>SIM nhận</MudTh>
                     <MudTh>Người gửi</MudTh>
                     <MudTh>Nội dung</MudTh>
                     <MudTh>OTP</MudTh>
@@ -107,6 +104,13 @@
                 <RowTemplate>
                     <MudTd Style="font-size:16px; white-space:nowrap;">@context.ReceivedTime</MudTd>
                     <MudTd Style="font-weight:600;">@context.PortName</MudTd>
+                    <MudTd Style="font-size:16px; white-space:nowrap;">
+                        <div style="font-weight:600; color:#0F172A;">@GetReceiverDisplay(context)</div>
+                        @if (!string.IsNullOrWhiteSpace(context.NetworkProvider))
+                        {
+                            <div style="font-size:12px; color:#64748B;">@context.NetworkProvider</div>
+                        }
+                    </MudTd>
                     <MudTd Style="font-size:16px;">@context.Sender</MudTd>
                     <MudTd Style="font-size:16px; white-space:nowrap;"
                            title="@context.Content">
@@ -337,10 +341,14 @@
         if (string.IsNullOrWhiteSpace(_smsFilter)) return true;
         string f = _smsFilter.ToLowerInvariant();
         return (sms.Sender?.ToLowerInvariant().Contains(f) == true)
+            || (sms.ReceiverPhone?.ToLowerInvariant().Contains(f) == true)
             || (sms.Content?.ToLowerInvariant().Contains(f) == true)
             || (sms.PortName?.ToLowerInvariant().Contains(f) == true)
             || (sms.Otp?.Contains(f) == true);
     }
+
+    static string GetReceiverDisplay(SmsMessage sms) =>
+        string.IsNullOrWhiteSpace(sms.ReceiverPhone) ? sms.PortName : sms.ReceiverPhone;
 
     // ========== 1. ACCEPT ONE (từ ComTable) ==========
     async Task HandleAcceptOne(SimPort port)
@@ -669,11 +677,11 @@
         try
         {
             var lines = new System.Text.StringBuilder();
-            lines.AppendLine("Thời gian,Cổng,Người gửi,Nội dung,OTP");
+            lines.AppendLine("Thời gian,Cổng,SIM nhận,Người gửi,Nội dung,OTP");
             foreach (var sms in IncomingSms)
             {
                 string content = (sms.Content ?? "").Replace("\"", "\"\"");
-                lines.AppendLine($"\"{sms.ReceivedTime}\",\"{sms.PortName}\",\"{sms.Sender}\",\"{content}\",\"{sms.Otp}\"");
+                lines.AppendLine($"\"{sms.ReceivedTime}\",\"{sms.PortName}\",\"{GetReceiverDisplay(sms)}\",\"{sms.Sender}\",\"{content}\",\"{sms.Otp}\"");
             }
             string fileName = $"sms_history_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
             string path = System.IO.Path.Combine(

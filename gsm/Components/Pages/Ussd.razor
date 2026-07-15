@@ -9,10 +9,6 @@
 @using gsm.Components.Shared
 @implements IDisposable
 
-<div class="feature-page-header">
-    <div><span class="feature-eyebrow">GSM Operations</span><h1>USSD Control</h1><p>Gửi USSD, kiểm tra tài khoản và vận hành nhiều cổng theo phiên SIM đã xác minh.</p></div>
-</div>
-
 <!-- ========== ACTION FORM ========== -->
 <MudPaper Class="pa-3 mx-3 mb-2 feature-toolbar" Elevation="0"
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
@@ -136,6 +132,7 @@
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
+                    <MudTh>SIM nhận</MudTh>
                     <MudTh>Người gửi</MudTh>
                     <MudTh>Nội dung</MudTh>
                     <MudTh>OTP</MudTh>
@@ -144,6 +141,13 @@
                 <RowTemplate>
                     <MudTd Style="font-size:16px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
+                    <MudTd Style="font-size:16px; white-space:nowrap;">
+                        <div style="font-weight:600; color:#0F172A;">@context.ReceiverDisplay</div>
+                        @if (!string.IsNullOrWhiteSpace(context.NetworkProvider))
+                        {
+                            <div style="font-size:12px; color:#64748B;">@context.NetworkProvider</div>
+                        }
+                    </MudTd>
                     <MudTd Style="font-size:16px;">@context.Sender</MudTd>
                     <MudTd Style="font-size:16px; white-space:nowrap;" title="@context.Content">
                         @context.Content
@@ -369,6 +373,8 @@
             {
                 Time = DateTime.TryParse(x.ReceivedTime, out var t) ? t : DateTime.Now,
                 Port = x.PortName,
+                ReceiverPhone = x.ReceiverPhone,
+                NetworkProvider = x.NetworkProvider,
                 Sender = x.Sender,
                 Content = x.Content,
                 Otp = x.Otp,
@@ -953,6 +959,9 @@
     {
         public DateTime Time { get; set; }
         public string Port { get; set; } = "";
+        public string ReceiverPhone { get; set; } = "";
+        public string NetworkProvider { get; set; } = "";
+        public string ReceiverDisplay => string.IsNullOrWhiteSpace(ReceiverPhone) ? Port : ReceiverPhone;
         public string Sender { get; set; } = "";
         public string Content { get; set; } = "";
         public string? Otp { get; set; }

@@ -94,7 +94,7 @@
                 else if (col.Name == "Balance")
                 {
                     <MudTd Style="color:#16A34A; font-weight:600; border-bottom:1px solid #F1F5F9; white-space: nowrap; font-size:16px;">
-                        @RenderLoadingOrValue(context, context.Balance)
+                        @RenderLoadingOrValue(context, context.Balance, forceLoading: context.IsBalanceLoading)
                     </MudTd>
                 }
                 else if (col.Name == "PhoneNumber")
@@ -111,7 +111,7 @@
                 }
                 else if (col.Name == "ExpiryDate")
                 {
-                    <MudTd Style="font-size:16px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@RenderLoadingOrValue(context, context.ExpiryDate)</MudTd>
+                    <MudTd Style="font-size:16px; border-bottom:1px solid #F1F5F9; color:#64748B; white-space: nowrap;">@RenderLoadingOrValue(context, context.ExpiryDate, forceLoading: context.IsBalanceLoading)</MudTd>
                 }
                 else if (col.Name == "SimRegDate")
                 {
@@ -433,11 +433,10 @@
         public string Name { get; set; } = "";
         public string Header { get; set; } = "";
     }
-    private RenderFragment RenderLoadingOrValue(gsm.Models.SimPort context, string value, string fallback = "—") => __builder =>
+    private RenderFragment RenderLoadingOrValue(gsm.Models.SimPort context, string value, string fallback = "—", bool forceLoading = false) => __builder =>
     {
-        bool isLoading = (string.IsNullOrEmpty(value) || value.Contains("Chưa"))
-                         && (context.Status == gsm.Models.SimStatus.Connecting
-                             || context.Status == gsm.Models.SimStatus.Active);
+        bool isLoading = string.IsNullOrEmpty(value)
+                         && (context.Status == gsm.Models.SimStatus.Connecting || forceLoading);
         if (isLoading)
         {
             <MudProgressCircular Color="Color.Primary" Size="Size.Small" Indeterminate="true" />

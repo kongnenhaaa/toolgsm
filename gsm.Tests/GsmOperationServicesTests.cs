@@ -70,6 +70,34 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
+    public async Task Ussd_BareOk_IsRetriedWithAlternateDcsUntilCusdArrives()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM24", CcidA);
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) => Task.FromResult(command switch
+            {
+                "AT+CPIN?" => "+CPIN: READY\r\nOK",
+                "AT+CREG?" => "+CREG: 0,1\r\nOK",
+                "AT+CSQ" => "+CSQ: 20,99\r\nOK",
+                "AT+CUSD=1,\"*101#\",15" => "OK",
+                "AT+CUSD=1,\"*101#\",0" => "+CUSD: 0,\"4321 VND\",15\r\nOK",
+                _ => "OK"
+            })
+        };
+        using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+
+        string result = await ussd.SendAsync("COM24", "*101#", 3);
+
+        Assert.Contains("4321 VND", result);
+        Assert.Contains("COM24:AT+CUSD=1,\"*101#\",15", modem.Commands);
+        Assert.Contains("COM24:AT+CUSD=2", modem.Commands);
+        Assert.Contains("COM24:AT+CUSD=1,\"*101#\",0", modem.Commands);
+    }
+
+    [Fact]
     public async Task Ussd_SimRemovedDuringCommand_ReturnsCancelledNotSuccess()
     {
         using var sessions = new PortSessionRegistry();

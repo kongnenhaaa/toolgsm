@@ -18,6 +18,14 @@ public class SmsMultipartAssemblerTests
     }
 
     [Fact]
+    public void EchoedCmgrCommand_IsNotIncludedInSmsBody()
+    {
+        string raw = "AT+QCMGR=3\r\n+QCMGR: \"REC UNREAD\",\"ZALO\"\r\nOTP 123456\r\nOK\r\n";
+
+        Assert.Equal("OTP 123456", SmsBodyDecoder.Decode(raw).Content);
+    }
+
+    [Fact]
     public void Udh8Bit_IsDecodedAndPartsAssembleOutOfOrderWithoutChangingText()
     {
         var assembler = new SmsMultipartAssembler();
@@ -42,9 +50,18 @@ public class SmsMultipartAssemblerTests
     }
 
     [Fact]
+    public void Ec20AlignmentByteBeforeUdh_IsIgnoredAndMultipartMetadataSurvives()
+    {
+        DecodedSmsBody part = DecodeUcs2Part(new byte[] { 0x00, 0x05, 0x00, 0x03, 0x2A, 0x02, 0x01 }, "noi dung");
+
+        Assert.Equal(new SmsConcatInfo(0x2A, 2, 1), part.Concatenation);
+        Assert.Equal("noi dung", part.Content);
+    }
+
+    [Fact]
     public void QuectelQcmgrMetadata_IsUsedWhenFirmwareRemovesUdhFromTextBody()
     {
-        string raw = "+QCMGR: \"REC UNREAD\",\"ZALO\",\"\",\"26/07/15,10:00:00+28\",145,64,0,8,\"+84900000000\",145,20,4660,2,3\r\nphan thu hai\r\nOK\r\n";
+        string raw = "+QCMGR: \"REC UNREAD\",\"ZALO\",,\"26/07/15,10:00:00+28\",4660,2,3\r\nphan thu hai\r\nOK\r\n";
 
         DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
 
@@ -57,6 +74,13 @@ public class SmsMultipartAssemblerTests
     {
         string raw = "+QCMGR: \"REC UNREAD\",\"ZALO\",\"\",\"26/07/15,10:00:00+28\",145,0,0,8,\"+84900000000\",145,20\r\nOTP 654321\r\nOK\r\n";
         Assert.Null(SmsBodyDecoder.Decode(raw).Concatenation);
+    }
+
+    [Fact]
+    public void Ec20DecimalAsciiSender_IsDecodedWithoutChangingPhoneNumbers()
+    {
+        Assert.Equal("VinaPhone", GsmModemService.DecodeSmsSender("861051109780104111110101"));
+        Assert.Equal("84901234567", GsmModemService.DecodeSmsSender("84901234567"));
     }
 
     [Fact]
@@ -104,6 +128,36 @@ public class SmsMultipartAssemblerTests
         Assert.Equal(SmsAssemblyStatus.Completed, a.Add("COM1", "ZALO", new(5, 2, 2), "two", "32").Status);
         Assert.Equal(SmsAssemblyStatus.Duplicate, a.Add("COM1", "ZALO", new(5, 2, 1), "one", "31").Status);
         Assert.Equal(SmsAssemblyStatus.Duplicate, a.Add("COM1", "ZALO", new(5, 2, 2), "two", "32").Status);
+    }
+
+    [Fact]
+    public void Ec20WithoutUdh_HoldsFullSizedPartsUntilShortFinalPartArrives()
+    {
+        var a = new SmsImplicitMultipartAssembler();
+        string p1 = new('A', 67);
+        string p2 = new('B', 67);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting, a.Add("COM74", "VinaPhone", p1, "0").Status);
+        Assert.Equal(SmsAssemblyStatus.Waiting, a.Add("COM74", "VinaPhone", p2, "1").Status);
+        SmsAssemblyResult result = a.Add("COM74", "VinaPhone", "cuoi", "2");
+
+        Assert.Equal(SmsAssemblyStatus.Completed, result.Status);
+        Assert.Equal(p1 + p2 + "cuoi", result.Content);
+        Assert.Equal(new[] { "0", "1", "2" }, result.MessageIndices);
+        Assert.Equal(SmsAssemblyStatus.Duplicate, a.Add("COM74", "VinaPhone", p1, "0").Status);
+    }
+
+    [Fact]
+    public void Ec20WithoutUdh_NeverEmitsOrDeletesIncompleteLongMessage()
+    {
+        var a = new SmsImplicitMultipartAssembler(TimeSpan.FromSeconds(5));
+        DateTimeOffset start = DateTimeOffset.UtcNow;
+        SmsAssemblyResult waiting = a.Add("COM18", "VinaPhone", new string('X', 67), "3", start);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting, waiting.Status);
+        Assert.Null(waiting.Content);
+        Assert.Empty(waiting.MessageIndices);
+        Assert.Equal(1, a.RemoveExpired(start.AddSeconds(6)));
     }
 
     private static DecodedSmsBody DecodeUcs2Part(byte[] udh, string content)

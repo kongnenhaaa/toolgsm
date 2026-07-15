@@ -6,6 +6,7 @@
         gsm.Models.SimStatus.SecurityBlocked => ("Cần xử lý", "status-blocked", false),
         gsm.Models.SimStatus.Connecting      => ("Đang xử lý", "status-connecting", true),
         gsm.Models.SimStatus.NoResponse      => ("Mất phản hồi", "status-error", false),
+        gsm.Models.SimStatus.Quarantined     => ("Đã cách ly", "status-error", false),
         "Chờ cắm SIM"                        => ("Chờ SIM", "status-idle", false),
         _                                    => (string.IsNullOrWhiteSpace(Status) ? "Chưa xác định" : Status, "status-idle", false)
     };

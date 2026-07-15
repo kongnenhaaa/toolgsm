@@ -177,27 +177,16 @@ public class ImeiManagementService
             var cachedEntry = getBackupEntry(ccid);
 
             // [FIX LOGIC]: Đưa ưu tiên chặn SIM lạ lên hàng đầu (Tính năng 3)
-            if (cachedEntry == null && !port.IsRebooting)
+            // Nếu chế độ Nạp SIM Mới đang bật, bỏ qua bước chặn này để lưu trực tiếp IMEI đã tráng
+            if (cachedEntry == null && settings.BlockUnknownSims && !settings.EnableNewSimIntakeMode)
             {
-                if (settings.EnableNewSimIntakeMode)
+                Log($"[{portName}] SIM mới chưa có trong kho IMEI. Đã chặn, chờ chấp thuận thủ công.", "WARNING");
+
+                return new ImeiProcessResult
                 {
-                    // Chế độ nạp SIM mới: Trả về trạng thái chờ UI chấp nhận
-                    return new ImeiProcessResult
-                    {
-                        Status = ImeiProcessStatus.SecurityBlocked,
-                        ErrorMessage = "SIM_MỚI_CHỜ_CHẤP_NHẬN",
-                        FinalImei = currentImei
-                    };
-                }
-                else if (settings.BlockUnknownSims)
-                {
-                    Log($"[{portName}] SIM mới chưa có trong kho IMEI. Đã chặn, chờ chấp thuận thủ công.", "WARNING");
-                    return new ImeiProcessResult
-                    {
-                        Status = ImeiProcessStatus.SecurityBlocked,
-                        ErrorMessage = "SIM mới chưa được chấp thuận"
-                    };
-                }
+                    Status = ImeiProcessStatus.SecurityBlocked,
+                    ErrorMessage = "SIM mới chưa được chấp thuận"
+                };
             }
 
             // Ưu tiên 2: Phục hồi từ backup nếu có (và nếu tính năng Restore được bật)
@@ -253,11 +242,18 @@ public class ImeiManagementService
                             CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                             LicenseKeySuffix = string.Empty,
                             KeyMismatch = "false",
-                            SourceFile = "auto-learn"
+                            SourceFile = settings.EnableNewSimIntakeMode ? "new-sim-intake" : "auto-learn"
                         };
                         saveBackupEntry(newEntry);
                         
-                        Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+                        if (settings.EnableNewSimIntakeMode)
+                        {
+                            Log($"[{portName}] (Nạp SIM Mới) Đã ghi nhận Fake IMEI tráng sẵn: {currentImei} gắn với CCID: {ccid}.", "SUCCESS");
+                        }
+                        else
+                        {
+                            Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc: {currentImei} gắn với CCID: {ccid} vào file backup.", "SUCCESS");
+                        }
 
                         dispatcherInvoke(() =>
                         {

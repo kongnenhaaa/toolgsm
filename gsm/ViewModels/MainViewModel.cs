@@ -1817,25 +1817,67 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.DeviceName = "Đang tráng IMEI Fake...";
                 });
 
-                bool success = await _modemService.AcceptNewSimAndPaintImeiAsync(port.PortName, targetImei);
+                string currentImei = NormalizeImei(port.Imei);
+                if (string.IsNullOrEmpty(currentImei))
+                {
+                    currentImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 10000, silent: true);
+                    currentImei = NormalizeImei(currentImei);
+                }
+                
+                var result = await _imeiManagementService.ProcessImeiAsync(
+                    port,
+                    port.Serial,
+                    currentImei,
+                    AppSettings,
+                    (queryCcid) => { _imeiCache.TryGetValue(queryCcid, out var e); return e; },
+                    (newE) => AddNewImeiCacheEntry(newE),
+                    (action) => Application.Current.Dispatcher.Invoke(action)
+                );
                 
                 Application.Current.Dispatcher.Invoke(() => 
                 {
-                    if (success)
+                    if (result.Status == Services.ImeiProcessStatus.Matched)
+                    {
+                        port.IsRebooting = false;
+                        port.Imei = result.FinalImei;
+                        MarkPortActiveAfterInit(port.PortName);
+                        _ = _modemService.ReinitializeSettingsAsync(port.PortName);
+                    }
+                    else if (result.Status == Services.ImeiProcessStatus.Applied)
                     {
                         port.IsRebooting = true;
-                        port.Imei = targetImei;
+                        port.Imei = result.FinalImei;
                         port.DeviceName = "Đang áp dụng IMEI, chờ Reset...";
                         port.Status = SimStatus.Connecting;
                         
-                        // Mạch sẽ tự ngắt kết nối USB và nhận lại. InitializeModemAsync sẽ tự chạy.
-                        // Không cần ép StartHotplugWaitLoop sau 15s.
+                        // [FIX] Handle modems with separate USB bridge chips that don't drop USB on AT+CFUN=1,1
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(15000);
+                            if (port.IsRebooting)
+                            {
+                                Application.Current.Dispatcher.Invoke(() => 
+                                {
+                                    port.IsRebooting = false;
+                                    AddLog($"[{port.PortName}] Mạch không tự ngắt USB. Khởi động lại vòng lặp...", "INFO");
+                                    _modemService.StartHotplugWaitLoop(port.PortName);
+                                });
+                            }
+                        });
+                    }
+                    else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
+                    {
+                        port.Status = SimStatus.SecurityBlocked;
+                        port.LastError = string.IsNullOrEmpty(result.ErrorMessage) ? gsm.Models.SecurityErrors.WrongImei : result.ErrorMessage;
+                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                        UpdateDashboard();
                     }
                     else
                     {
-                        port.Status = SimStatus.SecurityBlocked;
-                        port.LastError = "Lỗi tráng IMEI";
-                        port.DeviceName = "Lỗi tráng IMEI";
+                        port.Status = SimStatus.NoResponse;
+                        port.LastError = "Lỗi xử lý IMEI";
+                        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                        UpdateDashboard();
                     }
                 });
             });
@@ -2137,17 +2179,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 99999);
                             await Task.Delay(2000); // Đợi mạng xử lý xong lệnh trước
                         }
-                        
-                        // Retry USSD sau 35s nếu vẫn trống (Fix lỗi mạng yếu hoặc rớt USSD lúc mới khởi động)
-                        _ = Task.Run(async () => 
-                        {
-                            await Task.Delay(35000);
-                            if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
-                            {
-                                Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] SĐT/TKC vẫn trống sau 35s, thử gửi lại USSD *101#...", "WARN"));
-                                await SendUssdThrottledAsync(port.PortName, "*101#", "Retry lấy SĐT & TKC", maxAttempts: 99999);
-                            }
-                        });
 
                         // Tự động chuyển hướng cuộc gọi nếu tính năng được bật
                         if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))
@@ -2266,33 +2297,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     // Bắt buộc khởi tạo lại cài đặt (AT+CMGF=1, CSCS...) 
                                     // vì nếu vừa chạy CFUN=1,1 xong modem sẽ mất hết cài đặt tạm thời.
                                     _ = _modemService.ReinitializeSettingsAsync(port.PortName);
-
-                                    // === WATCHDOG: Nếu 50 giây sau vẫn không có nhà mạng / SĐT thì force ===
-                                    _ = Task.Run(async () =>
-                                    {
-                                        await Task.Delay(50000);
-                                        var p = Ports.FirstOrDefault(x => x.PortName == e.PortName);
-                                        if (p == null) return;
-
-                                        if (string.IsNullOrEmpty(p.NetworkProvider) || 
-                                            string.IsNullOrEmpty(p.PhoneNumber) || 
-                                            p.PhoneNumber == "Chưa lấy được số")
-                                        {
-                                            Application.Current.Dispatcher.Invoke(() =>
-                                            {
-                                                AddLog($"[{p.PortName}] [FORCE] Không có nhà mạng/SĐT sau 50s → Force recovery + USSD", "WARNING");
-                                            });
-
-                                            // Force radio + scan
-                                            await _modemService.SendCommandAsync(p.PortName, "AT+CFUN=1", 10000, silent: true);
-                                            await Task.Delay(2000);
-                                            await _modemService.SendCommandAsync(p.PortName, "AT+COPS=0", 10000, silent: true);
-
-                                            // Force USSD lấy SĐT + TKC
-                                            string ussd = GetUssdCodeForProvider(p.NetworkProvider); // fallback *101#
-                                            await SendUssdThrottledAsync(p.PortName, ussd, "Force lấy SĐT+TKC sau Accept", maxAttempts: 3);
-                                        }
-                                    });
                                 }
                                 else if (result.Status == Services.ImeiProcessStatus.Applied)
                                 {
@@ -2414,13 +2418,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
             }
-            else if (e.Data.StartsWith("[STATUS_WAITING_ACCEPT]"))
-            {
-                port.Status = SimStatus.SecurityBlocked;
-                port.LastError = "Chờ chấp nhận SIM mới";
-                port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
-                UpdateDashboard();
-            }
         });
     }
 
@@ -2428,9 +2425,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var port = Ports.FirstOrDefault(p => p.PortName == portName);
         if (port == null) return;
-
-        // Bắt buộc bật sóng rõ ràng sau khi Init/Matched (đảm bảo không kẹt ở CFUN=4)
-        _ = _modemService.SendCommandAsync(portName, "AT+CFUN=1", 10000, silent: true);
 
         port.Status = SimStatus.Active;
         port.TimeoutCount = 0;

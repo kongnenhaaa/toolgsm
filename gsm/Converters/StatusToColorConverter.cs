@@ -13,13 +13,11 @@ namespace gsm.Converters
             if (value is string status)
             {
                 if (status == SimStatus.Active)
-                    return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#22C55E"));
-                if (status == "Mất kết nối" || status == SimStatus.NoResponse || status == SimStatus.SecurityBlocked)
-                    return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF4444"));
-                if (status == SimStatus.Connecting)
-                    return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F59E0B"));
+                    return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4CAF50"));
+                if (status == "Mất kết nối")
+                    return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F44336"));
             }
-            return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#64748B"));
+            return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFA726")); // Đang kết nối...
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

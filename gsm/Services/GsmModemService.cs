@@ -543,8 +543,8 @@ public class GsmModemService : IGsmModemService
 
     public string ConnectAll(int baudRate = 115200)
     {
-        List<string> newlyOpenedPorts = new List<string>();
-        List<string> failedPorts = new List<string>();
+        var newlyOpenedPorts = new ConcurrentBag<string>();
+        var failedPorts = new ConcurrentBag<string>();
 
         lock (_connectLock)
         {
@@ -553,16 +553,20 @@ public class GsmModemService : IGsmModemService
             _connectionErrors.Clear();
 
             var ports = GetAvailablePorts();
+            BackendConcurrency.ConfigureThreadPool(ports.Count);
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = "SYSTEM", Data = $"[HỆ THỐNG] Quét cổng COM: Phát hiện {ports.Count} cổng trong Windows ({string.Join(", ", ports)})" });
 
-            foreach (var p in ports)
+            Parallel.ForEach(ports, new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, ports.Count)
+            }, p =>
             {
                 if (!_serialPorts.ContainsKey(p))
                 {
                     if (_sleepingPorts.TryGetValue(p, out var sleepUntil))
                     {
                         if (DateTime.Now < sleepUntil)
-                            continue; // Đang trong thời gian ngủ, bỏ qua
+                            return; // Đang trong thời gian ngủ, bỏ qua
                         else
                             _sleepingPorts.TryRemove(p, out _); // Đã hết thời gian ngủ
                     }
@@ -618,7 +622,7 @@ public class GsmModemService : IGsmModemService
                         failedPorts.Add(p);
                     }
                 }
-            }
+            });
         }
 
         // CHỈ gửi lệnh khởi tạo SAU KHI đã mở kết nối xong toàn bộ các cổng COM.
@@ -636,11 +640,9 @@ public class GsmModemService : IGsmModemService
 
     private async Task InitializeOpenedPortsAsync(IReadOnlyCollection<string> portNames)
     {
-        // Giới hạn đồng thời để nhiều EC20 không dồn lệnh AT lên cùng USB controller.
-        using var gate = new SemaphoreSlim(4, 4);
+        BackendConcurrency.ConfigureThreadPool(portNames.Count);
         var tasks = portNames.Select(async portName =>
         {
-            await gate.WaitAsync();
             try
             {
                 if (_portLifetimeCts.TryGetValue(portName, out var lifetime))
@@ -654,10 +656,6 @@ public class GsmModemService : IGsmModemService
                     PortName = portName,
                     Data = $"[STATUS_NO_RESPONSE] Lỗi khởi tạo modem: {ex.Message}"
                 });
-            }
-            finally
-            {
-                gate.Release();
             }
         });
 

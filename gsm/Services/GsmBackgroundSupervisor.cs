@@ -75,18 +75,20 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
             var ports = context.GetPorts().Where(context.IsActive).ToList();
             if (ports.Count == 0) continue;
             context.Log("[HỆ THỐNG] Tự động kiểm tra số dư định kỳ (30 phút/lần)...", "INFO");
-            foreach (var port in ports)
+            try
             {
-                if (token.IsCancellationRequested) return;
-                if (_modem.IsCallInProgress(port.PortName)) continue;
-                try
+                await BackendConcurrency.ForEachPortAsync(ports, async (port, ct) =>
                 {
-                    await context.SendBalanceUssdAsync(port, "Làm mới số dư tự động");
-                    await _delay.WaitAsync(TimeSpan.FromSeconds(2), token);
-                }
-                catch (OperationCanceledException) { return; }
-                catch (Exception ex) { context.Log($"[{port.PortName}] Balance supervisor: {ex.Message}", "ERROR"); }
+                    if (_modem.IsCallInProgress(port.PortName)) return;
+                    try
+                    {
+                        await context.SendBalanceUssdAsync(port, "Làm mới số dư tự động");
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                    catch (Exception ex) { context.Log($"[{port.PortName}] Balance supervisor: {ex.Message}", "ERROR"); }
+                }, token);
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
         }
     }
 
@@ -94,21 +96,25 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
     {
         while (await WaitNextAsync(TimeSpan.FromSeconds(15), token))
         {
-            foreach (var port in context.GetPorts().Where(context.IsActive))
+            try
             {
-                if (token.IsCancellationRequested) return;
-                if (_modem.IsCallInProgress(port.PortName)) continue;
-                try
+                await BackendConcurrency.ForEachPortAsync(
+                    context.GetPorts().Where(context.IsActive), async (port, ct) =>
                 {
-                    if (!_sessions.TryGet(port.PortName, out var session)) continue;
-                    string response = await _modem.SendCommandAsync(port.PortName, "AT+CSQ", 5000, true);
-                    if (!_sessions.IsCurrent(port.PortName, session.Ccid, session.Epoch)) continue;
-                    var match = Regex.Match(response, @"\+CSQ:\s*(\d+)");
-                    if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
-                        context.SetSignalStrength(port, csq >= 99 ? 0 : (int)(csq / 31d * 100));
-                }
-                catch (Exception ex) { context.Log($"[{port.PortName}] Signal supervisor: {ex.Message}", "WARN"); }
+                    if (_modem.IsCallInProgress(port.PortName)) return;
+                    try
+                    {
+                        if (!_sessions.TryGet(port.PortName, out var session)) return;
+                        string response = await _modem.SendCommandAsync(port.PortName, "AT+CSQ", 5000, true);
+                        if (!_sessions.IsCurrent(port.PortName, session.Ccid, session.Epoch)) return;
+                        var match = Regex.Match(response, @"\+CSQ:\s*(\d+)");
+                        if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
+                            context.SetSignalStrength(port, csq >= 99 ? 0 : (int)(csq / 31d * 100));
+                    }
+                    catch (Exception ex) { context.Log($"[{port.PortName}] Signal supervisor: {ex.Message}", "WARN"); }
+                }, token);
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
         }
     }
 
@@ -116,23 +122,25 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
     {
         while (await WaitNextAsync(TimeSpan.FromMinutes(3), token))
         {
-            foreach (var port in context.GetPorts())
+            try
             {
-                if (token.IsCancellationRequested) return;
-                if (port.Status != SimStatus.Active
-                    || context.IsSmsInProgress(port.PortName)
-                    || _modem.IsCallInProgress(port.PortName)) continue;
-                try
+                await BackendConcurrency.ForEachPortAsync(context.GetPorts(), async (port, ct) =>
                 {
-                    if (!_sessions.TryGet(port.PortName, out var session)) continue;
-                    await _modem.SweepUnreadSmsAsync(port.PortName);
-                    if (!_sessions.IsCurrent(port.PortName, session.Ccid, session.Epoch)) continue;
-                    context.MarkSmsSweep(port);
-                    await _delay.WaitAsync(TimeSpan.FromSeconds(1), token);
-                }
-                catch (OperationCanceledException) { return; }
-                catch (Exception ex) { context.Log($"[{port.PortName}] SMS sweep: {ex.Message}", "WARN"); }
+                    if (port.Status != SimStatus.Active
+                        || context.IsSmsInProgress(port.PortName)
+                        || _modem.IsCallInProgress(port.PortName)) return;
+                    try
+                    {
+                        if (!_sessions.TryGet(port.PortName, out var session)) return;
+                        await _modem.SweepUnreadSmsAsync(port.PortName);
+                        if (!_sessions.IsCurrent(port.PortName, session.Ccid, session.Epoch)) return;
+                        context.MarkSmsSweep(port);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                    catch (Exception ex) { context.Log($"[{port.PortName}] SMS sweep: {ex.Message}", "WARN"); }
+                }, token);
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
         }
     }
 
@@ -140,32 +148,32 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
     {
         while (await WaitNextAsync(TimeSpan.FromSeconds(20), token))
         {
-            foreach (var port in context.GetPorts())
+            try
             {
-                if (token.IsCancellationRequested) return;
-                if (_modem.IsCallInProgress(port.PortName)) continue;
-                if (port.Status == SimStatus.Connecting
-                    && DateTime.Now - port.StatusChangedAt > TimeSpan.FromMinutes(1))
+                await BackendConcurrency.ForEachPortAsync(context.GetPorts(), async (port, ct) =>
                 {
-                    context.MarkConnectionTimeout(port);
-                    _ = context.RecoverFaultedPortAsync(port);
-                    continue;
-                }
+                    if (_modem.IsCallInProgress(port.PortName)) return;
+                    bool connectionTimedOut = port.Status == SimStatus.Connecting
+                        && DateTime.Now - port.StatusChangedAt > TimeSpan.FromMinutes(1);
+                    if (connectionTimedOut)
+                        context.MarkConnectionTimeout(port);
 
-                if (!context.IsWatchdogEnabled()) continue;
-                if (port.Status != SimStatus.NoResponse && port.Status != "Offline" && port.Status != "Error") continue;
+                    bool needsRecovery = connectionTimedOut
+                        || (context.IsWatchdogEnabled()
+                            && (port.Status == SimStatus.NoResponse
+                                || port.Status == "Offline"
+                                || port.Status == "Error"));
+                    if (!needsRecovery) return;
 
-                try
-                {
-                    // Recovery tự quản lý concurrency và retry theo từng COM; không await để một
-                    // cổng hỏng không chặn watchdog của toàn bộ các cổng còn lại.
-                    _ = context.RecoverFaultedPortAsync(port);
-                }
-                catch (Exception ex)
-                {
-                    context.Log($"[{port.PortName}] Watchdog recovery: {ex.Message}", "ERROR");
-                }
+                    try { await context.RecoverFaultedPortAsync(port); }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+                    catch (Exception ex)
+                    {
+                        context.Log($"[{port.PortName}] Watchdog recovery: {ex.Message}", "ERROR");
+                    }
+                }, token);
             }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
         }
     }
 

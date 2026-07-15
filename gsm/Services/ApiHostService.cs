@@ -141,6 +141,8 @@ public class ApiHostService
         {
             ok = true,
             machineId = SettingsService.Current.MachineId,
+            concurrentPortLimit = "dynamic",
+            baselineConcurrentPorts = BackendConcurrency.BaselineConcurrentPorts,
             time = DateTime.UtcNow
         }));
 

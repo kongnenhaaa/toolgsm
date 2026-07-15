@@ -31,8 +31,9 @@ public sealed class PortSessionRegistry : IPortSessionRegistry
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, long> _epochs =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _gate = new();
-    private bool _disposed;
+    private readonly ConcurrentDictionary<string, object> _portGates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private int _disposed;
 
     public PortSessionLease Begin(string portName, string ccid, CancellationToken lifetimeToken = default)
     {
@@ -41,9 +42,11 @@ public sealed class PortSessionRegistry : IPortSessionRegistry
         if (string.IsNullOrWhiteSpace(normalizedCcid))
             throw new ArgumentException("CCID is required to start a SIM session.", nameof(ccid));
 
-        lock (_gate)
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        object portGate = _portGates.GetOrAdd(portName, static _ => new object());
+        lock (portGate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             CancelAndDispose(portName);
 
             long epoch = _epochs.AddOrUpdate(portName, 1, (_, old) => checked(old + 1));
@@ -83,7 +86,8 @@ public sealed class PortSessionRegistry : IPortSessionRegistry
     public void Invalidate(string portName)
     {
         if (string.IsNullOrWhiteSpace(portName)) return;
-        lock (_gate)
+        object portGate = _portGates.GetOrAdd(portName, static _ => new object());
+        lock (portGate)
         {
             _epochs.AddOrUpdate(portName, 1, (_, old) => checked(old + 1));
             CancelAndDispose(portName);
@@ -92,19 +96,27 @@ public sealed class PortSessionRegistry : IPortSessionRegistry
 
     public void InvalidateAll()
     {
-        foreach (string portName in _sessions.Keys.ToArray())
-            Invalidate(portName);
+        string[] portNames = _sessions.Keys.ToArray();
+        Parallel.ForEach(portNames, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, portNames.Length)
+        }, Invalidate);
     }
 
     public void Dispose()
     {
-        lock (_gate)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        string[] portNames = _sessions.Keys.ToArray();
+        Parallel.ForEach(portNames, new ParallelOptions
         {
-            if (_disposed) return;
-            _disposed = true;
-            foreach (string portName in _sessions.Keys.ToArray())
+            MaxDegreeOfParallelism = Math.Max(1, portNames.Length)
+        }, portName =>
+        {
+            object portGate = _portGates.GetOrAdd(portName, static _ => new object());
+            lock (portGate)
                 CancelAndDispose(portName);
-        }
+        });
+        _portGates.Clear();
     }
 
     internal static string NormalizeCcid(string? ccid)

@@ -11,15 +11,13 @@ public interface IGsmUssdService : IDisposable
 public sealed class GsmUssdService : IGsmUssdService
 {
     private static readonly TimeSpan PerPortInterval = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan GlobalInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly IGsmModemService _modem;
     private readonly IPortSessionRegistry _sessions;
     private readonly IGsmSmsService _sms;
     private readonly IGsmOperationDelay _delay;
     private readonly ConcurrentDictionary<string, DateTime> _lastByPort = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _throttleLock = new(1, 1);
-    private DateTime _lastGlobalUtc = DateTime.MinValue;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _portLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public GsmUssdService(
         IGsmModemService modem,
@@ -41,8 +39,10 @@ public sealed class GsmUssdService : IGsmUssdService
     {
         if (string.IsNullOrWhiteSpace(ussdCode)) return "ERROR: Invalid USSD request";
         if (!_sessions.TryGet(portName, out var session)) return SessionChangedError;
+        var portLock = _portLocks.GetOrAdd(portName, _ => new SemaphoreSlim(1, 1));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, session.Token);
         CancellationToken token = linkedCts.Token;
+        await portLock.WaitAsync(token);
 
         try
         {
@@ -123,40 +123,32 @@ public sealed class GsmUssdService : IGsmUssdService
         {
             return "ERROR: USSD operation cancelled";
         }
+        finally
+        {
+            portLock.Release();
+        }
     }
 
-    public void Dispose() => _throttleLock.Dispose();
+    public void Dispose()
+    {
+        foreach (var semaphore in _portLocks.Values) semaphore.Dispose();
+        _portLocks.Clear();
+    }
 
     private async Task ThrottleAsync(string portName, CancellationToken token)
     {
-        await _throttleLock.WaitAsync(token);
-        try
+        DateTime now = DateTime.UtcNow;
+        if (_lastByPort.TryGetValue(portName, out DateTime lastPort))
         {
-            DateTime now = DateTime.UtcNow;
-            if (_lastByPort.TryGetValue(portName, out DateTime lastPort))
+            TimeSpan wait = PerPortInterval - (now - lastPort);
+            if (wait > TimeSpan.Zero)
             {
-                TimeSpan wait = PerPortInterval - (now - lastPort);
-                if (wait > TimeSpan.Zero)
-                {
-                    await _delay.WaitAsync(wait, token);
-                    now = DateTime.UtcNow;
-                }
-            }
-
-            TimeSpan globalWait = GlobalInterval - (now - _lastGlobalUtc);
-            if (globalWait > TimeSpan.Zero)
-            {
-                await _delay.WaitAsync(globalWait, token);
+                await _delay.WaitAsync(wait, token);
                 now = DateTime.UtcNow;
             }
+        }
 
-            _lastByPort[portName] = now;
-            _lastGlobalUtc = now;
-        }
-        finally
-        {
-            _throttleLock.Release();
-        }
+        _lastByPort[portName] = now;
     }
 
     private async Task<string?> PreparePortAsync(PortSessionLease session, CancellationToken token)

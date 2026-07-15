@@ -523,10 +523,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     AddVnptResult(port.PortName, port.PhoneNumber, false, friendlyErr);
                 }
             }));
-            // Khi người dùng bấm Dừng, vẫn tạo các task còn lại để chúng
-            // tự thoát qua token và cập nhật đủ bộ đếm trạng thái.
-            if (!cancellationToken.IsCancellationRequested)
-                await Task.Delay(250);
         }
 
         await Task.WhenAll(requestTasks);
@@ -1731,21 +1727,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         AddLog($"Bắt đầu đăng ký EZ COM cho {targetPorts.Count} cổng...", "INFO");
         SnackbarMessageQueue.Enqueue($"Đang gửi lệnh đăng ký EZ COM cho {targetPorts.Count} cổng...");
 
-        int skipped = 0;
-        foreach (var port in targetPorts)
+        var activePorts = targetPorts.Where(port => port.Status == SimStatus.Active).ToList();
+        int skipped = targetPorts.Count - activePorts.Count;
+        foreach (var port in targetPorts.Except(activePorts))
         {
-            if (port.Status != SimStatus.Active)
-            {
-                AddLog($"[{port.PortName}] Bỏ qua vì SIM không ở trạng thái Active (hiện tại: {port.Status}).", "WARN");
-                skipped++;
-                continue;
-            }
+            AddLog($"[{port.PortName}] Bỏ qua vì SIM không ở trạng thái Active (hiện tại: {port.Status}).", "WARN");
+        }
 
-            _ = Task.Run(async () =>
+        await Task.WhenAll(activePorts.Select(async port =>
+        {
+            try
             {
                 Application.Current.Dispatcher.Invoke(() => port.LastMessageContent = "Đang gửi DK EZ...");
                 AddLog($"[{port.PortName}] Đang gửi lệnh DK EZ đến 888...", "INFO");
-                string result = await _modemService.SendSmsAsync(port.PortName, "888", "DK EZ");
+                string result = await _smsService.SendAsync(port.PortName, "888", "DK EZ", _lifetimeCts.Token);
                 if (result.Contains("ERROR") || result.Contains("TIMEOUT"))
                 {
                     Application.Current.Dispatcher.Invoke(() => port.LastMessageContent = $"Lỗi gửi DK EZ: {result}");
@@ -1756,9 +1751,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     Application.Current.Dispatcher.Invoke(() => port.LastMessageContent = "Đã gửi DK EZ, chờ 888 phản hồi...");
                     AddLog($"[{port.PortName}] Đã gửi DK EZ thành công, đang chờ phản hồi từ 888...", "SUCCESS");
                 }
-            });
-            await Task.Delay(200);
-        }
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{port.PortName}] Lỗi đăng ký EZ COM: {ex.Message}", "ERROR");
+            }
+        }));
         
         if (skipped > 0)
         {
@@ -3937,10 +3935,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 // Webhook rules
-                foreach (var rule in cfg2.WebhookRules.Where(r => r.Enabled))
-                {
-                    await WebhookService.TriggerAsync(rule, portName, simPhone, senderPhone, newOtp, existing.Content);
-                }
+                await Task.WhenAll(cfg2.WebhookRules
+                    .Where(r => r.Enabled)
+                    .Select(rule => WebhookService.TriggerAsync(
+                        rule, portName, simPhone, senderPhone, newOtp, existing.Content)));
 
                 // Global webhook URL (PushOtpToWeb)
                 if (!string.IsNullOrWhiteSpace(cfg2.OtpWebhookUrl))
@@ -4542,13 +4540,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         SnackbarMessageQueue.Enqueue($"Đang tiến hành vét tin nhắn kẹt trên {targetPorts.Count} cổng...");
         
-        using var sweepGate = new SemaphoreSlim(3, 3);
+        BackendConcurrency.ConfigureThreadPool(targetPorts.Count);
         var sweepTasks = targetPorts.Select(async port =>
         {
             if (SmsInProgressPorts.ContainsKey(port.PortName) || !IsPortReadyForOperation(port.PortName))
                 return;
 
-            await sweepGate.WaitAsync(_lifetimeCts.Token);
             try
             {
                 if (!TryGetCurrentSimSession(port.PortName, out var ccid, out var epoch, out _)) return;
@@ -4558,7 +4555,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { AddLog($"[{port.PortName}] Quét SMS lỗi: {ex.Message}", "ERROR"); }
-            finally { sweepGate.Release(); }
         }).ToList();
         await Task.WhenAll(sweepTasks);
     }
@@ -4639,12 +4635,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SnackbarMessageQueue.Enqueue($"Đang gửi lệnh khởi động lại cho {targetPorts.Count} cổng...");
         AddLog($"Bắt đầu khởi động lại {targetPorts.Count} cổng...");
 
-        foreach (var port in targetPorts)
+        await Task.WhenAll(targetPorts.Select(async port =>
         {
-            bool started = await ReloadPortSafelyAsync(port.PortName, "Đang khởi động lại và xác minh SIM...");
-            AddLog($"[{port.PortName}] {(started ? "Đã bắt đầu reload an toàn" : "Không thể reload")}",
-                started ? "SUCCESS" : "ERROR");
-        }
+            try
+            {
+                bool started = await ReloadPortSafelyAsync(port.PortName, "Đang khởi động lại và xác minh SIM...");
+                AddLog($"[{port.PortName}] {(started ? "Đã bắt đầu reload an toàn" : "Không thể reload")}",
+                    started ? "SUCCESS" : "ERROR");
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{port.PortName}] Khởi động lại lỗi: {ex.Message}", "ERROR");
+            }
+        }));
     }
 
     [RelayCommand]
@@ -4677,10 +4680,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SnackbarMessageQueue.Enqueue($"Đang gửi lệnh Fix Modem cho {targetPorts.Count} cổng...");
         AddLog($"Bắt đầu Fix Modem cho {targetPorts.Count} cổng...");
 
-        using var fixGate = new SemaphoreSlim(3, 3);
+        BackendConcurrency.ConfigureThreadPool(targetPorts.Count);
         var fixTasks = targetPorts.Select(async port =>
         {
-            await fixGate.WaitAsync(_lifetimeCts.Token);
             try
             {
                 if (!IsPortReadyForOperation(port.PortName)
@@ -4713,10 +4715,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             catch (Exception ex)
             {
                 AddLog($"[{port.PortName}] Lỗi Fix EC20: {ex.Message}", "ERROR");
-            }
-            finally
-            {
-                fixGate.Release();
             }
         }).ToList();
         await Task.WhenAll(fixTasks);
@@ -4798,11 +4796,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SnackbarMessageQueue.Enqueue($"Đang gửi lệnh xóa SMS rác cho {targetPorts.Count} cổng...");
         AddLog($"Bắt đầu xóa SMS rác cho {targetPorts.Count} cổng...");
 
-        foreach (var port in targetPorts)
+        await Task.WhenAll(targetPorts.Select(async port =>
         {
             if (!IsPortReadyForOperation(port.PortName)
                 || !TryGetCurrentSimSession(port.PortName, out var ccid, out var epoch, out _))
-                continue;
+                return;
             try
             {
                 string result = await _modemService.SendCommandAsync(port.PortName, "AT+CMGD=1,4");
@@ -4814,7 +4812,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 AddLog($"[{port.PortName}] Xóa SMS lỗi: {ex.Message}", "ERROR");
             }
-        }
+        }));
     }
 
     public async Task<string> CheckBalanceForPortAsync(string portName)
@@ -5175,10 +5173,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // Chỉ gửi lệnh cho các cổng đang Active — bỏ qua cổng lỗi/chờ SIM
                 var activePorts = GetPortsSnapshot().Where(p => p.Status == Models.SimStatus.Active).ToList();
-                foreach (var port in activePorts)
+                await Task.WhenAll(activePorts.Select(async port =>
                 {
                     string randomFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
-                    if (string.IsNullOrEmpty(randomFwd)) continue;
+                    if (string.IsNullOrEmpty(randomFwd)) return;
                     
                     string fwdDialType = randomFwd.StartsWith("+") ? "145" : "129";
                     AddLog($"[{port.PortName}] Đang thiết lập tự động chuyển hướng đến {randomFwd}...");
@@ -5196,8 +5194,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         AddLog($"[{port.PortName}] Thiết lập chuyển hướng thất bại: {res.Trim()}", "ERROR");
                     }
-                    await Task.Delay(500); // Tránh nghẽn lệnh
-                }
+                }));
             });
         }
         else if (AppSettings != null)
@@ -5206,12 +5203,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Task.Run(async () =>
             {
                 var activePorts = GetPortsSnapshot();
-                foreach (var port in activePorts)
+                await Task.WhenAll(activePorts.Select(async port =>
                 {
                     await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
                     Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
-                    await Task.Delay(500);
-                }
+                }));
             });
         }
     }
@@ -5229,11 +5225,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             AddLog("[Settings] Đang áp dụng chuyển hướng cuộc gọi...", "INFO");
             var activePorts = GetPortsSnapshot().Where(p => p.Status == Models.SimStatus.Active).ToList();
-            foreach (var port in activePorts)
+            await Task.WhenAll(activePorts.Select(async port =>
             {
-                if (!IsPortReadyForOperation(port.PortName)) continue;
+                if (!IsPortReadyForOperation(port.PortName)) return;
                 string rndFwd = GetRandomForwardNumber(AppSettings.ForwardPhoneNumber);
-                if (string.IsNullOrEmpty(rndFwd)) continue;
+                if (string.IsNullOrEmpty(rndFwd)) return;
                 string dialType = rndFwd.StartsWith("+") ? "145" : "129";
                 string res = await _modemService.SendCommandAsync(port.PortName, $"AT+CCFC=0,1,\"{rndFwd}\",{dialType}", timeoutMs: 5000);
                 if (res.Contains("OK"))
@@ -5241,19 +5237,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     Application.Current.Dispatcher.Invoke(() => { port.ForwardedTo = rndFwd; port.ForwardCount++; });
                     AddLog($"[{port.PortName}] Chuyển hướng → {rndFwd} OK", "SUCCESS");
                 }
-                await Task.Delay(300);
-            }
+            }));
         }
         else if (AppSettings != null && !AppSettings.EnableAutoCallForwarding)
         {
             var activePorts = GetPortsSnapshot().Where(p => p.Status == Models.SimStatus.Active).ToList();
-            foreach (var port in activePorts)
+            await Task.WhenAll(activePorts.Select(async port =>
             {
-                if (!IsPortReadyForOperation(port.PortName)) continue;
+                if (!IsPortReadyForOperation(port.PortName)) return;
                 await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
                 Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
-                await Task.Delay(300);
-            }
+            }));
         }
     }
 
@@ -6009,53 +6003,62 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            SnackbarMessageQueue.Enqueue($"Đang gửi {items.Count} SMS... (mỗi tin cách nhau 2 giây)");
+            SnackbarMessageQueue.Enqueue($"Đang gửi {items.Count} SMS song song trên {activePorts.Count} cổng...");
             AddLog($"[BULK SMS] Bắt đầu gửi {items.Count} tin nhắn từ file: {System.IO.Path.GetFileName(dialog.FileName)}");
 
-            int portIdx = 0;
             int sent = 0, failed = 0;
+            var portQueues = items
+                .Select((item, index) => new
+                {
+                    Item = item,
+                    PortName = activePorts[index % activePorts.Count]
+                })
+                .GroupBy(x => x.PortName, StringComparer.OrdinalIgnoreCase);
 
-            foreach (var (phone, content) in items)
+            await Task.WhenAll(portQueues.Select(async queue =>
             {
-                // Phân phối luân phiên giữa các cổng SIM
-                string sourcePort = activePorts[portIdx % activePorts.Count];
-                portIdx++;
-
-                try
+                // Một hàng đợi riêng cho mỗi COM: tuần tự trong cùng modem, song song giữa các modem.
+                foreach (var assignment in queue)
                 {
-                    await _modemService.SendCommandAsync(sourcePort, "AT+CSCS=\"GSM\"", 5000, true);
-                    await _modemService.SendCommandAsync(sourcePort, "AT+CSMP=17,167,0,0", 5000, true);
-
-                    string safeContent = RemoveDiacritics(content);
-                    string result = await _modemService.SendSmsAsync(sourcePort, phone, safeContent, timeoutMs: 30000);
-
-                    var port = Ports.FirstOrDefault(p => p.PortName == sourcePort);
-                    if (result.Contains("OK") || result.Contains("+CMGS:"))
+                    string sourcePort = assignment.PortName;
+                    var (phone, content) = assignment.Item;
+                    try
                     {
-                        AddLog($"[BULK SMS] [{sourcePort}] → {phone}: OK", "SUCCESS");
-                        if (port != null) { port.LastSmsResult = "Gửi thành công"; port.UpdateDisplayResult(CommandPanelTab); }
-                        sent++;
+                        string result = await _smsService.SendAsync(
+                            sourcePort, phone, content, _lifetimeCts.Token);
+                        var port = GetPortsSnapshot().FirstOrDefault(p => p.PortName == sourcePort);
+                        if (!result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                        {
+                            AddLog($"[BULK SMS] [{sourcePort}] → {phone}: OK", "SUCCESS");
+                            if (port != null)
+                                Application.Current.Dispatcher.Invoke(() =>
+                                {
+                                    port.LastSmsResult = "Gửi thành công";
+                                    port.UpdateDisplayResult(CommandPanelTab);
+                                });
+                            Interlocked.Increment(ref sent);
+                        }
+                        else
+                        {
+                            AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {result}", "ERROR");
+                            if (port != null)
+                                Application.Current.Dispatcher.Invoke(() =>
+                                {
+                                    port.LastSmsResult = result;
+                                    port.UpdateDisplayResult(CommandPanelTab);
+                                });
+                            Interlocked.Increment(ref failed);
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {result}", "ERROR");
-                        if (port != null) { port.LastSmsResult = result; port.UpdateDisplayResult(CommandPanelTab); }
-                        failed++;
+                        AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {ex.Message}", "ERROR");
+                        Interlocked.Increment(ref failed);
                     }
-                }
-                catch (Exception ex)
-                {
-                    AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {ex.Message}", "ERROR");
-                    failed++;
-                }
-                finally
-                {
-                    await _modemService.SendCommandAsync(sourcePort, "AT+CSCS=\"UCS2\"", 5000, true);
-                    await _modemService.SendCommandAsync(sourcePort, "AT+CSMP=17,167,0,8", 5000, true);
-                }
 
-                await Task.Delay(2000); // 2 giây giữa các tin
-            }
+                    await Task.Delay(2000, _lifetimeCts.Token);
+                }
+            }));
 
             AddLog($"[BULK SMS] Hoàn thành: {sent} thành công, {failed} thất bại.", sent > 0 ? "SUCCESS" : "ERROR");
             SnackbarMessageQueue.Enqueue($"Gửi xong: {sent}/{items.Count} tin nhắn thành công.");
@@ -6651,13 +6654,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        foreach (var p in targetPorts)
+        var busyPorts = targetPorts.Where(p => SmsInProgressPorts.ContainsKey(p.PortName)).ToList();
+        foreach (var p in busyPorts)
         {
-            if (SmsInProgressPorts.ContainsKey(p.PortName))
-            {
-                SnackbarMessageQueue.Enqueue("Đang có tác vụ chạy trên cổng " + p.PortName + ". Vui lòng đợi.");
-                return;
-            }
+            AddLog($"[{p.PortName}] Bỏ qua lệnh {CommandPanelTab} vì COM đang bận.", "WARN");
+        }
+        targetPorts = targetPorts.Except(busyPorts).ToList();
+        if (targetPorts.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Tất cả cổng được chọn đang bận.");
+            return;
         }
 
         foreach (var p in targetPorts)
@@ -6669,18 +6675,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            var tasks = new List<Task>();
-            foreach (var p in targetPorts)
+            await Task.WhenAll(targetPorts.Select(async p =>
             {
-                tasks.Add(Task.Run(async () =>
+                if (!_lifetimeCts.Token.IsCancellationRequested)
                 {
-                    if (!_lifetimeCts.Token.IsCancellationRequested)
-                    {
-                        await ExecuteCommandQueueItemAsync(p.PortName, singleItem);
-                    }
-                }));
-            }
-            await Task.WhenAll(tasks);
+                    await ExecuteCommandQueueItemAsync(p.PortName, singleItem);
+                }
+            }));
             SnackbarMessageQueue.Enqueue($"Đã chạy xong lệnh {CommandPanelTab}.");
         }
         finally
@@ -6745,13 +6746,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        foreach (var p in targetPorts)
+        var busyPorts = targetPorts.Where(p => SmsInProgressPorts.ContainsKey(p.PortName)).ToList();
+        foreach (var p in busyPorts)
         {
-            if (SmsInProgressPorts.ContainsKey(p.PortName))
-            {
-                SnackbarMessageQueue.Enqueue("Đang có tác vụ chạy trên cổng " + p.PortName + ". Vui lòng đợi.");
-                return;
-            }
+            AddLog($"[{p.PortName}] Bỏ qua kịch bản vì COM đang bận.", "WARN");
+        }
+        targetPorts = targetPorts.Except(busyPorts).ToList();
+        if (targetPorts.Count == 0)
+        {
+            SnackbarMessageQueue.Enqueue("Tất cả cổng được chọn đang bận.");
+            return;
         }
 
         foreach (var p in targetPorts)
@@ -6763,19 +6767,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            var tasks = new List<Task>();
-            foreach (var p in targetPorts)
+            await Task.WhenAll(targetPorts.Select(async p =>
             {
-                tasks.Add(Task.Run(async () =>
+                foreach (var item in items)
                 {
-                    foreach (var item in items)
-                    {
-                        if (_lifetimeCts.Token.IsCancellationRequested) break;
-                        await ExecuteCommandQueueItemAsync(p.PortName, item);
-                    }
-                }));
-            }
-            await Task.WhenAll(tasks);
+                    if (_lifetimeCts.Token.IsCancellationRequested) break;
+                    await ExecuteCommandQueueItemAsync(p.PortName, item);
+                }
+            }));
             SnackbarMessageQueue.Enqueue("Đã chạy xong kịch bản.");
         }
         finally

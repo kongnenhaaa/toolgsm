@@ -129,9 +129,15 @@ public sealed class SmsImplicitMultipartAssembler
         public List<string> Indices { get; } = new();
     }
 
-    private readonly object _gate = new();
-    private readonly Dictionary<string, Buffer> _buffers = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, DateTimeOffset> _processedIndices = new(StringComparer.Ordinal);
+    private sealed class PortState
+    {
+        public object Gate { get; } = new();
+        public Dictionary<string, Buffer> Buffers { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, DateTimeOffset> ProcessedIndices { get; } = new(StringComparer.Ordinal);
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, PortState> _ports =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeSpan _timeout;
 
     public SmsImplicitMultipartAssembler(TimeSpan? timeout = null) =>
@@ -144,20 +150,20 @@ public sealed class SmsImplicitMultipartAssembler
         if (!int.TryParse(index, out int numericIndex) || string.IsNullOrWhiteSpace(port))
             return new(SmsAssemblyStatus.Invalid, null, Array.Empty<string>());
 
-        string key = $"{port}\u001f{sender}";
-        lock (_gate)
+        PortState state = _ports.GetOrAdd(port, static _ => new PortState());
+        string key = sender;
+        lock (state.Gate)
         {
-            RemoveExpiredCore(timestamp);
-            string processedKey = $"{port}\u001f{index}";
-            if (_processedIndices.ContainsKey(processedKey))
+            RemoveExpiredCore(state, timestamp);
+            if (state.ProcessedIndices.ContainsKey(index))
                 return new(SmsAssemblyStatus.Duplicate, null, Array.Empty<string>());
-            if (!_buffers.TryGetValue(key, out var buffer))
+            if (!state.Buffers.TryGetValue(key, out var buffer))
             {
                 if (!fullSegment) return new(SmsAssemblyStatus.Invalid, null, Array.Empty<string>());
                 buffer = new Buffer { LastIndex = numericIndex, LastUpdated = timestamp };
                 buffer.Parts.Add(content);
                 buffer.Indices.Add(index);
-                _buffers[key] = buffer;
+                state.Buffers[key] = buffer;
                 return new(SmsAssemblyStatus.Waiting, null, Array.Empty<string>());
             }
 
@@ -174,33 +180,36 @@ public sealed class SmsImplicitMultipartAssembler
 
             string complete = string.Concat(buffer.Parts);
             string[] indices = buffer.Indices.ToArray();
-            foreach (string completedIndex in indices) _processedIndices[$"{port}\u001f{completedIndex}"] = timestamp;
-            _buffers.Remove(key);
+            foreach (string completedIndex in indices) state.ProcessedIndices[completedIndex] = timestamp;
+            state.Buffers.Remove(key);
             return new(SmsAssemblyStatus.Completed, complete, indices);
         }
     }
 
     public int RemoveExpired(DateTimeOffset? now = null)
     {
-        lock (_gate) return RemoveExpiredCore(now ?? DateTimeOffset.UtcNow);
-    }
-
-    public void ClearPort(string port)
-    {
-        lock (_gate)
+        DateTimeOffset timestamp = now ?? DateTimeOffset.UtcNow;
+        int removed = 0;
+        PortState[] states = _ports.Values.ToArray();
+        Parallel.ForEach(states, new ParallelOptions
         {
-            string prefix = port + "\u001f";
-            foreach (string key in _buffers.Keys.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToArray()) _buffers.Remove(key);
-            foreach (string key in _processedIndices.Keys.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToArray()) _processedIndices.Remove(key);
-        }
+            MaxDegreeOfParallelism = Math.Max(1, states.Length)
+        }, state =>
+        {
+            lock (state.Gate)
+                Interlocked.Add(ref removed, RemoveExpiredCore(state, timestamp));
+        });
+        return removed;
     }
 
-    private int RemoveExpiredCore(DateTimeOffset now)
+    public void ClearPort(string port) => _ports.TryRemove(port, out _);
+
+    private int RemoveExpiredCore(PortState state, DateTimeOffset now)
     {
-        string[] expired = _buffers.Where(x => now - x.Value.LastUpdated > _timeout).Select(x => x.Key).ToArray();
-        foreach (string key in expired) _buffers.Remove(key);
-        string[] processed = _processedIndices.Where(x => now - x.Value > _timeout).Select(x => x.Key).ToArray();
-        foreach (string key in processed) _processedIndices.Remove(key);
+        string[] expired = state.Buffers.Where(x => now - x.Value.LastUpdated > _timeout).Select(x => x.Key).ToArray();
+        foreach (string key in expired) state.Buffers.Remove(key);
+        string[] processed = state.ProcessedIndices.Where(x => now - x.Value > _timeout).Select(x => x.Key).ToArray();
+        foreach (string key in processed) state.ProcessedIndices.Remove(key);
         return expired.Length;
     }
 }
@@ -217,26 +226,31 @@ public sealed class SmsMultipartAssembler
         public Dictionary<int, string> Parts { get; } = new();
         public HashSet<string> Indices { get; } = new(StringComparer.Ordinal);
     }
-    private readonly object _gate = new();
-    private readonly Dictionary<string, Buffer> _buffers = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, DateTimeOffset> _processedIndices = new(StringComparer.Ordinal);
+    private sealed class PortState
+    {
+        public object Gate { get; } = new();
+        public Dictionary<string, Buffer> Buffers { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, DateTimeOffset> ProcessedIndices { get; } = new(StringComparer.Ordinal);
+    }
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, PortState> _ports =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly TimeSpan _timeout;
     public SmsMultipartAssembler(TimeSpan? timeout = null) => _timeout = timeout ?? TimeSpan.FromMinutes(10);
 
     public SmsAssemblyResult Add(string port, string sender, SmsConcatInfo concat, string content, string index, DateTimeOffset? now = null)
     {
         var timestamp = now ?? DateTimeOffset.UtcNow;
-        lock (_gate)
+        if (string.IsNullOrWhiteSpace(port) || concat.Total is < 2 or > 255 || concat.Sequence < 1 || concat.Sequence > concat.Total)
+            return new(SmsAssemblyStatus.Invalid, null, Array.Empty<string>());
+        PortState state = _ports.GetOrAdd(port, static _ => new PortState());
+        lock (state.Gate)
         {
-            RemoveExpiredCore(timestamp);
-            string processedKey = $"{port}\u001f{index}";
-            if (!string.IsNullOrWhiteSpace(index) && _processedIndices.ContainsKey(processedKey))
+            RemoveExpiredCore(state, timestamp);
+            if (!string.IsNullOrWhiteSpace(index) && state.ProcessedIndices.ContainsKey(index))
                 return new(SmsAssemblyStatus.Duplicate, null, Array.Empty<string>());
-            if (string.IsNullOrWhiteSpace(port) || concat.Total is < 2 or > 255 || concat.Sequence < 1 || concat.Sequence > concat.Total)
-                return new(SmsAssemblyStatus.Invalid, null, Array.Empty<string>());
-            string key = $"{port}\u001f{sender}\u001f{concat.Reference}\u001f{concat.Total}";
-            if (!_buffers.TryGetValue(key, out var buffer))
-                _buffers[key] = buffer = new Buffer { Total = concat.Total, LastUpdated = timestamp };
+            string key = $"{sender}\u001f{concat.Reference}\u001f{concat.Total}";
+            if (!state.Buffers.TryGetValue(key, out var buffer))
+                state.Buffers[key] = buffer = new Buffer { Total = concat.Total, LastUpdated = timestamp };
             if (buffer.Parts.TryGetValue(concat.Sequence, out string? old))
             {
                 if (!string.Equals(old, content, StringComparison.Ordinal)) return new(SmsAssemblyStatus.Conflict, null, Array.Empty<string>());
@@ -251,28 +265,34 @@ public sealed class SmsMultipartAssembler
                 return new(SmsAssemblyStatus.Waiting, null, Array.Empty<string>());
             string complete = string.Concat(Enumerable.Range(1, buffer.Total).Select(i => buffer.Parts[i]));
             string[] indices = buffer.Indices.ToArray();
-            foreach (string completedIndex in indices) _processedIndices[$"{port}\u001f{completedIndex}"] = timestamp;
-            _buffers.Remove(key);
+            foreach (string completedIndex in indices) state.ProcessedIndices[completedIndex] = timestamp;
+            state.Buffers.Remove(key);
             return new(SmsAssemblyStatus.Completed, complete, indices);
         }
     }
 
-    public int RemoveExpired(DateTimeOffset? now = null) { lock (_gate) return RemoveExpiredCore(now ?? DateTimeOffset.UtcNow); }
-    public void ClearPort(string port)
+    public int RemoveExpired(DateTimeOffset? now = null)
     {
-        lock (_gate)
+        DateTimeOffset timestamp = now ?? DateTimeOffset.UtcNow;
+        int removed = 0;
+        PortState[] states = _ports.Values.ToArray();
+        Parallel.ForEach(states, new ParallelOptions
         {
-            string prefix = port + "\u001f";
-            foreach (string key in _buffers.Keys.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToArray()) _buffers.Remove(key);
-            foreach (string key in _processedIndices.Keys.Where(x => x.StartsWith(prefix, StringComparison.Ordinal)).ToArray()) _processedIndices.Remove(key);
-        }
+            MaxDegreeOfParallelism = Math.Max(1, states.Length)
+        }, state =>
+        {
+            lock (state.Gate)
+                Interlocked.Add(ref removed, RemoveExpiredCore(state, timestamp));
+        });
+        return removed;
     }
-    private int RemoveExpiredCore(DateTimeOffset now)
+    public void ClearPort(string port) => _ports.TryRemove(port, out _);
+    private int RemoveExpiredCore(PortState state, DateTimeOffset now)
     {
-        var keys = _buffers.Where(x => now - x.Value.LastUpdated > _timeout).Select(x => x.Key).ToArray();
-        foreach (string key in keys) _buffers.Remove(key);
-        var processed = _processedIndices.Where(x => now - x.Value > _timeout).Select(x => x.Key).ToArray();
-        foreach (string key in processed) _processedIndices.Remove(key);
+        var keys = state.Buffers.Where(x => now - x.Value.LastUpdated > _timeout).Select(x => x.Key).ToArray();
+        foreach (string key in keys) state.Buffers.Remove(key);
+        var processed = state.ProcessedIndices.Where(x => now - x.Value > _timeout).Select(x => x.Key).ToArray();
+        foreach (string key in processed) state.ProcessedIndices.Remove(key);
         return keys.Length;
     }
 }

@@ -11,6 +11,8 @@ namespace gsm
     {
         public App()
         {
+            BackendConcurrency.ConfigureThreadPool();
+
             // FIX: Đặt CurrentDirectory về thư mục chứa file exe để BlazorWebView luôn tìm thấy wwwroot
             var baseDir = System.AppContext.BaseDirectory;
             if (!string.IsNullOrEmpty(baseDir))

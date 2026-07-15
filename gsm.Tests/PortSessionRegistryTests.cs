@@ -8,6 +8,22 @@ public sealed class PortSessionRegistryTests
     private const string CcidB = "89840987654321098765";
 
     [Fact]
+    public void MoreThanSixtyFourPorts_CanStartSessionsInParallel()
+    {
+        using var registry = new PortSessionRegistry();
+        const int portCount = BackendConcurrency.BaselineConcurrentPorts * 2;
+
+        Parallel.ForEach(Enumerable.Range(1, portCount), i =>
+            registry.Begin($"COM{i}", $"8984{i:D16}"));
+
+        Assert.All(Enumerable.Range(1, portCount), i =>
+        {
+            Assert.True(registry.TryGet($"COM{i}", out PortSessionLease session));
+            Assert.Equal($"8984{i:D16}", session.Ccid);
+        });
+    }
+
+    [Fact]
     public void Begin_NewSessionOnSameCom_CancelsOldLeaseAndAdvancesEpoch()
     {
         using var registry = new PortSessionRegistry();

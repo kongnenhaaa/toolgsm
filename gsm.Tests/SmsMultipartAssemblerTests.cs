@@ -6,6 +6,21 @@ namespace gsm.Tests;
 public class SmsMultipartAssemblerTests
 {
     [Fact]
+    public async Task MoreThanSixtyFourPorts_AssembleWithoutCrossPortBlocking()
+    {
+        var assembler = new SmsMultipartAssembler();
+        const int portCount = BackendConcurrency.BaselineConcurrentPorts * 2;
+
+        SmsAssemblyResult[] results = await Task.WhenAll(Enumerable.Range(1, portCount).Select(i => Task.Run(() =>
+        {
+            assembler.Add($"COM{i}", "ZALO", new(i, 2, 1), $"A{i}", "1");
+            return assembler.Add($"COM{i}", "ZALO", new(i, 2, 2), $"B{i}", "2");
+        })));
+
+        Assert.All(results, result => Assert.Equal(SmsAssemblyStatus.Completed, result.Status));
+    }
+
+    [Fact]
     public void ShortMultilineSms_IsNotCutToLongestLine()
     {
         string raw = "+CMGR: \"REC UNREAD\",\"ZALO\"\r\nDong dau ngan\r\nMa OTP cua ban la 123456\r\nDong cuoi\r\nOK\r\n";

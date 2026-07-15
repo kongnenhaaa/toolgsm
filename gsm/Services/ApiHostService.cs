@@ -57,7 +57,11 @@ public class ApiHostService
                 Ccid = p.Serial,
                 Otp = p.Otp,
                 LastContent = p.LastMessageContent,
-                UpdatedAt = p.UpdatedAt
+                UpdatedAt = p.UpdatedAt,
+                ModemManufacturer = p.ModemManufacturer,
+                ModemModel = p.ModemModel,
+                ModemFirmware = p.ModemFirmware,
+                ModemCapabilities = p.ModemCapabilities
             }).ToList();
 
             return Results.Json(new ApiPortsResponse

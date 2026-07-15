@@ -164,7 +164,11 @@ public class ApiServerService
             expiry   = p.ExpiryDate,
             otp      = p.Otp,
             forwardTo = p.ForwardedTo,
-            updatedAt = p.UpdatedAt
+            updatedAt = p.UpdatedAt,
+            modemManufacturer = p.ModemManufacturer,
+            modemModel = p.ModemModel,
+            modemFirmware = p.ModemFirmware,
+            modemCapabilities = p.ModemCapabilities
         }).ToList();
     }
 

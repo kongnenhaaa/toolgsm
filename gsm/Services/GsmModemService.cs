@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using gsm.Models;
 
 namespace gsm.Services;
 
@@ -29,6 +30,7 @@ public interface IGsmModemService
     Task ReloadSimAsync(string portName);
     Task<bool> CallWithAudioAsync(string portName, string phoneNumber, string? wavPath, int durationSeconds = 30, bool record = false, CancellationToken ct = default);
     bool IsCallInProgress(string portName);
+    QuectelModemProfile? GetModemProfile(string portName);
 
     Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
 
@@ -64,6 +66,7 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, int> _connectionErrors = new();
     private readonly ConcurrentDictionary<string, DateTime> _sleepingPorts = new();
     private readonly ConcurrentDictionary<string, string> _portVendors = new();
+    private readonly ConcurrentDictionary<string, QuectelModemProfile> _modemProfiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SerialDataReceivedEventHandler> _dataReceivedHandlers = new();
     private readonly ConcurrentDictionary<string, bool> _isDownloading = new();
     private readonly ConcurrentDictionary<string, bool> _activeCalls = new();
@@ -84,6 +87,9 @@ public class GsmModemService : IGsmModemService
     public bool IsCallInProgress(string portName) =>
         _outgoingCallOperations.ContainsKey(portName)
         || (_activeCalls.TryGetValue(portName, out bool active) && active);
+
+    public QuectelModemProfile? GetModemProfile(string portName) =>
+        _modemProfiles.TryGetValue(portName, out var profile) ? profile : null;
 
     // ===================== SMS DECODE + MULTIPART =====================
     static readonly Regex OtpRegex = new(
@@ -163,8 +169,11 @@ public class GsmModemService : IGsmModemService
     {
         // Quectel EC20/EC2x exposes uid, segment and total through QCMGR in text mode.
         // Fall back to standard CMGR for older firmware and non-Quectel modems.
-        string response = await SendCommandAsync(port, $"AT+QCMGR={msgIndex}", 15000, silent: true);
-        if (IsCompleteStoredSmsResponse(response, "+QCMGR:")) return response;
+        if (GetModemProfile(port)?.Supports(ModemCapability.QuectelStoredSms) == true)
+        {
+            string response = await SendCommandAsync(port, $"AT+QCMGR={msgIndex}", 15000, silent: true);
+            if (IsCompleteStoredSmsResponse(response, "+QCMGR:")) return response;
+        }
         return await SendCommandAsync(port, $"AT+CMGR={msgIndex}", 25000, silent: true);
     }
 
@@ -729,6 +738,64 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    private async Task<QuectelModemProfile> DetectModemProfileAsync(string portName, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        string manufacturer = await SendCommandAsync(portName, "AT+CGMI", 5000, silent: true);
+        string model = await SendCommandAsync(portName, "AT+CGMM", 5000, silent: true);
+        string firmware = await SendCommandAsync(portName, "AT+CGMR", 5000, silent: true);
+        if (IsCommandFailure(manufacturer) || IsCommandFailure(model))
+        {
+            string ati = await SendCommandAsync(portName, "ATI", 5000, silent: true);
+            if (IsCommandFailure(manufacturer) && ati.Contains("QUECTEL", StringComparison.OrdinalIgnoreCase))
+                manufacturer = "Quectel";
+            if (IsCommandFailure(model))
+            {
+                Match match = Regex.Match(ati, @"\b((?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,})\b", RegexOptions.IgnoreCase);
+                if (match.Success) model = match.Groups[1].Value;
+            }
+            if (IsCommandFailure(firmware)) firmware = ati;
+        }
+
+        QuectelModemProfile profile = QuectelModemProfile.FromIdentity(manufacturer, model, firmware);
+        if (profile.IsQuectel)
+        {
+            ModemCapability detected = profile.Capabilities;
+            var probes = new (string Command, ModemCapability Capability)[]
+            {
+                ("AT+QCFG=\"nwscanmode\"", ModemCapability.NetworkScanConfig),
+                ("AT+QCFG=\"ims\"", ModemCapability.ImsConfig),
+                ("AT+QSIMSTAT?", ModemCapability.SimStatusUrc),
+                ("AT+QURCCFG?", ModemCapability.UrcPortRouting),
+                ("AT+QCMGR=?", ModemCapability.QuectelStoredSms),
+                ("AT+QAUDRD=?", ModemCapability.AudioRecord),
+                ("AT+QHTTPCFG=?", ModemCapability.HttpData),
+                ("AT+QTONEDET=?", ModemCapability.DtmfDetection)
+            };
+            foreach ((string command, ModemCapability capability) in probes)
+            {
+                ct.ThrowIfCancellationRequested();
+                string response = await SendCommandAsync(portName, command, 3000, silent: true);
+                if (!IsCommandFailure(response)) detected |= capability;
+            }
+            profile = profile with { Capabilities = detected };
+        }
+
+        _portVendors[portName] = profile.Manufacturer.ToUpperInvariant();
+        _modemProfiles[portName] = profile;
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = $"[MODEM_PROFILE] manufacturer={profile.Manufacturer}; model={profile.Model}; firmware={profile.Firmware}; capabilities={profile.CapabilityText}"
+        });
+        return profile;
+    }
+
+    private static bool IsCommandFailure(string response) =>
+        string.IsNullOrWhiteSpace(response)
+        || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("Timeout", StringComparison.OrdinalIgnoreCase);
+
     private async Task InitializeModemCoreAsync(string portName, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -812,23 +879,28 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CEREG=2", 10000, silent: true);
         await SendCommandAsync(portName, "AT+CRC=1", 10000, silent: true);
         
-        // Lấy hãng sản xuất (Vendor)
-        string cgmi = await SendCommandAsync(portName, "AT+CGMI", 10000, silent: true);
-        string vendor = cgmi.ToUpper();
-        _portVendors[portName] = vendor;
+        QuectelModemProfile profile = await DetectModemProfileAsync(portName, ct);
 
-        if (vendor.Contains("QUECTEL"))
+        if (profile.IsQuectel)
         {
-            await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 10000, silent: true); // Định tuyến URC đúng cổng UART1 để nhận +CUSD và +CMTI
-            await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true); // 0 = Auto (2G/3G/4G)
-            await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 10000, silent: true); // Ưu tiên 4G -> 3G -> 2G
+            if (profile.Supports(ModemCapability.UrcPortRouting))
+                await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 10000, silent: true);
+            if (profile.Supports(ModemCapability.NetworkScanConfig))
+            {
+                await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 10000, silent: true);
+                await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 10000, silent: true);
+            }
             var settings = gsm.Services.SettingsService.Current;
             int imsVal = (settings != null && settings.EnableVolte) ? 1 : 0;
-            await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 10000, silent: true); // Cấu hình VoLTE theo Settings
-            await SendCommandAsync(portName, "AT+QSIMDET=1,0", 10000, silent: true); // Bật phát hiện chân SIM vật lý
-            await SendCommandAsync(portName, "AT+QSIMSTAT=1", 10000, silent: true); // Bật báo cáo trạng thái SIM URC
+            if (profile.Supports(ModemCapability.ImsConfig))
+                await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 10000, silent: true);
+            if (profile.Supports(ModemCapability.SimHotplugConfig))
+                await SendCommandAsync(portName, "AT+QSIMDET=1,0", 10000, silent: true);
+            if (profile.Supports(ModemCapability.SimStatusUrc))
+                await SendCommandAsync(portName, "AT+QSIMSTAT=1", 10000, silent: true);
             await SendCommandAsync(portName, "AT&W", 10000, silent: true); // Lưu cấu hình vào bộ nhớ profile modem
-            await SendCommandAsync(portName, "AT+QTONEDET=1", 30000); // Bật bộ phát hiện âm tần DTMF
+            if (profile.Supports(ModemCapability.DtmfDetection))
+                await SendCommandAsync(portName, "AT+QTONEDET=1", 30000);
         }
         
         string imei = await SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
@@ -860,7 +932,9 @@ public class GsmModemService : IGsmModemService
             ccid = await ReadCcidWithFallbackAsync(portName, 5000, false);
             if (ccid.Contains("ERROR") || string.IsNullOrWhiteSpace(ccid))
             {
-                string qsim = await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true);
+                string qsim = profile.Supports(ModemCapability.SimStatusUrc)
+                    ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
+                    : string.Empty;
                 bool physicallyPresent = initialCpin.Contains("READY", StringComparison.OrdinalIgnoreCase)
                                       || Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
                 // Một số EC20 trả SIM failure/QSIMSTAT=0 khi CFUN=4 dù SIM đã cắm sẵn.
@@ -957,19 +1031,27 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CEREG=2", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CRC=1", 5000, silent: true);
         
-        string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
-        if (vendor.Contains("QUECTEL"))
+        QuectelModemProfile profile = await DetectModemProfileAsync(portName, ct);
+        if (profile.IsQuectel)
         {
-            await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true);
-            await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true);
-            await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 5000, silent: true);
+            if (profile.Supports(ModemCapability.UrcPortRouting))
+                await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true);
+            if (profile.Supports(ModemCapability.NetworkScanConfig))
+            {
+                await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true);
+                await SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 5000, silent: true);
+            }
             var settings = gsm.Services.SettingsService.Current;
             int imsVal = (settings != null && settings.EnableVolte) ? 1 : 0;
-            await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 5000, silent: true); // Cấu hình VoLTE theo Settings
-            await SendCommandAsync(portName, "AT+QSIMDET=1,0", 5000, silent: true); // Bật phát hiện SIM vật lý
-            await SendCommandAsync(portName, "AT+QSIMSTAT=1", 5000, silent: true); // Bật báo cáo trạng thái SIM URC
+            if (profile.Supports(ModemCapability.ImsConfig))
+                await SendCommandAsync(portName, $"AT+QCFG=\"ims\",{imsVal}", 5000, silent: true);
+            if (profile.Supports(ModemCapability.SimHotplugConfig))
+                await SendCommandAsync(portName, "AT+QSIMDET=1,0", 5000, silent: true);
+            if (profile.Supports(ModemCapability.SimStatusUrc))
+                await SendCommandAsync(portName, "AT+QSIMSTAT=1", 5000, silent: true);
             await SendCommandAsync(portName, "AT&W", 5000, silent: true);
-            await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true); // Bật bộ phát hiện âm tần DTMF
+            if (profile.Supports(ModemCapability.DtmfDetection))
+                await SendCommandAsync(portName, "AT+QTONEDET=1", 5000, silent: true);
         } 
         string cnmi = await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 5000, silent: true);
         if (cnmi.Contains("ERROR")) 
@@ -1030,7 +1112,9 @@ public class GsmModemService : IGsmModemService
                 // Quectel sometimes returns generic ERROR when SIM is removed if CMEE=2 drops
                 if (!isSimPresent && !isSimRemoved && cpin.Contains("ERROR"))
                 {
-                    string qsimstat = await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true);
+                    string qsimstat = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
+                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
+                        : string.Empty;
                     // QSIMSTAT=0 ở CFUN=4 không chứng minh SIM đã bị rút trên EC20C.
                     // Chỉ cập nhật PRESENT khi cảm biến báo chắc chắn; removal thật do URC
                     // hoặc CPIN NOT INSERTED đảm nhiệm.
@@ -1139,7 +1223,9 @@ public class GsmModemService : IGsmModemService
                 }
                 if (!hasSim)
                 {
-                    string qsim = await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true);
+                    string qsim = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
+                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
+                        : string.Empty;
                     if (!IsCurrentLoop()) break;
                     hasSim = Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
 
@@ -1156,7 +1242,9 @@ public class GsmModemService : IGsmModemService
                             hasSim = enabledCpin.Contains("READY", StringComparison.OrdinalIgnoreCase);
                             if (!hasSim)
                             {
-                                string enabledQsim = await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true);
+                                string enabledQsim = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
+                                    ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
+                                    : string.Empty;
                                 hasSim = Regex.IsMatch(enabledQsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
                             }
                         }
@@ -1436,8 +1524,8 @@ public class GsmModemService : IGsmModemService
                     await SendCommandAsync(portName, "AT+CFUN=1", 12000, silent: true);
                     try { await Task.Delay(1500, token); } catch { break; }
                     
-                    string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
-                    if (vendor.Contains("QUECTEL"))
+                    QuectelModemProfile? profile = GetModemProfile(portName);
+                    if (profile?.Supports(ModemCapability.NetworkScanConfig) == true)
                     {
                         // Đặt lại chuẩn ưu tiên sau khi AT+COPS=0 vì một số FW Qualcomm reset giá trị này
                         await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 8000, silent: true);
@@ -1983,7 +2071,8 @@ public class GsmModemService : IGsmModemService
                 if (match.Success)
                 {
                     string ussdData = match.Value;
-                    if (_commandTcs.TryGetValue(portName, out var t) && t.Task.AsyncState is string c && c.StartsWith("AT+CUSD"))
+                    if (_commandTcs.TryGetValue(portName, out var t) && t.Task.AsyncState is string c
+                        && c.StartsWith("AT+CUSD=1", StringComparison.OrdinalIgnoreCase))
                     {
                         t.TrySetResult(currentData.Substring(0, match.Index + match.Length).Trim());
                         buffer.Remove(0, match.Index + match.Length);
@@ -2006,7 +2095,8 @@ public class GsmModemService : IGsmModemService
                 var match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?|>\s*|\r?\nCONNECT\r?\n?)");
                 if (match.Success)
                 {
-                    if (tcs.Task.AsyncState is string cmd && cmd.StartsWith("AT+CUSD"))
+                    if (tcs.Task.AsyncState is string cmd
+                        && cmd.StartsWith("AT+CUSD=1", StringComparison.OrdinalIgnoreCase))
                     {
                         // Đợi USSD từ tổng đài. Nếu chỉ mới có OK/phản hồi trung gian mà chưa có +CUSD: và chưa có lỗi, thoát ra tiếp tục đợi
                         if (!currentData.Contains("+CUSD:") && 
@@ -2101,6 +2191,7 @@ public class GsmModemService : IGsmModemService
         _connectionErrors.Clear();
         _sleepingPorts.Clear();
         _portVendors.Clear();
+        _modemProfiles.Clear();
         _pollingCts.Clear();
         _keepAliveCts.Clear();
         _simMonitorCts.Clear();
@@ -2153,6 +2244,7 @@ public class GsmModemService : IGsmModemService
             _isDownloading.TryRemove(portName, out _);
             _sleepingPorts.TryRemove(portName, out _);
             _portVendors.TryRemove(portName, out _);
+            _modemProfiles.TryRemove(portName, out _);
 
             if (_pollingCts.TryRemove(portName, out var pCts))
             {
@@ -2217,7 +2309,10 @@ public class GsmModemService : IGsmModemService
             _simStackDisabledByTool[portName] = false;
 
         // Kéo dài thời gian chờ cho các lệnh đặc biệt
-        if (command.StartsWith("AT+CUSD")) timeoutMs = 45000;
+        // CUSD=1 opens an asynchronous network session. CUSD=2 only closes it and
+        // must complete immediately on OK instead of waiting for a +CUSD payload.
+        if (command.StartsWith("AT+CUSD=1", StringComparison.OrdinalIgnoreCase))
+            timeoutMs = Math.Max(timeoutMs, 30000);
         else if (command.StartsWith("AT+CMGR")) timeoutMs = 25000;
 
         if (!EnsurePortOpen(portName, out var sp) || sp == null)
@@ -2588,7 +2683,8 @@ public class GsmModemService : IGsmModemService
             // 2. Đảm bảo network scan mode = AUTO để CSFB (LTE→3G/2G fallback) hoạt động
             //    AT+QCFG="nwscanmode",0 = AUTO (cho phép fallback xuống 2G/3G khi gọi)
             //    Không cần nếu đã AUTO, nhưng gọi lại không hại
-            await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0", 3000, silent: true);
+            if (GetModemProfile(portName)?.Supports(ModemCapability.NetworkScanConfig) == true)
+                await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0", 3000, silent: true);
 
             // 3. Kiểm tra đăng ký mạng — EC20C dùng AT+CEREG (LTE EPS) và AT+CREG (CS domain)
             //    Cần cả hai: CEREG=1 = LTE data OK, CREG=1 = CS voice OK (cho CSFB)
@@ -3067,7 +3163,8 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đã nhấc máy từ {session.Caller}" });
 
             var cfg = gsm.Services.SettingsService.Current;
-            if (cfg?.RecordIncoming == true)
+            if (cfg?.RecordIncoming == true
+                && GetModemProfile(portName)?.Supports(ModemCapability.AudioRecord) == true)
             {
                 // 2. Bắt đầu ghi âm (Quectel)
                 string remoteName = $"in_{DateTime.Now:HHmmss}.wav";

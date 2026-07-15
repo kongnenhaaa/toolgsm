@@ -29,6 +29,15 @@ Mọi operation bắt đầu bằng `PortSessionLease`. Kết quả chỉ hợp 
   lệnh trong một kịch bản) vẫn giữ đúng thứ tự; đây là tuần tự bắt buộc, không phải nút
   thắt toàn cục.
 
+## Auto-detect Quectel theo tung COM
+
+- Moi lan mo/reload COM, backend doc `CGMI`, `CGMM`, `CGMR` va fallback `ATI` de tao profile rieng.
+- Cac capability `QCFG`, `QSIMSTAT`, `QSIMDET`, `QCMGR`, `QAUDRD`, `QHTTP`, `QTONEDET`
+  duoc probe va luu theo port; khong dung profile cua COM nay cho COM khac.
+- SMS, USSD va call co ban tiep tuc dung lenh 3GPP chuan tren modem khong ho tro lenh Quectel.
+  Tinh nang rieng cua tung model chi chay khi profile bao ho tro.
+- API `/api/ports` tra them manufacturer, model, firmware va capabilities de doi chieu thiet bi that.
+
 ## Test doubles
 
 Project `gsm.Tests` dùng `FakeGsmModemService`, không mở serial port và không cần EC20C.

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using gsm.Models;
 
 namespace gsm.Services;
 
@@ -18,6 +19,7 @@ public sealed class GsmUssdService : IGsmUssdService
     private readonly IGsmOperationDelay _delay;
     private readonly ConcurrentDictionary<string, DateTime> _lastByPort = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _portLocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _ussdSupported = new(StringComparer.OrdinalIgnoreCase);
 
     public GsmUssdService(
         IGsmModemService modem,
@@ -52,41 +54,56 @@ public sealed class GsmUssdService : IGsmUssdService
                 if (!IsCurrent(session)) return SessionChangedError;
                 await ThrottleAsync(portName, token);
 
-                string? preflight = await PreparePortAsync(session, token);
+                string? preflight = await PreparePortAsync(session, attempt, token);
                 if (preflight != null) result = preflight;
                 else
                 {
                     if (!IsCurrent(session)) return SessionChangedError;
                     await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
-                    bool forcedGsm = false;
+                    bool forcedCsMode = false;
+                    bool csModeReady = true;
                     try
                     {
                         if (!IsCurrent(session)) return SessionChangedError;
                         // Một số thuê bao EC20 đăng ký LTE/CS đầy đủ nhưng tổng đài không trả
                         // USSD qua fallback. Lần cuối tạm ép GSM/2G, rồi luôn khôi phục Auto.
-                        if (attempt >= 3 && !_modem.IsCallInProgress(portName))
+                        QuectelModemProfile? profile = _modem.GetModemProfile(portName);
+                        if (attempt >= 2 && !_modem.IsCallInProgress(portName)
+                            && profile?.Supports(ModemCapability.NetworkScanConfig) == true)
                         {
                             string force = await _modem.SendCommandAsync(
-                                portName, "AT+QCFG=\"nwscanmode\",1,0", 10000, true);
-                            forcedGsm = !force.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
-                            if (forcedGsm)
+                                portName, $"AT+QCFG=\"nwscanmode\",{(attempt == 2 ? 2 : 1)}", 10000, true);
+                            forcedCsMode = !force.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
+                            if (forcedCsMode)
                             {
+                                csModeReady = false;
                                 for (int probe = 0; probe < 8; probe++)
                                 {
                                     await _delay.WaitAsync(TimeSpan.FromSeconds(probe == 0 ? 5 : 3), token);
                                     string reg = await CommandAsync(session, "AT+CREG?", 5000, token);
-                                    if (IsNetworkRegistered(reg)) break;
+                                    if (IsNetworkRegistered(reg))
+                                    {
+                                        csModeReady = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
 
-                        string cusdCommand = attempt switch
+                        if (!csModeReady)
                         {
-                            1 => $"AT+CUSD=1,\"{ussdCode}\",15",
-                            2 => $"AT+CUSD=1,\"{ussdCode}\",0",
-                            _ => $"AT+CUSD=1,\"{ussdCode}\""
-                        };
-                        result = await _modem.SendCommandAsync(portName, cusdCommand);
+                            result = $"ERROR: No CS registration after USSD fallback (attempt {attempt})";
+                        }
+                        else
+                        {
+                            string cusdCommand = attempt switch
+                            {
+                                1 => $"AT+CUSD=1,\"{ussdCode}\",15",
+                                2 => $"AT+CUSD=1,\"{ussdCode}\",0",
+                                _ => $"AT+CUSD=1,\"{ussdCode}\""
+                            };
+                            result = await _modem.SendCommandAsync(portName, cusdCommand);
+                        }
                         // Một số SIM/firmware chỉ trả OK sau khi nhận lệnh nhưng tổng đài
                         // không mở phiên USSD. Không được coi OK trần là thành công.
                         if (!result.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase)
@@ -102,9 +119,9 @@ public sealed class GsmUssdService : IGsmUssdService
                         {
                             try { await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }
-                            if (forcedGsm)
+                            if (forcedCsMode)
                             {
-                                try { await _modem.SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,0", 10000, true); }
+                                try { await _modem.SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0", 10000, true); }
                                 catch { /* Watchdog vẫn có thể khôi phục Auto sau đó. */ }
                             }
                         }
@@ -133,6 +150,7 @@ public sealed class GsmUssdService : IGsmUssdService
     {
         foreach (var semaphore in _portLocks.Values) semaphore.Dispose();
         _portLocks.Clear();
+        _ussdSupported.Clear();
     }
 
     private async Task ThrottleAsync(string portName, CancellationToken token)
@@ -151,10 +169,18 @@ public sealed class GsmUssdService : IGsmUssdService
         _lastByPort[portName] = now;
     }
 
-    private async Task<string?> PreparePortAsync(PortSessionLease session, CancellationToken token)
+    private async Task<string?> PreparePortAsync(PortSessionLease session, int attempt, CancellationToken token)
     {
         string at = await CommandAsync(session, "AT", 3000, token);
         if (IsCommandError(at)) return $"ERROR: Modem not ready ({at.Trim()})";
+
+        if (!_ussdSupported.TryGetValue(session.PortName, out bool supportsUssd))
+        {
+            string test = await CommandAsync(session, "AT+CUSD=?", 5000, token);
+            supportsUssd = !IsCommandError(test);
+            _ussdSupported[session.PortName] = supportsUssd;
+        }
+        if (!supportsUssd) return "ERROR: Modem firmware does not expose AT+CUSD";
 
         string pin = await CommandAsync(session, "AT+CPIN?", 5000, token);
         if (IsCommandError(pin)) return $"ERROR: SIM status check failed ({pin.Trim()})";
@@ -164,17 +190,26 @@ public sealed class GsmUssdService : IGsmUssdService
             return $"ERROR: SIM not ready ({pin.Trim()})";
 
         string registration = await CommandAsync(session, "AT+CREG?", 5000, token);
-        if (IsCommandError(registration))
-            return $"ERROR: Network registration check failed ({registration.Trim()})";
-        if (!IsNetworkRegistered(registration))
+        string lte = await CommandAsync(session, "AT+CEREG?", 5000, token);
+        string cops = await CommandAsync(session, "AT+COPS?", 5000, token);
+        bool registered = IsNetworkRegistered(registration)
+            || IsNetworkRegistered(lte)
+            || IsNetworkRegistered(cops);
+        if (!registered && attempt > 1 && !_modem.IsCallInProgress(session.PortName))
         {
-            string lte = await CommandAsync(session, "AT+CEREG?", 5000, token);
-            string cops = IsNetworkRegistered(lte)
-                ? lte
-                : await CommandAsync(session, "AT+COPS?", 5000, token);
-            if (!IsNetworkRegistered(cops))
-                return $"ERROR: SIM not registered on network ({registration.Trim()})";
+            // Ask the modem to reselect the home network only after a failed attempt.
+            // This is isolated to the current COM and avoids disturbing healthy ports.
+            await CommandAsync(session, "AT+COPS=0", 30000, token);
+            for (int probe = 0; probe < 6 && !registered; probe++)
+            {
+                await _delay.WaitAsync(TimeSpan.FromSeconds(probe == 0 ? 4 : 3), token);
+                registration = await CommandAsync(session, "AT+CREG?", 5000, token);
+                lte = await CommandAsync(session, "AT+CEREG?", 5000, token);
+                registered = IsNetworkRegistered(registration) || IsNetworkRegistered(lte);
+            }
         }
+        if (!registered)
+            return $"ERROR: SIM not registered on network ({registration.Trim()} | {lte.Trim()})";
 
         string signal = await CommandAsync(session, "AT+CSQ", 5000, token);
         if (IsCommandError(signal)) return $"ERROR: Signal quality check failed ({signal.Trim()})";
@@ -212,7 +247,7 @@ public sealed class GsmUssdService : IGsmUssdService
     private static bool HasUsableSignal(string response)
     {
         var match = Regex.Match(response, @"\+CSQ:\s*(\d+)");
-        return match.Success && int.TryParse(match.Groups[1].Value, out int csq) && csq is >= 6 and < 99;
+        return match.Success && int.TryParse(match.Groups[1].Value, out int csq) && csq is >= 2 and < 99;
     }
 
     private static bool IsFailure(string result) =>

@@ -150,13 +150,29 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _hardwareName = string.Empty;
 
+    [ObservableProperty]
+    private string _modemManufacturer = string.Empty;
+
+    [ObservableProperty]
+    private string _modemModel = string.Empty;
+
+    [ObservableProperty]
+    private string _modemFirmware = string.Empty;
+
+    [ObservableProperty]
+    private string _modemCapabilities = string.Empty;
+
     public string DeviceDisplayName =>
-        !string.IsNullOrWhiteSpace(HardwareName)
+        !string.IsNullOrWhiteSpace(ModemModel)
+            ? $"{ModemManufacturer} {ModemModel}".Trim()
+            : !string.IsNullOrWhiteSpace(HardwareName)
             ? HardwareName
             : (!string.IsNullOrWhiteSpace(DeviceName) ? DeviceName : "GSM Modem");
 
     partial void OnDeviceNameChanged(string value) => OnPropertyChanged(nameof(DeviceDisplayName));
     partial void OnHardwareNameChanged(string value) => OnPropertyChanged(nameof(DeviceDisplayName));
+    partial void OnModemManufacturerChanged(string value) => OnPropertyChanged(nameof(DeviceDisplayName));
+    partial void OnModemModelChanged(string value) => OnPropertyChanged(nameof(DeviceDisplayName));
     
     [ObservableProperty]
     private string _serial = string.Empty;

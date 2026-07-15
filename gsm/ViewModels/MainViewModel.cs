@@ -2212,8 +2212,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string cfunOn = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 12000, silent: true);
         if (cfunOn.Contains("ERROR", StringComparison.OrdinalIgnoreCase)) return false;
         await Task.Delay(2000, token);
-        await _modemService.SendCommandAsync(port.PortName, "AT+QCFG=\"nwscanmode\",0,1", 8000, silent: true);
-        await _modemService.SendCommandAsync(port.PortName, "AT+QCFG=\"nwscanseq\",030201,1", 8000, silent: true);
+        if (_modemService.GetModemProfile(port.PortName)?.Supports(ModemCapability.NetworkScanConfig) == true)
+        {
+            await _modemService.SendCommandAsync(port.PortName, "AT+QCFG=\"nwscanmode\",0,1", 8000, silent: true);
+            await _modemService.SendCommandAsync(port.PortName, "AT+QCFG=\"nwscanseq\",030201,1", 8000, silent: true);
+        }
 
         // Kiểm tra lần hai ngay sau khi bật radio; sai khác bất kỳ sẽ tắt sóng lại.
         var afterRadio = await VerifyIdentityAsync();
@@ -2285,6 +2288,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // CFUN=0 trên một số EC20 không cho đọc CCID. Khi đó chỉ chấp nhận tiếp tục
         // nếu cảm biến vật lý vẫn báo SIM có mặt và epoch chưa bị invalidated bởi URC.
+        if (_modemService.GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) != true)
+            return false;
         string qsim = await _modemService.SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true);
         return Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1")
             && IsSimSessionCurrent(portName, ccid, epoch);
@@ -2529,6 +2534,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     return;
                 }
+            }
+
+            if (e.Data.StartsWith("[MODEM_PROFILE]", StringComparison.Ordinal))
+            {
+                string Payload(string key)
+                {
+                    Match match = Regex.Match(e.Data, $@"(?:\[MODEM_PROFILE\]\s*|;\s*){Regex.Escape(key)}=([^;]*)", RegexOptions.IgnoreCase);
+                    return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
+                }
+                port.ModemManufacturer = Payload("manufacturer");
+                port.ModemModel = Payload("model");
+                port.ModemFirmware = Payload("firmware");
+                port.ModemCapabilities = Payload("capabilities");
             }
 
             if (e.Data == "[PORT_OPENED]")
@@ -4090,8 +4108,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     await Task.Delay(1500);
 
                     AddLog($"[{e.PortName}] Bắt đầu thu âm vào RAM của mạch Quectel...", "INFO");
-                    await _modemService.SendCommandAsync(e.PortName, "AT+QAUDRD=1,\"call.wav\",13,0");
-                    _activeRamRecordings[e.PortName] = true;
+                    if (_modemService.GetModemProfile(e.PortName)?.Supports(ModemCapability.AudioRecord) == true)
+                    {
+                        await _modemService.SendCommandAsync(e.PortName, "AT+QAUDRD=1,\"call.wav\",13,0");
+                        _activeRamRecordings[e.PortName] = true;
+                    }
+                    else
+                    {
+                        AddLog($"[{e.PortName}] Model does not support QAUDRD; call answered without recording.", "WARN");
+                    }
                 }
             }
             else
@@ -4690,14 +4715,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     return;
 
                 Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang cấu hình lại EC20..."));
-                string[] commands =
-                [
-                    "AT+QURCCFG=\"urcport\",\"uart1\"",
-                    "AT+QCFG=\"nwscanmode\",0,1",
-                    "AT+CUSD=1",
-                    "AT+QSIMDET=1,0",
-                    "AT+QSIMSTAT=1"
-                ];
+                QuectelModemProfile? profile = _modemService.GetModemProfile(port.PortName);
+                var commands = new List<string> { "AT+CUSD=1" };
+                if (profile?.Supports(ModemCapability.UrcPortRouting) == true)
+                    commands.Add("AT+QURCCFG=\"urcport\",\"uart1\"");
+                if (profile?.Supports(ModemCapability.NetworkScanConfig) == true)
+                    commands.Add("AT+QCFG=\"nwscanmode\",0,1");
+                if (profile?.Supports(ModemCapability.SimHotplugConfig) == true)
+                    commands.Add("AT+QSIMDET=1,0");
+                if (profile?.Supports(ModemCapability.SimStatusUrc) == true)
+                    commands.Add("AT+QSIMSTAT=1");
 
                 foreach (string command in commands)
                 {
@@ -6938,6 +6965,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task ConsumeDataQuectelAsync(string portName, int kilobytes)
     {
+        if (_modemService.GetModemProfile(portName)?.Supports(ModemCapability.HttpData) != true)
+            throw new NotSupportedException($"Model on {portName} does not support the Quectel HTTP command set.");
         // 1. Kích hoạt mạng 4G/3G (PDP Context)
         await _modemService.SendCommandAsync(portName, "AT+QIACT=1", timeoutMs: 15000);
         

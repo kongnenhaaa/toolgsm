@@ -13,6 +13,7 @@ public sealed class FakeGsmModemService : IGsmModemService
     public Func<string, string, string, Task<string>>? SmsHandler { get; set; }
     public Func<string, string, CancellationToken, Task<bool>>? CallHandler { get; set; }
     public bool CallInProgress { get; set; }
+    public QuectelModemProfile? ModemProfile { get; set; }
 
     public Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
 
@@ -61,6 +62,7 @@ public sealed class FakeGsmModemService : IGsmModemService
         CallHandler?.Invoke(portName, phoneNumber, ct) ?? Task.FromResult(true);
 
     public bool IsCallInProgress(string portName) => CallInProgress;
+    public QuectelModemProfile? GetModemProfile(string portName) => ModemProfile;
 
     public Task SweepUnreadSmsAsync(string portName) => Task.CompletedTask;
     public Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile) => Task.FromResult("OK");

@@ -34,6 +34,10 @@ public class ApiPortDto
     public string? Otp { get; set; }
     public string? LastContent { get; set; }
     public string? UpdatedAt { get; set; }
+    public string? ModemManufacturer { get; set; }
+    public string? ModemModel { get; set; }
+    public string? ModemFirmware { get; set; }
+    public string? ModemCapabilities { get; set; }
 }
 
 public class ApiPortsResponse

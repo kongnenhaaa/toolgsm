@@ -115,26 +115,7 @@ public class GsmModemService : IGsmModemService
     }
 
     public static string DecodeSmsBody(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return "";
-        raw = raw.Trim();
-        var lines = raw.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None)
-                       .Select(l => l.Trim())
-                       .Where(l => !string.IsNullOrEmpty(l) &&
-                                   !l.StartsWith("+CMGR:", StringComparison.OrdinalIgnoreCase) &&
-                                   !l.Equals("OK", StringComparison.OrdinalIgnoreCase) &&
-                                   !l.Equals("ERROR", StringComparison.OrdinalIgnoreCase))
-                       .ToList();
-
-        if (lines.Count == 0) return raw;
-        var body = lines.OrderByDescending(l => l.Length).First();
-
-        if (IsHexString(body) && body.Length >= 4 && body.Length % 2 == 0)
-        {
-            try { return DecodeUcs2Hex(body); } catch { }
-        }
-        return body;
-    }
+        => SmsBodyDecoder.Decode(raw).Content;
 
     static bool IsHexString(string s)
     {
@@ -162,6 +143,44 @@ public class GsmModemService : IGsmModemService
         for (int i = 0; i < bytes.Length; i++)
             bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
         return Encoding.BigEndianUnicode.GetString(bytes).Trim('\0');
+    }
+
+    private readonly SmsMultipartAssembler _exactMultipartAssembler = new();
+    private readonly ConcurrentDictionary<string, DateTime> _deliveredStoredSms = new();
+
+    private async Task<string> ReadStoredSmsAsync(string port, string msgIndex)
+    {
+        // Quectel EC20/EC2x exposes uid, segment and total through QCMGR in text mode.
+        // Fall back to standard CMGR for older firmware and non-Quectel modems.
+        string response = await SendCommandAsync(port, $"AT+QCMGR={msgIndex}", 8000, silent: true);
+        if (!response.Contains("ERROR", StringComparison.OrdinalIgnoreCase) && response.Contains("+QCMGR:", StringComparison.OrdinalIgnoreCase))
+            return response;
+        return await SendCommandAsync(port, $"AT+CMGR={msgIndex}", 25000, silent: true);
+    }
+
+    private string? TryAssembleMultipartExact(string port, string sender, DecodedSmsBody decoded, string msgIndex, string rawStoredSms, out List<string> indicesToDelete)
+    {
+        indicesToDelete = new List<string>();
+        if (decoded.Concatenation == null)
+        {
+            DateTime now = DateTime.UtcNow;
+            foreach (var item in _deliveredStoredSms.Where(x => now - x.Value > TimeSpan.FromMinutes(10)).ToArray())
+                _deliveredStoredSms.TryRemove(item.Key, out _);
+            string deliveryKey = $"{port}\u001f{msgIndex}\u001f{rawStoredSms}";
+            if (!_deliveredStoredSms.TryAdd(deliveryKey, now)) return null;
+            if (!string.IsNullOrWhiteSpace(msgIndex)) indicesToDelete.Add(msgIndex);
+            return decoded.Content;
+        }
+
+        SmsAssemblyResult result = _exactMultipartAssembler.Add(port, sender, decoded.Concatenation, decoded.Content, msgIndex);
+        if (result.Status == SmsAssemblyStatus.Completed)
+        {
+            indicesToDelete.AddRange(result.MessageIndices);
+            return result.Content;
+        }
+        if (result.Status is SmsAssemblyStatus.Invalid or SmsAssemblyStatus.Conflict)
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[MULTIPART] UDH không hợp lệ hoặc xung đột từ {sender}; giữ SMS trên SIM để quét lại." });
+        return null;
     }
 
     private class PendingMultipart
@@ -226,7 +245,7 @@ public class GsmModemService : IGsmModemService
     }
 
     static readonly Regex CmgrHeaderRegex = new(
-        @"\+CMGR:\s*""[^""]*"",\s*""([^""]+)""",
+        @"\+Q?CMGR:\s*""[^""]*"",\s*""([^""]+)""",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     string ParseSenderFromCmgr(string raw)
@@ -1502,9 +1521,9 @@ public class GsmModemService : IGsmModemService
                             
                             for (int attempt = 1; attempt <= 3; attempt++)
                             {
-                                smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
+                                smsContent = await ReadStoredSmsAsync(portName, msgIndex);
                                 // Đảm bảo không bị OK rỗng (Modem trả OK nhưng chưa kịp xuất nội dung)
-                                if (!smsContent.Contains("ERROR") && smsContent.Contains("+CMGR:"))
+                                if (!smsContent.Contains("ERROR") && (smsContent.Contains("+CMGR:") || smsContent.Contains("+QCMGR:")))
                                 {
                                     success = true;
                                     break;
@@ -1514,13 +1533,14 @@ public class GsmModemService : IGsmModemService
                             
                             if (success)
                             {
-                                string body = DecodeSmsBody(smsContent);
+                                DecodedSmsBody decodedBody = SmsBodyDecoder.Decode(smsContent);
                                 string senderInfo = ParseSenderFromCmgr(smsContent);
                                 
-                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body, msgIndex, out var indicesToDelete);
+                                string? fullContent = TryAssembleMultipartExact(portName, senderInfo, decodedBody, msgIndex, smsContent, out var indicesToDelete);
                                 if (fullContent == null)
                                 {
-                                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
+                                    if (decodedBody.Concatenation != null)
+                                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
                                     continue;
                                 }
                                 
@@ -1584,8 +1604,8 @@ public class GsmModemService : IGsmModemService
                             
                             for (int attempt = 1; attempt <= 3; attempt++)
                             {
-                                smsContent = await SendCommandAsync(portName, $"AT+CMGR={msgIndex}");
-                                if (!smsContent.Contains("ERROR") && smsContent.Contains("+CMGR:"))
+                                smsContent = await ReadStoredSmsAsync(portName, msgIndex);
+                                if (!smsContent.Contains("ERROR") && (smsContent.Contains("+CMGR:") || smsContent.Contains("+QCMGR:")))
                                 {
                                     success = true;
                                     break;
@@ -1595,13 +1615,14 @@ public class GsmModemService : IGsmModemService
                             
                             if (success)
                             {
-                                string body = DecodeSmsBody(smsContent);
+                                DecodedSmsBody decodedBody = SmsBodyDecoder.Decode(smsContent);
                                 string senderInfo = ParseSenderFromCmgr(smsContent);
                                 
-                                string? fullContent = TryAssembleMultipart(portName, senderInfo, body, msgIndex, out var indicesToDelete);
+                                string? fullContent = TryAssembleMultipartExact(portName, senderInfo, decodedBody, msgIndex, smsContent, out var indicesToDelete);
                                 if (fullContent == null)
                                 {
-                                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
+                                    if (decodedBody.Concatenation != null)
+                                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[MULTIPART] Nhận phần của tin dài từ {senderInfo}, chờ phần tiếp..." });
                                     continue;
                                 }
                                 

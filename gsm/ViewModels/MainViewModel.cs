@@ -3340,16 +3340,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
-                if (TryAppendToRecentMultipartSms(e.PortName, senderPhone, cleanContent, port, receiveAll))
-                {
-                    AddLog($"[{e.PortName}] Da ghep doan SMS tiep theo tu {senderPhone} vao tin truoc.", "INFO");
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
-                    return;
-                }
-
                 // ---------- LOAD SETTINGS ----------
                 var cfg = gsm.Services.SettingsService.Current;
                 if (cfg == null) return;

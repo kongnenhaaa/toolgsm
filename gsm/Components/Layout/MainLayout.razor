@@ -1,81 +1,90 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
+@implements IDisposable
 @inject NavigationManager Nav
 @inject gsm.ViewModels.MainViewModel Vm
 
 <MudThemeProvider Theme="_theme" IsDarkMode="false" />
 
-<MudLayout>
-    <!-- TOP APP BAR -->
-    <MudAppBar Elevation="0" Dense="true" Style="background:#FFFFFF; border-bottom:1px solid #E2E8F0; height:52px;">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="ml-2">
-            <MudButton Variant="@GetTabVariant("ussd")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("ussd"))" Style="@GetTabStyle("ussd")">
-                USSD
-            </MudButton>
-            <MudButton Variant="@GetTabVariant("sms")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("sms"))" Style="@GetTabStyle("sms")">
-                SMS
-            </MudButton>
-            <MudButton Variant="@GetTabVariant("call")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("call"))" Style="@GetTabStyle("call")">
-                Gọi
-            </MudButton>
-            <MudButton Variant="@GetTabVariant("imei")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("imei"))" Style="@GetTabStyle("imei")">
-                IMEI
-            </MudButton>
-            <MudButton Variant="@GetTabVariant("ezcom")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("ezcom"))" Style="@GetTabStyle("ezcom")">
-                EZ COM
-            </MudButton>
-            <MudButton Variant="@GetTabVariant("vnptpass")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("vnpt-pass"))" Style="@GetTabStyle("vnptpass")">
-                Pass VNPT
-            </MudButton>
-            <MudButton Variant="@GetTabVariant("logs")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("logs"))" Style="@GetTabStyle("logs")">
-                Log & Vận hành
-            </MudButton>
-            <MudButton Variant="@GetTabVariant("settings")" Color="Color.Primary" Size="Size.Small"
-                       OnClick="@(() => Navigate("settings"))" Style="@GetTabStyle("settings")">
-                Cài đặt
-            </MudButton>
-        </MudStack>
+<MudLayout Class="app-shell">
+    <MudAppBar Elevation="0" Dense="true" Class="app-shell-bar">
+        <div class="app-brand" aria-label="Tool GSM Professional">
+            <span class="app-brand-mark"><MudIcon Icon="@Icons.Material.Filled.CellTower" /></span>
+            <span class="app-brand-copy">
+                <strong>Tool GSM</strong>
+                <small>EC20 Control Center</small>
+            </span>
+        </div>
+
+        <nav class="app-nav" aria-label="Điều hướng chính">
+            @foreach (var item in _navItems)
+            {
+                <MudButton Variant="Variant.Text" Size="Size.Small"
+                           StartIcon="@item.Icon"
+                           Class="@GetTabClass(item.Key)"
+                           OnClick="@(() => Navigate(item.Route))">
+                    @item.Label
+                </MudButton>
+            }
+        </nav>
 
         <MudSpacer />
 
-        <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled" Class="mr-3">
-            @ActiveComCount COM Active
-        </MudChip>
-        <MudText Typo="Typo.subtitle2" Style="color:#64748B; margin-right:16px;">
-            ♥ Tool GSM Professional
-        </MudText>
+        <div class="app-health" title="Số cổng đã xác minh và đang hoạt động">
+            <span class="app-health-dot"></span>
+            <span><strong>@ActiveComCount</strong> / @TotalComCount Active</span>
+        </div>
     </MudAppBar>
 
-    <MudMainContent Style="background:#F8FAFC; min-height:100vh; padding-top: 60px;">
-        @Body
+    <MudMainContent Class="app-main-content">
+        <div class="page-enter">
+            @Body
+        </div>
     </MudMainContent>
 </MudLayout>
 
 @code {
+    private sealed record NavItem(string Key, string Route, string Label, string Icon);
+
+    private readonly NavItem[] _navItems =
+    {
+        new("ussd", "ussd", "USSD", Icons.Material.Filled.Dialpad),
+        new("sms", "sms", "SMS", Icons.Material.Filled.Sms),
+        new("call", "call", "Gọi", Icons.Material.Filled.Phone),
+        new("imei", "imei", "IMEI", Icons.Material.Filled.Fingerprint),
+        new("ezcom", "ezcom", "EZ COM", Icons.Material.Filled.Router),
+        new("vnptpass", "vnpt-pass", "Pass VNPT", Icons.Material.Filled.Key),
+        new("logs", "logs", "Vận hành", Icons.Material.Filled.Terminal),
+        new("settings", "settings", "Cài đặt", Icons.Material.Filled.Settings)
+    };
+
     private string _current = "ussd";
     private int ActiveComCount => Vm.Ports?.Count(p => p.Status == gsm.Models.SimStatus.Active) ?? 0;
+    private int TotalComCount => Vm.Ports?.Count ?? 0;
 
-    private MudTheme _theme = new()
+    private readonly MudTheme _theme = new()
     {
         PaletteLight = new PaletteLight
         {
             Primary = "#2563EB",
             Secondary = "#0D9488",
-            Background = "#F8FAFC",
+            Tertiary = "#7C3AED",
+            Background = "#F5F8FC",
             Surface = "#FFFFFF",
-            AppbarBackground = "#FFFFFF",
+            AppbarBackground = "rgba(255,255,255,.94)",
             DrawerBackground = "#FFFFFF",
-            TextPrimary = "#1E293B",
+            TextPrimary = "#172033",
             TextSecondary = "#64748B",
             ActionDefault = "#64748B",
             Divider = "#E2E8F0",
-            TableLines = "#E2E8F0"
+            TableLines = "#E8EEF6",
+            Success = "#16A34A",
+            Warning = "#D97706",
+            Error = "#DC2626",
+            Info = "#0284C7"
+        },
+        LayoutProperties = new LayoutProperties
+        {
+            DefaultBorderRadius = "12px"
         }
     };
 
@@ -83,32 +92,35 @@
 
     protected override void OnInitialized()
     {
-        var path = Nav.ToBaseRelativePath(Nav.Uri).ToLower();
-        if (path.Contains("sms")) _current = "sms";
-        else if (path.Contains("call")) _current = "call";
-        else if (path.Contains("imei")) _current = "imei";
-        else if (path.Contains("ezcom")) _current = "ezcom";
-        else if (path.Contains("vnpt-pass")) _current = "vnptpass";
-        else if (path.Contains("logs")) _current = "logs";
-        else if (path.Contains("settings")) _current = "settings";
-        else _current = "ussd";
-
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 2000, 2000);
+        SyncCurrentRoute();
+        Nav.LocationChanged += OnLocationChanged;
+        _timer = new System.Threading.Timer(_ => _ = InvokeAsync(StateHasChanged), null, 1000, 1000);
     }
 
-    void Navigate(string tab)
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
-        if (tab == "vnpt-pass") _current = "vnptpass";
-        else _current = tab;
-        
-        if (tab == "ussd") Nav.NavigateTo($"/");
-        else Nav.NavigateTo($"/{tab}");
+        SyncCurrentRoute();
+        _ = InvokeAsync(StateHasChanged);
     }
 
-    Variant GetTabVariant(string tab) => _current == tab ? Variant.Filled : Variant.Text;
-    string GetTabStyle(string tab) => _current == tab 
-        ? "background:#DBEAFE; color:#1D4ED8; font-weight:600;" 
-        : "color:#64748B;";
+    private void SyncCurrentRoute()
+    {
+        var path = Nav.ToBaseRelativePath(Nav.Uri).Trim('/').ToLowerInvariant();
+        _current = path switch
+        {
+            "" => "ussd",
+            "vnpt-pass" => "vnptpass",
+            _ => _navItems.FirstOrDefault(x => path.StartsWith(x.Route, StringComparison.OrdinalIgnoreCase))?.Key ?? "ussd"
+        };
+    }
 
-    public void Dispose() => _timer?.Dispose();
+    private void Navigate(string route) => Nav.NavigateTo(route == "ussd" ? "/" : $"/{route}");
+
+    private string GetTabClass(string tab) => _current == tab ? "app-nav-item is-active" : "app-nav-item";
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        _timer?.Dispose();
+    }
 }

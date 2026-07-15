@@ -64,9 +64,8 @@ public class ImeiManagementService
 
     public static string GenerateRandomImei()
     {
-        var random = new Random();
-        string tac = FakeTacs[random.Next(FakeTacs.Length)];
-        string snr = random.Next(0, 999999).ToString("D6");
+        string tac = FakeTacs[Random.Shared.Next(FakeTacs.Length)];
+        string snr = Random.Shared.Next(0, 1_000_000).ToString("D6");
         string imeiWithoutCheck = tac + snr;
         
         int sum = 0;
@@ -169,7 +168,11 @@ public class ImeiManagementService
         Func<string, SimBackupEntry?> getBackupEntry, 
         Action<SimBackupEntry> saveBackupEntry,
         Action<Action> dispatcherInvoke,
-        bool forceAccept = false)
+        bool forceAccept = false,
+        CancellationToken ct = default,
+        Func<Task<bool>>? validateIdentityAsync = null,
+        Func<string, bool>? imeiAlreadyAssigned = null,
+        string? explicitTargetImei = null)
     {
         string targetImei = string.Empty;
         string expectedImei = currentImei;
@@ -178,6 +181,15 @@ public class ImeiManagementService
         
         try
         {
+            async Task<bool> SessionIsValidAsync()
+            {
+                ct.ThrowIfCancellationRequested();
+                return validateIdentityAsync == null || await validateIdentityAsync();
+            }
+
+            if (!await SessionIsValidAsync())
+                return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi trong lúc xử lý" };
+
             var cachedEntry = getBackupEntry(ccid);
             bool hasValidBackup = cachedEntry != null && IsValidImei(NormalizeImei(cachedEntry.Imei));
             bool isHardwareImeiValid = IsValidImei(NormalizeImei(currentImei));
@@ -210,7 +222,15 @@ public class ImeiManagementService
             }
 
             // 2. Xác định IMEI mục tiêu (targetImei)
-            if (settings.EnableImeiRestore && hasValidBackup)
+            string normalizedExplicitTarget = NormalizeImei(explicitTargetImei);
+            if (IsValidImei(normalizedExplicitTarget))
+            {
+                if (imeiAlreadyAssigned?.Invoke(normalizedExplicitTarget) == true)
+                    return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "IMEI mục tiêu đang được gán cho SIM khác" };
+                targetImei = normalizedExplicitTarget;
+                targetSource = "manual-verified";
+            }
+            else if (settings.EnableImeiRestore && hasValidBackup)
             {
                 // Tráng phục hồi từ file backup cũ
                 string candidateImei = NormalizeImei(cachedEntry!.Imei);
@@ -236,7 +256,7 @@ public class ImeiManagementService
                 {
                     Log($"[{portName}] Đã có bản Backup IMEI nhưng tính năng Khôi phục đang tắt. Giữ nguyên IMEI gốc.");
                 }
-                else if (cachedEntry == null && isHardwareImeiValid)
+                else if (cachedEntry == null && isHardwareImeiValid && !forceAccept && settings.EnableNewSimIntakeMode)
                 {
                     // SIM mới cắm lần đầu, có IMEI gốc hợp lệ -> Lưu lại IMEI gốc của mạch để làm backup
                     var newEntry = new SimBackupEntry
@@ -263,7 +283,17 @@ public class ImeiManagementService
             if (string.IsNullOrEmpty(targetImei) && (forceAccept || !settings.EnableNewSimIntakeMode))
             {
                 // Tạo IMEI ngẫu nhiên hợp lệ đầu 35 hoặc 86
-                string randomImei = GenerateRandomImei();
+                string randomImei;
+                int generationAttempts = 0;
+                do
+                {
+                    randomImei = GenerateRandomImei();
+                    generationAttempts++;
+                }
+                while (imeiAlreadyAssigned?.Invoke(randomImei) == true && generationAttempts < 100);
+
+                if (imeiAlreadyAssigned?.Invoke(randomImei) == true)
+                    return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Không tạo được IMEI duy nhất" };
                 targetImei = randomImei;
                 targetSource = "auto-generation";
                 Log($"[{portName}] Sinh IMEI ngẫu nhiên mới để tráng: {targetImei} (Nguồn: {targetSource})", "SUCCESS");
@@ -290,12 +320,15 @@ public class ImeiManagementService
                     return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOffFailed };
                 }
                 
-                await Task.Delay(1000);
+                await Task.Delay(1000, ct);
 
                 bool success = false;
                 bool isUnsupported = false;
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
+                    if (!await SessionIsValidAsync())
+                        return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã bị rút hoặc thay đổi trước khi ghi IMEI" };
+
                     Log($"[{portName}] Thử ghi IMEI lần {attempt}/3...");
 
                     bool isDisconnected = false;
@@ -323,6 +356,9 @@ public class ImeiManagementService
 
                     if (finalImei == targetImei)
                     {
+                        if (!await SessionIsValidAsync())
+                            return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi sau khi ghi IMEI" };
+
                         success = true;
                         dispatcherInvoke(() => port.Imei = targetImei);
                         Log($"[{portName}] Ghi đè IMEI thành công ở lần thử {attempt}: {targetImei}", "SUCCESS");
@@ -338,13 +374,12 @@ public class ImeiManagementService
                         };
                         saveBackupEntry(newEntry);
 
-                        Log($"[{portName}] Đã gửi lệnh tắt/bật sóng (AT+CFUN=0 -> CFUN=1) để áp dụng IMEI mới...", "INFO");
-                        await _modemService.SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true);
-                        await Task.Delay(1000);
-                        await _modemService.SendCommandAsync(portName, "AT+CFUN=1", 12000, silent: true);
+                        // Giữ radio ở CFUN=0. Caller phải xác minh lại CCID/IMEI rồi mới
+                        // được bật CFUN=1; tránh SIM mới lên mạng trong cửa sổ chưa xác thực.
+                        Log($"[{portName}] IMEI đã ghi và xác minh; tiếp tục giữ radio tắt chờ xác minh CCID cuối.", "INFO");
                         
                         // Tr? v? Applied (không phải Matched) vì IMEI đã thành công được thay đổi
-                        // Caller (ViewModel) sẽ gọi ReinitializeSettingsAsync sau khi Applied
+                        // Caller tiếp tục qua cổng xác minh và cấu hình offline trước khi bật radio.
                         return new ImeiProcessResult { Status = ImeiProcessStatus.Applied, FinalImei = targetImei };
                     }
                     else
@@ -380,18 +415,19 @@ public class ImeiManagementService
                         Log($"[{portName}] IMEI khớp với mục tiêu: {currentImei}", "SUCCESS");
                     }
                     // QUAN TRỌNG: Không gọi AT+CFUN=1 ở đây.
-                    // Caller (ViewModel.MarkPortActiveAfterInit) sẽ gọi ReinitializeSettingsAsync
-                    // để setup đầy đủ CMGF/CSCS/CLIP/CNMI trước khi bật CFUN=1.
-                    // Gọi CFUN=1 ở đây sẽ gây bật sóng 2 lần liên tiếp (dư thừa và gây ngắt mạng).
+                    // CompletePortInitializationAsync sẽ cấu hình offline, xác minh lại danh tính
+                    // rồi mới bật CFUN=1. Không được bật radio trực tiếp tại service này.
                 }
 
             string checkFinalImei = string.Empty;
             for (int i = 0; i < 3; i++)
             {
+                if (!await SessionIsValidAsync())
+                    return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi trước bước xác minh cuối" };
                 string checkFinalResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
                 checkFinalImei = NormalizeImei(checkFinalResp);
                 if (!string.IsNullOrEmpty(checkFinalImei)) break;
-                await Task.Delay(1000);
+                await Task.Delay(1000, ct);
             }
             
             bool matched = (checkFinalImei == expectedImei) && !string.IsNullOrEmpty(checkFinalImei);
@@ -399,6 +435,18 @@ public class ImeiManagementService
 
             if (matched)
             {
+                if (IsValidImei(normalizedExplicitTarget))
+                {
+                    saveBackupEntry(new SimBackupEntry
+                    {
+                        Ccid = ccid,
+                        Imei = checkFinalImei,
+                        PhoneNumber = port.PhoneNumber,
+                        CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        SourceFile = "manual-verified",
+                        SimRegDate = port.SimRegDate
+                    });
+                }
                 bool wasApplied = (!string.IsNullOrEmpty(targetImei) && targetImei != currentImei);
                 return new ImeiProcessResult 
                 { 
@@ -410,6 +458,10 @@ public class ImeiManagementService
             {
                 return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.WrongImei };
             }
+        }
+        catch (OperationCanceledException)
+        {
+            return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Phiên xử lý SIM đã bị hủy" };
         }
         catch (Exception ex)
         {

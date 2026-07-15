@@ -1,18 +1,19 @@
 @{
-    var (text, bg, textColor) = Status switch
+    var (text, cssClass, busy) = Status switch
     {
-        gsm.Models.SimStatus.Active        => ("✔ Active",       "#DCFCE7", "#15803D"),
-        gsm.Models.SimStatus.WaitingAccept => ("⏳ Chờ Accept",  "#FFF7ED", "#C2410C"),
-        gsm.Models.SimStatus.SecurityBlocked => ("🔒 Bảo mật",  "#FEE2E2", "#B91C1C"),
-        gsm.Models.SimStatus.Connecting    => ("⟳ Connecting",   "#E0F2FE", "#0369A1"),
-        gsm.Models.SimStatus.NoResponse    => ("✕ No Response",  "#FEE2E2", "#B91C1C"),
-        "Chờ cắm SIM"                      => ("○ Chờ SIM",      "#F1F5F9", "#64748B"),
-        _                                  => (Status ?? "—",    "#F1F5F9", "#475569")
+        gsm.Models.SimStatus.Active          => ("Active", "status-active", false),
+        gsm.Models.SimStatus.WaitingAccept   => ("Chờ Accept", "status-waiting", true),
+        gsm.Models.SimStatus.SecurityBlocked => ("Cần xử lý", "status-blocked", false),
+        gsm.Models.SimStatus.Connecting      => ("Đang xử lý", "status-connecting", true),
+        gsm.Models.SimStatus.NoResponse      => ("Mất phản hồi", "status-error", false),
+        "Chờ cắm SIM"                        => ("Chờ SIM", "status-idle", false),
+        _                                    => (string.IsNullOrWhiteSpace(Status) ? "Chưa xác định" : Status, "status-idle", false)
     };
 }
 
-<span class="status-badge" style="background:@bg; color:@textColor; padding:3px 10px; border-radius:9999px; font-size:11px; font-weight:600; display:inline-block; white-space:nowrap;">
-    @text
+<span class="status-badge @cssClass" role="status" aria-label="Trạng thái: @text">
+    <span class="status-indicator @(busy ? "is-busy" : "")"></span>
+    <span>@text</span>
 </span>
 
 @code {

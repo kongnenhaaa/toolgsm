@@ -1,7 +1,8 @@
-﻿<div style="display:flex; justify-content:space-between; align-items:center;">
-    <MudText Typo="Typo.caption" Style="color:#64748B;">@Label</MudText>
-    <MudText Typo="@(Small ? Typo.caption : Typo.body2)" 
-             Style="@($"font-weight:{(Bold ? "600" : "400")}; color:{(string.IsNullOrEmpty(Color) ? "inherit" : Color)}; font-family:{(Mono ? "monospace" : "inherit")};")">
+<div class="info-row">
+    <MudText Typo="Typo.caption" Class="info-row-label">@Label</MudText>
+    <MudText Typo="@(Small ? Typo.caption : Typo.body2)"
+             Class="@GetValueClass()"
+             Style="@(string.IsNullOrEmpty(Color) ? null : $"color:{Color}")">
         @Value
     </MudText>
 </div>
@@ -13,4 +14,13 @@
     [Parameter] public bool Mono { get; set; }
     [Parameter] public bool Small { get; set; }
     [Parameter] public string Color { get; set; } = "";
+
+    private string GetValueClass()
+    {
+        var classes = new List<string> { "info-row-value" };
+        if (Bold) classes.Add("is-bold");
+        if (Mono) classes.Add("is-mono");
+        if (Small) classes.Add("is-small");
+        return string.Join(" ", classes);
+    }
 }

@@ -1,10 +1,11 @@
 @using gsm.Models
 @using gsm.Components.Shared
 @inject gsm.Services.IGsmModemService ModemService
+@inject gsm.ViewModels.MainViewModel Vm
 @inject ISnackbar Snackbar
 
-<MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:8px; overflow:hidden; background:#FFFFFF;">
-        <MudToolBar Dense="true" Style="background:#F1F5F9; border-bottom:1px solid #E2E8F0;">
+<MudPaper Elevation="0" Class="com-table-shell">
+        <MudToolBar Dense="true" Class="com-toolbar">
             @if (SelectedItems.Any())
             {
                 <MudText Typo="Typo.subtitle2" Style="color:#1D4ED8; font-weight:600;" Class="mr-4">
@@ -54,9 +55,10 @@
                        Variant="Variant.Text" Color="Color.Default" OnClick="OpenSettingsDialog">Cấu hình Cột/Cổng</MudButton>
         </MudToolBar>
 
-    <MudTable Items="@VisiblePorts" Hover="true" Dense="true" Elevation="0" Striped="true"
+    <MudTable Items="@VisiblePorts" Hover="true" Dense="true" Elevation="0" Striped="false"
               MultiSelection="true" @bind-SelectedItems="SelectedItems"
-              Style="background:#FFFFFF; color:#1E293B;"
+              Class="com-table"
+              RowClassFunc="GetRowClass"
               FixedHeader="true" Height="calc(100vh - 280px)"
               Breakpoint="Breakpoint.None">
         <HeaderContent>
@@ -146,7 +148,7 @@
             }
         </RowTemplate>
         <NoRecordsContent>
-            <div class="pa-16 text-center" style="color:#64748B;">
+            <div class="empty-state">
                 <MudIcon Icon="@Icons.Material.Outlined.Inbox" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
                 <div class="mb-4">Chưa có dữ liệu. Hãy kết nối thiết bị.</div>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" 
@@ -226,12 +228,11 @@
         var list = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
         if (!list.Any()) return;
 
-        foreach (var p in list)
-        {
-            _ = ModemService.ReloadSimAsync(p.PortName);
-        }
-        Snackbar.Add($"Đang tải lại phần cứng (SIM) cho {list.Count} cổng...", Severity.Info);
+        Snackbar.Add($"Đang tải lại SIM cho {list.Count} cổng...", Severity.Info);
+        await RunBoundedAsync(list, 4, p => Vm.ReloadPortSafelyAsync(p.PortName));
+        Snackbar.Add($"Đã gửi xong lệnh tải lại SIM cho {list.Count} cổng.", Severity.Success);
         SelectedItems.Clear();
+        await SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
     [Inject] private IDialogService DialogService { get; set; } = default!;
@@ -298,18 +299,56 @@
 
     async Task CheckTkcSelected()
     {
-        var ports = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
-        Snackbar.Add($"Đang kiểm tra tài khoản {ports.Count} cổng...", Severity.Info);
-        foreach (var p in ports)
+        var requested = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
+        var ports = requested.Where(p => p.Status == gsm.Models.SimStatus.Active).ToList();
+        if (!ports.Any())
         {
-            try { await ModemService.SendCommandAsync(p.PortName, "AT+CUSD=1,\"*101#\",15", 20000); } catch {}
-            await Task.Delay(500);
+            Snackbar.Add("Không có cổng Active để kiểm tra tài khoản.", Severity.Warning);
+            return;
         }
+
+        int skipped = requested.Count - ports.Count;
+        Snackbar.Add($"Đang kiểm tra tài khoản {ports.Count} cổng Active{(skipped > 0 ? $"; bỏ qua {skipped} cổng chưa sẵn sàng" : "")}...", Severity.Info);
+        await RunBoundedAsync(ports, 3, async p =>
+        {
+            await ModemService.SendCommandAsync(p.PortName, "AT+CUSD=1,\"*101#\",15", 20000);
+        });
         SelectedItems.Clear();
-        _ = SelectedItemsChanged.InvokeAsync(SelectedItems);
+        await SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
     async Task Ussd101Selected() => await CheckTkcSelected();
+
+    private static async Task RunBoundedAsync(
+        IReadOnlyCollection<SimPort> ports,
+        int maxConcurrency,
+        Func<SimPort, Task> operation)
+    {
+        using var gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        var tasks = ports.Select(async port =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                await operation(port);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+        await Task.WhenAll(tasks);
+    }
+
+    private static string GetRowClass(SimPort port, int rowNumber) => port.Status switch
+    {
+        gsm.Models.SimStatus.Active => "row-active",
+        gsm.Models.SimStatus.WaitingAccept => "row-pending",
+        gsm.Models.SimStatus.Connecting => "row-processing",
+        gsm.Models.SimStatus.SecurityBlocked => "row-error",
+        gsm.Models.SimStatus.NoResponse => "row-error",
+        _ => "row-idle"
+    };
 
     void ConnectAll()
     {

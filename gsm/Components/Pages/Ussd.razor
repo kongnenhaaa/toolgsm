@@ -9,8 +9,12 @@
 @using gsm.Components.Shared
 @implements IDisposable
 
+<div class="feature-page-header">
+    <div><span class="feature-eyebrow">GSM Operations</span><h1>USSD Control</h1><p>Gửi USSD, kiểm tra tài khoản và vận hành nhiều cổng theo phiên SIM đã xác minh.</p></div>
+</div>
+
 <!-- ========== ACTION FORM ========== -->
-<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0" 
+<MudPaper Class="pa-3 mx-3 mb-2 feature-toolbar" Elevation="0"
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
     <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
         <MudText Typo="Typo.caption" Style="color:#64748B; min-width:70px;">Mã USSD</MudText>
@@ -104,7 +108,7 @@
 
 <!-- ========== SUB TABS ========== -->
 <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true" 
-         PanelClass="pa-0" Class="mx-3"
+         PanelClass="pa-0" Class="mx-3 feature-tabs"
          Style="background:transparent;"
          @bind-ActivePanelIndex="_subTab">
 
@@ -338,6 +342,7 @@
     private int _checkCallDuration = 15;
     private List<CallCheckItem> _callCheckHistory = new();
     private bool _isCheckingCall = false;
+    private CancellationTokenSource? _checkCallCts;
 
     // DTMF
     private string _dtmfPort = "";
@@ -445,7 +450,7 @@
         if (string.IsNullOrWhiteSpace(_ussdCode)) return;
 
         var targets = _selectedPorts.Any()
-            ? _selectedPorts.Select(p => p.PortName).ToList()
+            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!targets.Any())
@@ -500,7 +505,7 @@
     async Task ApplyScanMode()
     {
         var targets = _selectedPorts.Any()
-            ? _selectedPorts.Select(p => p.PortName).ToList()
+            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!targets.Any())
@@ -534,9 +539,13 @@
         {
             try
             {
+                if (!Vm.IsPortReadyForOperation(port))
+                    continue;
+
                 await ModemService.SendCommandAsync(port, $"AT+QCFG=\"nwscanmode\",{nwscanmode}", 5000);
+                if (!Vm.IsPortReadyForOperation(port))
+                    continue;
                 await ModemService.SendCommandAsync(port, $"AT+QCFG=\"nwscanseq\",{nwscanseq}", 5000);
-                await ModemService.SendCommandAsync(port, "AT+CFUN=1", 8000);
                 ok++;
             }
             catch (Exception ex)
@@ -553,8 +562,8 @@
     async Task RecoverSignal()
     {
         var targets = _selectedPorts.Any()
-            ? _selectedPorts.Select(p => p.PortName).ToList()
-            : Ports.Select(p => p.PortName).ToList();
+            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
+            : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!targets.Any())
         {
@@ -569,14 +578,15 @@
         {
             try
             {
-                await ModemService.SendCommandAsync(port, "AT+CFUN=1,1", 12000);
-                await Task.Delay(1500);
-                await ModemService.SendCommandAsync(port, "AT+QCFG=\"nwscanmode\",0", 4000);
-                await ModemService.SendCommandAsync(port, "AT+QCFG=\"nwscanseq\",030201", 4000);
-                await ModemService.SendCommandAsync(port, "AT+COPS=0", 8000);
-                var csq = await ModemService.SendCommandAsync(port, "AT+CSQ", 3000);
-                ok++;
-                Snackbar.Add($"[{port}] Recover xong • CSQ: {csq.Trim()}", Severity.Success);
+                if (await Vm.RecoverActivePortAsync(port))
+                {
+                    ok++;
+                    Snackbar.Add($"[{port}] Đã khởi động recovery an toàn; đang xác minh lại SIM/IMEI.", Severity.Success);
+                }
+                else
+                {
+                    Snackbar.Add($"[{port}] Bỏ qua vì cổng không còn Active hoặc phiên SIM đã thay đổi.", Severity.Warning);
+                }
             }
             catch (Exception ex)
             {
@@ -608,7 +618,7 @@
     async Task CheckBalanceSelectedOrAll()
     {
         var targets = _selectedPorts.Any()
-            ? _selectedPorts.Select(p => p.PortName).ToList()
+            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!targets.Any())
@@ -656,7 +666,7 @@
         }
 
         var ports = _selectedPorts.Any()
-            ? _selectedPorts.Select(p => p.PortName).ToList()
+            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!ports.Any())
@@ -690,7 +700,14 @@
 
                     try
                     {
-                        var res = await ModemService.SendSmsAsync(port, phone, _spamContent);
+                        if (!Vm.IsPortReadyForOperation(port))
+                        {
+                            fail++;
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✗ Cổng không còn Active / SIM đã thay đổi\n";
+                            continue;
+                        }
+
+                        var res = await Vm.QueueSmsAsync(port, phone, _spamContent, _spamCts.Token);
                         if (res.Contains("ERROR") || res.Contains("TIMEOUT"))
                         {
                             fail++;
@@ -739,7 +756,8 @@
         }
 
         var ports = _selectedPorts.Any()
-            ? _selectedPorts.Select(p => p.PortName).ToList()
+            ? _selectedPorts.Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
+                            .Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!ports.Any())
@@ -748,13 +766,22 @@
             return;
         }
 
+        _checkCallCts?.Cancel();
+        _checkCallCts?.Dispose();
+        _checkCallCts = new CancellationTokenSource();
+        var ct = _checkCallCts.Token;
         _isCheckingCall = true;
         Snackbar.Add($"Đang check gọi {_checkCallPhone} trên {ports.Count} cổng...", Severity.Info);
 
         foreach (var port in ports)
         {
+            if (ct.IsCancellationRequested) break;
+
             try
             {
+                if (!Vm.IsPortReadyForOperation(port))
+                    throw new InvalidOperationException("Cổng không còn Active hoặc SIM đã thay đổi.");
+
                 var resp = await ModemService.SendCommandAsync(port, $"ATD{_checkCallPhone};", 10000);
                 bool callFailed = resp.Contains("ERROR") || resp.Contains("NO CARRIER")
                                || resp.Contains("NO DIALTONE") || resp.Contains("BUSY");
@@ -770,7 +797,9 @@
                 }
                 else
                 {
-                    await Task.Delay(_checkCallDuration * 1000);
+                    await Task.Delay(_checkCallDuration * 1000, ct);
+                    if (!Vm.IsPortReadyForOperation(port))
+                        throw new InvalidOperationException("SIM đã thay đổi trong khi gọi.");
                     await ModemService.SendCommandAsync(port, "ATH", 3000);
 
                     _callCheckHistory.Insert(0, new CallCheckItem
@@ -781,6 +810,11 @@
                     Snackbar.Add($"[{port}] Check gọi xong ({_checkCallDuration}s)", Severity.Success);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                try { await ModemService.SendCommandAsync(port, "ATH", 3000); } catch { }
+                break;
+            }
             catch (Exception ex)
             {
                 _callCheckHistory.Insert(0, new CallCheckItem
@@ -790,7 +824,8 @@
                 });
                 Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
             }
-            await Task.Delay(800);
+            try { await Task.Delay(800, ct); }
+            catch (OperationCanceledException) { break; }
         }
 
         _isCheckingCall = false;
@@ -800,6 +835,7 @@
 
     async Task StopAllCalls()
     {
+        _checkCallCts?.Cancel();
         var tasks = Ports.Select(async p =>
         {
             try { await ModemService.SendCommandAsync(p.PortName, "ATH", 2000); } catch { }
@@ -815,6 +851,12 @@
         if (string.IsNullOrWhiteSpace(_dtmfPort) || string.IsNullOrWhiteSpace(_dtmfCode))
         {
             Snackbar.Add("Chọn cổng và nhập mã DTMF", Severity.Warning);
+            return;
+        }
+
+        if (!Vm.IsPortReadyForOperation(_dtmfPort))
+        {
+            Snackbar.Add($"[{_dtmfPort}] Cổng không còn Active hoặc SIM đã thay đổi", Severity.Warning);
             return;
         }
 
@@ -901,7 +943,9 @@
     {
         _timer?.Dispose();
         _spamCts?.Cancel();
+        _checkCallCts?.Cancel();
         _spamCts?.Dispose();
+        _checkCallCts?.Dispose();
     }
 
     // ========== MODELS ==========

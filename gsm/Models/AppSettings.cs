@@ -119,7 +119,7 @@ public class AppSettings
     public bool Prefer4G { get; set; } = true;
     public bool EnableVolte { get; set; } = false;
     public bool AutoRecovery { get; set; } = true;
-    public bool ForceCfun1AfterReboot { get; set; } = true;
+    public bool ForceCfun1AfterReboot { get; set; } = false;
     public int RecoveryThreshold { get; set; } = 12;
     public int WatchdogSeconds { get; set; } = 50;
     public bool AutoCheckBalanceAfterSms { get; set; } = true;

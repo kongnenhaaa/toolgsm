@@ -1,7 +1,7 @@
 ﻿@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
-<MudPaper Class="@($"pa-4 port-card {(Port.IsRebooting ? "card-accepting" : "")}")" Elevation="0" Style="border-radius:12px; height:100%; border:1px solid #E2E8F0;">
+<MudPaper Class="@($"pa-4 port-card {GetStateClass()} {(Port.IsRebooting ? "card-accepting" : "")}")" Elevation="0" Style="height:100%;">
     <MudStack Spacing="2">
         <!-- Header -->
         <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
@@ -41,11 +41,11 @@
 
         <!-- Actions chính -->
         <MudStack Spacing="1" Class="mt-2">
-            @if (Port.Status == gsm.Models.SimStatus.SecurityBlocked)
+            @if (IsPendingAccept())
             {
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" 
                            FullWidth="true" OnClick="OnAcceptClicked" StartIcon="@Icons.Material.Filled.VerifiedUser">
-                    Chấp nhận SIM mới
+                    Accept SIM &amp; xác minh IMEI
                 </MudButton>
             }
             else
@@ -103,6 +103,19 @@
     async Task OpenUssd() => await OnUssd.InvokeAsync(Port);
     async Task OpenSms() => await OnSms.InvokeAsync(Port);
     async Task OpenCall() => await OnCall.InvokeAsync(Port);
+
+    bool IsPendingAccept() => Port.Status == gsm.Models.SimStatus.WaitingAccept
+                           || Port.Status == gsm.Models.SimStatus.SecurityBlocked;
+
+    string GetStateClass() => Port.Status switch
+    {
+        gsm.Models.SimStatus.Active => "state-active",
+        gsm.Models.SimStatus.WaitingAccept => "state-pending",
+        gsm.Models.SimStatus.SecurityBlocked => "state-error",
+        gsm.Models.SimStatus.Connecting => "state-processing",
+        gsm.Models.SimStatus.NoResponse => "state-error",
+        _ => "state-idle"
+    };
 
     async Task ShowDetail()
     {

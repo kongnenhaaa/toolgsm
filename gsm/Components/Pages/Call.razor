@@ -7,8 +7,12 @@
 @using gsm.Components.Shared
 @implements IDisposable
 
+<div class="feature-page-header">
+    <div><span class="feature-eyebrow">Voice Operations</span><h1>Call Center</h1><p>Gọi, phát WAV, DTMF, ghi âm và quản lý hàng đợi cuộc gọi an toàn.</p></div>
+</div>
+
 <!-- ========== ACTION FORM ========== -->
-<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0"
+<MudPaper Class="pa-3 mx-3 mb-2 feature-toolbar" Elevation="0"
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
     <MudGrid Spacing="2" Class="mb-2">
         <MudItem xs="12" md="3">
@@ -82,7 +86,7 @@
 
 <!-- ========== SUB TABS ========== -->
 <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true"
-         PanelClass="pa-0" Class="mx-3 mt-1"
+         PanelClass="pa-0" Class="mx-3 mt-1 feature-tabs"
          Style="background:transparent;"
          @bind-ActivePanelIndex="_callSubTab">
 
@@ -383,7 +387,7 @@
         if (_sendMode == "all")
             return ActivePorts.Select(p => p.PortName).ToList();
         if (_selectedPorts.Any())
-            return _selectedPorts.Select(p => p.PortName).ToList();
+            return _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
         return ActivePorts.Select(p => p.PortName).ToList();
     }
 
@@ -478,7 +482,7 @@
                             _callStatus = $"[{port}] {uiMsg}";
                             InvokeAsync(StateHasChanged);
                         }
-                    });
+                    }, _callCts.Token);
 
                 // Cập nhật progress trong khi chờ
                 int maxTick = _duration + 60;
@@ -590,6 +594,12 @@
             return;
         }
 
+        if (!Vm.IsPortReadyForOperation(port))
+        {
+            Snackbar.Add($"[{port}] Cổng không còn Active hoặc SIM đã thay đổi", Severity.Warning);
+            return;
+        }
+
         try
         {
             // Thử AT+VTS trước (chuẩn 3GPP), fallback AT+QVTS (Quectel specific)
@@ -681,7 +691,13 @@
             {
                 // Gọi TRỰC TIẾP qua ViewModel — KHÔNG mutate _phone/_wavPath/_duration
                 // vì làm vậy sẽ thay đổi form UI đang hiển thị và gây nhầm lẫn.
-                bool isOk = await Vm.ExecuteCallFromUiAsync(item.Port, item.Phone, item.Wav, item.Duration, item.Record);
+                if (!Vm.IsPortReadyForOperation(item.Port))
+                {
+                    item.Status = "Lỗi";
+                    Snackbar.Add($"[{item.Port}] Bỏ qua vì cổng không còn Active hoặc SIM đã thay đổi.", Severity.Warning);
+                    continue;
+                }
+                bool isOk = await Vm.ExecuteCallFromUiAsync(item.Port, item.Phone, item.Wav, item.Duration, item.Record, ct: _queueCts.Token);
                 item.Status = isOk ? "Xong" : "Lỗi";
 
                 _callHistory.Insert(0, new CallHistoryItem
@@ -768,7 +784,9 @@
             return;
         }
 
-        var ports = _selectedPorts.ToList();
+        var ports = _selectedPorts
+            .Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
+            .ToList();
         if (!ports.Any())
         {
             Snackbar.Add("Vui lòng chọn ít nhất 1 cổng ở tab Danh sách Cổng", Severity.Warning);
@@ -785,6 +803,9 @@
         {
             try
             {
+                if (!Vm.IsPortReadyForOperation(p.PortName))
+                    throw new InvalidOperationException("Cổng không còn Active hoặc SIM đã thay đổi.");
+
                 _forwardStatusText = $"[{p.PortName}] Đang gửi lệnh chuyển tiếp đến {_forwardPhone}...";
                 StateHasChanged();
 
@@ -825,7 +846,9 @@
     // ========== 9. CHUYỂN TIẾP – HỦY ==========
     async Task CancelForwardingSelected()
     {
-        var ports = _selectedPorts.ToList();
+        var ports = _selectedPorts
+            .Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
+            .ToList();
         if (!ports.Any())
         {
             Snackbar.Add("Vui lòng chọn ít nhất 1 cổng", Severity.Warning);
@@ -842,6 +865,9 @@
         {
             try
             {
+                if (!Vm.IsPortReadyForOperation(p.PortName))
+                    throw new InvalidOperationException("Cổng không còn Active hoặc SIM đã thay đổi.");
+
                 _forwardStatusText = $"[{p.PortName}] Đang hủy chuyển tiếp...";
                 StateHasChanged();
 
@@ -877,7 +903,9 @@
     // ========== 10. CHUYỂN TIẾP – KIỂM TRA ==========
     async Task CheckForwardingStatusSelected()
     {
-        var ports = _selectedPorts.ToList();
+        var ports = _selectedPorts
+            .Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
+            .ToList();
         if (!ports.Any())
         {
             Snackbar.Add("Vui lòng chọn ít nhất 1 cổng", Severity.Warning);
@@ -894,6 +922,9 @@
         {
             try
             {
+                if (!Vm.IsPortReadyForOperation(p.PortName))
+                    throw new InvalidOperationException("Cổng không còn Active hoặc SIM đã thay đổi.");
+
                 _forwardStatusText = $"[{p.PortName}] Đang kiểm tra...";
                 StateHasChanged();
 

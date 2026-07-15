@@ -117,7 +117,7 @@ public class ApiServerService
             else if (req.HttpMethod == "GET" && path.StartsWith("/api/proxy/reset/"))
             {
                 string portName = path["/api/proxy/reset/".Length..].ToUpper();
-                bool result = await _vm.ModemService.ResetNetworkAsync(portName);
+                bool result = await _vm.ResetNetworkSafelyAsync(portName);
                 if (result)
                 {
                     await WriteJson(resp, new { success = true, message = $"Đã gửi lệnh ngắt/bật mạng cho {portName}" });

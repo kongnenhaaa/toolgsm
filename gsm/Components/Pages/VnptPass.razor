@@ -9,8 +9,12 @@
 @using System.IO
 @implements IDisposable
 
+<div class="feature-page-header">
+    <div><span class="feature-eyebrow">VNPT Workflow</span><h1>Pass VNPT</h1><p>Yêu cầu OTP và theo dõi tiến trình đặt mật khẩu theo đúng SIM đang Active.</p></div>
+</div>
+
 <!-- ========== ACTION FORM ========== -->
-<MudPaper Class="pa-3 mx-3 mb-2" Elevation="0"
+<MudPaper Class="pa-3 mx-3 mb-2 feature-toolbar" Elevation="0"
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
     <MudGrid Spacing="2" Class="mb-2">
         <MudItem xs="12" md="4">
@@ -80,7 +84,7 @@
 
 <!-- ========== SUB TABS ========== -->
 <MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true"
-         PanelClass="pa-0" Class="mx-3 mt-1"
+         PanelClass="pa-0" Class="mx-3 mt-1 feature-tabs"
          Style="background:transparent;"
          @bind-ActivePanelIndex="_subTab">
 
@@ -184,6 +188,7 @@
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
     private bool _isSetting = false;
+    private CancellationTokenSource? _vnptCts;
 
     // ========== DATA ==========
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
@@ -205,7 +210,7 @@
         if (_sendMode == "all")
             return ActivePorts.ToList();
         if (_selectedPorts.Any())
-            return _selectedPorts.ToList();
+            return _selectedPorts.Where(p => p.Status == SimStatus.Active).ToList();
         return ActivePorts.ToList();
     }
 
@@ -280,6 +285,9 @@
         }
 
         _isSetting = true;
+        _vnptCts?.Cancel();
+        _vnptCts?.Dispose();
+        _vnptCts = new CancellationTokenSource();
         _subTab = 1; // Chuyển sang tab kết quả
 
         Snackbar.Add($"Đang yêu cầu đặt mật khẩu cho {validTargets.Count} cổng... (OTP sẽ gửi về SIM)", Severity.Info);
@@ -287,8 +295,12 @@
         try
         {
             // Gọi ViewModel — chạy song song cho tất cả cổng (Task.Run bên trong)
-            await Vm.SetMyVnptPassword(validTargets);
-            Snackbar.Add("Đã gửi yêu cầu API. Đang chờ OTP SMS về...", Severity.Success);
+            await Vm.SetMyVnptPassword(validTargets, _vnptCts.Token);
+            Snackbar.Add("Đã hoàn tất tiến trình VNPT cho các cổng đã chọn.", Severity.Success);
+        }
+        catch (OperationCanceledException)
+        {
+            Snackbar.Add("Đã dừng yêu cầu VNPT.", Severity.Normal);
         }
         catch (Exception ex)
         {
@@ -301,11 +313,9 @@
     // ========== 3. DỪNG ==========
     void StopSetPassword()
     {
-        // SetMyVnptPassword đã chạy song song bằng Task.Run bên trong ViewModel
-        // Không thể cancel các HTTP request đang chạy, nhưng ta reset UI state.
-        // Các request đang chạy sẽ hoàn thành tự nhiên và cập nhật VnptResults.
+        _vnptCts?.Cancel();
         _isSetting = false;
-        Snackbar.Add("Đã dừng theo dõi tiến trình (các request đã gửi vẫn tiếp tục xử lý)", Severity.Normal);
+        Snackbar.Add("Đang hủy các request VNPT và tiến trình chờ OTP...", Severity.Normal);
     }
 
     // ========== 4. XÓA KẾT QUẢ ==========
@@ -318,5 +328,7 @@
     public void Dispose()
     {
         _timer?.Dispose();
+        _vnptCts?.Cancel();
+        _vnptCts?.Dispose();
     }
 }

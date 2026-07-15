@@ -8,15 +8,12 @@
 @using gsm.Models
 @using System.IO
 
-<div class="px-3 pt-2">
-    <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Cài đặt</MudText>
-    <MudText Typo="Typo.body2" Class="mb-4" Style="color:#64748B;">
-        Cấu hình tool • Mạng • SMS/USSD • Thông báo • Telegram • Webhook • Firebase • Âm thanh • Nâng cao
-    </MudText>
+<div class="feature-page-header">
+    <div><span class="feature-eyebrow">Configuration</span><h1>Cài đặt</h1><p>Cấu hình mạng, GSM, thông báo, âm thanh và vận hành hệ thống.</p></div>
 </div>
 
 <!-- ========== TOOLBAR ========== -->
-<MudPaper Class="pa-3 mx-3 mb-4" Elevation="0"
+<MudPaper Class="pa-3 mx-3 mb-4 feature-toolbar settings-toolbar" Elevation="0"
           Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:8px;">
     <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
         <MudButton Variant="Variant.Filled" Color="Color.Primary"
@@ -42,7 +39,7 @@
     </MudStack>
 </MudPaper>
 
-<div class="mx-3">
+<div class="mx-3 settings-grid">
     <MudGrid>
 
         <!-- ========== CỘT TRÁI ========== -->
@@ -65,11 +62,8 @@
                            Label="Tự recovery khi mất sóng"
                            Color="Color.Primary" Class="mb-2" />
                 <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B; display:block;">
-                    Tự CFUN=1 + re-apply scan mode + COPS=0 khi mất sóng lâu
+                    Recovery giữ nguyên phiên SIM, cấu hình lại mạng và xác minh trước khi trở lại Active.
                 </MudText>
-                <MudSwitch T="bool" @bind-Value="_forceCfun1AfterReboot"
-                           Label="Ép CFUN=1 sau reboot"
-                           Color="Color.Primary" Class="mb-3" />
                 <MudStack Row="true" Spacing="2">
                     <MudNumericField T="int" @bind-Value="_recoveryThreshold"
                                      Label="Ngưỡng recovery (lần poll)"
@@ -385,7 +379,6 @@
     private bool _prefer4G = true;
     private bool _enableVolte = false;
     private bool _autoRecovery = true;
-    private bool _forceCfun1AfterReboot = true;
     private int _recoveryThreshold = 12;
     private int _watchdogSeconds = 50;
 
@@ -468,7 +461,6 @@
             _prefer4G = cfg.Prefer4G;
             _enableVolte = cfg.EnableVolte;
             _autoRecovery = cfg.AutoRecovery;
-            _forceCfun1AfterReboot = cfg.ForceCfun1AfterReboot;
             _recoveryThreshold = cfg.RecoveryThreshold;
             _watchdogSeconds = cfg.WatchdogSeconds;
 
@@ -529,12 +521,29 @@
     {
         try
         {
+            if (_recoveryThreshold is < 5 or > 30 || _watchdogSeconds is < 20 or > 120)
+            {
+                Snackbar.Add("Thông số recovery/watchdog nằm ngoài khoảng hợp lệ.", Severity.Warning);
+                return;
+            }
+            if (_smsTimeout is < 10000 or > 60000 || _ussdRetrySeconds is < 15 or > 90)
+            {
+                Snackbar.Add("Thông số timeout SMS/USSD nằm ngoài khoảng hợp lệ.", Severity.Warning);
+                return;
+            }
+            if (_enableAutoCallForwarding && string.IsNullOrWhiteSpace(_forwardPhoneNumber))
+            {
+                Snackbar.Add("Hãy nhập số chuyển tiếp trước khi bật chuyển tiếp cuộc gọi.", Severity.Warning);
+                return;
+            }
+
             var cfg = gsm.Services.SettingsService.Current;
 
             cfg.Prefer4G = _prefer4G;
             cfg.EnableVolte = _enableVolte;
             cfg.AutoRecovery = _autoRecovery;
-            cfg.ForceCfun1AfterReboot = _forceCfun1AfterReboot;
+            // Luôn tắt cờ legacy: lifecycle GSM hiện tại chỉ CFUN qua recovery có xác minh phiên SIM.
+            cfg.ForceCfun1AfterReboot = false;
             cfg.RecoveryThreshold = _recoveryThreshold;
             cfg.WatchdogSeconds = _watchdogSeconds;
 
@@ -592,8 +601,8 @@
 
             gsm.Services.SettingsService.SaveSettings(cfg);
 
-            // Áp dụng cài đặt (sync AppSettings + call forwarding) ngay lập tức
-            _ = Task.Run(async () => await Vm.ApplySettingsAsync());
+            // Chỉ báo thành công sau khi backend đã áp dụng xong lên các cổng Active.
+            await Vm.ApplySettingsAsync();
 
             Snackbar.Add("✓ Đã lưu tất cả cài đặt và áp dụng ngay", Severity.Success);
         }
@@ -608,7 +617,6 @@
         _prefer4G = true;
         _enableVolte = false;
         _autoRecovery = true;
-        _forceCfun1AfterReboot = true;
         _recoveryThreshold = 12;
         _watchdogSeconds = 50;
 

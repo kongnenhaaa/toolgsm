@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="gsm/gsm.csproj" />
+  <Project Path="gsm.Tests/gsm.Tests.csproj" />
 </Solution>

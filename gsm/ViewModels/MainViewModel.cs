@@ -24,6 +24,11 @@ namespace gsm.ViewModels;
 public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly IGsmModemService _modemService;
+    private readonly IPortSessionRegistry _portSessions;
+    private readonly IGsmSmsService _smsService;
+    private readonly IGsmUssdService _ussdService;
+    private readonly IGsmCallService _callService;
+    private readonly IGsmBackgroundSupervisor _backgroundSupervisor;
     private readonly Services.ImeiManagementService _imeiManagementService;
     private readonly SpeechToTextService _speechToTextService;
     private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
@@ -126,29 +131,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     
     public event Action<string, string>? OtpReceivedEvent;
 
-    private static readonly TimeSpan UssdMinIntervalPerPort = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan UssdMinIntervalGlobal = TimeSpan.FromMilliseconds(500);
-    private readonly ConcurrentDictionary<string, DateTime> _lastUssdByPort = new();
-    private readonly SemaphoreSlim _ussdSendLock = new SemaphoreSlim(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSendLocks = new();
     private readonly ConcurrentDictionary<string, DateTime> _portCooldownUntilUtc = new();
-    private DateTime _lastUssdGlobalUtc = DateTime.MinValue;
 
     // Fix #3: Dùng static Random để tránh lỗi seed trùng khi gọi liên tiếp nhanh
     private static readonly Random _rng = new Random();
 
     // Đánh dấu cổng nào đang có SMS được gửi để USSD tự nhường đường (tránh tranh Semaphore)
-    public readonly ConcurrentDictionary<string, bool> SmsInProgressPorts = new();
+    public ConcurrentDictionary<string, bool> SmsInProgressPorts => _smsService.InProgressPorts;
 
     // Đánh dấu cổng nào đang trong quá trình khởi tạo SIM/IMEI để tránh khởi tạo song song
     private readonly ConcurrentDictionary<string, bool> _initializingPorts = new();
     // Mỗi lần cắm/rút SIM tạo một epoch mới. Mọi tác vụ IMEI/Accept phải giữ đúng
     // epoch + CCID; tác vụ của SIM cũ không được phép cập nhật SIM mới trên cùng COM.
-    private readonly ConcurrentDictionary<string, long> _simEpochs = new();
-    private readonly ConcurrentDictionary<string, string> _sessionCcids = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _simOperationCts = new();
-    private readonly object _simSessionLock = new();
 
     private readonly string _cacheFilePath = AppPaths.ForRuntimeFile("sim_cache.json");
     private ConcurrentDictionary<string, string> _simCache = new();
@@ -1038,7 +1033,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public MainViewModel()
+    public MainViewModel(
+        IGsmModemService modemService,
+        IPortSessionRegistry portSessions,
+        IGsmSmsService smsService,
+        IGsmUssdService ussdService,
+        IGsmCallService callService,
+        IGsmBackgroundSupervisor backgroundSupervisor,
+        ImeiManagementService imeiManagementService)
     {
         FilteredPortsView = System.Windows.Data.CollectionViewSource.GetDefaultView(Ports);
         FilteredPortsView.Filter = o => 
@@ -1074,7 +1076,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ExportColumns.Add(new ExportColumnItem("Khóa 1C", "Lock1C"));
         ExportColumns.Add(new ExportColumnItem("Khóa 2C", "Lock2C"));
 
-        _modemService = new GsmModemService();
+        _modemService = modemService;
+        _portSessions = portSessions;
+        _smsService = smsService;
+        _ussdService = ussdService;
+        _callService = callService;
+        _backgroundSupervisor = backgroundSupervisor;
         _modemService.RequiresSimAcceptanceCheck = (ccid, imei) =>
         {
             string normCcid = NormalizeCcid(ccid);
@@ -1094,7 +1101,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             bool treatAsNewSim = (entry == null) || (!isHardwareImeiValid && !hasValidBackup);
             return treatAsNewSim;
         };
-        _imeiManagementService = new Services.ImeiManagementService(_modemService, (msg, level) => AddLog(msg, level));
+        _imeiManagementService = imeiManagementService;
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
         _modemService.PortDisconnected += ModemService_PortDisconnected;
@@ -1147,133 +1154,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
             AddLog($"[API] REST API server đang chạy tại http://localhost:{SettingsService.Current.ApiServerPort}/api/");
         }
 
-        var lifetimeToken = _lifetimeCts.Token;
-
-        // #7: Tự động làm mới số dư mỗi 30 phút
-        _ = Task.Run(async () =>
+        _backgroundSupervisor.Start(new GsmBackgroundSupervisorContext
         {
-            while (!lifetimeToken.IsCancellationRequested)
+            GetPorts = GetPortsSnapshot,
+            IsActive = IsActive,
+            IsWatchdogEnabled = () => IsWatchdogEnabled,
+            IsSmsInProgress = portName => _smsService.IsInProgress(portName),
+            SendBalanceUssdAsync = async (port, reason) =>
             {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromMinutes(30), lifetimeToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-
-                var activePorts = GetPortsSnapshot().Where(IsActive).ToList();
-                if (activePorts.Count > 0)
-                {
-                    AddLog("[HỆ THỐNG] Tự động kiểm tra số dư định kỳ (30 phút/lần)...");
-                    foreach (var p in activePorts)
-                    {
-                        if (lifetimeToken.IsCancellationRequested) break;
-                        string ussdCode = GetUssdCodeForProvider(p.NetworkProvider);
-                        await SendUssdThrottledAsync(p.PortName, ussdCode, "Làm mới số dư tự động", maxAttempts: 1);
-                        await Task.Delay(2000, lifetimeToken);
-                    }
-                }
-            }
-        }, lifetimeToken);
-
-        // Tự động đo cường độ sóng (CSQ) mỗi 15 giây
-        _ = Task.Run(async () =>
-        {
-            while (!lifetimeToken.IsCancellationRequested)
+                string code = GetUssdCodeForProvider(port.NetworkProvider);
+                await SendUssdThrottledAsync(port.PortName, code, reason, maxAttempts: 1);
+            },
+            SetSignalStrength = (port, value) => Application.Current.Dispatcher.Invoke(() => port.SignalStrength = value),
+            MarkSmsSweep = port => Application.Current.Dispatcher.Invoke(() =>
+                port.LastSweepTime = DateTime.Now.ToString("HH:mm:ss")),
+            MarkConnectionTimeout = port => Application.Current.Dispatcher.Invoke(() =>
             {
-                try { await Task.Delay(TimeSpan.FromSeconds(15), lifetimeToken); }
-                catch (OperationCanceledException) { break; }
-
-                var activePorts = GetPortsSnapshot().Where(IsActive).ToList();
-                foreach (var p in activePorts)
-                {
-                    if (lifetimeToken.IsCancellationRequested) break;
-                    
-                    string result = await _modemService.SendCommandAsync(p.PortName, "AT+CSQ", 5000, silent: true);
-                    var match = Regex.Match(result, @"\+CSQ:\s*(\d+)");
-                    if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
-                    {
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            p.SignalStrength = csq >= 99 ? 0 : (int)((csq / 31.0) * 100);
-                        });
-                    }
-                }
-            }
-        }, lifetimeToken);
-
-        // Tự động quét vét SMS (Periodic SMS Sweep)
-        _ = Task.Run(async () =>
-        {
-            while (!lifetimeToken.IsCancellationRequested)
-            {
-                try { await Task.Delay(TimeSpan.FromMinutes(3), lifetimeToken); }
-                catch (OperationCanceledException) { break; }
-
-                var portsCopy = GetPortsSnapshot();
-                foreach (var p in portsCopy)
-                {
-                    if (lifetimeToken.IsCancellationRequested) break;
-                    
-                    // Chỉ quét khi cổng đang rảnh (không chạy SMS gửi) và đang hoạt động tốt
-                    if (p.Status == SimStatus.Active && !SmsInProgressPorts.ContainsKey(p.PortName))
-                    {
-                        try
-                        {
-                            await _modemService.SweepUnreadSmsAsync(p.PortName);
-                            Application.Current.Dispatcher.Invoke(() => p.LastSweepTime = DateTime.Now.ToString("HH:mm:ss"));
-                            await Task.Delay(1000, lifetimeToken); // Tránh spam quá nhanh trên nhiều cổng
-                        }
-                        catch { }
-                    }
-                }
-            }
-        }, lifetimeToken);
-
-
-        // Tự động phục hồi (Watchdog)
-        _ = Task.Run(async () =>
-        {
-            while (!lifetimeToken.IsCancellationRequested)
-            {
-                try { await Task.Delay(TimeSpan.FromSeconds(60), lifetimeToken); }
-                catch (OperationCanceledException) { break; }
-
-                var portsCopy = GetPortsSnapshot();
-                foreach (var p in portsCopy)
-                {
-                    if (lifetimeToken.IsCancellationRequested) break;
-
-                    // 1. Kiểm tra timeout kết nối (2 phút)
-                    if (p.Status == SimStatus.Connecting && DateTime.Now - p.StatusChangedAt > TimeSpan.FromMinutes(2))
-                    {
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            p.Status = SimStatus.NoResponse;
-                            p.LastError = "Kết nối quá hạn (Timeout 2p)";
-                            AddLog($"[{p.PortName}] Kết nối quá hạn (Timeout 2 phút), chuyển về trạng thái Không phản hồi.", "WARN");
-                            UpdateDashboard();
-                        });
-                        continue;
-                    }
-
-                    if (!IsWatchdogEnabled) continue;
-
-                    if (p.Status == SimStatus.NoResponse || p.Status == "Offline" || p.Status == "Error")
-                    {
-                        // Phục hồi fail-closed: hủy phiên cũ, tắt RF rồi chạy lại luồng
-                        // nhận diện CCID/IMEI. Không reset thẳng CFUN=1,1 vì có thể
-                        // đưa một SIM chưa xác minh lên mạng.
-                        AddLog($"[WATCHDOG] Cổng {p.PortName} lỗi. Khởi động lại nhận diện SIM ở chế độ radio-off...", "WARN");
-                        InvalidateSimSession(p.PortName);
-                        await _modemService.SendCommandAsync(p.PortName, "AT+CFUN=4", 8000, silent: true);
-                        _modemService.StartHotplugWaitLoop(p.PortName);
-                    }
-                }
-            }
-        }, lifetimeToken);
+                port.Status = SimStatus.NoResponse;
+                port.LastError = "Kết nối quá hạn (Timeout 2p)";
+                AddLog($"[{port.PortName}] Kết nối quá hạn (Timeout 2 phút), chuyển về trạng thái Không phản hồi.", "WARN");
+                UpdateDashboard();
+            }),
+            InvalidateSession = InvalidateSimSession,
+            Log = AddLog
+        }, _lifetimeCts.Token);
     }
 
     private void UpdateSmsReceiverPhone(string portName, string newPhoneNumber)
@@ -1966,86 +1870,53 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public async Task RefreshPortAsync(string portName)
+    public Task RefreshPortAsync(string portName) => RefreshPortsAsync([portName]);
+
+    public void RefreshAllPorts() => _ = RefreshPortsAsync(GetPortsSnapshot().Select(p => p.PortName));
+
+    public async Task RefreshPortsAsync(IEnumerable<string> portNames)
     {
-        InvalidateSimSession(portName);
-        Application.Current.Dispatcher.Invoke(() =>
+        var names = portNames.Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (names.Count == 0) return;
+
+        foreach (string name in names) InvalidateSimSession(name);
+        await Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            var p = Ports.FirstOrDefault(x => x.PortName == portName);
-            if (p != null) Ports.Remove(p);
+            foreach (var port in Ports.Where(p => names.Contains(p.PortName, StringComparer.OrdinalIgnoreCase)).ToList())
+                Ports.Remove(port);
+            AddLog($"Đang làm mới {names.Count} cổng...");
         });
 
-        await Task.Run(async () =>
+        try
         {
-            _modemService.Disconnect(portName);
-            await Task.Delay(2000);
+            foreach (string name in names) _modemService.Disconnect(name);
+            await Task.Delay(1500, _lifetimeCts.Token);
             _modemService.ConnectAll(115200);
-        });
-        
-        Application.Current.Dispatcher.Invoke(() =>
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
         {
-            AddLog($"Đã nhận lệnh làm mới cổng {portName} từ Web.");
-            SnackbarMessageQueue.Enqueue($"Đang làm mới thiết bị {portName}...");
-        });
-    }
-
-    public void RefreshAllPorts()
-    {
-        foreach (var name in Ports.Select(p => p.PortName).ToList()) InvalidateSimSession(name);
-        Application.Current.Dispatcher.Invoke(() =>
-        {
-            AddLog("Đã nhận lệnh làm mới TẤT CẢ cổng từ Web.");
-            SnackbarMessageQueue.Enqueue("Đang làm mới toàn bộ thiết bị...");
-            Ports.Clear();
-        });
-
-        Task.Run(async () =>
-        {
-            _modemService.DisconnectAll();
-            await Task.Delay(2000); 
-            _modemService.ConnectAll(115200);
-        });
+            AddLog($"Làm mới cổng thất bại: {ex.Message}", "ERROR");
+        }
     }
 
     private (long Epoch, CancellationToken Token) StartSimSession(string portName, string ccid)
     {
-        lock (_simSessionLock)
-        {
-            if (_simOperationCts.TryRemove(portName, out var oldCts))
-            {
-                try { oldCts.Cancel(); oldCts.Dispose(); } catch { }
-            }
-
-            long epoch = _simEpochs.AddOrUpdate(portName, 1, (_, old) => old + 1);
-            var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
-            _simOperationCts[portName] = cts;
-            _sessionCcids[portName] = NormalizeCcid(ccid);
-            return (epoch, cts.Token);
-        }
+        var session = _portSessions.Begin(portName, ccid, _lifetimeCts.Token);
+        return (session.Epoch, session.Token);
     }
 
     private void InvalidateSimSession(string portName)
     {
-        lock (_simSessionLock)
-        {
-            _simEpochs.AddOrUpdate(portName, 1, (_, old) => old + 1);
-            _sessionCcids.TryRemove(portName, out _);
-            _initializingPorts.TryRemove(portName, out _);
-            if (_simOperationCts.TryRemove(portName, out var cts))
-            {
-                try { cts.Cancel(); cts.Dispose(); } catch { }
-            }
-        }
+        _portSessions.Invalidate(portName);
+        _initializingPorts.TryRemove(portName, out _);
     }
 
     private bool IsSimSessionCurrent(string portName, string ccid, long epoch)
     {
-        return _simEpochs.TryGetValue(portName, out long currentEpoch)
-            && currentEpoch == epoch
-            && _sessionCcids.TryGetValue(portName, out string? currentCcid)
-            && string.Equals(currentCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
-            && _simOperationCts.TryGetValue(portName, out var cts)
-            && !cts.IsCancellationRequested;
+        return _portSessions.IsCurrent(portName, ccid, epoch);
     }
 
     private bool TryGetCurrentSimSession(
@@ -2058,21 +1929,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         epoch = 0;
         token = CancellationToken.None;
 
-        if (!_sessionCcids.TryGetValue(portName, out var sessionCcid)
-            || !_simEpochs.TryGetValue(portName, out var sessionEpoch)
-            || !_simOperationCts.TryGetValue(portName, out var cts)
-            || cts.IsCancellationRequested
-            || string.IsNullOrWhiteSpace(sessionCcid))
-        {
-            return false;
-        }
-
-        if (!IsSimSessionCurrent(portName, sessionCcid, sessionEpoch))
-            return false;
-
-        ccid = sessionCcid;
-        epoch = sessionEpoch;
-        token = cts.Token;
+        if (!_portSessions.TryGet(portName, out var session)) return false;
+        ccid = session.Ccid;
+        epoch = session.Epoch;
+        token = session.Token;
         return true;
     }
 
@@ -2411,7 +2271,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            if (_simEpochs.TryGetValue(portName, out long currentEpoch) && currentEpoch == epoch)
+            if (_portSessions.IsEpochCurrent(portName, epoch))
                 _initializingPorts.TryRemove(portName, out _);
         }
     }
@@ -2732,7 +2592,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         // đều sẽ dùng chung 1 lệnh *101# để vừa lấy SĐT vừa lấy Số dư (TKC).
                         if (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance))
                         {
-                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 99999);
+                            await SendUssdThrottledAsync(port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 3);
                             await Task.Delay(2000, activeToken); // Đợi mạng xử lý xong lệnh trước
                         }
                         
@@ -2747,7 +2607,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                     && (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance)))
                                 {
                                     Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] SĐT/TKC vẫn trống sau 35s, thử gửi lại USSD *101#...", "WARN"));
-                                    await SendUssdThrottledAsync(port.PortName, "*101#", "Retry lấy SĐT & TKC", maxAttempts: 99999);
+                                    await SendUssdThrottledAsync(port.PortName, "*101#", "Retry lấy SĐT & TKC", maxAttempts: 2);
                                 }
                             }
                             catch (OperationCanceledException) { }
@@ -3014,12 +2874,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (!_initializingPorts.TryAdd(portName, true)) return false;
 
         (long Epoch, CancellationToken Token) session;
-        if (_simEpochs.TryGetValue(portName, out long epoch)
-            && _sessionCcids.TryGetValue(portName, out string? sessionCcid)
-            && string.Equals(sessionCcid, ccid, StringComparison.OrdinalIgnoreCase)
-            && _simOperationCts.TryGetValue(portName, out var existingCts)
-            && !existingCts.IsCancellationRequested)
-            session = (epoch, existingCts.Token);
+        if (_portSessions.TryGet(portName, out var existingSession)
+            && string.Equals(existingSession.Ccid, ccid, StringComparison.OrdinalIgnoreCase))
+            session = (existingSession.Epoch, existingSession.Token);
         else
             session = StartSimSession(portName, ccid);
 
@@ -3046,7 +2903,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            if (_simEpochs.TryGetValue(portName, out long currentEpoch) && currentEpoch == session.Epoch)
+            if (_portSessions.IsEpochCurrent(portName, session.Epoch))
                 _initializingPorts.TryRemove(portName, out _);
         }
     }
@@ -3070,13 +2927,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         (long Epoch, CancellationToken Token) session;
-        if (_simEpochs.TryGetValue(portName, out long epoch)
-            && _sessionCcids.TryGetValue(portName, out string? sessionCcid)
-            && string.Equals(sessionCcid, ccid, StringComparison.OrdinalIgnoreCase)
-            && _simOperationCts.TryGetValue(portName, out var existingCts)
-            && !existingCts.IsCancellationRequested)
+        if (_portSessions.TryGet(portName, out var existingSession)
+            && string.Equals(existingSession.Ccid, ccid, StringComparison.OrdinalIgnoreCase))
         {
-            session = (epoch, existingCts.Token);
+            session = (existingSession.Epoch, existingSession.Token);
         }
         else
         {
@@ -3116,7 +2970,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            if (_simEpochs.TryGetValue(portName, out long currentEpoch) && currentEpoch == session.Epoch)
+            if (_portSessions.IsEpochCurrent(portName, session.Epoch))
                 _initializingPorts.TryRemove(portName, out _);
         }
     }
@@ -4495,28 +4349,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         SnackbarMessageQueue.Enqueue($"Đang tiến hành vét tin nhắn kẹt trên {targetPorts.Count} cổng...");
         
-        foreach (var port in targetPorts)
+        using var sweepGate = new SemaphoreSlim(3, 3);
+        var sweepTasks = targetPorts.Select(async port =>
         {
-            if (SmsInProgressPorts.ContainsKey(port.PortName))
-                continue;
+            if (SmsInProgressPorts.ContainsKey(port.PortName) || !IsPortReadyForOperation(port.PortName))
+                return;
 
-            _ = Task.Run(async () =>
+            await sweepGate.WaitAsync(_lifetimeCts.Token);
+            try
             {
-                try
-                {
-                    await _modemService.SweepUnreadSmsAsync(port.PortName);
-                    Application.Current.Dispatcher.Invoke(() => port.LastSweepTime = DateTime.Now.ToString("HH:mm:ss"));
-                }
-                catch { }
-            });
-            await Task.Delay(200);
-        }
+                if (!TryGetCurrentSimSession(port.PortName, out var ccid, out var epoch, out _)) return;
+                await _modemService.SweepUnreadSmsAsync(port.PortName);
+                if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
+                Application.Current.Dispatcher.Invoke(() => port.LastSweepTime = DateTime.Now.ToString("HH:mm:ss"));
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { AddLog($"[{port.PortName}] Quét SMS lỗi: {ex.Message}", "ERROR"); }
+            finally { sweepGate.Release(); }
+        }).ToList();
+        await Task.WhenAll(sweepTasks);
     }
 
     [RelayCommand]
     private async Task CheckBalanceAsync(string mode)
     {
         List<Models.SimPort> targetPorts;
+        var balanceTasks = new List<Task>();
         
         if (mode == "Selected")
         {
@@ -4552,8 +4410,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
 
             // Gọi bất đồng bộ không chờ (để throttler bên trong hàm tự động xếp hàng)
-            _ = SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra số dư", maxAttempts: 3, logResult: true);
+            balanceTasks.Add(SendUssdThrottledAsync(
+                port.PortName, ussdCode, "Kiểm tra số dư", maxAttempts: 3, logResult: true));
         }
+        await Task.WhenAll(balanceTasks);
     }
 
     [RelayCommand]
@@ -4588,11 +4448,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         foreach (var port in targetPorts)
         {
-            InvalidateSimSession(port.PortName);
-            port.Status = SimStatus.Connecting;
-            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1,1");
-            await Task.Delay(5000);
-            _modemService.StartHotplugWaitLoop(port.PortName);
+            bool started = await ReloadPortSafelyAsync(port.PortName, "Đang khởi động lại và xác minh SIM...");
+            AddLog($"[{port.PortName}] {(started ? "Đã bắt đầu reload an toàn" : "Không thể reload")}",
+                started ? "SUCCESS" : "ERROR");
         }
     }
 
@@ -4626,41 +4484,49 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SnackbarMessageQueue.Enqueue($"Đang gửi lệnh Fix Modem cho {targetPorts.Count} cổng...");
         AddLog($"Bắt đầu Fix Modem cho {targetPorts.Count} cổng...");
 
-        foreach (var port in targetPorts)
+        using var fixGate = new SemaphoreSlim(3, 3);
+        var fixTasks = targetPorts.Select(async port =>
         {
-            _ = Task.Run(async () =>
+            await fixGate.WaitAsync(_lifetimeCts.Token);
+            try
             {
-                try
-                {
-                    InvalidateSimSession(port.PortName);
-                    Application.Current.Dispatcher.Invoke(() => port.Status = SimStatus.Connecting);
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang gửi lệnh Fix Modem..."));
-                    var commands = new[]
-                    {
-                        "AT+QURCCFG=\"urcport\",\"uart1\"",
-                        "AT+QCFG=\"nwscanmode\",0,1",
-                        "AT+CUSD=1",
-                        "AT+QSIMDET=1,0",
-                        "AT+QSIMSTAT=1",
-                        "AT+CFUN=1,1"
-                    };
+                if (!IsPortReadyForOperation(port.PortName)
+                    || !TryGetCurrentSimSession(port.PortName, out var ccid, out var epoch, out _))
+                    return;
 
-                    foreach (var cmd in commands)
-                    {
-                        await _modemService.SendCommandAsync(port.PortName, cmd, 1000);
-                        await Task.Delay(500);
-                    }
-                    await Task.Delay(5000);
-                    _modemService.StartHotplugWaitLoop(port.PortName);
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Fix EC20 hoàn tất, modem đang khởi động lại...", "SUCCESS"));
-                }
-                catch (Exception ex)
+                Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Đang cấu hình lại EC20..."));
+                string[] commands =
+                [
+                    "AT+QURCCFG=\"urcport\",\"uart1\"",
+                    "AT+QCFG=\"nwscanmode\",0,1",
+                    "AT+CUSD=1",
+                    "AT+QSIMDET=1,0",
+                    "AT+QSIMSTAT=1"
+                ];
+
+                foreach (string command in commands)
                 {
-                    Application.Current.Dispatcher.Invoke(() => AddLog($"[{port.PortName}] Lỗi Fix EC20: {ex.Message}", "ERROR"));
+                    if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
+                    string response = await _modemService.SendCommandAsync(port.PortName, command, 5000);
+                    if (response.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException($"{command}: {response.Trim()}");
                 }
-            });
-            await Task.Delay(200); // Throttling
-        }
+
+                bool reloading = await ReloadPortSafelyAsync(port.PortName, "Đang nạp lại cấu hình EC20 và xác minh SIM...");
+                AddLog($"[{port.PortName}] {(reloading ? "Fix EC20 hoàn tất; đang xác minh lại" : "Fix EC20 không thể reload")}",
+                    reloading ? "SUCCESS" : "ERROR");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                AddLog($"[{port.PortName}] Lỗi Fix EC20: {ex.Message}", "ERROR");
+            }
+            finally
+            {
+                fixGate.Release();
+            }
+        }).ToList();
+        await Task.WhenAll(fixTasks);
     }
 
     [RelayCommand]
@@ -4689,21 +4555,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SnackbarMessageQueue.Enqueue($"Đang ép ngắt sóng {targetPorts.Count} cổng để chờ thay SIM...");
         AddLog($"Bắt đầu ngắt sóng {targetPorts.Count} cổng...");
 
-        foreach (var port in targetPorts)
+        var swapTasks = targetPorts.Select(async port =>
         {
-            // Vô hiệu hóa ngay mọi Accept/IMEI/reinitialize đang chạy trước khi
-            // gửi lệnh tắt sóng; không chờ event WAITING_FOR_SIM đến sau.
             InvalidateSimSession(port.PortName);
             Application.Current.Dispatcher.Invoke(() => port.Status = SimStatus.Connecting);
-            _ = Task.Run(async () => 
+            try
             {
                 await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4");
-                
-                // [SHIELD IMEI] Tráng một lớp IMEI Fake ngẫu nhiên làm lá chắn.
-                
                 _modemService.StartHotplugWaitLoop(port.PortName);
-            });
-        }
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{port.PortName}] Không thể tắt sóng để thay SIM: {ex.Message}", "ERROR");
+            }
+        }).ToList();
+        await Task.WhenAll(swapTasks);
         
         SnackbarMessageQueue.Enqueue("Đã ngắt sóng an toàn. Bạn có thể rút khay SIM ra và cắm SIM mới vào.");
     }
@@ -4741,7 +4607,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         foreach (var port in targetPorts)
         {
-            await _modemService.SendCommandAsync(port.PortName, "AT+CMGD=1,4");
+            if (!IsPortReadyForOperation(port.PortName)
+                || !TryGetCurrentSimSession(port.PortName, out var ccid, out var epoch, out _))
+                continue;
+            try
+            {
+                string result = await _modemService.SendCommandAsync(port.PortName, "AT+CMGD=1,4");
+                if (IsSimSessionCurrent(port.PortName, ccid, epoch)
+                    && result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                    AddLog($"[{port.PortName}] Xóa SMS thất bại: {result.Trim()}", "ERROR");
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{port.PortName}] Xóa SMS lỗi: {ex.Message}", "ERROR");
+            }
         }
     }
 
@@ -4755,7 +4634,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string ussdCode = GetUssdCodeForProvider(port.NetworkProvider);
             AddLog($"Tự động kiểm tra lại TKC cho {port.PortName} sau khi gửi SMS...");
-            return await SendUssdThrottledAsync(port.PortName, ussdCode, "Tự động kiểm tra TKC", maxAttempts: 99999, logResult: true);
+            return await SendUssdThrottledAsync(port.PortName, ussdCode, "Kiểm tra TKC", maxAttempts: 3, logResult: true);
         }
         return "ERROR: Cổng không hợp lệ hoặc không có thông tin nhà mạng";
     }
@@ -4787,240 +4666,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxAttempts = 3)
     {
-        if (!IsPortReadyForOperation(portName)
-            || !TryGetCurrentSimSession(portName, out var ussdCcid, out var ussdEpoch, out var simToken))
+        if (!IsPortReadyForOperation(portName))
             return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi";
 
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token, simToken);
-        var operationToken = linkedCts.Token;
+        var currentPort = Ports.FirstOrDefault(p => p.PortName == portName);
+        if (reason.Contains("lấy SĐT") && !reason.Contains("TKC")
+            && currentPort != null && !string.IsNullOrWhiteSpace(currentPort.PhoneNumber))
+            return "SKIPPED: Đã có SĐT";
+        if (reason == "Tự động lấy SĐT và TKC" && currentPort != null
+            && !string.IsNullOrWhiteSpace(currentPort.PhoneNumber)
+            && !string.IsNullOrWhiteSpace(currentPort.Balance))
+            return "SKIPPED: Đã đủ thông tin";
 
-        string result = string.Empty;
-
-        for (int i = 0; i < maxAttempts; i++)
+        string result = await _ussdService.SendAsync(portName, ussdCode, maxAttempts, _lifetimeCts.Token);
+        if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
         {
-            if (!IsSimSessionCurrent(portName, ussdCcid, ussdEpoch)
-                || !IsPortReadyForOperation(portName))
-                return "ERROR: Phiên SIM đã thay đổi trong lúc gửi USSD";
-
-            // Chỉ kiểm tra cooldown ở lần thử đầu tiên (i == 0)
-            if (i == 0 && IsPortCoolingDown(portName, out var remainingCooldown))
-            {
-                result = $"ERROR: Port cooling down for {remainingCooldown.TotalSeconds:0}s";
-                AddLog($"[{portName}] Bỏ qua USSD vì cổng đang cooldown {remainingCooldown.TotalSeconds:0}s sau lỗi gần nhất.", "WARN");
-                return result;
-            }
-
-            if (string.IsNullOrWhiteSpace(portName) || string.IsNullOrWhiteSpace(ussdCode))
-            {
-                return "ERROR: Invalid USSD request";
-            }
-
-            var port = Ports.FirstOrDefault(p => p.PortName == portName);
-            if (reason.Contains("lấy SĐT") && !reason.Contains("TKC") && port != null && !string.IsNullOrWhiteSpace(port.PhoneNumber))
-            {
-                return "SKIPPED: Đã có SĐT";
-            }
-            if (reason == "Tự động lấy SĐT và TKC" && port != null && !string.IsNullOrWhiteSpace(port.PhoneNumber) && !string.IsNullOrWhiteSpace(port.Balance))
-            {
-                return "SKIPPED: Đã đủ thông tin";
-            }
-
-            await _ussdSendLock.WaitAsync(operationToken);
-            try
-            {
-                var now = DateTime.UtcNow;
-
-                if (_lastUssdByPort.TryGetValue(portName, out var lastPortUtc))
-                {
-                    var remaining = UssdMinIntervalPerPort - (now - lastPortUtc);
-                    if (remaining > TimeSpan.Zero)
-                    {
-                        WarnUssdThrottle(portName, reason, remaining, "SIM");
-                        await Task.Delay(remaining, operationToken);
-                        now = DateTime.UtcNow;
-                    }
-                }
-
-                var globalRemaining = UssdMinIntervalGlobal - (now - _lastUssdGlobalUtc);
-                if (globalRemaining > TimeSpan.Zero)
-                {
-                    WarnUssdThrottle(portName, reason, globalRemaining, "GLOBAL");
-                    await Task.Delay(globalRemaining, operationToken);
-                    now = DateTime.UtcNow;
-                }
-
-                _lastUssdByPort[portName] = now;
-                _lastUssdGlobalUtc = now;
-            }
-            finally
-            {
-                _ussdSendLock.Release();
-            }
-
-            // 1. Chuyển bảng mã về GSM
-            var preflightError = await PrepareUssdPortAsync(portName);
-            if (!string.IsNullOrEmpty(preflightError))
-            {
-                result = preflightError;
-            }
-            else
-            {
-                if (!IsSimSessionCurrent(portName, ussdCcid, ussdEpoch)
-                    || !IsPortReadyForOperation(portName))
-                    return "ERROR: Phiên SIM đã thay đổi trong lúc chuẩn bị USSD";
-
-                await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
-
-            // 2. Gửi lệnh USSD
-                try
-                {
-                    result = await _modemService.SendCommandAsync(portName, $"AT+CUSD=1,\"{ussdCode}\",15");
-                    await Task.Delay(3500, operationToken);
-                }
-                finally
-                {
-
-            // 3. Chuyển lại UCS2
-                    if (IsSimSessionCurrent(portName, ussdCcid, ussdEpoch)
-                        && IsPortReadyForOperation(portName))
-                        await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
-                }
-            }
-
-            bool isFailed = result.Contains("ERROR") || result.Contains("Thao tac khong hop le") || result.Contains("he thong ban") || result.Contains("+CUSD: 2") || result.Contains("+CUSD: 4") || result.Contains("+CUSD: 5");
-
-            if (!isFailed)
-            {
-                if (logResult) AddLog($"Kết quả từ {portName}: {result}", "SUCCESS");
-                return result; // Thành công, thoát vòng lặp
-            }
-
             RecordPortError(portName, result);
             MaybeCooldownPort(portName, result);
-
-            if (i < maxAttempts - 1)
-            {
-                // Nếu đang có SMS chờ xử lý trên cổng này, dừng retry USSD lại ngay
-                if (SmsInProgressPorts.ContainsKey(portName))
-                {
-                    AddLog($"[{portName}] Dừng retry USSD vì có lệnh SMS đang ưu tiên.", "INFO");
-                    break;
-                }
-                int delaySecs = Math.Min(3 + i * 2, 30);
-                AddLog($"[{portName}] Lỗi USSD ({result.Trim()}). Thử lại sau {delaySecs} giây... (Lần {i + 1}/{maxAttempts - 1})", "WARN");
-                await Task.Delay(TimeSpan.FromSeconds(delaySecs), _lifetimeCts.Token);
-            }
+            if (logResult) AddLog($"Kết quả từ {portName}: {result}", "ERROR");
         }
-
-        if (logResult) AddLog($"Kết quả từ {portName} (Đã thử {maxAttempts} lần): {result}", "ERROR");
+        else if (logResult)
+        {
+            AddLog($"Kết quả từ {portName}: {result}", "SUCCESS");
+        }
         return result;
-    }
-
-    private void WarnUssdThrottle(string portName, string reason, TimeSpan remaining, string scope)
-    {
-        string message = $"USSD đang xếp hàng ({scope}) cho {portName} - {reason}. Đợi {remaining.TotalSeconds:0.#}s.";
-        AddLog(message, "INFO");
-    }
-
-    private async Task<string?> PrepareUssdPortAsync(string portName)
-    {
-        string at = await _modemService.SendCommandAsync(portName, "AT", 3000, true);
-        if (IsCommandError(at))
-        {
-            return $"ERROR: Modem not ready ({at.Trim()})";
-        }
-
-        string pinStatus = await _modemService.SendCommandAsync(portName, "AT+CPIN?", 5000, true);
-        if (IsCommandError(pinStatus))
-        {
-            return $"ERROR: SIM status check failed ({pinStatus.Trim()})";
-        }
-        if (pinStatus.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase) ||
-            pinStatus.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase) ||
-            pinStatus.Contains("PH-NET PIN", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"ERROR: SIM not ready ({pinStatus.Trim()})";
-        }
-
-        string registration = await _modemService.SendCommandAsync(portName, "AT+CREG?", 5000, true);
-        if (IsCommandError(registration))
-        {
-            return $"ERROR: Network registration check failed ({registration.Trim()})";
-        }
-        if (!IsNetworkRegistered(registration))
-        {
-            // Thử thêm CEREG (LTE EPS) nếu CREG báo chưa đăng ký
-            string lteReg = await _modemService.SendCommandAsync(portName, "AT+CEREG?", 5000, true);
-            if (IsNetworkRegistered(lteReg))
-            {
-                registration = lteReg;
-            }
-            else
-            {
-                // Thử tiếp COPS để lấy trực tiếp trạng thái nhà mạng
-                string copsReg = await _modemService.SendCommandAsync(portName, "AT+COPS?", 5000, true);
-                if (IsNetworkRegistered(copsReg))
-                {
-                    registration = copsReg;
-                }
-                else
-                {
-                    return $"ERROR: SIM not registered on network ({registration.Trim()})";
-                }
-            }
-        }
-
-        string signal = await _modemService.SendCommandAsync(portName, "AT+CSQ", 5000, true);
-        if (IsCommandError(signal))
-        {
-            return $"ERROR: Signal quality check failed ({signal.Trim()})";
-        }
-        if (!HasUsableSignal(signal))
-        {
-            return $"ERROR: Signal too weak for USSD ({signal.Trim()})";
-        }
-
-        await _modemService.SendCommandAsync(portName, "AT+CUSD=2", 5000, true);
-        await Task.Delay(400, _lifetimeCts.Token);
-        return null;
-    }
-
-    private static bool IsCommandError(string response)
-    {
-        return string.IsNullOrWhiteSpace(response) ||
-               response.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsNetworkRegistered(string response)
-    {
-        if (string.IsNullOrWhiteSpace(response)) return false;
-
-        // 1. Kiểm tra CREG / CGREG / CEREG
-        var cregMatch = Regex.Match(response, @"\+(?:C|CG|CE)REG:\s*\d+\s*,\s*(\d+)");
-        if (cregMatch.Success && (cregMatch.Groups[1].Value is "1" or "5"))
-        {
-            return true;
-        }
-
-        // 2. Kiểm tra COPS (nếu phản hồi chứa tên nhà mạng trong dấu ngoặc kép)
-        var copsMatch = Regex.Match(response, @"\+COPS:\s*\d+\s*,\s*\d+\s*,\s*""([^""]+)""");
-        if (copsMatch.Success && !string.IsNullOrWhiteSpace(copsMatch.Groups[1].Value))
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool HasUsableSignal(string response)
-    {
-        var match = Regex.Match(response, @"\+CSQ:\s*(\d+)");
-        if (!match.Success) return false;
-
-        if (!int.TryParse(match.Groups[1].Value, out int csq)) return false;
-        if (csq == 99) return false;
-
-        return csq >= 6;
     }
 
     private bool IsPortCoolingDown(string portName, out TimeSpan remaining)
@@ -5618,129 +5287,39 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string content,
         CancellationToken ct = default)
     {
-        return SendSmsThrottledAsync(portName, phoneNumber, content, ct);
+        return SendSmsViaServiceAsync(portName, phoneNumber, content, ct);
     }
 
-    private async Task<string> SendSmsThrottledAsync(
+    private async Task<string> SendSmsViaServiceAsync(
         string portName,
         string phoneNumber,
         string content,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
-        var sendLock = _smsSendLocks.GetOrAdd(portName, _ => new SemaphoreSlim(1, 1));
-        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token, ct);
-        await sendLock.WaitAsync(waitCts.Token);
-        string smsCcid = string.Empty;
-        long smsEpoch = 0;
-        CancellationTokenSource? linkedCts = null;
+        if (!IsPortReadyForOperation(portName))
+            return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi";
+        if (IsPortCoolingDown(portName, out var remaining))
+            return $"ERROR: Port cooling down for {remaining.TotalSeconds:0}s";
 
-        try
+        string result = await _smsService.SendAsync(portName, phoneNumber, content, ct);
+        if (result.Contains("thành công", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase))
         {
-            if (!IsPortReadyForOperation(portName)
-                || !TryGetCurrentSimSession(portName, out smsCcid, out smsEpoch, out var simToken))
-                return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi";
-
-            linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token, simToken, ct);
-            var operationToken = linkedCts.Token;
-
-            SmsInProgressPorts.TryAdd(portName, true);
-
-            if (IsPortCoolingDown(portName, out var remainingCooldown))
-            {
-                string msg = $"ERROR: Port cooling down for {remainingCooldown.TotalSeconds:0}s";
-                AddLog($"[{portName}] Bỏ qua gửi SMS vì cổng đang cooldown {remainingCooldown.TotalSeconds:0}s sau lỗi gần nhất.", "WARN");
-                return msg;
-            }
-
-            // 1. Remove diacritics to send via GSM safely without UCS2 hex-encoding complexity
-            string safeContent = RemoveDiacritics(content);
-
-            for (int attempt = 1; attempt <= 3; attempt++)
-            {
-                if (!IsPortReadyForOperation(portName)
-                    || !IsSimSessionCurrent(portName, smsCcid, smsEpoch))
-                    return "ERROR: Phiên SIM đã thay đổi trong lúc gửi SMS";
-
-                // 2. Switch to GSM temporarily so that the raw text is accepted
-                await _modemService.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
-                await _modemService.SendCommandAsync(portName, "AT+CSMP=17,167,0,0", 5000, true);
-
-                // 3. Send the SMS
-                string result = await _modemService.SendSmsAsync(portName, phoneNumber, safeContent, timeoutMs: 30000);
-
-                if (!IsSimSessionCurrent(portName, smsCcid, smsEpoch)
-                    || !IsPortReadyForOperation(portName))
-                    return "ERROR: Phiên SIM đã thay đổi trong lúc gửi SMS";
-                
-                if (result.Contains("OK") || result.Contains("+CMGS:"))
-                {
-                    RecordSmsSuccess(portName);
-                    AddLog($"[{portName}] Gửi tin nhắn đến {phoneNumber} thành công.", "SUCCESS");
-                    return "Gửi thành công";
-                }
-
-                RecordPortError(portName, result);
-                MaybeCooldownPort(portName, result);
-
-                if (attempt >= 3 || !ShouldRetrySms(result))
-                {
-                    if (result.Contains("Timeout"))
-                    {
-                        AddLog($"[{portName}] Lỗi Timeout SMS: Không retry để tránh gửi trùng. Vui lòng kiểm tra điện thoại người nhận xem đã có tin nhắn chưa!", "WARN");
-                        Application.Current.Dispatcher.Invoke(() => SnackbarMessageQueue.Enqueue($"[{portName}] Timeout SMS: Không retry để tránh gửi trùng."));
-                    }
-                    else
-                    {
-                        AddLog($"[{portName}] Gửi tin nhắn thất bại sau {attempt} lần: {result}", "ERROR");
-                    }
-                    return result;
-                }
-
-                var delay = TimeSpan.FromSeconds(2 * attempt);
-                AddLog($"[{portName}] Gửi SMS lỗi ({result}). Thử lại sau {delay.TotalSeconds:0}s... (Lần {attempt}/3)", "WARN");
-                await Task.Delay(delay, operationToken);
-
-                if (IsPortCoolingDown(portName, out remainingCooldown))
-                {
-                    AddLog($"[{portName}] Dừng retry SMS vì cổng chuyển sang cooldown {remainingCooldown.TotalSeconds:0}s.", "WARN");
-                    return $"ERROR: Cooldown {remainingCooldown.TotalSeconds:0}s";
-                }
-            }
+            RecordSmsSuccess(portName);
+            AddLog($"[{portName}] Gửi tin nhắn đến {phoneNumber} thành công.", "SUCCESS");
         }
-        catch (OperationCanceledException)
+        else
         {
+            RecordPortError(portName, result);
+            MaybeCooldownPort(portName, result);
+            AddLog($"[{portName}] Gửi SMS thất bại: {result}", "ERROR");
         }
-        finally
-        {
-            // 4. Always revert back to UCS2 so incoming SMS (Tiếng Việt) doesn't break!
-            if (!string.IsNullOrWhiteSpace(smsCcid)
-                && IsSimSessionCurrent(portName, smsCcid, smsEpoch)
-                && IsPortReadyForOperation(portName))
-            {
-                await _modemService.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
-                await _modemService.SendCommandAsync(portName, "AT+CSMP=17,167,0,8", 5000, true);
-            }
-            linkedCts?.Dispose();
-            SmsInProgressPorts.TryRemove(portName, out _);
-            sendLock.Release();
-        }
-        return "ERROR: Hết thời gian chờ hoặc hủy bỏ";
+        return result;
     }
 
     public string RemoveDiacritics(string text)
     {
-        if (string.IsNullOrWhiteSpace(text)) return text;
-        string normalizedString = text.Normalize(NormalizationForm.FormD);
-        StringBuilder stringBuilder = new StringBuilder();
-        foreach (char c in normalizedString)
-        {
-            System.Globalization.UnicodeCategory unicodeCategory = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
-            if (unicodeCategory != System.Globalization.UnicodeCategory.NonSpacingMark)
-            {
-                stringBuilder.Append(c);
-            }
-        }
-        return stringBuilder.ToString().Normalize(NormalizationForm.FormC).Replace("đ", "d").Replace("Đ", "D");
+        return GsmSmsService.RemoveDiacritics(text);
     }
 
     private string GetRandomForwardNumber(string input)
@@ -5885,7 +5464,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            bool result = await _modemService.CallWithAudioAsync(
+            bool result = await _callService.CallAsync(
                 port,
                 phone,
                 string.IsNullOrWhiteSpace(wavPath) ? null : wavPath,
@@ -6687,7 +6266,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _lifetimeCts.Cancel();
         }
 
-        foreach (var name in _simOperationCts.Keys.ToList()) InvalidateSimSession(name);
+        _portSessions.InvalidateAll();
 
         _firebaseService.Stop();
         _firebaseService.Dispose();
@@ -6697,12 +6276,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _activeRamRecordings.Clear();
         _activeCallers.Clear();
 
-        foreach (var semaphore in _smsSendLocks.Values)
-        {
-            semaphore.Dispose();
-        }
-
-        _ussdSendLock.Dispose();
+        _smsService.Dispose();
+        _ussdService.Dispose();
+        _backgroundSupervisor.Dispose();
+        _portSessions.Dispose();
         _lifetimeCts.Dispose();
     }
 
@@ -6985,7 +6562,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (cmdType == "SMS")
             {
-                finalResult = await SendSmsThrottledAsync(portName, item.Recipient, item.Content);
+                finalResult = await QueueSmsAsync(portName, item.Recipient, item.Content, _lifetimeCts.Token);
             }
             else if (cmdType == "Call")
             {

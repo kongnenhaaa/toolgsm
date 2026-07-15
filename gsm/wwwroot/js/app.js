@@ -15,3 +15,13 @@ window.clipboardCopy = {
         }
     }
 };
+
+window.appUi = {
+    scrollToTop: function () {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+        const main = document.querySelector(".app-main-content");
+        if (main) main.scrollTop = 0;
+    }
+};

@@ -217,9 +217,7 @@
             await OnRefresh.InvokeAsync(port);
         else
         {
-            try { ModemService.Disconnect(port.PortName); } catch {}
-            await Task.Delay(500);
-            ModemService.ConnectAll(115200);
+            await Vm.RefreshPortAsync(port.PortName);
         }
     }
 
@@ -287,12 +285,7 @@
     {
         var ports = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
         Snackbar.Add($"Đang làm mới {ports.Count} cổng...", Severity.Info);
-        foreach (var p in ports)
-        {
-            try { ModemService.Disconnect(p.PortName); } catch {}
-            await Task.Delay(500);
-        }
-        ModemService.ConnectAll(115200);
+        await Vm.RefreshPortsAsync(ports.Select(p => p.PortName));
         SelectedItems.Clear();
         _ = SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
@@ -300,7 +293,9 @@
     async Task CheckTkcSelected()
     {
         var requested = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
-        var ports = requested.Where(p => p.Status == gsm.Models.SimStatus.Active).ToList();
+        var ports = requested
+            .Where(p => p.Status == gsm.Models.SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
+            .ToList();
         if (!ports.Any())
         {
             Snackbar.Add("Không có cổng Active để kiểm tra tài khoản.", Severity.Warning);
@@ -311,7 +306,7 @@
         Snackbar.Add($"Đang kiểm tra tài khoản {ports.Count} cổng Active{(skipped > 0 ? $"; bỏ qua {skipped} cổng chưa sẵn sàng" : "")}...", Severity.Info);
         await RunBoundedAsync(ports, 3, async p =>
         {
-            await ModemService.SendCommandAsync(p.PortName, "AT+CUSD=1,\"*101#\",15", 20000);
+            await Vm.CheckBalanceForPortAsync(p.PortName);
         });
         SelectedItems.Clear();
         await SelectedItemsChanged.InvokeAsync(SelectedItems);

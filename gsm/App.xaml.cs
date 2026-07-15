@@ -37,6 +37,12 @@ namespace gsm
 
             // ===== ĐĂNG KÝ BACKEND CŨ =====
             serviceCollection.AddSingleton<IGsmModemService, GsmModemService>();
+            serviceCollection.AddSingleton<IPortSessionRegistry, PortSessionRegistry>();
+            serviceCollection.AddSingleton<IGsmOperationDelay, GsmOperationDelay>();
+            serviceCollection.AddSingleton<IGsmSmsService, GsmSmsService>();
+            serviceCollection.AddSingleton<IGsmUssdService, GsmUssdService>();
+            serviceCollection.AddSingleton<IGsmCallService, GsmCallService>();
+            serviceCollection.AddSingleton<IGsmBackgroundSupervisor, GsmBackgroundSupervisor>();
             serviceCollection.AddSingleton<ImeiManagementService>(sp => 
             {
                 var modem = sp.GetRequiredService<IGsmModemService>();

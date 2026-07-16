@@ -98,5 +98,42 @@ public sealed class ImeiRestoreTests
         Assert.Contains($"COM40:AT+EGMR=1,7,\"{canonicalBackupImei}\"", modem.Commands);
         Assert.Contains("COM40:AT+CGSN", modem.Commands);
         Assert.Contains("COM40:AT+EGMR=0,7", modem.Commands);
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CFUN=1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Restore_DoesNotSucceedWhenCgsnMatchesButStoredImeiIsDifferent()
+    {
+        const string ccid = "89840200011750541177";
+        const string currentImei = "867702058238604";
+        const string targetImei = "355008370781449";
+        const string wrongStoredImei = "351488165212715";
+
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) => Task.FromResult(command switch
+            {
+                "AT+CGSN" => targetImei + "\r\nOK",
+                "AT+EGMR=0,7" => $"+EGMR: \"{wrongStoredImei}\"\r\nOK",
+                _ => "OK"
+            })
+        };
+        var service = new ImeiManagementService(modem);
+        var port = new SimPort { PortName = "COM41", Serial = ccid, Imei = currentImei };
+        var backup = new SimBackupEntry { Ccid = ccid, Imei = targetImei };
+        var settings = new AppSettings { EnableImeiRestore = true, EnableNewSimIntakeMode = true };
+
+        ImeiProcessResult result = await service.ProcessImeiAsync(
+            port,
+            ccid,
+            currentImei,
+            settings,
+            _ => backup,
+            _ => { },
+            action => action(),
+            validateIdentityAsync: () => Task.FromResult(true));
+
+        Assert.Equal(ImeiProcessStatus.SecurityBlocked, result.Status);
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CFUN=1", StringComparison.Ordinal));
     }
 }

@@ -23,6 +23,8 @@
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.SimCard" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Error" OnClick="ReloadSimSelected">Tải lại SIM</MudButton>
             @{
+                // Không chọn cổng: cho phép Accept toàn bộ SIM đang chờ.
+                // Có chọn cổng: chỉ Accept các SIM đang chờ trong selection.
                 var pendingList = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
                 var pendingCount = pendingList.Count(IsPendingAccept);
             }
@@ -33,7 +35,11 @@
                            StartIcon="@Icons.Material.Filled.CheckCircle"
                            OnClick="AcceptSelectedPending"
                            Disabled="@_bulkAccepting">
-                    @(_bulkAccepting ? "Đang chấp nhận..." : $"CHẤP NHẬN ({pendingCount})")
+                    @(_bulkAccepting
+                        ? "Đang chấp nhận..."
+                        : SelectedItems.Any()
+                            ? $"CHẤP NHẬN ĐÃ CHỌN ({pendingCount})"
+                            : $"CHẤP NHẬN TẤT CẢ ({pendingCount})")
                 </MudButton>
             }
 
@@ -250,18 +256,24 @@
 
     async Task AcceptSelectedPending()
     {
-        var list = SelectedItems.Any() ? SelectedItems.Where(IsPendingAccept).ToList() : Ports.Where(IsPendingAccept).ToList();
+        bool acceptAll = !SelectedItems.Any();
+        var list = acceptAll
+            ? Ports.Where(IsPendingAccept).ToList()
+            : SelectedItems.Where(IsPendingAccept).ToList();
         if (!list.Any())
         {
             Snackbar.Add("Không có cổng nào đang Chờ Accept", Severity.Warning);
             return;
         }
 
-        if (list.Count > 5)
+        // Accept toàn bộ luôn phải xác nhận rõ ràng; selection lớn cũng cần xác nhận.
+        if (acceptAll || list.Count > 5)
         {
             var ok = await DialogService.ShowMessageBox(
                 "Xác nhận",
-                $"Chấp nhận SIM + tráng IMEI cho {list.Count} cổng?\nChỉ Accept khi đã chắc SIM đúng.",
+                acceptAll
+                    ? $"Không có COM nào được tick. Chấp nhận TẤT CẢ {list.Count} SIM đang chờ và tráng IMEI?"
+                    : $"Chấp nhận SIM + tráng IMEI cho {list.Count} cổng đã chọn?\nChỉ Accept khi đã chắc SIM đúng.",
                 yesText: "Chấp nhận", cancelText: "Hủy");
             if (ok != true) return;
         }

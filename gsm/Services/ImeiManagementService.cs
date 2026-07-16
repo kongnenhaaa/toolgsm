@@ -19,6 +19,7 @@ public class ImeiProcessResult
 {
     public ImeiProcessStatus Status { get; set; }
     public string FinalImei { get; set; } = string.Empty;
+    public string TargetSource { get; set; } = string.Empty;
     public string ErrorMessage { get; set; } = string.Empty;
 }
 
@@ -205,6 +206,20 @@ public class ImeiManagementService
         if (IsValidImei(canonicalImei)) return true;
         canonicalImei = string.Empty;
         return false;
+    }
+
+    internal static bool StoredImeiMatchesOrUnavailable(string? response, string expectedImei)
+    {
+        if (string.IsNullOrWhiteSpace(response)
+            || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+            || response.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        string storedImei = NormalizeImeiValue(response);
+        // Một số firmware chỉ trả OK cho lệnh đọc EGMR. Khi nó thực sự trả về đủ
+        // 15 số thì bắt buộc phải khớp; không bỏ qua một thanh ghi sai chỉ vì IMEI
+        // đó có check digit không hợp lệ.
+        return storedImei.Length == 0 || AreEquivalentImei(storedImei, expectedImei);
     }
 
     private static int CalculateCheckDigit(string first14Digits)
@@ -456,8 +471,8 @@ public class ImeiManagementService
                     string finalImei = NormalizeImei(finalImeiResp);
                     string storedImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
                     string storedImei = NormalizeImei(storedImeiResp);
-                    bool storedRegisterMatches = !IsUsableObservedImei(storedImei)
-                        || AreEquivalentImei(storedImei, targetImei);
+                    bool storedRegisterMatches = StoredImeiMatchesOrUnavailable(
+                        storedImeiResp, targetImei);
 
                     if (AreEquivalentImei(finalImei, targetImei) && storedRegisterMatches)
                     {
@@ -468,24 +483,18 @@ public class ImeiManagementService
                         dispatcherInvoke(() => port.Imei = targetImei);
                         Log($"[{portName}] Ghi đè IMEI thành công ở lần thử {attempt}: {targetImei}", "SUCCESS");
 
-                        var newEntry = new SimBackupEntry
-                        {
-                            Ccid = ccid,
-                            Imei = targetImei,
-                            PhoneNumber = port.PhoneNumber,
-                            CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                            SourceFile = targetSource,
-                            SimRegDate = port.SimRegDate
-                        };
-                        saveBackupEntry(newEntry);
-
                         // Giữ radio ở CFUN=0. Caller phải xác minh lại CCID/IMEI rồi mới
                         // được bật CFUN=1; tránh SIM mới lên mạng trong cửa sổ chưa xác thực.
                         Log($"[{portName}] IMEI đã ghi và xác minh; tiếp tục giữ radio tắt chờ xác minh CCID cuối.", "INFO");
                         
                         // Tr? v? Applied (không phải Matched) vì IMEI đã thành công được thay đổi
                         // Caller tiếp tục qua cổng xác minh và cấu hình offline trước khi bật radio.
-                        return new ImeiProcessResult { Status = ImeiProcessStatus.Applied, FinalImei = targetImei };
+                        return new ImeiProcessResult
+                        {
+                            Status = ImeiProcessStatus.Applied,
+                            FinalImei = targetImei,
+                            TargetSource = targetSource
+                        };
                     }
                     else
                     {
@@ -526,42 +535,32 @@ public class ImeiManagementService
 
             string checkFinalImei = string.Empty;
             string checkStoredImei = string.Empty;
+            string checkStoredResp = string.Empty;
             for (int i = 0; i < 3; i++)
             {
                 if (!await SessionIsValidAsync())
                     return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi trước bước xác minh cuối" };
                 string checkFinalResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
                 checkFinalImei = NormalizeImei(checkFinalResp);
-                string checkStoredResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
+                checkStoredResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
                 checkStoredImei = NormalizeImei(checkStoredResp);
                 if (!string.IsNullOrEmpty(checkFinalImei)) break;
                 await Task.Delay(1000, ct);
             }
             
-            bool storedFinalMatches = !IsUsableObservedImei(checkStoredImei)
-                || AreEquivalentImei(checkStoredImei, expectedImei);
+            bool storedFinalMatches = StoredImeiMatchesOrUnavailable(
+                checkStoredResp, expectedImei);
             bool matched = AreEquivalentImei(checkFinalImei, expectedImei) && storedFinalMatches;
             Log($"[{portName}] [IMEI_FINAL] CGSN={checkFinalImei}, EGMR={checkStoredImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
 
             if (matched)
             {
-                if (IsValidImei(normalizedExplicitTarget))
-                {
-                    saveBackupEntry(new SimBackupEntry
-                    {
-                        Ccid = ccid,
-                        Imei = expectedImei,
-                        PhoneNumber = port.PhoneNumber,
-                        CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                        SourceFile = "manual-verified",
-                        SimRegDate = port.SimRegDate
-                    });
-                }
                 bool wasApplied = !string.IsNullOrEmpty(targetImei) && !targetAlreadyPresent;
                 return new ImeiProcessResult 
                 { 
                     Status = wasApplied ? ImeiProcessStatus.Applied : ImeiProcessStatus.Matched, 
-                    FinalImei = expectedImei
+                    FinalImei = expectedImei,
+                    TargetSource = targetSource
                 };
             }
             else

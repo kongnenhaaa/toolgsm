@@ -121,7 +121,7 @@
                     <MudTd Style="font-size:12px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@(context.Phone ?? "—")</MudTd>
-                    <MudTd Style="font-family:monospace; font-size:12px;">@context.PasswordMasked</MudTd>
+                    <MudTd Style="font-family:monospace; font-size:12px;">@context.Password</MudTd>
                     <MudTd>
                         <MudChip T="string" Size="Size.Small"
                                  Color="@(context.Success ? Color.Success : Color.Error)">
@@ -205,9 +205,7 @@
     {
         if (_sendMode == "all")
             return ActivePorts.ToList();
-        if (_selectedPorts.Any())
-            return _selectedPorts.Where(p => p.Status == SimStatus.Active).ToList();
-        return ActivePorts.ToList();
+        return _selectedPorts.Where(p => p.Status == SimStatus.Active).ToList();
     }
 
     // ========== 1. ACCEPT SIM ==========
@@ -247,7 +245,7 @@
 
         // Lọc chỉ cổng đã có SĐT để tránh gửi vô nghĩa
         var validTargets = targets
-            .Where(p => !string.IsNullOrWhiteSpace(p.PhoneNumber) && p.PhoneNumber != "Chưa lấy được số")
+            .Where(p => !string.IsNullOrWhiteSpace(MyVnptService.NormalizePhone(p.PhoneNumber)))
             .ToList();
 
         if (!validTargets.Any())
@@ -263,21 +261,9 @@
         if (validTargets.Count > 5)
         {
             var ok = await DialogService.ShowMessageBox("Xác nhận",
-                $"Đặt mật khẩu My VNPT qua API cho {validTargets.Count} cổng?\nMật khẩu: {_vnptPassword}",
+                $"Đặt mật khẩu My VNPT qua API cho {validTargets.Count} cổng?",
                 yesText: "Đặt mật khẩu", cancelText: "Hủy");
             if (ok != true) return;
-        }
-
-        // Ghi mật khẩu vào file config để MyVnptService sử dụng khi nhận OTP
-        try
-        {
-            string passPath = AppPaths.ForRuntimeFile("dat_passvnpt.txt");
-            await File.WriteAllTextAsync(passPath, _vnptPassword.Trim());
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Lỗi ghi cấu hình mật khẩu: {ex.Message}", Severity.Error);
-            return;
         }
 
         _isSetting = true;
@@ -291,7 +277,7 @@
         try
         {
             // Gọi ViewModel — chạy song song cho tất cả cổng (Task.Run bên trong)
-            await Vm.SetMyVnptPassword(validTargets, _vnptCts.Token);
+            await Vm.SetMyVnptPassword(validTargets, _vnptPassword.Trim(), _vnptCts.Token);
             Snackbar.Add("Đã hoàn tất tiến trình VNPT cho các cổng đã chọn.", Severity.Success);
         }
         catch (OperationCanceledException)
@@ -302,15 +288,16 @@
         {
             Snackbar.Add($"Lỗi yêu cầu API: {ex.Message}", Severity.Error);
         }
-
-        _isSetting = false;
+        finally
+        {
+            _isSetting = false;
+        }
     }
 
     // ========== 3. DỪNG ==========
     void StopSetPassword()
     {
         _vnptCts?.Cancel();
-        _isSetting = false;
         Snackbar.Add("Đang hủy các request VNPT và tiến trình chờ OTP...", Severity.Normal);
     }
 

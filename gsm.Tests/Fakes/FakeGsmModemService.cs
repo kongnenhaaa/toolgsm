@@ -79,6 +79,7 @@ public sealed class FakeGsmModemService : IGsmModemService
     public void StartHotplugWaitLoop(string portName) { }
     public Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
     public Task ReloadSimAsync(string portName) => Task.CompletedTask;
+    public Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
 
     public void RaiseSms(string portName, string sender, string data) =>
         SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Sender = sender, Data = data });

@@ -33,6 +33,7 @@ public interface IGsmModemService
     void StartHotplugWaitLoop(string portName);
     Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default);
     Task ReloadSimAsync(string portName);
+    Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default);
     Task<bool> CallWithAudioAsync(string portName, string phoneNumber, string? wavPath, int durationSeconds = 30, bool record = false, CancellationToken ct = default);
     bool IsCallInProgress(string portName);
     QuectelModemProfile? GetModemProfile(string portName);
@@ -91,6 +92,11 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _simMonitorCts = new();
     private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
     private readonly ConcurrentDictionary<string, bool> _simStackDisabledByTool = new();
+    private readonly ConcurrentDictionary<string, int> _simRemovalEvidenceCounts = new();
+    // A CFUN=1,1 reboot temporarily reports CPIN NOT READY / QSIMSTAT=0 even when the
+    // card is still inserted. While this marker is present, removal monitors must not
+    // turn that boot window into a hot-plug removal and force the modem back to CFUN=4.
+    private readonly ConcurrentDictionary<string, byte> _rebootRecoveryInProgress = new();
     /// <summary>Guard chống race condition: đánh dấu port đang trong quá trình khởi tạo SIM đầu tiên.</summary>
     private readonly ConcurrentDictionary<string, bool> _simInitInProgress = new();
     private readonly ConcurrentDictionary<string, bool> _simInsertInProgress = new();
@@ -868,6 +874,24 @@ public class GsmModemService : IGsmModemService
         || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
         || response.Contains("Timeout", StringComparison.OrdinalIgnoreCase);
 
+    internal static bool HasReadableCcid(string response) =>
+        !IsCommandFailure(response)
+        && Regex.IsMatch(response, @"(?<!\d)89\d{16,20}(?!\d)");
+
+    internal static bool ShouldVerifySimRemoval(
+        string cpin,
+        bool stackDisabledByTool,
+        bool removalUrcPending)
+    {
+        if (stackDisabledByTool) return false;
+        bool explicitNotInserted = cpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase);
+        bool transientNotReady = cpin.Contains("NOT READY", StringComparison.OrdinalIgnoreCase)
+            || cpin.Contains("ERROR: 10", StringComparison.OrdinalIgnoreCase)
+            || cpin.Contains("ERROR: 13", StringComparison.OrdinalIgnoreCase)
+            || cpin.Contains("ERROR: 14", StringComparison.OrdinalIgnoreCase);
+        return explicitNotInserted || (transientNotReady && removalUrcPending);
+    }
+
     private async Task InitializeModemCoreAsync(string portName, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -968,8 +992,10 @@ public class GsmModemService : IGsmModemService
             {
                 await ConfigureVoiceAudioAsync(portName);
             }
-            if (profile.Supports(ModemCapability.SimHotplugConfig))
-                await SendCommandAsync(portName, "AT+QSIMDET=1,0", 10000, silent: true);
+            // Không ghi QSIMDET tự động. Mức SIM_DET là đặc tính của bo mạch, không
+            // phải của model EC20; ép level=0 rồi reboot có thể làm một số khay đang
+            // có SIM bị firmware báo nhầm là đã rút. Tool dùng CPIN/QSIMSTAT/CCID để
+            // xác minh hot-plug mà không thay cấu hình chân phần cứng của thiết bị.
             if (profile.Supports(ModemCapability.SimStatusUrc))
                 await SendCommandAsync(portName, "AT+QSIMSTAT=1", 10000, silent: true);
             if (profile.Supports(ModemCapability.DtmfDetection))
@@ -994,9 +1020,10 @@ public class GsmModemService : IGsmModemService
         string initialCpin = await SendCommandAsync(portName, "AT+CPIN?", 3000, silent: true);
         bool simLocked = initialCpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
                       || initialCpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-        bool definitelyNoSim = initialCpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase)
-                            || initialCpin.Contains("NOT READY", StringComparison.OrdinalIgnoreCase)
-                            || initialCpin.Contains("CME ERROR: 10", StringComparison.OrdinalIgnoreCase);
+        // Under CFUN=4, EC20 commonly reports NOT READY/CME 10 while the card is still
+        // physically inserted. Only an explicit NOT INSERTED is conclusive here; all
+        // other states must go through the brief CFUN=1 + CCID probe below.
+        bool definitelyNoSim = initialCpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase);
         if (simLocked)
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {initialCpin.Trim()}" });
 
@@ -1008,8 +1035,8 @@ public class GsmModemService : IGsmModemService
                 string qsim = profile.Supports(ModemCapability.SimStatusUrc)
                     ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
                     : string.Empty;
-                bool physicallyPresent = initialCpin.Contains("READY", StringComparison.OrdinalIgnoreCase)
-                                      || Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
+                bool physicallyPresent = Regex.IsMatch(initialCpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
+                                       || Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
                 // Một số EC20 trả SIM failure/QSIMSTAT=0 khi CFUN=4 dù SIM đã cắm sẵn.
                 // Với lỗi chung (không phải NOT INSERTED), bật stack ngắn hạn để xác minh thật.
                 if (physicallyPresent || !definitelyNoSim)
@@ -1069,6 +1096,77 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CFUN=1,1", 10000);
     }
 
+    public async Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default)
+    {
+        if (!_serialPorts.ContainsKey(portName)) return false;
+        if (!_rebootRecoveryInProgress.TryAdd(portName, 0)) return false;
+
+        try
+        {
+            await ReloadSimAsync(portName);
+
+            // ReinitializeSettingsAsync waits for AT to come back instead of assuming a
+            // fixed five-second boot time. EC20/EC25 firmware and a busy USB hub can need
+            // considerably longer after CFUN=1,1.
+            if (!await ReinitializeSettingsAsync(portName, ct)) return false;
+
+            bool simReady = false;
+            for (int attempt = 0; attempt < 45; attempt++)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!_serialPorts.ContainsKey(portName)) return false;
+
+                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true, ct: ct);
+                if (cpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
+                    || cpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}"
+                    });
+                    return false;
+                }
+
+                simReady = cpin.Contains("READY", StringComparison.OrdinalIgnoreCase)
+                    && !cpin.Contains("NOT READY", StringComparison.OrdinalIgnoreCase);
+                if (!simReady)
+                {
+                    string qsim = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
+                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true, ct: ct)
+                        : string.Empty;
+                    simReady = Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
+
+                    // SIM_DET có thể không được nối hoặc dùng polarity khác trên bo 32/64
+                    // cổng. CCID đọc được là bằng chứng mạnh hơn CPIN NOT READY tạm thời.
+                    if (!simReady && attempt % 3 == 2)
+                    {
+                        string ccid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
+                        simReady = HasReadableCcid(ccid);
+                    }
+                }
+                if (simReady) break;
+
+                // NOT READY/CME 10 is expected during boot. Do not emit WAITING_FOR_SIM
+                // and do not enter the CFUN=4 hot-plug loop during this grace period.
+                await Task.Delay(1500, ct);
+            }
+
+            if (!simReady) return false;
+
+            _lastSimState[portName] = true;
+        }
+        finally
+        {
+            _rebootRecoveryInProgress.TryRemove(portName, out _);
+        }
+
+        // Re-enter the normal identity pipeline (CCID -> IMEI -> configuration) only
+        // after the modem and SIM are both ready.
+        await HandleSimInsertedAsync(portName);
+        return true;
+    }
+
     public async Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default)
     {
         // Chờ modem boot lên (AT trả về OK)
@@ -1118,8 +1216,7 @@ public class GsmModemService : IGsmModemService
             {
                 await ConfigureVoiceAudioAsync(portName);
             }
-            if (profile.Supports(ModemCapability.SimHotplugConfig))
-                await SendCommandAsync(portName, "AT+QSIMDET=1,0", 5000, silent: true);
+            // Giữ nguyên QSIMDET hiện có của bo mạch; không ép polarity chung cho mọi khay.
             if (profile.Supports(ModemCapability.SimStatusUrc))
                 await SendCommandAsync(portName, "AT+QSIMSTAT=1", 5000, silent: true);
             if (profile.Supports(ModemCapability.DtmfDetection))
@@ -1164,22 +1261,40 @@ public class GsmModemService : IGsmModemService
                 try { await Task.Delay(5000, token); } catch { break; } // Quét mỗi 5 giây
                 if (!_serialPorts.ContainsKey(portName)) break;
                 if (IsCallInProgress(portName)) continue;
+                if (_rebootRecoveryInProgress.ContainsKey(portName)) continue;
 
                 string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
                 
                 // Nếu timeout (modem đang bận gọi điện) thì bỏ qua vòng lặp này
                 if (string.IsNullOrWhiteSpace(cpin)) continue;
 
-                bool isSimPresent = cpin.Contains("READY");
+                // Do not use Contains("READY"): it also matches "+CPIN: NOT READY".
+                bool isSimPresent = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
                 bool isSimLocked = cpin.Contains("SIM PIN") || cpin.Contains("SIM PUK");
                 bool stackDisabledByTool = _simStackDisabledByTool.TryGetValue(portName, out bool stackDisabled) && stackDisabled;
                 // EC20C reports CPIN NOT READY / CME 10 while CFUN=0/4 even when the card is
                 // physically still inserted. Never turn that tool-induced radio transition into
                 // a physical-removal event; the unsolicited QSIMSTAT/CPIN handler will detect a
                 // real removal once the SIM stack is enabled again.
-                bool isSimRemoved = !stackDisabledByTool &&
-                                    (cpin.Contains("NOT INSERTED") || cpin.Contains("NOT READY") ||
-                                     cpin.Contains("ERROR: 10") || cpin.Contains("ERROR: 13") || cpin.Contains("ERROR: 14"));
+                bool removalUrcPending = _simRemovalEvidenceCounts.TryGetValue(portName, out int urcEvidence)
+                    && urcEvidence > 0;
+                bool isSimRemoved = ShouldVerifySimRemoval(cpin, stackDisabledByTool, removalUrcPending);
+
+                // CPIN/CME đơn lẻ không đủ kết luận SIM đã bị rút. Sau USSD hoặc lúc
+                // modem chuyển miền CS/IMS, một số EC20 trả CME 10 dù CCID vẫn đọc được.
+                // Xác minh thêm cảm biến và danh tính SIM trước khi tăng bằng chứng rút.
+                if (isSimRemoved)
+                {
+                    string qsimstat = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
+                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
+                        : string.Empty;
+                    string liveCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
+                    if (Regex.IsMatch(qsimstat, @"\+QSIMSTAT:\s*1\s*,\s*1") || HasReadableCcid(liveCcid))
+                    {
+                        isSimPresent = true;
+                        isSimRemoved = false;
+                    }
+                }
 
                 // Quectel sometimes returns generic ERROR when SIM is removed if CMEE=2 drops
                 if (!isSimPresent && !isSimRemoved && cpin.Contains("ERROR"))
@@ -1198,6 +1313,7 @@ public class GsmModemService : IGsmModemService
 
                 if (isSimLocked)
                 {
+                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
                     _lastSimState[portName] = false;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}" });
                     continue;
@@ -1205,14 +1321,24 @@ public class GsmModemService : IGsmModemService
 
                 if (isSimPresent && !lastState)
                 {
+                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
                     // Guard: Nếu InitializeModemAsync đang chạy (trong 20s đầu) hoặc đang handle SIM khác → bỏ qua
                     if (_simInitInProgress.ContainsKey(portName)) continue;
 
                     _lastSimState[portName] = true;
                     _ = HandleSimInsertedSafelyAsync(portName);
                 }
+                else if (isSimPresent)
+                {
+                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                }
                 else if (isSimRemoved && lastState)
                 {
+                    // Require three consecutive, identity-confirmed removal cycles before
+                    // clearing CCID/phone/balance and entering the CFUN=4 hot-plug loop.
+                    int evidence = _simRemovalEvidenceCounts.AddOrUpdate(portName, 1, (_, old) => old + 1);
+                    if (evidence < 3) continue;
+                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
                     _lastSimState[portName] = false;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (Quét nền)!" });
                     _ = SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
@@ -1287,7 +1413,7 @@ public class GsmModemService : IGsmModemService
                 // Chỉ dùng trạng thái vật lý để phát hiện SIM. Việc đọc CCID/IMEI được gom
                 // vào HandleSimInsertedAsync nhằm tránh hai luồng cùng xử lý một lần cắm.
                 string cpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-                bool hasSim = cpin.Contains("READY");
+                bool hasSim = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
                 if (cpin.Contains("SIM PIN") || cpin.Contains("SIM PUK"))
                 {
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}" });
@@ -1311,13 +1437,18 @@ public class GsmModemService : IGsmModemService
                         {
                             await Task.Delay(attempt == 0 ? 1800 : 1200, token);
                             string enabledCpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-                            hasSim = enabledCpin.Contains("READY", StringComparison.OrdinalIgnoreCase);
+                            hasSim = Regex.IsMatch(enabledCpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
                             if (!hasSim)
                             {
                                 string enabledQsim = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
                                     ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
                                     : string.Empty;
                                 hasSim = Regex.IsMatch(enabledQsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
+                            }
+                            if (!hasSim)
+                            {
+                                string enabledCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
+                                hasSim = HasReadableCcid(enabledCcid);
                             }
                         }
                         if (!hasSim)
@@ -1339,7 +1470,6 @@ public class GsmModemService : IGsmModemService
                                     Data = $"[SIM_RECOVERY] COM vẫn phản hồi nhưng chưa đọc được SIM; reboot riêng module lần {hardRecoveryAttempts}/2..."
                                 });
 
-                                await SendCommandAsync(portName, "AT+QSIMDET=1,0", 5000, silent: true);
                                 await SendCommandAsync(portName, "AT+CFUN=1,1", 10000, silent: true);
                                 try { await Task.Delay(12000, token); } catch { break; }
                                 if (!IsCurrentLoop()) break;
@@ -2083,21 +2213,36 @@ public class GsmModemService : IGsmModemService
             bool hasUnsolicitedQsimRemoval = !stackDisabledByTool && !isQsimQueryResponse && currentData.Contains("+QSIMSTAT: 1,0");
             if (hasUnsolicitedCpinRemoval || hasUnsolicitedQsimRemoval)
             {
-                buffer.Replace("+CPIN: NOT READY", "");
-                buffer.Replace("+CPIN: NOT INSERTED", "");
-                buffer.Replace("+QSIMSTAT: 1,0", "");
-                currentData = buffer.ToString();
+                if (_rebootRecoveryInProgress.ContainsKey(portName))
+                {
+                    buffer.Replace("+CPIN: NOT READY", "");
+                    buffer.Replace("+CPIN: NOT INSERTED", "");
+                    buffer.Replace("+QSIMSTAT: 1,0", "");
+                    currentData = buffer.ToString();
+                }
+                else
+                {
+                    buffer.Replace("+CPIN: NOT READY", "");
+                    buffer.Replace("+CPIN: NOT INSERTED", "");
+                    buffer.Replace("+QSIMSTAT: 1,0", "");
+                    currentData = buffer.ToString();
 
                 // AT+QSIMSTAT? cũng trả "+QSIMSTAT: 1,0" như response. Chỉ xử lý rút SIM
                 // khi trạng thái trước đó thực sự là có SIM; nếu không sẽ tự restart polling
                 // mỗi 2 giây và không bao giờ chạy được probe CFUN=1.
-                _lastSimState.TryGetValue(portName, out bool wasPresent);
-                if (wasPresent)
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra!" });
-                    _lastSimState[portName] = false;
-                    _ = SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
-                    StartHotplugWaitLoop(portName);
+                    _lastSimState.TryGetValue(portName, out bool wasPresent);
+                    if (wasPresent)
+                    {
+                        // QSIMSTAT polarity phụ thuộc bo mạch và CPIN có thể NOT READY
+                        // tạm thời khi CS/IMS đổi trạng thái. URC chỉ là bằng chứng đầu;
+                        // global monitor sẽ xác minh thêm QSIMSTAT + CCID qua nhiều vòng.
+                        _simRemovalEvidenceCounts.AddOrUpdate(portName, 1, (_, old) => Math.Max(old, 1));
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = "[SIM_REMOVAL_PENDING] Modem báo mất SIM; đang xác minh lại trước khi đổi trạng thái."
+                        });
+                    }
                 }
             }
 
@@ -2235,6 +2380,8 @@ public class GsmModemService : IGsmModemService
         _keepAliveCts.Clear();
         _simMonitorCts.Clear();
         _lastSimState.Clear();
+        _simRemovalEvidenceCounts.Clear();
+        _rebootRecoveryInProgress.Clear();
         _simInitInProgress.Clear();
         _simInsertInProgress.Clear();
         _portLifetimeCts.Clear();
@@ -2309,6 +2456,8 @@ public class GsmModemService : IGsmModemService
                 try { smCts.Cancel(); smCts.Dispose(); } catch {}
             }
             _lastSimState.TryRemove(portName, out _);
+            _simRemovalEvidenceCounts.TryRemove(portName, out _);
+            _rebootRecoveryInProgress.TryRemove(portName, out _);
             _simInitInProgress.TryRemove(portName, out _);
             _simInsertInProgress.TryRemove(portName, out _);
         }
@@ -2318,6 +2467,8 @@ public class GsmModemService : IGsmModemService
         if (_keepAliveCts.TryRemove(portName, out var keepAlive)) { try { keepAlive.Cancel(); keepAlive.Dispose(); } catch { } }
         if (_simMonitorCts.TryRemove(portName, out var simMonitor)) { try { simMonitor.Cancel(); simMonitor.Dispose(); } catch { } }
         _lastSimState.TryRemove(portName, out _);
+        _simRemovalEvidenceCounts.TryRemove(portName, out _);
+        _rebootRecoveryInProgress.TryRemove(portName, out _);
         _simInitInProgress.TryRemove(portName, out _);
         _simInsertInProgress.TryRemove(portName, out _);
     }

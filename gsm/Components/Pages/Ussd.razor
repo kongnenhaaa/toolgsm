@@ -25,18 +25,6 @@
             @(_ussdInFlight.IsEmpty ? "Thực hiện" : $"Thực hiện ({_ussdInFlight.Count} đang chạy)")
         </MudButton>
 
-        @{
-            var pendingCount = _selectedPorts.Count(IsPendingAccept);
-        }
-        @if (pendingCount > 0)
-        {
-            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning"
-                       StartIcon="@Icons.Material.Filled.CheckCircle"
-                       OnClick="AcceptSelectedPending" Disabled="@_bulkAccepting">
-                @(_bulkAccepting ? "Đang chấp nhận..." : $"CHẤP NHẬN ({pendingCount})")
-            </MudButton>
-        }
-
         <MudText Typo="Typo.caption" Style="color:#64748B; margin-left:12px;">Mức sóng</MudText>
         <MudSelect T="string" @bind-Value="_scanMode" Dense="true" Variant="Variant.Outlined" 
                    Margin="Margin.Dense" Style="width:100px; background:#F8FAFC;">
@@ -322,9 +310,6 @@
     private bool _notifyOtp = true;
     private bool _notifyTelegram = false;
 
-    // Accept
-    private bool _bulkAccepting = false;
-
     // ========== DATA ==========
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private List<SimPort> FilteredPorts => Ports;
@@ -379,37 +364,6 @@
         catch (Exception ex)
         {
             Snackbar.Add($"[{port.PortName}] Accept lỗi: {ex.Message}", Severity.Error);
-        }
-    }
-
-    // ========== 2. ACCEPT SELECTED PENDING ==========
-    async Task AcceptSelectedPending()
-    {
-        var list = _selectedPorts.Where(IsPendingAccept).ToList();
-        if (!list.Any())
-        {
-            Snackbar.Add("Không có cổng nào đang Chờ Accept trong selection", Severity.Warning);
-            return;
-        }
-
-        if (list.Count > 5)
-        {
-            var ok = await DialogService.ShowMessageBox(
-                "Xác nhận",
-                $"Chấp nhận SIM + tráng IMEI cho {list.Count} cổng?\nChỉ Accept khi đã chắc SIM đúng.",
-                yesText: "Chấp nhận", cancelText: "Hủy");
-            if (ok != true) return;
-        }
-
-        _bulkAccepting = true;
-        try
-        {
-            await Vm.AcceptSelectedAsync(list.Select(p => p.PortName));
-            Snackbar.Add($"Đã gửi lệnh chấp nhận hàng loạt cho {list.Count} cổng.", Severity.Success);
-        }
-        finally
-        {
-            _bulkAccepting = false;
         }
     }
 

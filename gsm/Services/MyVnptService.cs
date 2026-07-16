@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -31,7 +32,8 @@ public static class MyVnptService
 
     public static async Task<MyVnptOtpSession> PreparePasswordRequestAsync(
         string phone,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, string>? addLogCallback = null)
     {
         string normalizedPhone = NormalizePhone(phone);
         if (string.IsNullOrEmpty(normalizedPhone))
@@ -45,7 +47,8 @@ public static class MyVnptService
             new { msisdn = normalizedPhone },
             deviceInfo,
             userAgent,
-            cancellationToken);
+            cancellationToken,
+            addLogCallback);
 
         string? checkCode = GetResponseValue(checkContent, "error_code", "errorCode");
         bool accountExists = checkCode switch
@@ -60,7 +63,8 @@ public static class MyVnptService
 
     public static async Task SendOtpAsync(
         MyVnptOtpSession session,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, string>? addLogCallback = null)
     {
         string otpContent = await PostAsync(
             "otp_send",
@@ -71,14 +75,19 @@ public static class MyVnptService
             },
             session.DeviceInfo,
             session.UserAgent,
-            cancellationToken);
+            cancellationToken,
+            addLogCallback);
 
         if (GetResponseValue(otpContent, "error_code", "errorCode") != "0")
         {
             string message = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
             // VNPT trả thông báo này khi OTP của chính thuê bao vẫn đang được xử lý.
             // Tiếp tục chờ SMS thay vì đánh dấu lỗi hoặc gửi thêm một yêu cầu OTP.
-            if (IsOtpAlreadyPendingMessage(message)) return;
+            if (IsOtpAlreadyPendingMessage(message))
+            {
+                addLogCallback?.Invoke("[VNPT_HTTP] otp_send báo OTP đang được xử lý; tiếp tục chờ SMS.", "INFO");
+                return;
+            }
             throw new InvalidOperationException(message);
         }
 
@@ -111,7 +120,8 @@ public static class MyVnptService
                 payload,
                 session.DeviceInfo,
                 session.UserAgent,
-                cancellationToken);
+                cancellationToken,
+                addLogCallback);
 
             string mode = session.AccountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
             if (GetResponseValue(responseContent, "error_code", "errorCode") == "0")
@@ -183,7 +193,8 @@ public static class MyVnptService
         object payload,
         string deviceInfo,
         string userAgent,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string, string>? addLogCallback = null)
     {
         string json = JsonSerializer.Serialize(payload);
         for (int attempt = 1; attempt <= MaxTransientAttempts; attempt++)
@@ -193,6 +204,7 @@ public static class MyVnptService
             try
             {
                 await WaitForRequestStartAsync(cancellationToken);
+                var stopwatch = Stopwatch.StartNew();
                 using var request = new HttpRequestMessage(HttpMethod.Post, ApiRoot + service)
                 {
                     Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -205,6 +217,10 @@ public static class MyVnptService
 
                 using HttpResponseMessage response = await Client.SendAsync(request, cancellationToken);
                 string content = await response.Content.ReadAsStringAsync(cancellationToken);
+                stopwatch.Stop();
+                addLogCallback?.Invoke(
+                    $"[VNPT_HTTP] service={service} attempt={attempt} status={(int)response.StatusCode} elapsedMs={stopwatch.ElapsedMilliseconds}",
+                    response.IsSuccessStatusCode ? "INFO" : "WARN");
                 if (response.IsSuccessStatusCode) return content;
 
                 string responseMessage = GetResponseMessage(content, response.ReasonPhrase ?? "Request failed");
@@ -219,6 +235,9 @@ public static class MyVnptService
                 TimeSpan retryDelay = response.Headers.RetryAfter?.Delta
                     ?? TimeSpan.FromSeconds(attempt * 2);
                 if (retryDelay > TimeSpan.FromSeconds(15)) retryDelay = TimeSpan.FromSeconds(15);
+                addLogCallback?.Invoke(
+                    $"[VNPT_HTTP] service={service} tạm lỗi {(int)response.StatusCode}; thử lại sau {retryDelay.TotalSeconds:0.#} giây.",
+                    "WARN");
                 await Task.Delay(retryDelay, cancellationToken);
             }
             finally

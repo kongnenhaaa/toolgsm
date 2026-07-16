@@ -61,6 +61,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, PendingMyVnptPasswordOperation> _pendingMyVnptPasswordPorts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _vnptBatchGate = new(1, 1);
+    // Khóa trọn giao dịch phát OTP của một COM: check account -> đăng ký pending
+    // -> otp_send. Không để toàn bộ check_account chen lên trước toàn bộ otp_send.
+    private readonly SemaphoreSlim _vnptOtpIssueWorkflowGate = new(1, 1);
     
     [ObservableProperty] private int _vnptTotalActiveCount = 0;
     [ObservableProperty] private int _vnptSuccessCount = 0;
@@ -484,60 +487,83 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     operationToken.ThrowIfCancellationRequested();
                     Application.Current.Dispatcher.Invoke(() =>
                     {
-                        port.VnptStatus = "Kiểm tra TK...";
-                        port.LastMessageContent = "Đang kiểm tra tài khoản MyVNPT...";
-                        AddLog($"[{port.PortName}] Đang kiểm tra trạng thái tài khoản số {port.PhoneNumber}...");
+                        port.VnptStatus = "Xếp hàng OTP...";
+                        port.LastMessageContent = "Đang chờ đến lượt gửi yêu cầu MyVNPT...";
                     });
-                    MyVnptOtpSession apiSession = await MyVnptService.PreparePasswordRequestAsync(
-                        port.PhoneNumber, operationToken);
-                    if (!IsSimSessionCurrent(port.PortName, vnptCcid, vnptEpoch)
-                        || port.Status != SimStatus.Active)
-                        throw new OperationCanceledException(operationToken);
-
-                    string modeStr = apiSession.AccountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
-                    pending = new PendingMyVnptPasswordOperation
+                    await _vnptOtpIssueWorkflowGate.WaitAsync(operationToken);
+                    try
                     {
-                        PortName = port.PortName,
-                        Ccid = vnptCcid,
-                        Epoch = vnptEpoch,
-                        LocalPhone = port.PhoneNumber,
-                        Password = password,
-                        ApiSession = apiSession,
-                        CancellationToken = operationToken
-                    };
-                    if (!_pendingMyVnptPasswordPorts.TryAdd(port.PortName, pending))
-                        throw new InvalidOperationException("COM đang có một yêu cầu MyVNPT khác");
-
-                    Application.Current.Dispatcher.Invoke(() => 
-                    {
-                        port.VnptStatus = "Yêu cầu OTP...";
-                        port.LastMessageContent = $"Đang yêu cầu gửi OTP ({modeStr})...";
-                        AddLog($"[{port.PortName}] Trạng thái: {modeStr}. Đang yêu cầu OTP...");
-                    });
-                    
-                    // Pending đã được đăng ký trước khi gọi otp_send, nên SMS về cực nhanh
-                    // vẫn được ghép đúng COM + đúng mật khẩu của tác vụ này.
-                    await MyVnptService.SendOtpAsync(apiSession, operationToken);
-                    if (!IsSimSessionCurrent(port.PortName, vnptCcid, vnptEpoch)
-                        || port.Status != SimStatus.Active)
-                        throw new OperationCanceledException(operationToken);
-
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        if (port.VnptStatus == "Yêu cầu OTP...")
+                        operationToken.ThrowIfCancellationRequested();
+                        Application.Current.Dispatcher.Invoke(() =>
                         {
-                            port.VnptStatus = "Đợi tin nhắn...";
-                            port.LastMessageContent = "Đang đợi tin nhắn OTP...";
-                        }
-                        AddLog($"[{port.PortName}] Đã gửi yêu cầu OTP thành công ({modeStr}), đang đợi tin nhắn...", "INFO");
-                    });
+                            port.VnptStatus = "Kiểm tra TK...";
+                            port.LastMessageContent = "Đang kiểm tra tài khoản MyVNPT...";
+                            AddLog($"[{port.PortName}] [VNPT_FLOW] Bắt đầu kiểm tra tài khoản {port.PhoneNumber}...");
+                        });
+
+                        MyVnptOtpSession apiSession = await MyVnptService.PreparePasswordRequestAsync(
+                            port.PhoneNumber,
+                            operationToken,
+                            (message, type) => AddLog($"[{port.PortName}] {message}", type));
+                        if (!IsSimSessionCurrent(port.PortName, vnptCcid, vnptEpoch)
+                            || port.Status != SimStatus.Active)
+                            throw new OperationCanceledException(operationToken);
+
+                        string modeStr = apiSession.AccountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
+                        pending = new PendingMyVnptPasswordOperation
+                        {
+                            PortName = port.PortName,
+                            Ccid = vnptCcid,
+                            Epoch = vnptEpoch,
+                            LocalPhone = port.PhoneNumber,
+                            Password = password,
+                            ApiSession = apiSession,
+                            CancellationToken = operationToken
+                        };
+                        if (!_pendingMyVnptPasswordPorts.TryAdd(port.PortName, pending))
+                            throw new InvalidOperationException("COM đang có một yêu cầu MyVNPT khác");
+
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.VnptStatus = "Yêu cầu OTP...";
+                            port.LastMessageContent = $"Đang yêu cầu gửi OTP ({modeStr})...";
+                            AddLog($"[{port.PortName}] [VNPT_FLOW] {modeStr}; gửi OTP ngay sau bước kiểm tra...");
+                        });
+
+                        // Đăng ký pending trước otp_send để không bỏ lỡ SMS về cực nhanh.
+                        // Giữ khóa workflow đến khi otp_send có phản hồi, sau đó COM kế tiếp mới chạy check.
+                        await MyVnptService.SendOtpAsync(
+                            apiSession,
+                            operationToken,
+                            (message, type) => AddLog($"[{port.PortName}] {message}", type));
+                        if (!IsSimSessionCurrent(port.PortName, vnptCcid, vnptEpoch)
+                            || port.Status != SimStatus.Active)
+                            throw new OperationCanceledException(operationToken);
+
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            if (port.VnptStatus == "Yêu cầu OTP...")
+                            {
+                                port.VnptStatus = "Đợi tin nhắn...";
+                                port.LastMessageContent = "Đang đợi tin nhắn OTP...";
+                            }
+                            AddLog($"[{port.PortName}] [VNPT_FLOW] otp_send thành công ({modeStr}); nhường lượt cho COM kế tiếp.", "INFO");
+                        });
+                    }
+                    finally
+                    {
+                        _vnptOtpIssueWorkflowGate.Release();
+                    }
+
+                    PendingMyVnptPasswordOperation activePending = pending
+                        ?? throw new InvalidOperationException("Không tạo được phiên chờ OTP MyVNPT");
 
                     using var otpTimeout = CancellationTokenSource.CreateLinkedTokenSource(operationToken);
                     otpTimeout.CancelAfter(TimeSpan.FromMinutes(3));
                     MyVnptPasswordResult result;
                     try
                     {
-                        result = await pending.Completion.Task.WaitAsync(otpTimeout.Token);
+                        result = await activePending.Completion.Task.WaitAsync(otpTimeout.Token);
                     }
                     catch (OperationCanceledException) when (!operationToken.IsCancellationRequested)
                     {
@@ -559,7 +585,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     Application.Current.Dispatcher.Invoke(() =>
                     {
-                        if (port.VnptStatus is "Kiểm tra TK..." or "Yêu cầu OTP..." or "Đợi tin nhắn...")
+                        if (port.VnptStatus is "Xếp hàng OTP..." or "Kiểm tra TK..." or "Yêu cầu OTP..." or "Đợi tin nhắn...")
                         {
                             port.VnptStatus = "Đã hủy";
                             port.LastMessageContent = "Đã hủy yêu cầu MyVNPT";
@@ -2812,7 +2838,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     string ussdContent = match.Groups[1].Value;
                     
                     // Giải mã UCS2 (Hex sang string UTF-8) để đọc được tiếng Việt
-                    ussdContent = DecodeUcs2(ussdContent);
+                    ussdContent = UssdResponseDecoder.DecodePayload(ussdContent);
 
                     // Lưu kết quả USSD vào LastUssdResult (dùng cho tab USSD trong CommandPanel)
                     port.LastUssdResult = ussdContent;
@@ -3619,8 +3645,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 bool receiveAll = SettingsService.Current.ReceiveAllSms;
+                bool pendingWebOtp = _firebaseService.HasPendingOtpCommand(e.PortName);
 
-                if (!receiveAll)
+                if (!receiveAll && !pendingWebOtp)
                 {
                     // Chặn tin nhắn rác từ nhà mạng / tổng đài hệ thống
                     // isTopUpSender: sender là tổng đài nhà mạng Viettel/Vinaphone (không bao giờ là OTP thực)
@@ -5075,6 +5102,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             result = await SendUssdThrottledAsync(
                 portName, ussdCode, "Manual USSD", maxAttempts: 2, logResult: true,
                 cancellationToken: timeoutCts.Token);
+            result = UssdResponseDecoder.Normalize(result);
         }
         catch (OperationCanceledException)
         {
@@ -6036,6 +6064,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
         CancellationToken ct = default)
     {
         return SendSmsViaServiceAsync(portName, phoneNumber, content, ct);
+    }
+
+    /// <summary>
+    /// SMS từ ToolWeb luôn đi vào pipeline chung theo từng COM và không bị chặn
+    /// bởi cooldown của thao tác UI.
+    /// </summary>
+    public async Task<string> QueueSmsFromWebAsync(
+        string portName,
+        string phoneNumber,
+        string content,
+        CancellationToken ct = default)
+    {
+        string result = await _smsService.SendAsync(portName, phoneNumber, content, ct);
+        if (result.Contains("thành công", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase))
+        {
+            RecordSmsSuccess(portName);
+            AddLog($"[{portName}] [WEB_SMS_SENT] Đã gửi đến {phoneNumber}; đang chờ OTP.", "SUCCESS");
+        }
+        else
+        {
+            RecordPortError(portName, result);
+            AddLog($"[{portName}] [WEB_SMS_FAILED] {result}", "ERROR");
+        }
+        return result;
     }
 
     private async Task<string> SendSmsViaServiceAsync(

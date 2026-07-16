@@ -417,7 +417,8 @@
             (string Port, string Result, bool Success) completed;
             try
             {
-                string result = await Vm.SendUssdForPortAsync(portName, requestedCode);
+                string result = gsm.Services.UssdResponseDecoder.Normalize(
+                    await Vm.SendUssdForPortAsync(portName, requestedCode));
                 completed = (portName, result, IsUssdSuccess(result));
             }
             catch (Exception ex)

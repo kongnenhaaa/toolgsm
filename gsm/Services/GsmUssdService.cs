@@ -103,7 +103,7 @@ public sealed class GsmUssdService : IGsmUssdService
                     }
                 }
 
-                if (!IsFailure(result)) return result;
+                if (!IsFailure(result)) return UssdResponseDecoder.Normalize(result);
                 if (attempt >= maxAttempts || _sms.IsInProgress(portName)) return result;
                 // Đóng phiên im lặng trước khi thử DCS tiếp theo.
                 await _modem.SendCommandAsync(portName, "AT+CUSD=2", 5000, true);

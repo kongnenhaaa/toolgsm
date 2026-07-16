@@ -25,6 +25,8 @@ namespace gsm.Services
         private readonly CancellationTokenSource _cts = new();
         private Task? _listenTask;
         private Task? _syncTask;
+        private readonly ConcurrentDictionary<string, byte> _scheduledCommands =
+            new(StringComparer.OrdinalIgnoreCase);
         private const long StaleRunningCommandMs = 10 * 60 * 1000;
         private string _databaseUrl 
         {
@@ -114,7 +116,9 @@ namespace gsm.Services
                 {
                     if (SettingsService.Current.EnableWebNotification)
                     {
-                        await _restClient.DeleteAsync($"{_databaseUrl}web_states/machines/{_machineId}.json");
+                        // Giữ nguyên commandId/reservation để request web đang chờ không
+                        // bị mất liên kết khi ToolGSM khởi động lại.
+                        _vm.AddLog("[FIREBASE] Khởi động cầu nối Web; giữ nguyên các request đang chờ.", "INFO");
                     }
                 }
                 catch { }
@@ -203,6 +207,9 @@ namespace gsm.Services
         {
             while (!ct.IsCancellationRequested)
             {
+                // SSE nhận lệnh tức thời; polling bảo đảm không mất lệnh nếu stream
+                // bị ngắt đúng lúc web vừa ghi command.
+                await PollQueuedCommandsAsync(ct);
                 await SyncPortsAsync(ct);
                 try
                 {
@@ -260,6 +267,7 @@ namespace gsm.Services
                     request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
                     using var response = await _sseClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                    response.EnsureSuccessStatusCode();
                     using var stream = await response.Content.ReadAsStreamAsync(ct);
                     using var reader = new StreamReader(stream);
 
@@ -293,8 +301,9 @@ namespace gsm.Services
                 {
                     break;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    _vm.AddLog($"[FIREBASE_LISTEN_ERROR] {ex.Message}; sẽ kết nối lại.", "WARN");
                     // Lỗi mạng hoặc Firebase bị gián đoạn, thử lại gần như ngay lập tức (chờ 1s để tránh vắt kiệt CPU nếu mất mạng hoàn toàn)
                     try
                     {
@@ -338,7 +347,10 @@ namespace gsm.Services
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _vm.AddLog($"[FIREBASE_EVENT_ERROR] Không đọc được sự kiện command: {ex.Message}", "WARN");
+            }
         }
 
         private async Task UpdateCommandStatusAsync(string cmdId, string status, string? error = null)
@@ -609,6 +621,7 @@ namespace gsm.Services
                     string type = cmdData.TryGetProperty("type", out var typeEl)
                         ? typeEl.GetString() ?? (recipient == "USSD" ? "balance" : "sms")
                         : (recipient == "USSD" ? "balance" : recipient == "SYSTEM" ? "system" : "sms");
+                    if (!_scheduledCommands.TryAdd(cmdId, 0)) return;
                     _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "queued");
 
                     Application.Current.Dispatcher.Invoke(() => 
@@ -634,12 +647,6 @@ namespace gsm.Services
 
                             // Reset OTP cũ khi bắt đầu nhận lệnh mới để tránh kịch bản đọc nhầm OTP cũ
                             var port = _vm.Ports.FirstOrDefault(p => p.PortName == portId);
-                            if (port != null)
-                            {
-                                Application.Current.Dispatcher.Invoke(() => {
-                                    port.Otp = "";
-                                });
-                            }
 
                             await UpdateWebCommandStateAsync(portId, cmdId, "running");
                             _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "running");
@@ -741,11 +748,16 @@ namespace gsm.Services
                                     resultSemaphore.Release();
                                 }
                             }
+                            _scheduledCommands.TryRemove(cmdId, out _);
                         }
                     });
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _scheduledCommands.TryRemove(cmdId, out _);
+                _vm.AddLog($"[FIREBASE_COMMAND_ERROR] Lệnh {cmdId}: {ex.Message}", "ERROR");
+            }
         }
 
         private sealed record PendingWebOtpCommand(
@@ -763,6 +775,9 @@ namespace gsm.Services
         private readonly ConcurrentDictionary<string, byte> _otpCompletedCommands =
             new(StringComparer.OrdinalIgnoreCase);
 
+        public bool HasPendingOtpCommand(string portId) =>
+            !string.IsNullOrWhiteSpace(portId) && _pendingOtpCommands.ContainsKey(portId);
+
         private async Task<string> ExecuteSmsAsync(string portId, string recipient, string content)
         {
             var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
@@ -774,20 +789,13 @@ namespace gsm.Services
             try
             {
                 // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"GSM\"", 10000, true);
+                // Charset và khóa COM được quản lý tập trung bởi GsmSmsService.
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,0", 10000, true); // Sửa lỗi 305 Invalid text mode parameter
-
-                string safeContent = _vm.RemoveDiacritics(content);
 
                 string result = "";
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
-                    result = await _vm.ModemService.SendSmsAsync(
-                        portId,
-                        recipient,
-                        safeContent,
-                        timeoutMs: 45000
-                    );
+                    result = await _vm.QueueSmsFromWebAsync(portId, recipient, content);
 
                     // KHÔNG RETRY nếu lỗi Timeout để tránh gửi trùng SMS (anti-duplicate SMS)
                     // Chỉ retry khi chắc chắn lỗi là do cổng bận (Lock / Another command)
@@ -824,8 +832,6 @@ namespace gsm.Services
 
                 // QUAN TRỌNG: Luôn khôi phục về UCS2 dù gửi SMS thành công hay lỗi
                 // Nếu không, modem sẽ kẹt ở GSM mode, không đọc được tiếng Việt/UCS2 nữa!
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,8", 10000, true);
                 sem.Release();
             }
         }
@@ -909,6 +915,36 @@ namespace gsm.Services
             catch (Exception ex)
             {
                 _vm.AddLog($"[{portId}] [FIREBASE_OTP_RESULT_ERROR] {ex.Message}", "WARN");
+            }
+        }
+
+        private async Task PollQueuedCommandsAsync(CancellationToken ct)
+        {
+            try
+            {
+                using var response = await _restClient.GetAsync($"{_databaseUrl}commands.json", ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _vm.AddLog($"[FIREBASE_POLL] Không đọc được commands: HTTP {(int)response.StatusCode}", "WARN");
+                    return;
+                }
+
+                string json = await response.Content.ReadAsStringAsync(ct);
+                if (string.IsNullOrWhiteSpace(json) || json == "null") return;
+
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+
+                foreach (var command in doc.RootElement.EnumerateObject())
+                {
+                    ct.ThrowIfCancellationRequested();
+                    ExecuteAndRemoveCommand(command.Name, command.Value);
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                _vm.AddLog($"[FIREBASE_POLL_ERROR] {ex.Message}", "WARN");
             }
         }
 

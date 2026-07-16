@@ -4,6 +4,8 @@ namespace gsm.Models;
 
 public class AppSettings
 {
+    public bool DarkMode { get; set; } = false;
+
     public string TelegramBotToken { get; set; } = "";
     public string TelegramChatIds { get; set; } = "";
     public string TelegramChatId { get; set; } = ""; // Mapped from TelegramChatIds or standalone

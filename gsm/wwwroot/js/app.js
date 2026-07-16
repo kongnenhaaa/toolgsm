@@ -17,6 +17,12 @@ window.clipboardCopy = {
 };
 
 window.appUi = {
+    setDarkMode: function (enabled) {
+        const isDark = enabled === true;
+        document.documentElement.classList.toggle("theme-dark", isDark);
+        document.body.classList.toggle("theme-dark", isDark);
+        document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+    },
     scrollToTop: function () {
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
         document.documentElement.scrollTop = 0;

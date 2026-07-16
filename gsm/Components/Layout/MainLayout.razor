@@ -4,7 +4,7 @@
 @inject gsm.ViewModels.MainViewModel Vm
 @inject IJSRuntime JS
 
-<MudThemeProvider Theme="_theme" IsDarkMode="false" />
+<MudThemeProvider Theme="_theme" IsDarkMode="@_isDarkMode" />
 
 <MudLayout Class="app-shell">
     <MudAppBar Elevation="0" Dense="true" Class="app-shell-bar">
@@ -29,6 +29,17 @@
         </nav>
 
         <MudSpacer />
+
+        <div class="app-theme-toggle" title="@(_isDarkMode ? "Chuyển sang giao diện sáng" : "Chuyển sang giao diện tối")">
+            <MudIcon Icon="@(_isDarkMode ? Icons.Material.Filled.DarkMode : Icons.Material.Filled.LightMode)"
+                     Size="Size.Small" />
+            <MudSwitch T="bool"
+                       Value="@_isDarkMode"
+                       ValueChanged="@SetDarkModeAsync"
+                       Color="Color.Primary"
+                       Class="app-theme-switch"
+                       aria-label="Bật tắt Dark Mode" />
+        </div>
 
         <div class="app-health" title="Số cổng đã xác minh và đang hoạt động">
             <span class="app-health-dot"></span>
@@ -59,6 +70,7 @@
     };
 
     private string _current = "ussd";
+    private bool _isDarkMode;
     private int ActiveComCount => Vm.Ports?.Count(p => p.Status == gsm.Models.SimStatus.Active) ?? 0;
     private int TotalComCount => Vm.Ports?.Count ?? 0;
 
@@ -83,6 +95,25 @@
             Error = "#DC2626",
             Info = "#0284C7"
         },
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#60A5FA",
+            Secondary = "#2DD4BF",
+            Tertiary = "#A78BFA",
+            Background = "#0B1120",
+            Surface = "#111827",
+            AppbarBackground = "rgba(15,23,42,.96)",
+            DrawerBackground = "#111827",
+            TextPrimary = "#E5EDF8",
+            TextSecondary = "#94A3B8",
+            ActionDefault = "#94A3B8",
+            Divider = "#263449",
+            TableLines = "#263449",
+            Success = "#4ADE80",
+            Warning = "#FBBF24",
+            Error = "#F87171",
+            Info = "#38BDF8"
+        },
         LayoutProperties = new LayoutProperties
         {
             DefaultBorderRadius = "12px"
@@ -93,9 +124,26 @@
 
     protected override void OnInitialized()
     {
+        _isDarkMode = gsm.Services.SettingsService.Current.DarkMode;
         SyncCurrentRoute();
         Nav.LocationChanged += OnLocationChanged;
         _timer = new System.Threading.Timer(_ => _ = InvokeAsync(StateHasChanged), null, 1000, 1000);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await JS.InvokeVoidAsync("appUi.setDarkMode", _isDarkMode);
+    }
+
+    private async Task SetDarkModeAsync(bool enabled)
+    {
+        if (_isDarkMode == enabled) return;
+
+        _isDarkMode = enabled;
+        gsm.Services.SettingsService.Current.DarkMode = enabled;
+        gsm.Services.SettingsService.SaveSettings(gsm.Services.SettingsService.Current);
+        await JS.InvokeVoidAsync("appUi.setDarkMode", enabled);
     }
 
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)

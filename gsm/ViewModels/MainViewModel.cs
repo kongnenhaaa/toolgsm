@@ -5121,7 +5121,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (port.LastMessageContent.Contains("Đang gửi", StringComparison.OrdinalIgnoreCase))
             {
-                port.LastMessageContent = "[USSD][HOÀN TẤT] " + result;
+                port.LastMessageContent = result;
             }
             port.Sender = "USSD";
             port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");

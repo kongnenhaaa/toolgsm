@@ -1,4 +1,5 @@
 using gsm.Services;
+using System.Net;
 
 namespace gsm.Tests;
 
@@ -39,6 +40,28 @@ public sealed class MyVnptServiceTests
     public void IsMyVnptOtpMessage_RejectsUnrelatedSms(string? content)
     {
         Assert.False(MyVnptService.IsMyVnptOtpMessage(content));
+    }
+
+    [Theory]
+    [InlineData("Bạn đang gửi OTP")]
+    [InlineData("Ban dang gui OTP, vui long cho")]
+    public void IsOtpAlreadyPendingMessage_TreatsExistingRequestAsPending(string content)
+    {
+        Assert.True(MyVnptService.IsOtpAlreadyPendingMessage(content));
+    }
+
+    [Fact]
+    public void GetFriendlyExceptionMessage_ExplainsServiceUnavailable()
+    {
+        var exception = new HttpRequestException(
+            "VNPT HTTP 503: Service Temporarily Unavailable",
+            null,
+            HttpStatusCode.ServiceUnavailable);
+
+        string message = MyVnptService.GetFriendlyExceptionMessage(exception);
+
+        Assert.Contains("VNPT", message);
+        Assert.DoesNotContain("HTTP 503", message);
     }
 
 }

@@ -113,40 +113,41 @@ public class GsmModemService : IGsmModemService
         _modemProfiles.TryGetValue(portName, out var profile) ? profile : null;
 
     // ===================== SMS DECODE + MULTIPART =====================
-    static readonly Regex OtpRegex = new(
-        // Nhóm 1: Có từ khoá rõ ràng trước số OTP (độ chính xác cao nhất)
-        @"(?:otp|m\xE3\s*otp|ma\s*otp|m\xE3\s*x\xE1c\s*th\u1EF1c|ma\s*xac\s*thuc|" +
-        @"m\xE3\s*x\xE1c\s*nh\u1EADn|ma\s*xac\s*nhan|" +
-        @"verification\s*code|auth(?:entication)?\s*code|m\xE3\s*pin|" +
-        @"code\s*(?:is|:)|l\xE0\s*:?\s*|la\s*:?\s*|" +
-        @"m\u1EADt\s*kh\u1EA9u|mat\s*khau|" +
-        @"token|pin)[^\d]{0,12}(\d{4,8})\b" +
-        // Nhóm 2: Fallback – số đứng độc lập 4-8 chữ số
-        @"|(?<!\d)(\d{4,8})(?!\d)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private const string OtpKeywordPattern =
+        @"(?:otp|m[aã]\s*otp|m[aã]\s*x[aá]c\s*th[uự]c|m[aã]\s*x[aá]c\s*nh[aậ]n|" +
+        @"verification\s*code|auth(?:entication)?\s*code|security\s*code|passcode|" +
+        @"m[aã]\s*pin|m[aậ]t\s*kh[aẩ]u|token|pin|code)";
+
+    private static readonly Regex OtpAfterKeywordRegex = new(
+        $@"(?<![\p{{L}}\p{{N}}]){OtpKeywordPattern}(?![\p{{L}}\p{{N}}])[^\d]{{0,48}}(?<code>\d{{4,8}})(?!\d)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex OtpBeforeKeywordRegex = new(
+        $@"(?<!\d)(?<code>\d{{4,8}})(?!\d)[^\d]{{0,48}}(?<![\p{{L}}\p{{N}}]){OtpKeywordPattern}(?![\p{{L}}\p{{N}}])",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex NumericOnlyOtpRegex = new(
+        @"^\s*(?<code>\d{4,8})\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static string? ExtractOtp(string? content)
     {
         if (string.IsNullOrWhiteSpace(content)) return null;
-        
-        // Tiền xử lý: xóa các chuỗi dạng *số* (số điện thoại ẩn)
+
+        // Xóa SĐT đã che (***7003) trước khi tìm mã để không lấy nhầm 4 số cuối.
         string text = Regex.Replace(content.Trim(), @"\*+\d+", "");
-        
-        var m = OtpRegex.Match(text);
-        if (!m.Success) return null;
-        
-        if (m.Groups[1].Success) return m.Groups[1].Value;
-        
-        if (m.Groups[2].Success)
-        {
-            var num = m.Groups[2].Value;
-            // Loại bỏ năm (2024-2030), hotline (1800, 1900), SĐT dài >= 9 chữ số
-            if (num.Length >= 9) return null;                                        // SĐT
-            if (num.Length == 4 && (num.StartsWith("19") || num.StartsWith("20"))) return null; // Năm / 1900
-            if (num.StartsWith("1800") || num.StartsWith("1900")) return null;       // Hotline
-            return num;
-        }
-        return null;
+
+        // Chỉ nhận số gắn với ngữ cảnh OTP/mã xác thực. Không còn fallback lấy bừa
+        // số 4-8 chữ số vì nó biến số tiền (19980đ), phút, shortcode... thành OTP.
+        Match match = OtpAfterKeywordRegex.Match(text);
+        if (match.Success) return match.Groups["code"].Value;
+
+        match = OtpBeforeKeywordRegex.Match(text);
+        if (match.Success) return match.Groups["code"].Value;
+
+        // Một SMS chỉ chứa duy nhất dãy số vẫn là định dạng OTP hợp lệ phổ biến.
+        match = NumericOnlyOtpRegex.Match(text);
+        return match.Success ? match.Groups["code"].Value : null;
     }
 
     public static string DecodeSmsBody(string raw)

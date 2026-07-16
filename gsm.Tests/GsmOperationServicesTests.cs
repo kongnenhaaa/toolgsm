@@ -299,6 +299,107 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
+    public async Task Call_DifferentComPorts_DoNotBlockEachOther()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM12", CcidA);
+        sessions.Begin("COM13", CcidB);
+        int entered = 0;
+        var bothEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var modem = new FakeGsmModemService
+        {
+            CallHandler = async (_, _, _) =>
+            {
+                if (Interlocked.Increment(ref entered) == 2) bothEntered.TrySetResult();
+                await release.Task;
+                return true;
+            }
+        };
+        using var calls = new GsmCallService(modem, sessions);
+
+        Task<bool> first = calls.CallAsync("COM12", "0911111111", null, 30, false);
+        Task<bool> second = calls.CallAsync("COM13", "0922222222", null, 30, false);
+        await bothEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        release.TrySetResult();
+
+        Assert.All(await Task.WhenAll(first, second), Assert.True);
+    }
+
+    [Fact]
+    public async Task Call_SameCom_IsSerialized()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM12", CcidA);
+        int entered = 0;
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var modem = new FakeGsmModemService
+        {
+            CallHandler = async (_, _, _) =>
+            {
+                int call = Interlocked.Increment(ref entered);
+                if (call == 1)
+                {
+                    firstEntered.TrySetResult();
+                    await releaseFirst.Task;
+                }
+                else
+                {
+                    secondEntered.TrySetResult();
+                }
+                return true;
+            }
+        };
+        using var calls = new GsmCallService(modem, sessions);
+
+        Task<bool> first = calls.CallAsync("COM12", "0911111111", null, 30, false);
+        await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task<bool> second = calls.CallAsync("COM12", "0922222222", null, 30, false);
+
+        Task early = await Task.WhenAny(secondEntered.Task, Task.Delay(150));
+        Assert.NotSame(secondEntered.Task, early);
+        releaseFirst.TrySetResult();
+
+        Assert.True(await first);
+        Assert.True(await second);
+        await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task Call_MoreThanSixtyFourComPorts_CanRunConcurrently()
+    {
+        using var sessions = new PortSessionRegistry();
+        const int portCount = BackendConcurrency.BaselineConcurrentPorts * 2;
+        for (int i = 1; i <= portCount; i++)
+            sessions.Begin($"COM{i}", $"8984{i:D16}");
+
+        int entered = 0;
+        var allEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var modem = new FakeGsmModemService
+        {
+            CallHandler = async (_, _, _) =>
+            {
+                if (Interlocked.Increment(ref entered) == portCount) allEntered.TrySetResult();
+                await release.Task;
+                return true;
+            }
+        };
+        using var calls = new GsmCallService(modem, sessions);
+
+        Task<bool>[] operations = Enumerable.Range(1, portCount)
+            .Select(i => calls.CallAsync($"COM{i}", "0912345678", null, 30, false))
+            .ToArray();
+
+        await allEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(portCount, Volatile.Read(ref entered));
+        release.TrySetResult();
+        Assert.All(await Task.WhenAll(operations), Assert.True);
+    }
+
+    [Fact]
     public async Task Sms_CallerCancelsWhileWaitingForSameComLock_DoesNotSendSecondMessage()
     {
         using var sessions = new PortSessionRegistry();

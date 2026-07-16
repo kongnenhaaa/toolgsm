@@ -60,6 +60,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private readonly ConcurrentDictionary<string, PendingMyVnptPasswordOperation> _pendingMyVnptPasswordPorts =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _vnptBatchGate = new(1, 1);
     
     [ObservableProperty] private int _vnptTotalActiveCount = 0;
     [ObservableProperty] private int _vnptSuccessCount = 0;
@@ -362,6 +363,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string password,
         CancellationToken cancellationToken = default)
     {
+        if (!await _vnptBatchGate.WaitAsync(0, cancellationToken))
+        {
+            SnackbarMessageQueue.Enqueue("Tiến trình MyVNPT đang chạy; không gửi lặp lại OTP.");
+            return;
+        }
+
+        try
+        {
         var targetPorts = new List<SimPort>();
         
         if (obj is System.Collections.Generic.IEnumerable<SimPort> portsList)
@@ -406,6 +415,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
             .Where(p => p.Status == SimStatus.Active && IsPortReadyForOperation(p.PortName))
             .DistinctBy(p => p.PortName)
             .ToList();
+
+        // Mỗi SĐT chỉ tạo một yêu cầu trong một lượt, kể cả khi cache làm cùng
+        // một SĐT tạm thời xuất hiện trên nhiều COM.
+        var uniqueTargets = new List<SimPort>(targetPorts.Count);
+        var seenPhones = new HashSet<string>(StringComparer.Ordinal);
+        foreach (SimPort candidate in targetPorts)
+        {
+            string normalizedPhone = MyVnptService.NormalizePhone(candidate.PhoneNumber);
+            if (string.IsNullOrEmpty(normalizedPhone) || seenPhones.Add(normalizedPhone))
+            {
+                uniqueTargets.Add(candidate);
+            }
+            else
+            {
+                AddLog($"[{candidate.PortName}] Bỏ qua yêu cầu MyVNPT trùng SĐT {candidate.PhoneNumber}.", "WARN");
+            }
+        }
+        targetPorts = uniqueTargets;
 
         if (!targetPorts.Any())
         {
@@ -576,6 +603,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         
         if (count > 0)
             SnackbarMessageQueue.Enqueue($"Đã hoàn tất xử lý MyVNPT cho {count} cổng.");
+        }
+        finally
+        {
+            _vnptBatchGate.Release();
+        }
     }
 
     [ObservableProperty]

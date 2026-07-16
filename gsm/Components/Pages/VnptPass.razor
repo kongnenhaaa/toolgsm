@@ -184,6 +184,7 @@
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
     private bool _isSetting = false;
+    private int _vnptStartGuard;
     private CancellationTokenSource? _vnptCts;
 
     // ========== DATA ==========
@@ -224,6 +225,14 @@
     // ========== 2. ĐẶT MẬT KHẨU MY VNPT ==========
     async Task SetVnptPassword()
     {
+        if (Interlocked.CompareExchange(ref _vnptStartGuard, 1, 0) != 0)
+        {
+            Snackbar.Add("Tiến trình MyVNPT đang được khởi chạy, không gửi lặp OTP.", Severity.Warning);
+            return;
+        }
+
+        try
+        {
         if (string.IsNullOrWhiteSpace(_vnptPassword))
         {
             Snackbar.Add("Nhập mật khẩu mới", Severity.Warning);
@@ -246,6 +255,8 @@
         // Lọc chỉ cổng đã có SĐT để tránh gửi vô nghĩa
         var validTargets = targets
             .Where(p => !string.IsNullOrWhiteSpace(MyVnptService.NormalizePhone(p.PhoneNumber)))
+            .GroupBy(p => MyVnptService.NormalizePhone(p.PhoneNumber), StringComparer.Ordinal)
+            .Select(group => group.First())
             .ToList();
 
         if (!validTargets.Any())
@@ -256,7 +267,7 @@
 
         int skipCount = targets.Count - validTargets.Count;
         if (skipCount > 0)
-            Snackbar.Add($"Bỏ qua {skipCount} cổng chưa có SĐT", Severity.Warning);
+            Snackbar.Add($"Bỏ qua {skipCount} cổng chưa có hoặc bị trùng SĐT", Severity.Warning);
 
         if (validTargets.Count > 5)
         {
@@ -291,6 +302,11 @@
         finally
         {
             _isSetting = false;
+        }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _vnptStartGuard, 0);
         }
     }
 

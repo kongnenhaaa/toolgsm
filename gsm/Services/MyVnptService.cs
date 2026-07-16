@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -20,6 +21,13 @@ public static class MyVnptService
     private const string AuthorizationToken = "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b";
     private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(60) };
     private static readonly object PasswordLogLock = new();
+    // Mọi COM dùng chung một IP/API token: phát request VNPT tuần tự để tránh
+    // burst 5-10 request làm phía VNPT trả 429/503 hoặc giới hạn IP.
+    private static readonly SemaphoreSlim RequestConcurrencyGate = new(1, 1);
+    private static readonly SemaphoreSlim RequestStartGate = new(1, 1);
+    private static readonly TimeSpan MinimumRequestSpacing = TimeSpan.FromMilliseconds(1200);
+    private static DateTime _nextRequestStartUtc = DateTime.MinValue;
+    private const int MaxTransientAttempts = 3;
 
     public static async Task<MyVnptOtpSession> PreparePasswordRequestAsync(
         string phone,
@@ -66,7 +74,13 @@ public static class MyVnptService
             cancellationToken);
 
         if (GetResponseValue(otpContent, "error_code", "errorCode") != "0")
-            throw new InvalidOperationException(GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT"));
+        {
+            string message = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
+            // VNPT trả thông báo này khi OTP của chính thuê bao vẫn đang được xử lý.
+            // Tiếp tục chờ SMS thay vì đánh dấu lỗi hoặc gửi thêm một yêu cầu OTP.
+            if (IsOtpAlreadyPendingMessage(message)) return;
+            throw new InvalidOperationException(message);
+        }
 
     }
 
@@ -129,6 +143,11 @@ public static class MyVnptService
         && (content.Contains("MyVNPT", StringComparison.OrdinalIgnoreCase)
             || content.Contains("My VNPT", StringComparison.OrdinalIgnoreCase));
 
+    public static bool IsOtpAlreadyPendingMessage(string? message) =>
+        !string.IsNullOrWhiteSpace(message)
+        && (message.Contains("đang gửi OTP", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("dang gui OTP", StringComparison.OrdinalIgnoreCase));
+
     public static string NormalizePhone(string? phone)
     {
         if (string.IsNullOrWhiteSpace(phone)) return string.Empty;
@@ -142,6 +161,11 @@ public static class MyVnptService
 
     public static string GetFriendlyExceptionMessage(Exception ex)
     {
+        if (ex is HttpRequestException { StatusCode: HttpStatusCode.ServiceUnavailable })
+            return "VNPT tạm quá tải; tool đã tự thử lại nhưng dịch vụ vẫn chưa sẵn sàng";
+        if (ex is HttpRequestException { StatusCode: HttpStatusCode.TooManyRequests })
+            return "VNPT đang giới hạn yêu cầu; vui lòng chờ ít phút";
+
         string msg = ex.Message;
         if (msg.Contains("api-myvnpt.vnpt.vn", StringComparison.OrdinalIgnoreCase)
             || msg.Contains("connection", StringComparison.OrdinalIgnoreCase)
@@ -162,22 +186,72 @@ public static class MyVnptService
         CancellationToken cancellationToken)
     {
         string json = JsonSerializer.Serialize(payload);
-        using var request = new HttpRequestMessage(HttpMethod.Post, ApiRoot + service)
+        for (int attempt = 1; attempt <= MaxTransientAttempts; attempt++)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-        request.Headers.TryAddWithoutValidation("Authorization", AuthorizationToken);
-        request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
-        request.Headers.TryAddWithoutValidation("Device-Info", deviceInfo);
-        request.Headers.TryAddWithoutValidation("Language", "vi_VN");
-        request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
+            cancellationToken.ThrowIfCancellationRequested();
+            await RequestConcurrencyGate.WaitAsync(cancellationToken);
+            try
+            {
+                await WaitForRequestStartAsync(cancellationToken);
+                using var request = new HttpRequestMessage(HttpMethod.Post, ApiRoot + service)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+                request.Headers.TryAddWithoutValidation("Authorization", AuthorizationToken);
+                request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
+                request.Headers.TryAddWithoutValidation("Device-Info", deviceInfo);
+                request.Headers.TryAddWithoutValidation("Language", "vi_VN");
+                request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
 
-        using HttpResponseMessage response = await Client.SendAsync(request, cancellationToken);
-        string content = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException($"VNPT HTTP {(int)response.StatusCode}: {GetResponseMessage(content, response.ReasonPhrase ?? "Request failed")}");
-        return content;
+                using HttpResponseMessage response = await Client.SendAsync(request, cancellationToken);
+                string content = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (response.IsSuccessStatusCode) return content;
+
+                string responseMessage = GetResponseMessage(content, response.ReasonPhrase ?? "Request failed");
+                if (!IsTransientStatusCode(response.StatusCode) || attempt == MaxTransientAttempts)
+                {
+                    throw new HttpRequestException(
+                        $"VNPT HTTP {(int)response.StatusCode}: {responseMessage}",
+                        null,
+                        response.StatusCode);
+                }
+
+                TimeSpan retryDelay = response.Headers.RetryAfter?.Delta
+                    ?? TimeSpan.FromSeconds(attempt * 2);
+                if (retryDelay > TimeSpan.FromSeconds(15)) retryDelay = TimeSpan.FromSeconds(15);
+                await Task.Delay(retryDelay, cancellationToken);
+            }
+            finally
+            {
+                RequestConcurrencyGate.Release();
+            }
+        }
+
+        throw new HttpRequestException("VNPT không phản hồi sau các lần thử lại");
     }
+
+    private static async Task WaitForRequestStartAsync(CancellationToken cancellationToken)
+    {
+        await RequestStartGate.WaitAsync(cancellationToken);
+        try
+        {
+            TimeSpan delay = _nextRequestStartUtc - DateTime.UtcNow;
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay, cancellationToken);
+            _nextRequestStartUtc = DateTime.UtcNow + MinimumRequestSpacing;
+        }
+        finally
+        {
+            RequestStartGate.Release();
+        }
+    }
+
+    private static bool IsTransientStatusCode(HttpStatusCode statusCode) =>
+        statusCode is HttpStatusCode.RequestTimeout
+            or HttpStatusCode.TooManyRequests
+            or HttpStatusCode.BadGateway
+            or HttpStatusCode.ServiceUnavailable
+            or HttpStatusCode.GatewayTimeout;
 
     private static string? GetResponseValue(string json, params string[] names)
     {

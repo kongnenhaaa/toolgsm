@@ -5,6 +5,7 @@
 @inject IDialogService DialogService
 @using gsm.Models
 @using gsm.Components.Shared
+@using System.Collections.Concurrent
 @implements IDisposable
 
 <!-- ========== ACTION FORM ========== -->
@@ -347,6 +348,8 @@
     private double _progressPercent = 0;
     private string _currentCallPort = "";
     private CancellationTokenSource? _callCts;
+    private readonly ConcurrentDictionary<string, byte> _activeCallPorts =
+        new(StringComparer.OrdinalIgnoreCase);
 
     // Lịch sử
     private List<CallHistoryItem> _callHistory = new();
@@ -442,22 +445,28 @@
         _callCts = new CancellationTokenSource();
         int okCount = 0, failCount = 0;
 
-        foreach (var port in ports)
-        {
-            if (_callCts.Token.IsCancellationRequested) break;
+        CancellationToken callToken = _callCts.Token;
 
-            _currentCallPort = port;
-            _callStatus = $"[{port}] Đang gọi {cleanPhone}...";
-            _elapsedSeconds = 0;
-            _progressPercent = 0;
-            StateHasChanged();
+        async Task CallPortAsync(string port)
+        {
+            if (callToken.IsCancellationRequested) return;
+            _activeCallPorts[port] = 0;
+
+            await InvokeAsync(() =>
+            {
+                _currentCallPort = port;
+                _callStatus = $"Đang gọi song song {_activeCallPorts.Count} cổng | [{port}] {cleanPhone}";
+                StateHasChanged();
+            });
 
             bool success = false;
             string resultMsg = "Lỗi";
+            int elapsedForPort = 0;
 
             try
             {
-                // Gọi trực tiếp qua Vm.ExecuteCallFromUiAsync, truyền callback để nhận trạng thái realtime
+                // Mỗi COM là một task độc lập. GsmCallService khóa riêng từng COM nên các
+                // COM khác nhau chạy song song, còn lệnh trên cùng COM luôn tuần tự.
                 var callTask = Vm.ExecuteCallFromUiAsync(port, cleanPhone, _wavPath ?? "", _duration, _recordCall,
                     statusMsg =>
                     {
@@ -477,24 +486,31 @@
                                 .Replace("[CALL_DIAG] ", "")
                                 .Replace("[FIX] ", "");
                             if (uiMsg.Length > 60) uiMsg = uiMsg.Substring(0, 57) + "...";
-                            _callStatus = $"[{port}] {uiMsg}";
-                            InvokeAsync(StateHasChanged);
+                            _ = InvokeAsync(() =>
+                            {
+                                _callStatus = $"Đang gọi {_activeCallPorts.Count} cổng | [{port}] {uiMsg}";
+                                StateHasChanged();
+                            });
                         }
-                    }, _callCts.Token);
+                    }, callToken);
 
-                // Cập nhật progress trong khi chờ
                 int maxTick = _duration + 60;
                 for (int tick = 0; tick < maxTick; tick++)
                 {
-                    if (_callCts.Token.IsCancellationRequested || callTask.IsCompleted) break;
-                    _elapsedSeconds = tick + 1;
-                    _progressPercent = Math.Min(100.0, (_elapsedSeconds * 100.0) / Math.Max(1, _duration));
-                    StateHasChanged();
-                    try { await Task.Delay(1000, _callCts.Token); } catch { break; }
+                    if (callToken.IsCancellationRequested || callTask.IsCompleted) break;
+                    elapsedForPort = tick + 1;
+                    int progressElapsed = elapsedForPort;
+                    await InvokeAsync(() =>
+                    {
+                        _elapsedSeconds = Math.Max(_elapsedSeconds, progressElapsed);
+                        _progressPercent = Math.Min(100.0, (_elapsedSeconds * 100.0) / Math.Max(1, _duration));
+                        StateHasChanged();
+                    });
+                    try { await Task.Delay(1000, callToken); } catch (OperationCanceledException) { break; }
                 }
 
                 success = await callTask;
-                resultMsg = success ? "OK" : "Không kết nối được";
+                resultMsg = success ? "OK" : callToken.IsCancellationRequested ? "Đã dừng" : "Không kết nối được";
             }
             catch (OperationCanceledException)
             {
@@ -507,33 +523,50 @@
                 try { await ModemService.SendCommandAsync(port, "ATH", 3000); } catch { }
                 Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
             }
-
-            if (success) okCount++;
-            else failCount++;
-
-            Snackbar.Add($"[{port}] {(success ? "✓ Xong" : $"✗ {resultMsg}")}",
-                success ? Severity.Success : Severity.Warning);
-
-            // Lưu lịch sử
-            _callHistory.Insert(0, new CallHistoryItem
+            finally
             {
-                Time = DateTime.Now,
-                Port = port,
-                Phone = cleanPhone,
-                Duration = _elapsedSeconds > 0 ? _elapsedSeconds : _duration,
-                WavFile = _wavPath ?? "",
-                HasRecording = _recordCall,
-                Success = success,
-                Result = resultMsg
+                _activeCallPorts.TryRemove(port, out _);
+            }
+
+            if (success) Interlocked.Increment(ref okCount);
+            else Interlocked.Increment(ref failCount);
+
+            await InvokeAsync(() =>
+            {
+                Snackbar.Add($"[{port}] {(success ? "✓ Xong" : $"✗ {resultMsg}")}",
+                    success ? Severity.Success : Severity.Warning);
+
+                _callHistory.Insert(0, new CallHistoryItem
+                {
+                    Time = DateTime.Now,
+                    Port = port,
+                    Phone = cleanPhone,
+                    Duration = elapsedForPort > 0 ? elapsedForPort : _duration,
+                    WavFile = _wavPath ?? "",
+                    HasRecording = _recordCall,
+                    Success = success,
+                    Result = resultMsg
+                });
+
+                if (_callHistory.Count > 200)
+                    _callHistory.RemoveRange(200, _callHistory.Count - 200);
+                StateHasChanged();
             });
+        }
 
-            if (_callHistory.Count > 200)
-                _callHistory.RemoveRange(200, _callHistory.Count - 200);
-
-            await Task.Delay(600);
+        try
+        {
+            await Task.WhenAll(ports.Select(CallPortAsync));
+        }
+        finally
+        {
+            _activeCallPorts.Clear();
+            _callCts.Dispose();
+            _callCts = null;
         }
 
         _isCalling = false;
+        _currentCallPort = "";
         _callStatus = $"Hoàn tất: {okCount} OK, {failCount} lỗi";
         if (ports.Count > 1)
             Snackbar.Add(_callStatus, failCount == 0 ? Severity.Success : Severity.Warning);
@@ -582,9 +615,14 @@
             return;
         }
 
-        string port = !string.IsNullOrEmpty(_currentCallPort)
-            ? _currentCallPort
-            : GetTargetPorts().FirstOrDefault() ?? "";
+        string port = _selectedPorts
+            .Where(candidate => _activeCallPorts.ContainsKey(candidate.PortName))
+            .Select(candidate => candidate.PortName)
+            .FirstOrDefault()
+            ?? _activeCallPorts.Keys.FirstOrDefault()
+            ?? (!string.IsNullOrEmpty(_currentCallPort)
+                ? _currentCallPort
+                : GetTargetPorts().FirstOrDefault() ?? "");
 
         if (string.IsNullOrEmpty(port))
         {
@@ -678,60 +716,93 @@
         _queueCts = new CancellationTokenSource();
         Snackbar.Add($"Bắt đầu chạy {pending.Count} cuộc gọi...", Severity.Info);
 
-        foreach (var item in pending)
+        CancellationToken queueToken = _queueCts.Token;
+        int queueOk = 0, queueFail = 0;
+
+        async Task RunPortQueueAsync(IEnumerable<CallQueueItem> portItems)
         {
-            if (_queueCts.Token.IsCancellationRequested) break;
-
-            item.Status = "Đang gọi";
-            StateHasChanged();
-
-            try
+            // Các cuộc gọi của cùng một COM chạy lần lượt; mỗi nhóm COM chạy song song.
+            foreach (var item in portItems)
             {
-                // Gọi TRỰC TIẾP qua ViewModel — KHÔNG mutate _phone/_wavPath/_duration
-                // vì làm vậy sẽ thay đổi form UI đang hiển thị và gây nhầm lẫn.
-                if (!Vm.IsPortReadyForOperation(item.Port))
-                {
-                    item.Status = "Lỗi";
-                    Snackbar.Add($"[{item.Port}] Bỏ qua vì cổng không còn Active hoặc SIM đã thay đổi.", Severity.Warning);
-                    continue;
-                }
-                bool isOk = await Vm.ExecuteCallFromUiAsync(item.Port, item.Phone, item.Wav, item.Duration, item.Record, ct: _queueCts.Token);
-                item.Status = isOk ? "Xong" : "Lỗi";
+                if (queueToken.IsCancellationRequested) break;
 
-                _callHistory.Insert(0, new CallHistoryItem
+                await InvokeAsync(() =>
                 {
-                    Time = DateTime.Now,
-                    Port = item.Port,
-                    Phone = item.Phone,
-                    Duration = item.Duration,
-                    WavFile = item.Wav,
-                    HasRecording = item.Record,
-                    Success = isOk,
-                    Result = isOk ? "OK" : "Thất bại"
+                    item.Status = "Đang gọi";
+                    StateHasChanged();
                 });
-            }
-            catch (OperationCanceledException)
-            {
-                item.Status = "Lỗi";
-                break;
-            }
-            catch (Exception ex)
-            {
-                item.Status = "Lỗi";
-                Snackbar.Add($"[{item.Port}→{item.Phone}] Lỗi: {ex.Message}", Severity.Error);
-            }
 
-            StateHasChanged();
+                try
+                {
+                    if (!Vm.IsPortReadyForOperation(item.Port))
+                    {
+                        Interlocked.Increment(ref queueFail);
+                        await InvokeAsync(() =>
+                        {
+                            item.Status = "Lỗi";
+                            Snackbar.Add($"[{item.Port}] Bỏ qua vì cổng không còn Active hoặc SIM đã thay đổi.", Severity.Warning);
+                        });
+                        continue;
+                    }
 
-            try { await Task.Delay(1500, _queueCts.Token); }
-            catch (TaskCanceledException) { break; }
+                    bool isOk = await Vm.ExecuteCallFromUiAsync(
+                        item.Port, item.Phone, item.Wav, item.Duration, item.Record, ct: queueToken);
+                    if (isOk) Interlocked.Increment(ref queueOk);
+                    else Interlocked.Increment(ref queueFail);
+
+                    await InvokeAsync(() =>
+                    {
+                        item.Status = isOk ? "Xong" : "Lỗi";
+                        _callHistory.Insert(0, new CallHistoryItem
+                        {
+                            Time = DateTime.Now,
+                            Port = item.Port,
+                            Phone = item.Phone,
+                            Duration = item.Duration,
+                            WavFile = item.Wav,
+                            HasRecording = item.Record,
+                            Success = isOk,
+                            Result = isOk ? "OK" : "Thất bại"
+                        });
+                        if (_callHistory.Count > 200)
+                            _callHistory.RemoveRange(200, _callHistory.Count - 200);
+                        StateHasChanged();
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    await InvokeAsync(() => item.Status = "Chờ");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref queueFail);
+                    await InvokeAsync(() =>
+                    {
+                        item.Status = "Lỗi";
+                        Snackbar.Add($"[{item.Port}→{item.Phone}] Lỗi: {ex.Message}", Severity.Error);
+                    });
+                }
+
+                try { await Task.Delay(1500, queueToken); }
+                catch (OperationCanceledException) { break; }
+            }
+        }
+
+        try
+        {
+            var groups = pending.GroupBy(item => item.Port, StringComparer.OrdinalIgnoreCase);
+            await Task.WhenAll(groups.Select(RunPortQueueAsync));
+        }
+        finally
+        {
+            _queueCts.Dispose();
+            _queueCts = null;
         }
 
         _isRunningQueue = false;
-        int doneOk = _callQueue.Count(x => x.Status == "Xong");
-        int doneFail = _callQueue.Count(x => x.Status == "Lỗi");
-        Snackbar.Add($"Hoàn tất hàng đợi: {doneOk} OK, {doneFail} lỗi",
-            doneFail == 0 ? Severity.Success : Severity.Warning);
+        Snackbar.Add($"Hoàn tất hàng đợi: {queueOk} OK, {queueFail} lỗi",
+            queueFail == 0 ? Severity.Success : Severity.Warning);
         StateHasChanged();
     }
 

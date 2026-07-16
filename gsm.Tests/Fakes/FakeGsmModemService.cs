@@ -31,10 +31,12 @@ public sealed class FakeGsmModemService : IGsmModemService
         string portName,
         string command,
         int timeoutMs = 5000,
-        bool silent = false)
+        bool silent = false,
+        CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         Commands.Enqueue($"{portName}:{command}");
-        if (CommandHandler != null) return await CommandHandler(portName, command);
+        if (CommandHandler != null) return await CommandHandler(portName, command).WaitAsync(ct);
         return DefaultResponse(command);
     }
 
@@ -45,10 +47,12 @@ public sealed class FakeGsmModemService : IGsmModemService
         string portName,
         string phoneNumber,
         string message,
-        int timeoutMs = 15000)
+        int timeoutMs = 15000,
+        CancellationToken ct = default)
     {
         SmsRequests.Enqueue((portName, phoneNumber, message));
-        if (SmsHandler != null) return await SmsHandler(portName, phoneNumber, message);
+        if (SmsHandler != null) return await SmsHandler(portName, phoneNumber, message).WaitAsync(ct);
+        ct.ThrowIfCancellationRequested();
         return "+CMGS: 1\r\nOK";
     }
 

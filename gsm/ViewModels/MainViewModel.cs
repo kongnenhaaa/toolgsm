@@ -147,6 +147,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, int> _portRecoveryAttempts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _portRecoveryInProgress = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _quarantinedPorts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Task<bool>> _ussdVoiceRecoveryTasks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _ussdVoiceRecoveryAttempted = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _ussdRecoveryRetryOwners = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxAutomaticRecoveryAttempts = 3;
     // Mỗi lần cắm/rút SIM tạo một epoch mới. Mọi tác vụ IMEI/Accept phải giữ đúng
     // epoch + CCID; tác vụ của SIM cũ không được phép cập nhật SIM mới trên cùng COM.
@@ -154,7 +157,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly string _cacheFilePath = AppPaths.ForRuntimeFile("sim_cache.json");
     private ConcurrentDictionary<string, string> _simCache = new();
 
-    private readonly string _imeiCacheFilePath = AppPaths.ForRuntimeFile("imei_backup.csv");
+    // Bản publish nằm trong ...\win-x64\publish, trong khi kho backup thường nằm
+    // ở thư mục Release cha. Luôn dùng kho gần nhất đã tồn tại để tránh
+    // mỗi bản EXE tạo một imei_backup.xlsx rỗng khác nhau.
+    private readonly string _imeiCacheFilePath =
+        AppPaths.ResolveRuntimeOrAncestorFile("imei_backup.xlsx");
+    private readonly string _pendingImeiCacheFilePath =
+        AppPaths.ForResolvedFileSibling("imei_backup.xlsx", "imei_backup.pending.xlsx");
+    private readonly string _legacyImeiCacheCsvPath =
+        AppPaths.ForResolvedFileSibling("imei_backup.xlsx", "imei_backup.csv");
+    private static readonly string[] ImeiBackupColumns =
+    [
+        "CCID", "IMEI", "PhoneNumber", "NetworkProvider", "Balance", "PromotionBalance",
+        "ExpiryDate", "SimRegDate", "Lock1C", "Lock2C", "CreatedAt", "UpdatedAt",
+        "LastPortName", "DeviceName", "HardwareName", "ModemManufacturer", "ModemModel",
+        "ModemFirmware", "ModemCapabilities", "Status", "SignalStrength", "SourceFile"
+    ];
     private ConcurrentDictionary<string, SimBackupEntry> _imeiCache = new();
     public IReadOnlyDictionary<string, SimBackupEntry> ImeiCache => _imeiCache;
     private readonly object _imeiCacheLock = new();
@@ -1094,15 +1112,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (string.IsNullOrEmpty(normCcid)) return true;
             _imeiCache.TryGetValue(normCcid, out var entry);
             
-            bool hasValidBackup = entry != null && 
-                                  !string.IsNullOrWhiteSpace(entry.Imei) && 
-                                  entry.Imei.Length >= 14 && 
-                                  !entry.Imei.Contains("ERROR");
+            bool hasValidBackup = entry != null
+                && Services.ImeiManagementService.IsValidImei(entry.Imei);
                                   
-            bool isHardwareImeiValid = !string.IsNullOrWhiteSpace(imei) && 
-                                       imei.Length >= 14 && 
-                                       !imei.Contains("ERROR") && 
-                                       !Services.ImeiManagementService.IsFakeImei(imei);
+            bool isHardwareImeiValid = Services.ImeiManagementService.IsUsableObservedImei(imei)
+                && !Services.ImeiManagementService.IsFakeImei(imei);
             
             bool treatAsNewSim = (entry == null) || (!isHardwareImeiValid && !hasValidBackup);
             return treatAsNewSim;
@@ -1255,7 +1269,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             item.Error = error ?? string.Empty;
             item.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
 
-            while (CommandQueue.Count > 200)
+            // Multi-port SMS batches can legitimately contain thousands of rows.
+            // A 200-row cap silently discarded pending work.
+            while (CommandQueue.Count > 10_000)
             {
                 CommandQueue.RemoveAt(CommandQueue.Count - 1);
             }
@@ -2171,11 +2187,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         async Task<(bool Valid, string Imei)> VerifyIdentityAsync()
         {
             string liveCcid = await ReadLiveCcidAsync(port.PortName, token, allowBriefRadioEnable: true);
-            string rawImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 8000, silent: true);
+            string rawImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 8000, silent: true, ct: token);
             string liveImei = NormalizeImei(rawImei);
+            string rawStoredImei = await _modemService.SendCommandAsync(port.PortName, "AT+EGMR=0,7", 8000, silent: true, ct: token);
+            string storedImei = NormalizeImei(rawStoredImei);
+            bool storedMatches = !Services.ImeiManagementService.IsUsableObservedImei(storedImei)
+                || Services.ImeiManagementService.AreEquivalentImei(storedImei, expectedImei);
             bool valid = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
-                      && string.Equals(liveImei, NormalizeImei(expectedImei), StringComparison.Ordinal)
+                      && Services.ImeiManagementService.AreEquivalentImei(liveImei, expectedImei)
+                      && storedMatches
                       && IsSimSessionCurrent(port.PortName, ccid, epoch);
+            if (!valid)
+                AddLog($"[{port.PortName}] [IMEI_VERIFY] expected={expectedImei}; CGSN={liveImei}; EGMR={storedImei}; CCID={liveCcid}", "ERROR");
             return (valid, liveImei);
         }
 
@@ -2212,11 +2235,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string cfunOn = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 12000, silent: true);
         if (cfunOn.Contains("ERROR", StringComparison.OrdinalIgnoreCase)) return false;
         await Task.Delay(2000, token);
-        if (_modemService.GetModemProfile(port.PortName)?.Supports(ModemCapability.NetworkScanConfig) == true)
-        {
-            await _modemService.SendCommandAsync(port.PortName, "AT+QCFG=\"nwscanmode\",0,1", 8000, silent: true);
-            await _modemService.SendCommandAsync(port.PortName, "AT+QCFG=\"nwscanseq\",030201,1", 8000, silent: true);
-        }
 
         // Kiểm tra lần hai ngay sau khi bật radio; sai khác bất kỳ sẽ tắt sóng lại.
         var afterRadio = await VerifyIdentityAsync();
@@ -2352,7 +2370,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ccid,
                 currentImei,
                 AppSettings,
-                queryCcid => { _imeiCache.TryGetValue(queryCcid, out var entry); return entry; },
+                queryCcid => FindImeiBackupEntry(queryCcid),
                 newEntry => AddNewImeiCacheEntry(newEntry),
                 action => Application.Current.Dispatcher.Invoke(action),
                 forceAccept,
@@ -2360,7 +2378,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 () => ValidateSessionIdentityAsync(portName, ccid, epoch, initializationToken),
                 candidate => _imeiCache.Values.Any(entry =>
                     !string.Equals(NormalizeCcid(entry.Ccid), NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(NormalizeImei(entry.Imei), candidate, StringComparison.Ordinal)),
+                    && Services.ImeiManagementService.AreEquivalentImei(entry.Imei, candidate)),
                 explicitTargetImei);
 
             AddLog($"[{portName}] [IMEI_RESULT] status={result.Status} forceAccept={forceAccept} message={result.ErrorMessage}",
@@ -2511,7 +2529,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (port == null)
             {
-                if (e.Data == "[PORT_OPENED]" || e.Data.StartsWith("[STATUS_SIM_LOCKED]") || e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]") || e.Data.StartsWith("[NETWORK_RECOVERY]") || e.Data.StartsWith("[NETWORK_FAILED]") || e.Data.StartsWith("Lỗi kết nối"))
+                if (e.Data == "[PORT_OPENED]" || e.Data.StartsWith("[STATUS_SIM_LOCKED]") || e.Data.StartsWith("[PARSE_CCID]") || e.Data.StartsWith("[PARSE_CNUM]") || e.Data.Contains("+COPS:") || e.Data.StartsWith("+CUSD:") || e.Data.StartsWith("[WAITING_FOR_SIM]") || e.Data.StartsWith("[PARSE_IMEI]") || e.Data.StartsWith("[STATUS_NO_RESPONSE]") || e.Data.StartsWith("[NETWORK_WAITING]") || e.Data.StartsWith("[NETWORK_RECOVERY]") || e.Data.StartsWith("[NETWORK_FAILED]") || e.Data.StartsWith("Lỗi kết nối"))
                 {
                     port = new SimPort { PortName = e.PortName, Status = "Chờ cắm SIM", SignalStrength = 0 };
                     port.PhysicalIndex = _modemService.GetAvailablePorts().IndexOf(e.PortName);
@@ -2580,6 +2598,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.Status = SimStatus.NoResponse;
                 port.DeviceName = "Lỗi kết nối";
                 port.LastError = e.Data;
+            }
+            else if (e.Data.StartsWith("[NETWORK_WAITING]") && !_modemService.IsCallInProgress(e.PortName))
+            {
+                // Modem và phiên SIM vẫn hoạt động; chỉ chưa có COPS. Không đổi
+                // Active thành NoResponse và không reset RF, để cổng tự bắt sóng.
+                port.LastError = "Đang chờ đăng ký nhà mạng (không reset RF)";
+                port.SignalStrength = 0;
             }
             else if (e.Data.StartsWith("[NETWORK_RECOVERY]") && !_modemService.IsCallInProgress(e.PortName))
             {
@@ -2688,8 +2713,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             {
                                 if (entry.PhoneNumber != foundNumber)
                                 {
-                                    entry.PhoneNumber = foundNumber;
-                                    SaveImeiCache();
+                                    UpdateImeiCacheEntry(port.Serial, value => value.PhoneNumber = foundNumber);
                                 }
                             }
                         }
@@ -2752,6 +2776,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         port.Lock2C = lock2cVal;
                         UpdateImeiCacheEntry(port.Serial, entry => entry.Lock2C = lock2cVal);
                     }
+
+                    // Persist one complete snapshot after all USSD fields have been parsed.
+                    UpdateImeiCacheEntry(port.Serial, _ => { });
 
                     UpdateDashboard(); // Refresh online/offline count when Balance is updated
 
@@ -2941,10 +2968,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     if (_imeiCache.TryGetValue(ccid, out var entry) && entry != null)
                     {
-                        port.CreatedAt = entry.CreatedAt;
-                        port.SimRegDate = entry.SimRegDate;
-                        port.Lock1C = entry.Lock1C;
-                        port.Lock2C = entry.Lock2C;
+                        ApplyBackupMetadata(port, entry);
                     }
 
                     AddLog($"[{e.PortName}] [IMEI_MODE] Restore={AppSettings.EnableImeiRestore} BlockNew={AppSettings.BlockUnknownSims}");
@@ -3003,8 +3027,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         {
                             if (entry.PhoneNumber != rawNumber)
                             {
-                                entry.PhoneNumber = rawNumber;
-                                SaveImeiCache();
+                                UpdateImeiCacheEntry(port.Serial, value => value.PhoneNumber = rawNumber);
                             }
                         }
                     }
@@ -3119,7 +3142,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             return IsSimSessionCurrent(portName, ccid, session.Epoch)
                 && port.Status == SimStatus.Active
-                && string.Equals(NormalizeImei(port.Imei), target, StringComparison.Ordinal);
+                && Services.ImeiManagementService.AreEquivalentImei(port.Imei, target);
         }
         finally
         {
@@ -3288,6 +3311,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (port != null)
                 {
+                    bool simMetadataChanged = false;
+
                     // 1. Parse SĐT từ SMS (nếu có)
                     var phoneMatch = Regex.Match(cleanContent, @"(?:thuê bao|thue bao|so tb|số tb|msisdn|sim)[^\d]{0,15}(0\d{9,10}|84\d{9,10})", RegexOptions.IgnoreCase);
                     if (phoneMatch.Success)
@@ -3301,6 +3326,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             port.PhoneNumber = foundNumber;
                             UpdateSmsReceiverPhone(port.PortName, foundNumber);
                             AddLog($"[{e.PortName}] Đã cập nhật SĐT từ SMS: {foundNumber}", "SUCCESS");
+                            simMetadataChanged = true;
+                            if (!string.IsNullOrWhiteSpace(port.Serial))
+                            {
+                                _simCache[NormalizeCcid(port.Serial)] = foundNumber;
+                                SaveSimCache();
+                            }
                         }
                     }
 
@@ -3314,8 +3345,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         {
                             port.Balance = bal;
                             AddLog($"[{e.PortName}] Đã cập nhật số dư từ SMS: {bal}", "SUCCESS");
+                            simMetadataChanged = true;
                         }
                     }
+
+                    // Refresh/reconnect xóa dữ liệu tạm trên UI. Ghi snapshot ngay theo
+                    // CCID để SĐT/TKC vừa đọc từ SMS được phục hồi ở phiên kế tiếp.
+                    if (simMetadataChanged && !string.IsNullOrWhiteSpace(port.Serial))
+                        UpdateImeiCacheEntry(port.Serial, _ => { });
                 }
 
 
@@ -3564,6 +3601,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (cfg == null) return;
 
                 // ---------- 0. FIREBASE (toolweb) ----------
+                // A pending web SMS command must always receive its correlated OTP result.
+                // WriteOtpToFirebase only controls the general port snapshot, not command replies.
+                if (port != null && extractedOtp != "N/A")
+                {
+                    _ = _firebaseService.PublishOtpForPendingCommandAsync(
+                        port.PortName, extractedOtp, cleanContent, senderPhone);
+                }
+
                 if (cfg.WriteOtpToFirebase && port != null)
                 {
                     string machineId = cfg.MachineId ?? "machine-1";
@@ -4098,24 +4143,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _ = _notifyService.SendTelegramAsync(clipCfg.TelegramBotToken, clipCfg.TelegramChatId, callText);
             }
 
-            // Tự động nhận cuộc gọi và ghi âm
+            // Khôi phục luồng nhánh dev: +CLIP báo lên UI trước, sau đó chính handler
+            // này gửi ATA và bắt đầu ghi âm trên đúng COM nhận cuộc gọi.
             if (IsAutoAnswerEnabled)
             {
                 if (!_activeRamRecordings.ContainsKey(e.PortName))
                 {
                     AddLog($"[{e.PortName}] Đang tự động bắt máy cuộc gọi đến...", "INFO");
-                    await _modemService.SendCommandAsync(e.PortName, "ATA");
-                    await Task.Delay(1500);
+                    string answer = await _modemService.SendCommandAsync(e.PortName, "ATA", 8000);
+                    if (answer.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                    {
+                        AddLog($"[{e.PortName}] ATA lỗi: {answer.Trim()}", "ERROR");
+                        return;
+                    }
 
-                    AddLog($"[{e.PortName}] Bắt đầu thu âm vào RAM của mạch Quectel...", "INFO");
+                    await Task.Delay(1500);
                     if (_modemService.GetModemProfile(e.PortName)?.Supports(ModemCapability.AudioRecord) == true)
                     {
-                        await _modemService.SendCommandAsync(e.PortName, "AT+QAUDRD=1,\"call.wav\",13,0");
-                        _activeRamRecordings[e.PortName] = true;
-                    }
-                    else
-                    {
-                        AddLog($"[{e.PortName}] Model does not support QAUDRD; call answered without recording.", "WARN");
+                        AddLog($"[{e.PortName}] Bắt đầu thu âm vào RAM của mạch Quectel...", "INFO");
+                        string recordResult = await _modemService.SendCommandAsync(
+                            e.PortName, "AT+QAUDRD=1,\"call.wav\",13,0", 5000);
+                        if (!recordResult.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                            _activeRamRecordings[e.PortName] = true;
+                        else
+                            AddLog($"[{e.PortName}] Không thể bắt đầu ghi âm: {recordResult.Trim()}", "WARN");
                     }
                 }
             }
@@ -4506,15 +4557,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string ccid = NormalizeCcid(port.Serial);
             if (!_imeiCache.TryGetValue(ccid, out var entry) || entry == null) continue;
 
+            ApplyBackupMetadata(port, entry);
             if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
             {
-                port.PhoneNumber = entry.PhoneNumber;
                 UpdateSmsReceiverPhone(port.PortName, entry.PhoneNumber);
                 _simCache[ccid] = entry.PhoneNumber;
             }
-
-            port.CreatedAt = entry.CreatedAt;
-            port.SimRegDate = entry.SimRegDate;
             applied++;
         }
 
@@ -4523,8 +4571,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             SaveSimCache();
         }
 
-        AddLog($"[IMEI_SOURCE] Đã reload imei_backup.csv và áp dụng metadata cho {applied} cổng đang cắm.", "SUCCESS");
-        SnackbarMessageQueue.Enqueue($"Đã reload imei_backup.csv ({applied} cổng được cập nhật).");
+        AddLog($"[IMEI_SOURCE] Đã reload imei_backup.xlsx và áp dụng metadata cho {applied} cổng đang cắm.", "SUCCESS");
+        SnackbarMessageQueue.Enqueue($"Đã reload imei_backup.xlsx ({applied} cổng được cập nhật).");
     }
 
     private string GetUssdCodeForProvider(string provider)
@@ -4878,7 +4926,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
             port.Sender = "USSD";
         });
 
-        return await SendUssdThrottledAsync(portName, ussdCode, "Manual USSD", maxAttempts: 2, logResult: true);
+        string result;
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(110));
+        try
+        {
+            result = await SendUssdThrottledAsync(
+                portName, ussdCode, "Manual USSD", maxAttempts: 2, logResult: true,
+                cancellationToken: timeoutCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            result = "ERROR: USSD timeout after 110 seconds";
+        }
+
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            bool failed = result.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || result.Contains("Timeout", StringComparison.OrdinalIgnoreCase);
+            port.LastUssdResult = result;
+            if (failed)
+            {
+                port.LastMessageContent = "[USSD][THẤT BẠI] " + result;
+                port.LastError = result;
+            }
+            else if (port.LastMessageContent.Contains("Đang gửi", StringComparison.OrdinalIgnoreCase))
+            {
+                port.LastMessageContent = "[USSD][HOÀN TẤT] " + result;
+            }
+            port.Sender = "USSD";
+            port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+        });
+        return result;
     }
 
 
@@ -4890,16 +4969,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || (!string.IsNullOrWhiteSpace(port.PhoneNumber) && !string.IsNullOrWhiteSpace(port.Balance)))
             return;
 
+        // Phiên trước đang sở hữu lần retry sau phục hồi IMS. Không tạo thêm một
+        // yêu cầu *101# song song khi ReloadPortSafelyAsync vừa dựng phiên mới.
+        string recoveryRetryKey = $"{port.PortName}|{NormalizeCcid(ccid)}";
+        if (_ussdRecoveryRetryOwners.ContainsKey(recoveryRetryKey)) return;
+
         using var lookupCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-        // Ba biến thể USSD có thể cần tới ~45 giây/biến thể khi modem chỉ trả OK
-        // nhưng tổng đài không gửi +CUSD. Cho phép hoàn tất cả DCS 15, DCS 0 và no-DCS.
+        // Luồng UCS2 ổn định có thể cần đủ 30 giây/lần khi modem chỉ trả OK
+        // nhưng tổng đài chưa gửi +CUSD. Retry giữ nguyên RAT và cùng một cách mã hóa.
         lookupCts.CancelAfter(TimeSpan.FromSeconds(180));
         CancellationToken lookupToken = lookupCts.Token;
         await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
         try
         {
             await SendUssdThrottledAsync(
-                port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 3);
+                port.PortName, "*101#", "Tự động lấy SĐT & TKC", maxAttempts: 3,
+                cancellationToken: lookupToken);
 
             // SendCommandAsync đã chờ +CUSD cho từng biến thể; chỉ dành thêm một khoảng
             // ngắn cho firmware phát URC trễ sau khi lệnh kết thúc.
@@ -4908,7 +4993,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 && port.Status == SimStatus.Active
                 && (string.IsNullOrWhiteSpace(port.PhoneNumber) || string.IsNullOrWhiteSpace(port.Balance)))
             {
-                AddLog($"[{port.PortName}] SĐT/TKC vẫn trống sau cả 3 biến thể USSD (DCS 15/0/no-DCS); tiếp tục giữ Active và cho phép thử lại thủ công.", "WARN");
+                AddLog($"[{port.PortName}] SĐT/TKC vẫn trống sau các lần USSD UCS2; tiếp tục giữ Active và cho phép thử lại thủ công.", "WARN");
             }
         }
         catch (OperationCanceledException) { }
@@ -4946,7 +5031,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task<string> SendUssdThrottledAsync(string portName, string ussdCode, string reason, bool logResult = false, int maxAttempts = 3)
+    private async Task<string> SendUssdThrottledAsync(
+        string portName,
+        string ussdCode,
+        string reason,
+        bool logResult = false,
+        int maxAttempts = 3,
+        CancellationToken cancellationToken = default)
     {
         if (!IsPortReadyForOperation(portName))
             return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi";
@@ -4960,7 +5051,50 @@ public partial class MainViewModel : ObservableObject, IDisposable
             && !string.IsNullOrWhiteSpace(currentPort.Balance))
             return "SKIPPED: Đã đủ thông tin";
 
-        string result = await _ussdService.SendAsync(portName, ussdCode, maxAttempts, _lifetimeCts.Token);
+        CancellationToken effectiveToken = cancellationToken.CanBeCanceled
+            ? cancellationToken
+            : _lifetimeCts.Token;
+
+        bool voiceReady = await EnsureUssdVoiceDomainAsync(portName, effectiveToken);
+        if (!voiceReady || !IsPortReadyForOperation(portName))
+        {
+            string recoveryError = "ERROR: LTE registered but CS/IMS recovery did not complete";
+            RecordPortError(portName, recoveryError);
+            return recoveryError;
+        }
+
+        string result = await _ussdService.SendAsync(portName, ussdCode, maxAttempts, effectiveToken);
+
+        // EC20F có thể đang CREG=1, nhận CUSD bằng OK, rồi rớt riêng miền CS trong
+        // khi LTE/CEREG vẫn còn. Khi đó preflight ban đầu đã qua nên phải kiểm tra
+        // lại sau lỗi, phục hồi IMS/reboot và retry đúng một chủ sở hữu cho COM+SIM.
+        if (IsMissingUssdPayload(result)
+            && TryGetCurrentSimSession(portName, out string recoveryCcid, out _, out _))
+        {
+            string retryKey = $"{portName}|{NormalizeCcid(recoveryCcid)}";
+            if (_ussdRecoveryRetryOwners.TryAdd(retryKey, 0))
+            {
+                try
+                {
+                    bool recovered = await TryRecoverCsAfterUssdFailureAsync(
+                        portName, recoveryCcid, _lifetimeCts.Token);
+                    if (recovered
+                        && TryGetCurrentSimSession(portName, out string liveCcid, out _, out _)
+                        && string.Equals(NormalizeCcid(liveCcid), NormalizeCcid(recoveryCcid), StringComparison.OrdinalIgnoreCase)
+                        && IsPortReadyForOperation(portName))
+                    {
+                        AddLog($"[{portName}] [USSD_RETRY_AFTER_IMS] Gửi lại {ussdCode} sau khi CS đã phục hồi.", "INFO");
+                        result = await _ussdService.SendAsync(
+                            portName, ussdCode, maxAttempts, _lifetimeCts.Token);
+                    }
+                }
+                finally
+                {
+                    _ussdRecoveryRetryOwners.TryRemove(retryKey, out _);
+                }
+            }
+        }
+
         if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
         {
             RecordPortError(portName, result);
@@ -4972,6 +5106,138 @@ public partial class MainViewModel : ObservableObject, IDisposable
             AddLog($"Kết quả từ {portName}: {result}", "SUCCESS");
         }
         return result;
+    }
+
+    private static bool IsMissingUssdPayload(string result) =>
+        result.Contains("network returned no +CUSD", StringComparison.OrdinalIgnoreCase)
+        // Lần đầu có thể mất +CUSD; các retry sau ghi đè kết quả bằng lỗi CREG.
+        // Hàm phục hồi vẫn xác minh CREG mất nhưng CEREG còn trước khi reboot.
+        || result.Contains("SIM not registered on CS network", StringComparison.OrdinalIgnoreCase);
+
+    private async Task<bool> TryRecoverCsAfterUssdFailureAsync(
+        string portName, string expectedCcid, CancellationToken token)
+    {
+        static bool Registered(string response, string type) =>
+            Regex.IsMatch(response, $@"\+{type}:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase);
+
+        string creg = await _modemService.SendCommandAsync(
+            portName, "AT+CREG?", 5000, silent: true, ct: token);
+        if (Registered(creg, "CREG")) return false;
+
+        string cereg = await _modemService.SendCommandAsync(
+            portName, "AT+CEREG?", 5000, silent: true, ct: token);
+        if (!Registered(cereg, "CEREG")) return false;
+        if (!TryGetCurrentSimSession(portName, out string liveCcid, out _, out _)
+            || !string.Equals(NormalizeCcid(liveCcid), NormalizeCcid(expectedCcid), StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        AddLog($"[{portName}] [USSD_CS_LOST_AFTER_SEND] Modem chỉ trả OK, không có +CUSD và đã rớt CS; bắt đầu phục hồi IMS.", "WARN");
+        return await EnsureUssdVoiceDomainAsync(portName, token);
+    }
+
+    private async Task<bool> EnsureUssdVoiceDomainAsync(string portName, CancellationToken token)
+    {
+        static bool Registered(string response, string type) =>
+            Regex.IsMatch(response, $@"\+{type}:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase);
+
+        string creg = await _modemService.SendCommandAsync(
+            portName, "AT+CREG?", 5000, silent: true, ct: token);
+        if (Registered(creg, "CREG")) return true;
+
+        string cereg = await _modemService.SendCommandAsync(
+            portName, "AT+CEREG?", 5000, silent: true, ct: token);
+        QuectelModemProfile? profile = _modemService.GetModemProfile(portName);
+        if (!Registered(cereg, "CEREG")
+            || profile?.Supports(ModemCapability.ImsConfig) != true)
+        {
+            // Không phải đúng lỗi LTE-only đã xác minh trên EC20F; để preflight USSD
+            // trả lỗi mạng thật thay vì tự thay đổi cấu hình modem.
+            return true;
+        }
+
+        if (!TryGetCurrentSimSession(portName, out string ccid, out _, out _)) return false;
+        string recoveryKey = $"{portName}|{ccid}";
+
+        // Nhiều thao tác USSD đồng thời trên cùng SIM phải chờ chung đúng một lần
+        // phục hồi; không để yêu cầu thứ hai vượt qua trong khi modem đang reboot.
+        if (_ussdVoiceRecoveryTasks.TryGetValue(recoveryKey, out Task<bool>? activeRecovery))
+            return await activeRecovery.WaitAsync(token);
+
+        // Một SIM chỉ tự reboot một lần. Nếu lần đó thất bại, trả lỗi rõ ràng thay
+        // vì gây vòng lặp reboot. SIM mới trên cùng COM có CCID khác nên vẫn được thử.
+        if (_ussdVoiceRecoveryAttempted.ContainsKey(recoveryKey)) return false;
+
+        Task<bool> recovery = _ussdVoiceRecoveryTasks.GetOrAdd(
+            recoveryKey, _ => RecoverUssdVoiceDomainCoreAsync(portName, recoveryKey));
+        _ = recovery.ContinueWith(
+            _ => ((ICollection<KeyValuePair<string, Task<bool>>>)_ussdVoiceRecoveryTasks)
+                .Remove(new KeyValuePair<string, Task<bool>>(recoveryKey, recovery)),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+        return await recovery.WaitAsync(token);
+    }
+
+    private async Task<bool> RecoverUssdVoiceDomainCoreAsync(string portName, string recoveryKey)
+    {
+        if (!_ussdVoiceRecoveryAttempted.TryAdd(recoveryKey, 0)) return false;
+
+        try
+        {
+            AddLog($"[{portName}] [USSD_IMS_RECOVERY] LTE đã đăng ký nhưng chưa có CS; bật IMS và reboot riêng COM.", "WARN");
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                var port = Ports.FirstOrDefault(p => p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                if (port != null)
+                {
+                    port.LastMessageContent = "[USSD][ĐANG CHẠY] Bật IMS và đăng ký lại dịch vụ thoại...";
+                    port.Sender = "USSD";
+                }
+            });
+
+            string ims = await _modemService.SendCommandAsync(
+                portName, "AT+QCFG=\"ims\"", 5000, silent: true, ct: _lifetimeCts.Token);
+            if (!Regex.IsMatch(ims, @"""ims""\s*,\s*1\b", RegexOptions.IgnoreCase))
+            {
+                string setIms = await _modemService.SendCommandAsync(
+                    portName, "AT+QCFG=\"ims\",1", 5000, silent: true, ct: _lifetimeCts.Token);
+                if (setIms.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddLog($"[{portName}] [USSD_IMS_RECOVERY] Modem từ chối bật IMS: {setIms.Trim()}", "ERROR");
+                    return false;
+                }
+            }
+
+            if (!await ReloadPortSafelyAsync(portName, "Đang bật IMS và xác minh lại SIM/IMEI..."))
+                return false;
+
+            for (int probe = 0; probe < 45; probe++)
+            {
+                await Task.Delay(2000, _lifetimeCts.Token);
+                if (!IsPortReadyForOperation(portName)) continue;
+
+                string creg = await _modemService.SendCommandAsync(
+                    portName, "AT+CREG?", 5000, silent: true, ct: _lifetimeCts.Token);
+                if (Regex.IsMatch(creg, @"\+CREG:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase))
+                {
+                    AddLog($"[{portName}] [USSD_IMS_RECOVERY] Đã đăng ký CS sau reboot; tiếp tục USSD.", "SUCCESS");
+                    return true;
+                }
+            }
+
+            AddLog($"[{portName}] [USSD_IMS_RECOVERY] Hết 90 giây nhưng chưa đăng ký được CS.", "ERROR");
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[{portName}] [USSD_IMS_RECOVERY] {ex.Message}", "ERROR");
+            return false;
+        }
     }
 
     private bool IsPortCoolingDown(string portName, out TimeSpan remaining)
@@ -6155,35 +6421,70 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         lock (_imeiCacheLock)
         {
-            if (File.Exists(_imeiCacheFilePath))
+            if (File.Exists(_imeiCacheFilePath) || File.Exists(_pendingImeiCacheFilePath))
+            {
+                LoadImeiCacheWorkbook();
+                return;
+            }
+
+            // One-time migration path for older ToolGSM installations.
+            if (File.Exists(_legacyImeiCacheCsvPath))
             {
                 try
                 {
-                    var lines = File.ReadAllLines(_imeiCacheFilePath);
+                    var lines = File.ReadAllLines(_legacyImeiCacheCsvPath);
                     var newCache = new ConcurrentDictionary<string, SimBackupEntry>();
                     if (lines.Length > 0)
                     {
-                        var header = lines[0].Split(',');
+                        int headerLineIndex = lines[0].TrimStart('\uFEFF')
+                            .StartsWith("sep=", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+                        if (headerLineIndex >= lines.Length)
+                            throw new InvalidDataException("File imei_backup.csv thiếu dòng tiêu đề.");
+
+                        var header = ParseCsvLine(lines[headerLineIndex])
+                            .Select(value => value.Trim().TrimStart('\uFEFF'))
+                            .ToArray();
                         int idxCcid = Array.IndexOf(header, "CCID");
                         int idxImei = Array.IndexOf(header, "IMEI");
                         int idxPhone = Array.IndexOf(header, "PhoneNumber");
+                        int idxNetwork = Array.IndexOf(header, "NetworkProvider");
+                        int idxBalance = Array.IndexOf(header, "Balance");
+                        int idxPromotion = Array.IndexOf(header, "PromotionBalance");
+                        int idxExpiry = Array.IndexOf(header, "ExpiryDate");
                         int idxCreated = Array.IndexOf(header, "CreatedAt");
+                        int idxUpdated = Array.IndexOf(header, "UpdatedAt");
                         int idxRegDate = Array.IndexOf(header, "SimRegDate");
                         int idxLock1C = Array.IndexOf(header, "Lock1C");
                         int idxLock2C = Array.IndexOf(header, "Lock2C");
+                        int idxPort = Array.IndexOf(header, "LastPortName");
+                        int idxDevice = Array.IndexOf(header, "DeviceName");
+                        int idxHardware = Array.IndexOf(header, "HardwareName");
+                        int idxManufacturer = Array.IndexOf(header, "ModemManufacturer");
+                        int idxModel = Array.IndexOf(header, "ModemModel");
+                        int idxFirmware = Array.IndexOf(header, "ModemFirmware");
+                        int idxCapabilities = Array.IndexOf(header, "ModemCapabilities");
+                        int idxStatus = Array.IndexOf(header, "Status");
+                        int idxSignal = Array.IndexOf(header, "SignalStrength");
+                        int idxSource = Array.IndexOf(header, "SourceFile");
 
                         if (idxCcid < 0) idxCcid = 0;
                         if (idxImei < 0) idxImei = 1;
                         if (idxPhone < 0) idxPhone = 2;
                         if (idxCreated < 0) idxCreated = 3;
-                        if (idxRegDate < 0) idxRegDate = 6;
-                        if (idxLock1C < 0) idxLock1C = 7;
-                        if (idxLock2C < 0) idxLock2C = 8;
+                        // Legacy seven-column schema:
+                        // CCID,IMEI,PhoneNumber,CreatedAt,SimRegDate,Lock1C,Lock2C
+                        if (header.Length == 7)
+                        {
+                            if (idxRegDate < 0) idxRegDate = 4;
+                            if (idxLock1C < 0) idxLock1C = 5;
+                            if (idxLock2C < 0) idxLock2C = 6;
+                        }
 
                         // Heuristic detection based on first data row if headers were corrupted by old bugs
-                        if (lines.Length > 1)
+                        int firstDataLineIndex = headerLineIndex + 1;
+                        if (lines.Length > firstDataLineIndex)
                         {
-                            var firstDataParts = ParseCsvLine(lines[1]);
+                            var firstDataParts = ParseCsvLine(lines[firstDataLineIndex]);
                             if (firstDataParts.Length >= 2)
                             {
                                 string colCcid = firstDataParts[idxCcid].Trim();
@@ -6198,7 +6499,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             }
                         }
 
-                        for (int i = 1; i < lines.Length; i++)
+                        static string Field(string[] values, int index) =>
+                            index >= 0 && index < values.Length ? values[index].Trim() : string.Empty;
+
+                        for (int i = firstDataLineIndex; i < lines.Length; i++)
                         {
                             var line = lines[i];
                             if (string.IsNullOrWhiteSpace(line)) continue;
@@ -6220,11 +6524,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                         Ccid = ccid,
                                         Imei = imei,
                                         PhoneNumber = phone,
-                                        CreatedAt = parts.Length > idxCreated ? parts[idxCreated].Trim() : string.Empty,
-                                        SourceFile = "imei_backup.csv",
-                                        SimRegDate = (idxRegDate >= 0 && parts.Length > idxRegDate) ? parts[idxRegDate].Trim() : string.Empty,
-                                        Lock1C = (idxLock1C >= 0 && parts.Length > idxLock1C) ? parts[idxLock1C].Trim() : string.Empty,
-                                        Lock2C = (idxLock2C >= 0 && parts.Length > idxLock2C) ? parts[idxLock2C].Trim() : string.Empty
+                                        NetworkProvider = Field(parts, idxNetwork),
+                                        Balance = Field(parts, idxBalance),
+                                        PromotionBalance = Field(parts, idxPromotion),
+                                        ExpiryDate = Field(parts, idxExpiry),
+                                        CreatedAt = Field(parts, idxCreated),
+                                        UpdatedAt = Field(parts, idxUpdated),
+                                        SourceFile = string.IsNullOrWhiteSpace(Field(parts, idxSource))
+                                            ? "imei_backup.csv" : Field(parts, idxSource),
+                                        SimRegDate = Field(parts, idxRegDate),
+                                        Lock1C = Field(parts, idxLock1C),
+                                        Lock2C = Field(parts, idxLock2C),
+                                        LastPortName = Field(parts, idxPort),
+                                        DeviceName = Field(parts, idxDevice),
+                                        HardwareName = Field(parts, idxHardware),
+                                        ModemManufacturer = Field(parts, idxManufacturer),
+                                        ModemModel = Field(parts, idxModel),
+                                        ModemFirmware = Field(parts, idxFirmware),
+                                        ModemCapabilities = Field(parts, idxCapabilities),
+                                        Status = Field(parts, idxStatus),
+                                        SignalStrength = int.TryParse(Field(parts, idxSignal), out int signal) ? signal : 0
                                     };
                                     newCache[ccid] = entry;
                                     if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
@@ -6236,7 +6555,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         }
                     }
                     _imeiCache = newCache;
-                    AddLog($"[IMEI_SOURCE] Đã nạp {newCache.Count} dòng từ imei_backup.csv.", "SUCCESS");
+                    AddLog($"[IMEI_SOURCE] Đã nạp {newCache.Count} dòng từ imei_backup.csv và chuyển sang XLSX.", "SUCCESS");
                     SaveImeiCache();
                 }
                 catch (Exception ex)
@@ -6244,71 +6563,342 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     AddLog($"Lỗi đọc imei_backup.csv: {ex.Message}", "ERROR");
                 }
             }
+            else
+            {
+                // File backup đã bị xóa trong lúc tool đang chạy: không giữ cache
+                // cũ trong RAM, nếu không SIM chưa backup vẫn có thể bị nhận là đã duyệt.
+                _imeiCache = new ConcurrentDictionary<string, SimBackupEntry>();
+                AddLog($"[IMEI_SOURCE] Không tìm thấy {_imeiCacheFilePath}; mọi SIM sẽ chờ ACCEPT.", "WARN");
+            }
         }
     }
- 
+
+    private void LoadImeiCacheWorkbook()
+    {
+        try
+        {
+            ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+            var newCache = new ConcurrentDictionary<string, SimBackupEntry>();
+            int ReadWorkbook(string path)
+            {
+                if (!File.Exists(path)) return 0;
+                using var package = new ExcelPackage(new FileInfo(path));
+                var worksheet = package.Workbook.Worksheets["IMEI Backup"]
+                    ?? package.Workbook.Worksheets.FirstOrDefault();
+                if (worksheet?.Dimension == null)
+                    throw new InvalidDataException($"File {Path.GetFileName(path)} không có dữ liệu.");
+
+                var headerIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                for (int column = 1; column <= worksheet.Dimension.End.Column; column++)
+                {
+                    string name = worksheet.Cells[1, column].Text.Trim().TrimStart('\uFEFF');
+                    if (!string.IsNullOrWhiteSpace(name)) headerIndexes[name] = column;
+                }
+
+                if (!headerIndexes.TryGetValue("CCID", out int ccidColumn)
+                    || !headerIndexes.TryGetValue("IMEI", out int imeiColumn))
+                    throw new InvalidDataException($"File {Path.GetFileName(path)} thiếu cột CCID hoặc IMEI.");
+
+                string Cell(int row, string name) => headerIndexes.TryGetValue(name, out int column)
+                    ? worksheet.Cells[row, column].Text.Trim()
+                    : string.Empty;
+
+                int loaded = 0;
+                for (int row = 2; row <= worksheet.Dimension.End.Row; row++)
+                {
+                    string ccid = NormalizeCcid(worksheet.Cells[row, ccidColumn].Text);
+                    string imei = NormalizeImei(worksheet.Cells[row, imeiColumn].Text);
+                    if (string.IsNullOrWhiteSpace(ccid) || string.IsNullOrWhiteSpace(imei)) continue;
+
+                    var entry = new SimBackupEntry
+                    {
+                        Ccid = ccid, Imei = imei, PhoneNumber = Cell(row, "PhoneNumber"),
+                        NetworkProvider = Cell(row, "NetworkProvider"), Balance = Cell(row, "Balance"),
+                        PromotionBalance = Cell(row, "PromotionBalance"), ExpiryDate = Cell(row, "ExpiryDate"),
+                        SimRegDate = Cell(row, "SimRegDate"), Lock1C = Cell(row, "Lock1C"),
+                        Lock2C = Cell(row, "Lock2C"), CreatedAt = Cell(row, "CreatedAt"),
+                        UpdatedAt = Cell(row, "UpdatedAt"), LastPortName = Cell(row, "LastPortName"),
+                        DeviceName = Cell(row, "DeviceName"), HardwareName = Cell(row, "HardwareName"),
+                        ModemManufacturer = Cell(row, "ModemManufacturer"), ModemModel = Cell(row, "ModemModel"),
+                        ModemFirmware = Cell(row, "ModemFirmware"), ModemCapabilities = Cell(row, "ModemCapabilities"),
+                        Status = Cell(row, "Status"),
+                        SignalStrength = int.TryParse(Cell(row, "SignalStrength"), out int signal) ? signal : 0,
+                        SourceFile = string.IsNullOrWhiteSpace(Cell(row, "SourceFile"))
+                            ? Path.GetFileName(path) : Cell(row, "SourceFile")
+                    };
+                    newCache[ccid] = entry;
+                    loaded++;
+                }
+                return loaded;
+            }
+
+            int canonicalCount = ReadWorkbook(_imeiCacheFilePath);
+            int pendingCount = ReadWorkbook(_pendingImeiCacheFilePath);
+            _imeiCache = newCache;
+            foreach (var entry in newCache.Values)
+            {
+                if (!string.IsNullOrWhiteSpace(entry.PhoneNumber)) _simCache[entry.Ccid] = entry.PhoneNumber;
+            }
+            AddLog($"[IMEI_SOURCE] Đã nạp {newCache.Count} dòng từ XLSX (chính={canonicalCount}, chờ hợp nhất={pendingCount}).", "SUCCESS");
+
+            // A pending workbook is a complete snapshot saved while the main XLSX was locked.
+            if (pendingCount > 0) SaveImeiCache();
+        }
+        catch (Exception ex)
+        {
+            AddLog($"Lỗi đọc imei_backup.xlsx: {ex.Message}", "ERROR");
+        }
+    }
+
     private void SaveImeiCache()
     {
         lock (_imeiCacheLock)
         {
             try
             {
-                var builder = new StringBuilder();
-                builder.AppendLine("CCID,IMEI,PhoneNumber,CreatedAt,SimRegDate,Lock1C,Lock2C");
-                foreach (var kvp in _imeiCache)
+                ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+                using var package = new ExcelPackage();
+                package.Workbook.Properties.Title = "ToolGSM IMEI Backup";
+                package.Workbook.Properties.Subject = "CCID to IMEI and SIM metadata mapping";
+                var worksheet = package.Workbook.Worksheets.Add("IMEI Backup");
+
+                for (int column = 0; column < ImeiBackupColumns.Length; column++)
+                    worksheet.Cells[1, column + 1].Value = ImeiBackupColumns[column];
+
+                int row = 2;
+                foreach (var entry in _imeiCache.Values.OrderBy(value => value.Ccid, StringComparer.OrdinalIgnoreCase))
                 {
-                    var entry = kvp.Value;
-                    builder.AppendLine(string.Join(",", new[]
-                    {
-                        EscapeCsv(entry.Ccid),
-                        EscapeCsv(entry.Imei),
-                        EscapeCsv(entry.PhoneNumber),
-                        EscapeCsv(entry.CreatedAt),
-                        EscapeCsv(entry.SimRegDate),
-                        EscapeCsv(entry.Lock1C),
-                        EscapeCsv(entry.Lock2C)
-                    }));
+                    object?[] values =
+                    [
+                        entry.Ccid, entry.Imei, entry.PhoneNumber, entry.NetworkProvider, entry.Balance,
+                        entry.PromotionBalance, entry.ExpiryDate, entry.SimRegDate, entry.Lock1C,
+                        entry.Lock2C, entry.CreatedAt, entry.UpdatedAt, entry.LastPortName,
+                        entry.DeviceName, entry.HardwareName, entry.ModemManufacturer, entry.ModemModel,
+                        entry.ModemFirmware, entry.ModemCapabilities, entry.Status, entry.SignalStrength,
+                        entry.SourceFile
+                    ];
+                    for (int column = 0; column < values.Length; column++)
+                        worksheet.Cells[row, column + 1].Value = values[column];
+                    row++;
                 }
- 
-                string tempPath = _imeiCacheFilePath + ".tmp";
-                File.WriteAllText(tempPath, builder.ToString());
+
+                int lastRow = Math.Max(1, row - 1);
+                int lastColumn = ImeiBackupColumns.Length;
+                using (var header = worksheet.Cells[1, 1, 1, lastColumn])
+                {
+                    header.Style.Font.Bold = true;
+                    header.Style.Font.Color.SetColor(System.Drawing.Color.White);
+                    header.Style.Fill.PatternType = OfficeOpenXml.Style.ExcelFillStyle.Solid;
+                    header.Style.Fill.BackgroundColor.SetColor(System.Drawing.Color.FromArgb(30, 58, 138));
+                    header.Style.HorizontalAlignment = OfficeOpenXml.Style.ExcelHorizontalAlignment.Center;
+                    header.Style.VerticalAlignment = OfficeOpenXml.Style.ExcelVerticalAlignment.Center;
+                }
+
+                worksheet.Row(1).Height = 26;
+                worksheet.View.FreezePanes(2, 1);
+                worksheet.Cells[1, 1, lastRow, lastColumn].Style.VerticalAlignment =
+                    OfficeOpenXml.Style.ExcelVerticalAlignment.Center;
+
+                double[] widths = [24, 18, 16, 17, 15, 18, 14, 14, 14, 14, 20, 20, 13, 22, 24, 20, 18, 24, 28, 18, 13, 22];
+                for (int column = 1; column <= lastColumn; column++)
+                    worksheet.Column(column).Width = widths[column - 1];
+
+                if (lastRow >= 2)
+                {
+                    // Keep identifiers exact (including a leading zero in phone numbers).
+                    worksheet.Cells[2, 1, lastRow, 3].Style.Numberformat.Format = "@";
+                    worksheet.Cells[2, 1, lastRow, 3].Style.QuotePrefix = true;
+                    worksheet.Cells[2, 21, lastRow, 21].Style.Numberformat.Format = "0";
+                    // Excel Table tự tạo AutoFilter trong table1.xml. Không đặt thêm
+                    // worksheet AutoFilter trên cùng vùng vì Excel sẽ coi hai filter
+                    // chồng nhau là nội dung không đọc được và xóa cả Table khi mở file.
+                    var table = worksheet.Tables.Add(worksheet.Cells[1, 1, lastRow, lastColumn], "ImeiBackupTable");
+                    table.TableStyle = OfficeOpenXml.Table.TableStyles.Medium2;
+                    table.ShowFilter = true;
+                }
+
+                string directory = Path.GetDirectoryName(_imeiCacheFilePath) ?? AppPaths.RuntimeDirectory;
+                string tempPath = Path.Combine(directory, "imei_backup.tmp.xlsx");
+                if (File.Exists(tempPath)) File.Delete(tempPath);
+                package.SaveAs(new FileInfo(tempPath));
 
                 if (File.Exists(_imeiCacheFilePath))
                 {
-                    string backupPath = _imeiCacheFilePath.Replace(".csv", ".backup.csv");
+                    string backupPath = Path.Combine(directory, "imei_backup.backup.xlsx");
                     File.Copy(_imeiCacheFilePath, backupPath, overwrite: true);
                 }
 
                 File.Move(tempPath, _imeiCacheFilePath, overwrite: true);
+                if (File.Exists(_pendingImeiCacheFilePath)) File.Delete(_pendingImeiCacheFilePath);
             }
             catch (Exception ex)
             {
-                AddLog($"Lỗi ghi file imei_backup.csv: {ex.Message}", "ERROR");
+                // Excel may lock the main workbook while the user is viewing it. Keep the
+                // complete snapshot separately so accepted SIMs survive a restart and are
+                // merged automatically on the next successful save.
+                try
+                {
+                    string tempPath = AppPaths.ForRuntimeFile("imei_backup.tmp.xlsx");
+                    if (File.Exists(tempPath))
+                        File.Move(tempPath, _pendingImeiCacheFilePath, overwrite: true);
+                }
+                catch (Exception pendingEx)
+                {
+                    AddLog($"Lỗi lưu snapshot IMEI dự phòng: {pendingEx.Message}", "ERROR");
+                }
+                AddLog($"Lỗi ghi file imei_backup.xlsx: {ex.Message}", "ERROR");
             }
         }
     }
 
-    public void AddNewImeiCacheEntry(SimBackupEntry newEntry)
+    public void ExportImeiBackupWorkbook(string filePath)
     {
-        if (newEntry == null || string.IsNullOrEmpty(newEntry.Ccid)) return;
+        if (string.IsNullOrWhiteSpace(filePath)) return;
+
         lock (_imeiCacheLock)
         {
-            _imeiCache[newEntry.Ccid] = newEntry;
+            foreach (var port in GetPortsSnapshot())
+            {
+                string ccid = NormalizeCcid(port.Serial);
+                if (!string.IsNullOrWhiteSpace(ccid) && _imeiCache.TryGetValue(ccid, out var entry))
+                    EnrichBackupEntry(entry, port);
+            }
+        }
+
+        SaveImeiCache();
+        string sourcePath = File.Exists(_pendingImeiCacheFilePath)
+            ? _pendingImeiCacheFilePath
+            : _imeiCacheFilePath;
+        if (!File.Exists(sourcePath))
+            throw new IOException("Không tạo được file backup XLSX.");
+
+        string fullSource = Path.GetFullPath(sourcePath);
+        string fullTarget = Path.GetFullPath(filePath);
+        if (!string.Equals(fullSource, fullTarget, StringComparison.OrdinalIgnoreCase))
+            File.Copy(fullSource, fullTarget, overwrite: true);
+    }
+
+    public int ImportImeiBackupWorkbook(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return 0;
+
+        ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
+        int validRows = 0;
+        using (var package = new ExcelPackage(new FileInfo(filePath)))
+        {
+            var worksheet = package.Workbook.Worksheets["IMEI Backup"]
+                ?? package.Workbook.Worksheets.FirstOrDefault();
+            if (worksheet?.Dimension == null)
+                throw new InvalidDataException("File XLSX không có dữ liệu.");
+
+            int ccidColumn = 0;
+            int imeiColumn = 0;
+            for (int column = 1; column <= worksheet.Dimension.End.Column; column++)
+            {
+                string header = worksheet.Cells[1, column].Text.Trim();
+                if (header.Equals("CCID", StringComparison.OrdinalIgnoreCase)) ccidColumn = column;
+                if (header.Equals("IMEI", StringComparison.OrdinalIgnoreCase)) imeiColumn = column;
+            }
+            if (ccidColumn == 0 || imeiColumn == 0)
+                throw new InvalidDataException("File XLSX thiếu cột CCID hoặc IMEI.");
+
+            for (int row = 2; row <= worksheet.Dimension.End.Row; row++)
+            {
+                if (!string.IsNullOrWhiteSpace(NormalizeCcid(worksheet.Cells[row, ccidColumn].Text))
+                    && !string.IsNullOrWhiteSpace(NormalizeImei(worksheet.Cells[row, imeiColumn].Text)))
+                    validRows++;
+            }
+        }
+
+        if (validRows == 0) return 0;
+        File.Copy(filePath, _pendingImeiCacheFilePath, overwrite: true);
+        lock (_imeiCacheLock)
+        {
+            LoadImeiCacheWorkbook();
+        }
+        return validRows;
+    }
+
+    public void AddNewImeiCacheEntry(SimBackupEntry newEntry)
+    {
+        if (newEntry == null) return;
+        string normalizedCcid = NormalizeCcid(newEntry.Ccid);
+        if (string.IsNullOrEmpty(normalizedCcid)) return;
+        newEntry.Ccid = normalizedCcid;
+        var currentPort = GetPortsSnapshot().FirstOrDefault(port =>
+            string.Equals(NormalizeCcid(port.Serial), normalizedCcid, StringComparison.OrdinalIgnoreCase));
+        if (currentPort != null) EnrichBackupEntry(newEntry, currentPort);
+        lock (_imeiCacheLock)
+        {
+            _imeiCache[normalizedCcid] = newEntry;
             SaveImeiCache();
         }
     }
 
     private void UpdateImeiCacheEntry(string ccid, Action<SimBackupEntry> updateAction)
     {
-        if (string.IsNullOrEmpty(ccid)) return;
+        string normalizedCcid = NormalizeCcid(ccid);
+        if (string.IsNullOrEmpty(normalizedCcid)) return;
+        var currentPort = GetPortsSnapshot().FirstOrDefault(port =>
+            string.Equals(NormalizeCcid(port.Serial), normalizedCcid, StringComparison.OrdinalIgnoreCase));
         lock (_imeiCacheLock)
         {
-            if (_imeiCache.TryGetValue(ccid, out var entry))
+            if (_imeiCache.TryGetValue(normalizedCcid, out var entry))
             {
                 updateAction(entry);
+                if (currentPort != null) EnrichBackupEntry(entry, currentPort);
                 SaveImeiCache();
             }
         }
+    }
+
+    private static void EnrichBackupEntry(SimBackupEntry entry, SimPort port)
+    {
+        static void CopyIfPresent(string value, Action<string> assign)
+        {
+            if (!string.IsNullOrWhiteSpace(value)) assign(value.Trim());
+        }
+
+        CopyIfPresent(port.PhoneNumber, value => entry.PhoneNumber = value);
+        CopyIfPresent(port.NetworkProvider, value => entry.NetworkProvider = value);
+        CopyIfPresent(port.Balance, value => entry.Balance = value);
+        CopyIfPresent(port.PromotionBalance, value => entry.PromotionBalance = value);
+        CopyIfPresent(port.ExpiryDate, value => entry.ExpiryDate = value);
+        CopyIfPresent(port.SimRegDate, value => entry.SimRegDate = value);
+        CopyIfPresent(port.Lock1C, value => entry.Lock1C = value);
+        CopyIfPresent(port.Lock2C, value => entry.Lock2C = value);
+        CopyIfPresent(port.CreatedAt, value => entry.CreatedAt = value);
+        CopyIfPresent(port.DeviceName, value => entry.DeviceName = value);
+        CopyIfPresent(port.HardwareName, value => entry.HardwareName = value);
+        CopyIfPresent(port.ModemManufacturer, value => entry.ModemManufacturer = value);
+        CopyIfPresent(port.ModemModel, value => entry.ModemModel = value);
+        CopyIfPresent(port.ModemFirmware, value => entry.ModemFirmware = value);
+        CopyIfPresent(port.ModemCapabilities, value => entry.ModemCapabilities = value);
+        CopyIfPresent(port.Status, value => entry.Status = value);
+
+        entry.LastPortName = port.PortName;
+        entry.SignalStrength = port.SignalStrength;
+        entry.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        if (string.IsNullOrWhiteSpace(entry.CreatedAt))
+            entry.CreatedAt = entry.UpdatedAt;
+    }
+
+    private static void ApplyBackupMetadata(SimPort port, SimBackupEntry entry)
+    {
+        static void Apply(string value, Action<string> assign)
+        {
+            if (!string.IsNullOrWhiteSpace(value)) assign(value);
+        }
+
+        Apply(entry.PhoneNumber, value => port.PhoneNumber = value);
+        Apply(entry.NetworkProvider, value => port.NetworkProvider = value);
+        Apply(entry.Balance, value => port.Balance = value);
+        Apply(entry.PromotionBalance, value => port.PromotionBalance = value);
+        Apply(entry.ExpiryDate, value => port.ExpiryDate = value);
+        Apply(entry.CreatedAt, value => port.CreatedAt = value);
+        Apply(entry.SimRegDate, value => port.SimRegDate = value);
+        Apply(entry.Lock1C, value => port.Lock1C = value);
+        Apply(entry.Lock2C, value => port.Lock2C = value);
     }
 
     public void RemoveImeiCacheEntry(string ccid)
@@ -6337,6 +6927,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var match = Regex.Match(ccid, @"\b(\d{18,22})\b");
         if (match.Success) return match.Groups[1].Value;
         return string.Empty;
+    }
+
+    private SimBackupEntry? FindImeiBackupEntry(string? rawCcid)
+    {
+        string ccid = NormalizeCcid(rawCcid);
+        if (string.IsNullOrWhiteSpace(ccid)) return null;
+        if (_imeiCache.TryGetValue(ccid, out var exact)) return exact;
+
+        // Some legacy exports dropped the final ICCID check digit (19 instead of 20 digits).
+        // Accept only a unique one-digit prefix match, then migrate it to the full live ICCID.
+        var prefixMatches = _imeiCache
+            .Where(pair =>
+            {
+                string cachedCcid = NormalizeCcid(pair.Key);
+                return Math.Abs(cachedCcid.Length - ccid.Length) == 1
+                    && (cachedCcid.StartsWith(ccid, StringComparison.Ordinal)
+                        || ccid.StartsWith(cachedCcid, StringComparison.Ordinal));
+            })
+            .ToList();
+
+        if (prefixMatches.Count != 1) return null;
+
+        var legacy = prefixMatches[0];
+        lock (_imeiCacheLock)
+        {
+            if (_imeiCache.TryRemove(legacy.Key, out var migrated))
+            {
+                migrated.Ccid = ccid;
+                migrated.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                _imeiCache[ccid] = migrated;
+                SaveImeiCache();
+                AddLog($"[IMEI_SOURCE] Tự nâng cấp CCID backup thiếu số kiểm tra: {legacy.Key} -> {ccid}.", "SUCCESS");
+                return migrated;
+            }
+        }
+        return null;
     }
 
     private static string[] ParseCsvLine(string line)
@@ -6831,7 +7457,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 else if (cmdType == "IMEI") port.LastImeiResult = "Đang chạy...";
                 else if (cmdType == "Data") port.LastDataResult = "Đang chạy...";
                 else if (cmdType == "Delay") port.LastDelayResult = "Đang chạy...";
-                port.UpdateDisplayResult(CommandPanelTab);
+                port.UpdateDisplayResult(cmdType);
             }
             if (cmdType == "USSD")
             {
@@ -6844,7 +7470,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (cmdType == "Call")
             {
-                string cleanNumber = (item.Recipient ?? "").Replace(" ", "").Replace("-", "");
+                if (!GsmDestination.TryNormalizeDial(item.Recipient, out string cleanNumber))
+                    throw new InvalidOperationException("Địa chỉ gọi không hợp lệ");
                 finalResult = await _modemService.SendCommandAsync(portName, "ATD" + cleanNumber + ";", timeoutMs: 15000);
                 
                 if (finalResult.Contains("OK"))
@@ -6861,7 +7488,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         
                         // Cập nhật UI ngay lập tức để báo đang chờ
                         if (port != null) port.LastCallResult = finalResult;
-                        port?.UpdateDisplayResult(CommandPanelTab);
+                        port?.UpdateDisplayResult(cmdType);
                         
                         _callFailures.TryRemove(portName, out _);
                         
@@ -6950,14 +7577,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     else if (cmdType == "Delay") port.LastDelayResult = finalResult;
                 }
                 
-                port.UpdateDisplayResult(CommandPanelTab);
+                port.UpdateDisplayResult(cmdType);
             }
 
-            Application.Current.Dispatcher.Invoke(() => item.Status = "Xong");
+            bool commandFailed = finalResult.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || finalResult.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
+                || finalResult.Contains("Lỗi", StringComparison.OrdinalIgnoreCase)
+                || finalResult.Contains("thất bại", StringComparison.OrdinalIgnoreCase);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                item.Result = finalResult;
+                item.Error = commandFailed ? finalResult : string.Empty;
+                item.Status = commandFailed ? "Lỗi" : "Xong";
+            });
         }
         catch (Exception ex)
         {
-            Application.Current.Dispatcher.Invoke(() => { item.Status = "Lỗi"; item.Error = ex.Message; });
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                item.Status = "Lỗi";
+                item.Error = ex.Message;
+                item.Result = ex.Message;
+                var failedPort = Ports.FirstOrDefault(p => p.PortName == portName);
+                if (failedPort != null && string.Equals(item.Type, "USSD", StringComparison.OrdinalIgnoreCase))
+                {
+                    failedPort.LastUssdResult = "ERROR: " + ex.Message;
+                    failedPort.LastCommandResult = failedPort.LastUssdResult;
+                    failedPort.LastMessageContent = "[USSD][THẤT BẠI] " + ex.Message;
+                    failedPort.Sender = "USSD";
+                    failedPort.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+                }
+            });
         }
         
         UpdateCommandCounts();

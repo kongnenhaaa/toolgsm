@@ -60,12 +60,12 @@ public sealed class GsmSmsService : IGsmSmsService
                 token.ThrowIfCancellationRequested();
                 if (!IsCurrent(session)) return SessionChangedError;
 
-                await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true);
+                await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true, token);
                 if (!IsCurrent(session)) return SessionChangedError;
-                await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,0", 5000, true);
+                await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,0", 5000, true, token);
                 if (!IsCurrent(session)) return SessionChangedError;
 
-                string result = await _modem.SendSmsAsync(portName, phoneNumber, safeContent, 30000);
+                string result = await _modem.SendSmsAsync(portName, phoneNumber, safeContent, 30000, token);
                 if (!IsCurrent(session)) return SessionChangedError;
                 if (IsSuccess(result)) return "Gửi thành công";
                 if (attempt >= 3 || !ShouldRetry(result)) return result;
@@ -77,7 +77,9 @@ public sealed class GsmSmsService : IGsmSmsService
         }
         catch (OperationCanceledException)
         {
-            return "ERROR: SMS operation cancelled";
+            return IsCurrent(session)
+                ? "ERROR: SMS operation cancelled"
+                : SessionChangedError;
         }
         finally
         {

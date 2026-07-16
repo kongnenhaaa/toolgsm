@@ -22,11 +22,6 @@
                        Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.SimCard" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Error" OnClick="ReloadSimSelected">Tải lại SIM</MudButton>
-            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.CreditCard" Class="mr-2"
-                       Variant="Variant.Outlined" Color="Color.Success" OnClick="CheckTkcSelected">Check TKC</MudButton>
-            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Dialpad" Class="mr-2"
-                       Variant="Variant.Outlined" Color="Color.Warning" OnClick="Ussd101Selected">USSD *101#</MudButton>
-            
             @{
                 var pendingList = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
                 var pendingCount = pendingList.Count(IsPendingAccept);
@@ -46,7 +41,7 @@
             @if (SelectedItems.Any())
             {
                 <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
-                           Variant="Variant.Text" Color="Color.Default" OnClick="() => SelectedItems.Clear()">Bỏ chọn</MudButton>
+                           Variant="Variant.Text" Color="Color.Default" OnClick="ClearSelectionAsync">Bỏ chọn</MudButton>
             }
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.TableView"
                        Variant="Variant.Outlined" Color="Color.Success" OnClick="CopyToExcel"
@@ -227,8 +222,24 @@
         if (!list.Any()) return;
 
         Snackbar.Add($"Đang tải lại SIM cho {list.Count} cổng...", Severity.Info);
-        await RunBoundedAsync(list, 4, p => Vm.ReloadPortSafelyAsync(p.PortName));
-        Snackbar.Add($"Đã gửi xong lệnh tải lại SIM cho {list.Count} cổng.", Severity.Success);
+        int success = 0;
+        int failed = 0;
+        await RunBoundedAsync(list, 4, async p =>
+        {
+            try
+            {
+                if (await Vm.ReloadPortSafelyAsync(p.PortName))
+                    Interlocked.Increment(ref success);
+                else
+                    Interlocked.Increment(ref failed);
+            }
+            catch
+            {
+                Interlocked.Increment(ref failed);
+            }
+        });
+        Snackbar.Add($"Tải lại SIM: {success} COM đã bắt đầu reload, {failed} COM không thể khởi động.",
+            failed == 0 ? Severity.Success : Severity.Warning);
         SelectedItems.Clear();
         await SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
@@ -286,33 +297,16 @@
         var ports = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
         Snackbar.Add($"Đang làm mới {ports.Count} cổng...", Severity.Info);
         await Vm.RefreshPortsAsync(ports.Select(p => p.PortName));
+        Snackbar.Add($"Đã gửi lệnh làm mới {ports.Count} cổng; trạng thái sẽ cập nhật khi kết nối lại.", Severity.Success);
         SelectedItems.Clear();
         _ = SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
-    async Task CheckTkcSelected()
+    async Task ClearSelectionAsync()
     {
-        var requested = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
-        var ports = requested
-            .Where(p => p.Status == gsm.Models.SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
-            .ToList();
-        if (!ports.Any())
-        {
-            Snackbar.Add("Không có cổng Active để kiểm tra tài khoản.", Severity.Warning);
-            return;
-        }
-
-        int skipped = requested.Count - ports.Count;
-        Snackbar.Add($"Đang kiểm tra tài khoản {ports.Count} cổng Active{(skipped > 0 ? $"; bỏ qua {skipped} cổng chưa sẵn sàng" : "")}...", Severity.Info);
-        await RunBoundedAsync(ports, 3, async p =>
-        {
-            await Vm.CheckBalanceForPortAsync(p.PortName);
-        });
         SelectedItems.Clear();
         await SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
-
-    async Task Ussd101Selected() => await CheckTkcSelected();
 
     private static async Task RunBoundedAsync(
         IReadOnlyCollection<SimPort> ports,
@@ -348,8 +342,17 @@
     void ConnectAll()
     {
         Snackbar.Add("Đang quét kết nối...", Severity.Info);
-        string result = ModemService.ConnectAll(115200);
-        Snackbar.Add(result, result.Contains("Lỗi") ? Severity.Warning : Severity.Success);
+        try
+        {
+            string result = ModemService.ConnectAll(115200);
+            bool failed = result.Contains("Lỗi", StringComparison.OrdinalIgnoreCase)
+                || result.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
+            Snackbar.Add(result, failed ? Severity.Warning : Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Connect All lỗi: " + ex.Message, Severity.Error);
+        }
     }
 
     private IEnumerable<SimPort> VisiblePorts
@@ -485,12 +488,17 @@
         }
 
         // Dùng System.Windows.Clipboard (WPF) để đặt text Unicode — đây là clipboard đúng cho Excel
-        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        try
         {
-            System.Windows.Clipboard.SetText(sb.ToString(), System.Windows.TextDataFormat.UnicodeText);
-        });
-
-        int count = rows.Count;
-        Snackbar.Add($"✅ Đã copy {count} dòng vào clipboard — Paste thẳng vào Excel!", Severity.Success);
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                System.Windows.Clipboard.SetText(sb.ToString(), System.Windows.TextDataFormat.UnicodeText);
+            });
+            Snackbar.Add($"✅ Đã copy {rows.Count} dòng vào clipboard — Paste thẳng vào Excel!", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Copy Excel lỗi: " + ex.Message, Severity.Error);
+        }
     }
 }

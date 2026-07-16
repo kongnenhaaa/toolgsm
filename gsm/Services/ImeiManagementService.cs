@@ -141,12 +141,92 @@ public class ImeiManagementService
         _logAction?.Invoke(message, level);
     }
 
-    private bool IsValidImei(string imei)
+    public static bool IsValidImei(string? imei)
     {
-        if (string.IsNullOrWhiteSpace(imei)) return false;
-        var clean = new string(imei.Where(char.IsDigit).ToArray());
-        return clean.Length == 15;
+        string clean = NormalizeImeiValue(imei);
+        if (clean.Length != 15) return false;
+
+        int sum = 0;
+        for (int i = 0; i < clean.Length; i++)
+        {
+            int digit = clean[i] - '0';
+            if ((i & 1) != 0)
+            {
+                digit *= 2;
+                if (digit > 9) digit -= 9;
+            }
+            sum += digit;
+        }
+        return sum % 10 == 0;
     }
+
+    /// <summary>
+    /// So sánh danh tính thiết bị theo TAC + SNR (14 số). Theo 3GPP, check digit
+    /// không được truyền lên mạng và vị trí cuối có thể được biểu diễn bằng spare digit 0.
+    /// Chỉ chấp nhận khác biệt này khi một phía là IMEI Luhn hợp lệ.
+    /// </summary>
+    public static bool AreEquivalentImei(string? left, string? right)
+    {
+        string a = NormalizeImeiValue(left);
+        string b = NormalizeImeiValue(right);
+        if (a.Length != 15 || b.Length != 15) return false;
+        if (string.Equals(a, b, StringComparison.Ordinal)) return true;
+        if (!a.AsSpan(0, 14).SequenceEqual(b.AsSpan(0, 14))) return false;
+
+        return (IsValidImei(a) && b[14] == '0')
+            || (IsValidImei(b) && a[14] == '0');
+    }
+
+    public static bool IsUsableObservedImei(string? imei)
+    {
+        string clean = NormalizeImeiValue(imei);
+        if (IsValidImei(clean)) return true;
+        if (clean.Length != 15 || clean[14] != '0') return false;
+
+        string canonical = clean[..14] + CalculateCheckDigit(clean[..14]);
+        return IsValidImei(canonical);
+    }
+
+    public static string ToCanonicalImei(string? imei)
+    {
+        string clean = NormalizeImeiValue(imei);
+        if (IsValidImei(clean)) return clean;
+        if (clean.Length == 15 && clean[14] == '0')
+        {
+            int checkDigit = CalculateCheckDigit(clean[..14]);
+            if (checkDigit >= 0) return clean[..14] + checkDigit;
+        }
+        return clean;
+    }
+
+    public static bool TryNormalizeBackupImei(string? imei, out string canonicalImei)
+    {
+        canonicalImei = ToCanonicalImei(imei);
+        if (IsValidImei(canonicalImei)) return true;
+        canonicalImei = string.Empty;
+        return false;
+    }
+
+    private static int CalculateCheckDigit(string first14Digits)
+    {
+        if (first14Digits.Length != 14 || first14Digits.Any(c => !char.IsDigit(c))) return -1;
+        int sum = 0;
+        for (int i = 0; i < first14Digits.Length; i++)
+        {
+            int digit = first14Digits[i] - '0';
+            if ((i & 1) != 0)
+            {
+                digit *= 2;
+                if (digit > 9) digit -= 9;
+            }
+            sum += digit;
+        }
+        return (10 - (sum % 10)) % 10;
+    }
+
+    private static string NormalizeImeiValue(string? imei) => string.IsNullOrWhiteSpace(imei)
+        ? string.Empty
+        : new string(imei.Where(char.IsDigit).ToArray());
 
     private string NormalizeImei(string? imei)
     {
@@ -191,14 +271,27 @@ public class ImeiManagementService
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi trong lúc xử lý" };
 
             var cachedEntry = getBackupEntry(ccid);
-            bool hasValidBackup = cachedEntry != null && IsValidImei(NormalizeImei(cachedEntry.Imei));
-            bool isHardwareImeiValid = IsValidImei(NormalizeImei(currentImei));
+            string canonicalBackupImei = string.Empty;
+            bool hasValidBackup = cachedEntry != null
+                && TryNormalizeBackupImei(cachedEntry.Imei, out canonicalBackupImei);
+            bool isHardwareImeiValid = IsUsableObservedImei(NormalizeImei(currentImei));
+            string canonicalCurrentImei = ToCanonicalImei(currentImei);
+
+            if (hasValidBackup
+                && !string.Equals(cachedEntry!.Imei, canonicalBackupImei, StringComparison.Ordinal))
+            {
+                // File cũ có thể lưu dạng network spare digit 0. Nâng cấp về
+                // IMEI Luhn 15 số trước khi ghi modem và lưu lại workbook.
+                cachedEntry.Imei = canonicalBackupImei;
+                saveBackupEntry(cachedEntry);
+                Log($"[{portName}] [IMEI_BACKUP_NORMALIZED] CCID={ccid} IMEI={canonicalBackupImei}", "SUCCESS");
+            }
 
             // Quyết định xem SIM này có cần được xử lý như SIM mới (chờ chấp nhận để tráng IMEI mới) hay không
             bool treatAsNewSim = (cachedEntry == null) || (!isHardwareImeiValid && !hasValidBackup);
 
             // 1. Kiểm tra chặn/chờ duyệt đối với SIM mới
-            if (treatAsNewSim && !port.IsRebooting && !forceAccept)
+            if (treatAsNewSim && !forceAccept)
             {
                 if (settings.EnableNewSimIntakeMode)
                 {
@@ -233,18 +326,19 @@ public class ImeiManagementService
             else if (settings.EnableImeiRestore && hasValidBackup)
             {
                 // Tráng phục hồi từ file backup cũ
-                string candidateImei = NormalizeImei(cachedEntry!.Imei);
+                SimBackupEntry validCachedEntry = cachedEntry!;
+                string candidateImei = canonicalBackupImei;
                 targetImei = candidateImei;
-                targetSource = string.IsNullOrWhiteSpace(cachedEntry.SourceFile) ? "imei_backup.csv" : cachedEntry.SourceFile;
+                targetSource = string.IsNullOrWhiteSpace(validCachedEntry.SourceFile) ? "imei_backup.xlsx" : validCachedEntry.SourceFile;
                 
                 dispatcherInvoke(() =>
                 {
                     port.DeviceName = GetDeviceNameFromImei(candidateImei);
-                    if (!string.IsNullOrWhiteSpace(cachedEntry.PhoneNumber))
+                    if (!string.IsNullOrWhiteSpace(validCachedEntry.PhoneNumber))
                     {
-                        port.PhoneNumber = cachedEntry.PhoneNumber;
+                        port.PhoneNumber = validCachedEntry.PhoneNumber;
                     }
-                    port.CreatedAt = cachedEntry.CreatedAt;
+                    port.CreatedAt = validCachedEntry.CreatedAt;
                 });
             }
             else
@@ -262,7 +356,7 @@ public class ImeiManagementService
                     var newEntry = new SimBackupEntry
                     {
                         Ccid = ccid,
-                        Imei = currentImei,
+                        Imei = canonicalCurrentImei,
                         PhoneNumber = port.PhoneNumber,
                         CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                         SourceFile = "auto-learn",
@@ -270,7 +364,7 @@ public class ImeiManagementService
                     };
                     saveBackupEntry(newEntry);
                     
-                    Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc hợp lệ: {currentImei} vào file backup.", "SUCCESS");
+                    Log($"[{portName}] Cắm lần đầu, tự động ghi nhận IMEI gốc hợp lệ: {canonicalCurrentImei} vào file backup.", "SUCCESS");
 
                     dispatcherInvoke(() =>
                     {
@@ -302,13 +396,20 @@ public class ImeiManagementService
             // 4. Nếu cuối cùng không có targetImei (ví dụ SIM bị chặn chưa được duyệt), giữ nguyên IMEI hiện tại
             if (string.IsNullOrEmpty(targetImei))
             {
-                targetImei = currentImei;
+                targetImei = canonicalCurrentImei;
             }
 
             expectedImei = targetImei;
 
             // 5. Tiến hành ghi IMEI lên modem nếu khác với IMEI hiện tại
-            if (!string.IsNullOrEmpty(targetImei) && targetImei != currentImei)
+            bool targetAlreadyPresent = AreEquivalentImei(targetImei, currentImei);
+            if (targetAlreadyPresent
+                && !string.Equals(targetImei, currentImei, StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(targetImei))
+            {
+                Log($"[{portName}] [IMEI_EQUIVALENT] modem={currentImei}; backup={targetImei}; cùng TAC+SNR 14 số, chỉ khác Check Digit/Spare Digit. Không tráng lại.", "SUCCESS");
+            }
+            if (!string.IsNullOrEmpty(targetImei) && !targetAlreadyPresent)
             {
                 Log($"[{portName}] [IMEI_TARGET] source={targetSource} CCID={ccid} target_imei={targetImei}");
                 Log($"[{portName}] [IMEI_CHANGE] IMEI hiện tại ({currentImei}) khác mục tiêu ({targetImei}). Bắt đầu ghi đè...", "WARNING");
@@ -353,8 +454,12 @@ public class ImeiManagementService
 
                     string finalImeiResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
                     string finalImei = NormalizeImei(finalImeiResp);
+                    string storedImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
+                    string storedImei = NormalizeImei(storedImeiResp);
+                    bool storedRegisterMatches = !IsUsableObservedImei(storedImei)
+                        || AreEquivalentImei(storedImei, targetImei);
 
-                    if (finalImei == targetImei)
+                    if (AreEquivalentImei(finalImei, targetImei) && storedRegisterMatches)
                     {
                         if (!await SessionIsValidAsync())
                             return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi sau khi ghi IMEI" };
@@ -396,7 +501,7 @@ public class ImeiManagementService
                         }
                         else
                         {
-                            Log($"[{portName}] Ghi đè IMEI thất bại ở lần thử {attempt} (Đọc lại: {finalImei}). Giữ sóng tắt.", "ERROR");
+                            Log($"[{portName}] Ghi đè IMEI thất bại ở lần thử {attempt} (CGSN={finalImei}; EGMR={storedImei}). Giữ sóng tắt.", "ERROR");
                         }
                     }
                 }
@@ -410,7 +515,7 @@ public class ImeiManagementService
             }
                 else
                 {
-                    if (targetImei == currentImei && !string.IsNullOrEmpty(currentImei))
+                    if (AreEquivalentImei(targetImei, currentImei) && !string.IsNullOrEmpty(currentImei))
                     {
                         Log($"[{portName}] IMEI khớp với mục tiêu: {currentImei}", "SUCCESS");
                     }
@@ -420,18 +525,23 @@ public class ImeiManagementService
                 }
 
             string checkFinalImei = string.Empty;
+            string checkStoredImei = string.Empty;
             for (int i = 0; i < 3; i++)
             {
                 if (!await SessionIsValidAsync())
                     return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi trước bước xác minh cuối" };
                 string checkFinalResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
                 checkFinalImei = NormalizeImei(checkFinalResp);
+                string checkStoredResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
+                checkStoredImei = NormalizeImei(checkStoredResp);
                 if (!string.IsNullOrEmpty(checkFinalImei)) break;
                 await Task.Delay(1000, ct);
             }
             
-            bool matched = (checkFinalImei == expectedImei) && !string.IsNullOrEmpty(checkFinalImei);
-            Log($"[{portName}] [IMEI_FINAL] current={checkFinalImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
+            bool storedFinalMatches = !IsUsableObservedImei(checkStoredImei)
+                || AreEquivalentImei(checkStoredImei, expectedImei);
+            bool matched = AreEquivalentImei(checkFinalImei, expectedImei) && storedFinalMatches;
+            Log($"[{portName}] [IMEI_FINAL] CGSN={checkFinalImei}, EGMR={checkStoredImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
 
             if (matched)
             {
@@ -440,18 +550,18 @@ public class ImeiManagementService
                     saveBackupEntry(new SimBackupEntry
                     {
                         Ccid = ccid,
-                        Imei = checkFinalImei,
+                        Imei = expectedImei,
                         PhoneNumber = port.PhoneNumber,
                         CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                         SourceFile = "manual-verified",
                         SimRegDate = port.SimRegDate
                     });
                 }
-                bool wasApplied = (!string.IsNullOrEmpty(targetImei) && targetImei != currentImei);
+                bool wasApplied = !string.IsNullOrEmpty(targetImei) && !targetAlreadyPresent;
                 return new ImeiProcessResult 
                 { 
                     Status = wasApplied ? ImeiProcessStatus.Applied : ImeiProcessStatus.Matched, 
-                    FinalImei = checkFinalImei
+                    FinalImei = expectedImei
                 };
             }
             else

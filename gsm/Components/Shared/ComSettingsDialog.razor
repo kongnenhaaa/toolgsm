@@ -99,7 +99,11 @@
         // 1. Thu thập tất cả các cổng COM
         var sysPorts = ModemService.GetAvailablePorts() ?? new List<string>();
         var vmPorts = Vm.Ports?.Select(p => p.PortName) ?? Enumerable.Empty<string>();
-        _allPorts = sysPorts.Concat(vmPorts).Distinct().OrderBy(p => p).ToList();
+        // Keep the physical USB/device order returned by the modem service.
+        // Sorting alphabetically would turn COM3, COM12, COM4 into COM12, COM3, COM4.
+        _allPorts = sysPorts.Concat(vmPorts)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         // 2. Load cấu hình ẩn cổng COM
         var cfg = SettingsService.Current;

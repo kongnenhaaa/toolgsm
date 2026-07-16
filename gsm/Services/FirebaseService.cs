@@ -661,6 +661,7 @@ namespace gsm.Services
                             }
                             else if (recipient == "SYSTEM" && content == "CLEAR_OTP")
                             {
+                                _pendingOtpCommands.TryRemove(portId, out _);
                                 if (port != null)
                                 {
                                     Application.Current.Dispatcher.Invoke(() => {
@@ -685,6 +686,9 @@ namespace gsm.Services
                             }
                             else
                             {
+                                var pendingOtp = new PendingWebOtpCommand(
+                                    cmdId, portId, recipient, content, DateTime.UtcNow);
+                                _pendingOtpCommands[portId] = pendingOtp;
                                 finalResult = await ExecuteSmsAsync(portId, recipient, content);
                                 if (finalResult.Contains("ERROR") || finalResult.Contains("Timeout"))
                                 {
@@ -695,6 +699,8 @@ namespace gsm.Services
                                     else
                                     {
                                         finalStatus = "failed";
+                                        _pendingOtpCommands.TryRemove(
+                                            new KeyValuePair<string, PendingWebOtpCommand>(portId, pendingOtp));
                                     }
                                     finalError = GetHumanReadableError(finalResult);
                                 }
@@ -713,12 +719,27 @@ namespace gsm.Services
                         {
                             if (isClaimed)
                             {
-                                _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError);
-                                await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
-                                await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
-                                await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
+                                var resultSemaphore = _commandResultSemaphores.GetOrAdd(
+                                    cmdId, _ => new SemaphoreSlim(1, 1));
+                                await resultSemaphore.WaitAsync();
+                                try
+                                {
+                                    // An OTP can arrive before ExecuteSmsAsync finishes. Never let
+                                    // the ordinary "sent" result overwrite the final OTP result.
+                                    if (!_otpCompletedCommands.ContainsKey(cmdId))
+                                    {
+                                        _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError);
+                                        await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
+                                        await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
+                                        await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
+                                    }
                                 // Chỉ xóa khi đã xử lý xong (hoặc lỗi), tránh bị dính lệnh vĩnh viễn trên Firebase
-                                await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                                    await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                                }
+                                finally
+                                {
+                                    resultSemaphore.Release();
+                                }
                             }
                         }
                     });
@@ -727,33 +748,23 @@ namespace gsm.Services
             catch { }
         }
 
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSemaphores = new();
-        private readonly ConcurrentDictionary<string, DateTime> _recentSmsPayloads = new();
+        private sealed record PendingWebOtpCommand(
+            string CommandId,
+            string PortId,
+            string Recipient,
+            string Content,
+            DateTime CreatedAtUtc);
 
-        private void CleanOldSmsPayloads()
-        {
-            var now = DateTime.Now;
-            var keysToRemove = _recentSmsPayloads.Where(kv => (now - kv.Value).TotalMinutes > 3).Select(kv => kv.Key).ToList();
-            foreach (var key in keysToRemove)
-            {
-                _recentSmsPayloads.TryRemove(key, out _);
-            }
-        }
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSemaphores = new();
+        private readonly ConcurrentDictionary<string, PendingWebOtpCommand> _pendingOtpCommands =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _commandResultSemaphores =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, byte> _otpCompletedCommands =
+            new(StringComparer.OrdinalIgnoreCase);
 
         private async Task<string> ExecuteSmsAsync(string portId, string recipient, string content)
         {
-            CleanOldSmsPayloads();
-            string payloadKey = $"{portId}_{recipient}_{content}";
-            if (_recentSmsPayloads.TryGetValue(payloadKey, out var lastSentTime))
-            {
-                if ((DateTime.Now - lastSentTime).TotalMinutes <= 3)
-                {
-                    return "ERROR: Khóa chống gửi trùng (Idempotency). Tin nhắn giống hệt đã được gửi cách đây ít phút.";
-                }
-            }
-            // Cập nhật thời gian gửi trước, sẽ gỡ bỏ nếu gặp lỗi không thực sự gửi đi
-            _recentSmsPayloads[payloadKey] = DateTime.Now;
-
             var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
             await sem.WaitAsync();
             
@@ -793,15 +804,6 @@ namespace gsm.Services
 
                 if (result.Contains("ERROR"))
                 {
-                    // Nếu lỗi chỉ ra rằng SMS chắc chắn chưa được Modem gửi ra ngoài không trung
-                    if (result.Contains("Port not open") || 
-                        result.Contains("Timeout waiting for > prompt") || 
-                        result.Contains("Another command") || 
-                        result.Contains("waiting for lock"))
-                    {
-                        _recentSmsPayloads.TryRemove(payloadKey, out _);
-                    }
-
                     string errorMsg = GetHumanReadableError(result);
                     var fbCfg = SettingsService.Current;
                     if (fbCfg != null && fbCfg.TelegramOnError &&
@@ -825,6 +827,88 @@ namespace gsm.Services
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSCS=\"UCS2\"", 10000, true);
                 await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,8", 10000, true);
                 sem.Release();
+            }
+        }
+
+        public async Task PublishOtpForPendingCommandAsync(
+            string portId, string otp, string smsContent, string sender)
+        {
+            if (string.IsNullOrWhiteSpace(portId)
+                || string.IsNullOrWhiteSpace(otp)
+                || otp == "N/A") return;
+
+            if (!_pendingOtpCommands.TryGetValue(portId, out var pending)) return;
+            if (DateTime.UtcNow - pending.CreatedAtUtc > TimeSpan.FromMinutes(5))
+            {
+                _pendingOtpCommands.TryRemove(
+                    new KeyValuePair<string, PendingWebOtpCommand>(portId, pending));
+                return;
+            }
+
+            try
+            {
+                var resultSemaphore = _commandResultSemaphores.GetOrAdd(
+                    pending.CommandId, _ => new SemaphoreSlim(1, 1));
+                await resultSemaphore.WaitAsync();
+                try
+                {
+                var resultPayload = new Dictionary<string, object?>
+                {
+                    ["id"] = pending.CommandId,
+                    ["machineId"] = _machineId,
+                    ["portId"] = portId,
+                    ["recipient"] = pending.Recipient,
+                    ["content"] = pending.Content,
+                    ["type"] = "sms",
+                    ["status"] = "otp_received",
+                    ["result"] = "OTP received",
+                    ["error"] = null,
+                    ["otp"] = otp,
+                    ["otpSender"] = sender,
+                    ["otpContent"] = smsContent,
+                    ["handledBy"] = _machineId,
+                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                };
+                using var resultContent = new StringContent(
+                    JsonSerializer.Serialize(resultPayload), Encoding.UTF8, "application/json");
+                using var resultResponse = await _restClient.PutAsync(
+                    $"{_databaseUrl}command_results/{pending.CommandId}.json", resultContent);
+                if (!resultResponse.IsSuccessStatusCode) return;
+
+                _otpCompletedCommands[pending.CommandId] = 0;
+
+                if (await IsWebCommandCurrentAsync(portId, pending.CommandId))
+                {
+                    var statePayload = new Dictionary<string, object?>
+                    {
+                        ["commandId"] = pending.CommandId,
+                        ["commandStatus"] = "otp_received",
+                        ["smsSent"] = false,
+                        ["otp"] = otp,
+                        ["errorMsg"] = null,
+                        ["otpReceivedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" },
+                        ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                    };
+                    using var stateContent = new StringContent(
+                        JsonSerializer.Serialize(statePayload), Encoding.UTF8, "application/json");
+                    await _restClient.PatchAsync(
+                        $"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json", stateContent);
+                }
+
+                _vm.UpsertCommandQueue(
+                    pending.CommandId, portId, "sms", pending.Recipient, pending.Content,
+                    "otp_received", "OTP received");
+                _pendingOtpCommands.TryRemove(
+                    new KeyValuePair<string, PendingWebOtpCommand>(portId, pending));
+                }
+                finally
+                {
+                    resultSemaphore.Release();
+                }
+            }
+            catch (Exception ex)
+            {
+                _vm.AddLog($"[{portId}] [FIREBASE_OTP_RESULT_ERROR] {ex.Message}", "WARN");
             }
         }
 

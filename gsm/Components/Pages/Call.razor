@@ -14,7 +14,7 @@
         <MudItem xs="12" md="3">
             <MudTextField @bind-Value="_phone"
                           Label="Số điện thoại"
-                          Placeholder="09xxxxxxxx"
+                          Placeholder="900 / 09xxxxxxxx / *mã#"
                           Variant="Variant.Outlined" Margin="Margin.Dense"
                           Immediate="true" FullWidth="true" />
         </MudItem>
@@ -418,12 +418,9 @@
             return false;
         }
 
-        // Làm sạch số điện thoại
-        string prefix = _phone.TrimStart().StartsWith("+") ? "+" : "";
-        string cleanPhone = prefix + new string(_phone.Where(char.IsDigit).ToArray());
-        if (cleanPhone.Length < 9)
+        if (!GsmDestination.TryNormalizeDial(_phone, out string cleanPhone))
         {
-            Snackbar.Add("Số điện thoại không hợp lệ (tối thiểu 9 chữ số)", Severity.Warning);
+            Snackbar.Add("Địa chỉ gọi không hợp lệ", Severity.Warning);
             return false;
         }
 
@@ -465,7 +462,9 @@
                     statusMsg =>
                     {
                         // Lọc các trạng thái quan trọng để hiển thị lên UI
-                        if (statusMsg.Contains("[CALL]") || statusMsg.Contains("Đang bật lại") ||
+                        if (statusMsg.Contains("[CALL]") || statusMsg.Contains("[CALL_STATE]") ||
+                            statusMsg.Contains("[CALL_NO_VOICE_SESSION]") ||
+                            statusMsg.Contains("[CALL_DIAG]") || statusMsg.Contains("Đang bật lại") ||
                             statusMsg.Contains("ATD") || statusMsg.Contains("rung") ||
                             statusMsg.Contains("nhấc máy") || statusMsg.Contains("Dập máy") ||
                             statusMsg.Contains("thất bại") || statusMsg.Contains("kết thúc"))
@@ -473,6 +472,9 @@
                             // Chuyển thành message ngắn gọn cho UI
                             string uiMsg = statusMsg
                                 .Replace("[CALL] ", "")
+                                .Replace("[CALL_STATE] ", "")
+                                .Replace("[CALL_NO_VOICE_SESSION] ", "")
+                                .Replace("[CALL_DIAG] ", "")
                                 .Replace("[FIX] ", "");
                             if (uiMsg.Length > 60) uiMsg = uiMsg.Substring(0, 57) + "...";
                             _callStatus = $"[{port}] {uiMsg}";
@@ -622,14 +624,14 @@
     {
         var phones = _queuePhones
             .Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(x => x.Trim())
-            .Where(x => x.Length >= 9)
-            .Distinct()
+            .Select(x => GsmDestination.TryNormalizeDial(x, out string destination) ? destination : "")
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (!phones.Any())
         {
-            Snackbar.Add("Nhập danh sách số hợp lệ (tối thiểu 9 chữ số)", Severity.Warning);
+            Snackbar.Add("Nhập ít nhất một địa chỉ gọi", Severity.Warning);
             return;
         }
 

@@ -15,7 +15,7 @@
         <MudItem xs="12" md="4">
             <MudTextField @bind-Value="_phone"
                           Label="Số điện thoại nhận"
-                          Placeholder="09xxxxxxxx (nhiều số: mỗi dòng 1 số)"
+                          Placeholder="900 / 888 / số điện thoại (mỗi dòng 1 đích)"
                           Variant="Variant.Outlined" Margin="Margin.Dense"
                           Lines="2" FullWidth="true" />
         </MudItem>
@@ -40,6 +40,11 @@
                                FullWidth="true">
                         @(_isSending ? "Đang gửi..." : "Gửi ngay")
                     </MudButton>
+                    @if (_isSending)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
+                                       OnClick="StopImmediateSend" title="Dừng lệnh gửi ngay" />
+                    }
                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
                                StartIcon="@Icons.Material.Filled.PlaylistAdd" OnClick="AddToQueue"
                                Disabled="@(string.IsNullOrWhiteSpace(_phone) || string.IsNullOrWhiteSpace(_message))"
@@ -258,7 +263,7 @@
 
             <MudDivider Class="my-3" />
             <MudText Typo="Typo.caption" Style="color:#64748B;">
-                💡 Biến hỗ trợ trong mẫu: <code>{port}</code> · <code>{phone}</code> · <code>{time}</code>
+                💡 Biến hỗ trợ trong mẫu: <code>{port}</code> · <code>{phone}</code> · <code>{otp}</code> · <code>{time}</code>
             </MudText>
         </MudPaper>
     </MudTabPanel>
@@ -274,6 +279,7 @@
     private HashSet<SimPort> _selectedPorts = new();
     private int _smsSubTab = 0;
     private bool _isSending = false;
+    private CancellationTokenSource? _sendCts;
 
     // Mẫu tin nhắn
     private string _newTemplate = "";
@@ -320,12 +326,26 @@
         if (_sendMode == "all")
             return ActivePorts.Select(p => p.PortName).ToList();
 
-        // "selected" – ưu tiên tick box; fallback về tất cả Active nếu không có gì được chọn
+        // "selected" means exactly the checked Active ports.
         if (_selectedPorts.Any())
             return _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
 
-        return ActivePorts.Select(p => p.PortName).ToList();
+        // SMS can incur charges: selected mode must never silently fall back to all ports.
+        return new List<string>();
     }
+
+    List<string> ParsePhones() => _phone
+        .Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+        .Select(x => GsmDestination.TryNormalizeSms(x, out string destination) ? destination : "")
+        .Where(x => !string.IsNullOrWhiteSpace(x))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    static bool IsSmsSuccess(string? result) =>
+        !string.IsNullOrWhiteSpace(result)
+        && (result.Contains("thành công", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase)
+            || result.StartsWith("OK", StringComparison.OrdinalIgnoreCase));
 
     Color GetQueueStatusColor(string status) => status switch
     {
@@ -372,23 +392,20 @@
             return;
         }
 
-        var phones = _phone
-            .Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(x => x.Trim())
-            .Where(x => x.Length >= 9)
-            .Distinct()
-            .ToList();
+        var phones = ParsePhones();
 
         if (!phones.Any())
         {
-            Snackbar.Add("Không có số hợp lệ (tối thiểu 9 chữ số)", Severity.Warning);
+            Snackbar.Add("Không có địa chỉ nhận hợp lệ", Severity.Warning);
             return;
         }
 
         var ports = GetTargetPorts();
         if (!ports.Any())
         {
-            Snackbar.Add("Không có cổng Active / đã chọn", Severity.Warning);
+            Snackbar.Add(_sendMode == "selected"
+                ? "Hãy chọn ít nhất một cổng Active"
+                : "Không có cổng Active", Severity.Warning);
             return;
         }
 
@@ -401,51 +418,93 @@
             if (ok != true) return;
         }
 
+        _sendCts?.Cancel();
+        _sendCts?.Dispose();
+        _sendCts = new CancellationTokenSource();
+        CancellationToken token = _sendCts.Token;
         _isSending = true;
         int sent = 0, fail = 0;
-        Snackbar.Add($"Đang gửi {totalSms} SMS...", Severity.Info);
+        Snackbar.Add($"Đang gửi song song {totalSms} SMS trên {ports.Count} cổng...", Severity.Info);
 
-        foreach (var port in ports)
+        async Task SendForPortAsync(string port)
         {
             foreach (var phone in phones)
             {
+                if (token.IsCancellationRequested) break;
+
+                string commandId = Guid.NewGuid().ToString("N")[..12];
                 if (!Vm.IsPortReadyForOperation(port))
                 {
-                    fail += phones.Count;
-                    break;
+                    Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message,
+                        "Lỗi", "Cổng không còn Active hoặc SIM đã thay đổi");
+                    Interlocked.Increment(ref fail);
+                    continue;
                 }
+
+                Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Đang gửi", "Đang xử lý...");
+                await InvokeAsync(StateHasChanged);
                 try
                 {
-                    // Dùng QueueSmsAsync (throttle + retry) thay vì SendSmsAsync thô
-                    string res = await Vm.QueueSmsAsync(port, phone, _message);
-
-                    if (res != null && (res.Contains("ERROR") || res.Contains("TIMEOUT")))
+                    string res = await Vm.QueueSmsAsync(port, phone, _message, token);
+                    if (token.IsCancellationRequested && res.Contains("cancel", StringComparison.OrdinalIgnoreCase))
                     {
-                        fail++;
-                        Snackbar.Add($"[{port}] → {phone} Lỗi: {res.Trim()}", Severity.Error);
+                        Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Chờ", "Đã dừng");
+                        break;
+                    }
+                    if (IsSmsSuccess(res))
+                    {
+                        Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Xong", res.Trim());
+                        Interlocked.Increment(ref sent);
                     }
                     else
                     {
-                        sent++;
-                        Snackbar.Add($"[{port}] → {phone} ✓", Severity.Success);
+                        Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Lỗi", res?.Trim() ?? "Không có phản hồi");
+                        Interlocked.Increment(ref fail);
                     }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Chờ", "Đã dừng");
+                    break;
                 }
                 catch (Exception ex)
                 {
-                    fail++;
-                    Snackbar.Add($"[{port}] → {phone} Lỗi: {ex.Message}", Severity.Error);
+                    Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Lỗi", ex.Message);
+                    Interlocked.Increment(ref fail);
                 }
-                await Task.Delay(600); // chống spam modem
+
+                await InvokeAsync(StateHasChanged);
+                try { await Task.Delay(600, token); }
+                catch (OperationCanceledException) { break; }
             }
         }
 
-        _isSending = false;
-        Snackbar.Add($"Hoàn tất: {sent} thành công, {fail} lỗi",
-            fail == 0 ? Severity.Success : Severity.Warning);
+        try
+        {
+            await Task.WhenAll(ports.Select(SendForPortAsync));
+        }
+        finally
+        {
+            bool cancelled = token.IsCancellationRequested;
+            _isSending = false;
+            _sendCts?.Dispose();
+            _sendCts = null;
+            Snackbar.Add(cancelled
+                    ? $"Đã dừng gửi: {sent} thành công, {fail} lỗi"
+                    : $"Hoàn tất: {sent} thành công, {fail} lỗi",
+                fail == 0 ? Severity.Success : Severity.Warning);
+            StateHasChanged();
+        }
+    }
+
+    void StopImmediateSend()
+    {
+        _sendCts?.Cancel();
+        Snackbar.Add("Đang dừng các lệnh gửi SMS...", Severity.Info);
     }
 
     // ========== 3. THÊM VÀO HÀNG ĐỢI ==========
-    async Task AddToQueue()
+    void AddToQueue()
     {
         if (string.IsNullOrWhiteSpace(_phone) || string.IsNullOrWhiteSpace(_message))
         {
@@ -453,12 +512,7 @@
             return;
         }
 
-        var phones = _phone
-            .Split(new[] { '\n', '\r', ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-            .Select(x => x.Trim())
-            .Where(x => x.Length >= 9)
-            .Distinct()
-            .ToList();
+        var phones = ParsePhones();
 
         var ports = GetTargetPorts();
 
@@ -488,8 +542,11 @@
     // ========== 4. CHẠY HÀNG ĐỢI ==========
     async Task RunQueue()
     {
+        if (_isRunningQueue) return;
+
         var queue = SmsQueue
             .Where(x => x.Status == "Chờ" || x.Status == "Pending" || string.IsNullOrEmpty(x.Status))
+            .Reverse()
             .ToList();
 
         if (!queue.Any())
@@ -498,75 +555,99 @@
             return;
         }
 
-        _isRunningQueue = true;
+        _queueCts?.Cancel();
+        _queueCts?.Dispose();
         _queueCts = new CancellationTokenSource();
+        CancellationToken token = _queueCts.Token;
+        _isRunningQueue = true;
 
         int ok = 0, fail = 0;
 
-        try
+        async Task RunPortQueueAsync(IEnumerable<CommandQueueItem> portItems)
         {
-            foreach (var item in queue)
+            foreach (var item in portItems)
             {
-                if (_queueCts.Token.IsCancellationRequested) break;
+                if (token.IsCancellationRequested) break;
 
-                // Cập nhật trạng thái đang gửi qua UpsertCommandQueue để reactive binding hoạt động
                 if (!Vm.IsPortReadyForOperation(item.PortId))
                 {
                     Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
                         item.Recipient, item.Content, "Lỗi", "Cổng không còn Active hoặc SIM đã thay đổi");
-                    fail++;
+                    Interlocked.Increment(ref fail);
                     continue;
                 }
 
                 Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
-                    item.Recipient, item.Content, "Đang gửi");
-                StateHasChanged();
+                    item.Recipient, item.Content, "Đang gửi", "Đang xử lý...");
+                await InvokeAsync(StateHasChanged);
 
                 try
                 {
-                    // Gửi thật qua ViewModel với đầy đủ throttle + retry
-                    string res = await Vm.QueueSmsAsync(item.PortId, item.Recipient, item.Content, _queueCts.Token);
+                    string res = await Vm.QueueSmsAsync(item.PortId, item.Recipient, item.Content, token);
 
-                    if (res != null && (res.Contains("ERROR") || res.Contains("TIMEOUT")))
+                    if (token.IsCancellationRequested && res.Contains("cancel", StringComparison.OrdinalIgnoreCase))
                     {
                         Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
-                            item.Recipient, item.Content, "Lỗi", res.Trim());
-                        fail++;
+                            item.Recipient, item.Content, "Chờ", "Đã dừng");
+                        break;
+                    }
+                    if (IsSmsSuccess(res))
+                    {
+                        Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
+                            item.Recipient, item.Content, "Xong", res.Trim());
+                        Interlocked.Increment(ref ok);
                     }
                     else
                     {
                         Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
-                            item.Recipient, item.Content, "Xong", "OK");
-                        ok++;
+                            item.Recipient, item.Content, "Lỗi", res?.Trim() ?? "Không có phản hồi");
+                        Interlocked.Increment(ref fail);
                     }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
+                        item.Recipient, item.Content, "Chờ", "Đã dừng");
+                    break;
                 }
                 catch (Exception ex)
                 {
                     Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
                         item.Recipient, item.Content, "Lỗi", ex.Message);
-                    fail++;
+                    Interlocked.Increment(ref fail);
                 }
 
-                StateHasChanged();
-                await Task.Delay(800, _queueCts.Token);
+                await InvokeAsync(StateHasChanged);
+                try { await Task.Delay(800, token); }
+                catch (OperationCanceledException) { break; }
             }
         }
-        catch (TaskCanceledException)
-        {
-            Snackbar.Add("Đã dừng hàng đợi.", Severity.Normal);
-        }
 
-        _isRunningQueue = false;
-        Snackbar.Add($"Hàng đợi xong: {ok} thành công, {fail} lỗi",
-            fail == 0 ? Severity.Success : Severity.Warning);
-        StateHasChanged();
+        try
+        {
+            // Different COMs run concurrently; messages on the same COM stay sequential.
+            var groups = queue.GroupBy(item => item.PortId, StringComparer.OrdinalIgnoreCase);
+            await Task.WhenAll(groups.Select(RunPortQueueAsync));
+        }
+        finally
+        {
+            bool cancelled = token.IsCancellationRequested;
+            _isRunningQueue = false;
+            _queueCts?.Dispose();
+            _queueCts = null;
+            int waiting = SmsQueuePendingCount;
+            Snackbar.Add(cancelled
+                    ? $"Đã dừng hàng đợi: {ok} thành công, {fail} lỗi, {waiting} còn chờ"
+                    : $"Hàng đợi xong: {ok} thành công, {fail} lỗi",
+                fail == 0 ? Severity.Success : Severity.Warning);
+            StateHasChanged();
+        }
     }
 
     void StopQueue()
     {
         _queueCts?.Cancel();
-        _isRunningQueue = false;
-        Snackbar.Add("Đã dừng hàng đợi", Severity.Normal);
+        Snackbar.Add("Đang dừng hàng đợi...", Severity.Info);
     }
 
     // ========== 5. RESET FAILED → CHỜ ==========
@@ -612,28 +693,43 @@
             return;
         }
 
-        // Tìm cổng phù hợp: ưu tiên cổng gốc, fallback về cổng Active đầu tiên
+        // Reply from the original SIM only. Falling back to another COM can expose
+        // the wrong phone number and charge a different subscriber.
         string? port = !string.IsNullOrEmpty(sms.PortName)
-                       && Ports.Any(p => p.PortName == sms.PortName && p.Status == SimStatus.Active)
+                       && Vm.IsPortReadyForOperation(sms.PortName)
             ? sms.PortName
-            : ActivePorts.FirstOrDefault()?.PortName;
+            : null;
 
         if (string.IsNullOrEmpty(port))
         {
-            Snackbar.Add("Không có cổng Active để gửi lại", Severity.Warning);
+            Snackbar.Add($"Cổng gốc {sms.PortName} không còn sẵn sàng để gửi lại", Severity.Warning);
             return;
         }
 
+        var confirmed = await DialogService.ShowMessageBox("Xác nhận gửi lại",
+            $"Gửi lại SMS từ {port} tới {sms.Sender}?", yesText: "Gửi", cancelText: "Hủy");
+        if (confirmed != true) return;
+
+        string commandId = Guid.NewGuid().ToString("N")[..12];
+        Vm.UpsertCommandQueue(commandId, port, "SMS", sms.Sender, sms.Content, "Đang gửi", "Đang xử lý...");
         try
         {
             string res = await Vm.QueueSmsAsync(port, sms.Sender, sms.Content);
-            if (res != null && (res.Contains("ERROR") || res.Contains("TIMEOUT")))
-                Snackbar.Add($"[{port}] Gửi lại lỗi: {res.Trim()}", Severity.Error);
+            if (!IsSmsSuccess(res))
+            {
+                string error = res?.Trim() ?? "Không có phản hồi";
+                Vm.UpsertCommandQueue(commandId, port, "SMS", sms.Sender, sms.Content, "Lỗi", error);
+                Snackbar.Add($"[{port}] Gửi lại lỗi: {error}", Severity.Error);
+            }
             else
+            {
+                Vm.UpsertCommandQueue(commandId, port, "SMS", sms.Sender, sms.Content, "Xong", res.Trim());
                 Snackbar.Add($"[{port}] ✓ Đã gửi lại tới {sms.Sender}", Severity.Success);
+            }
         }
         catch (Exception ex)
         {
+            Vm.UpsertCommandQueue(commandId, port, "SMS", sms.Sender, sms.Content, "Lỗi", ex.Message);
             Snackbar.Add("Gửi lại lỗi: " + ex.Message, Severity.Error);
         }
     }
@@ -654,11 +750,13 @@
 
     void UseTemplate(string tpl)
     {
+        SimPort? selected = _selectedPorts.FirstOrDefault();
         // Thay biến động nếu có
         string expanded = tpl
             .Replace("{time}", DateTime.Now.ToString("HH:mm:ss dd/MM/yyyy"))
-            .Replace("{port}", _selectedPorts.FirstOrDefault()?.PortName ?? "")
-            .Replace("{phone}", _selectedPorts.FirstOrDefault()?.PhoneNumber ?? "");
+            .Replace("{port}", selected?.PortName ?? "")
+            .Replace("{phone}", selected?.PhoneNumber ?? "")
+            .Replace("{otp}", selected?.Otp ?? "");
         _message = expanded;
         // Không cần switch tab — form gửi luôn nằm ở trên cùng
         Snackbar.Add("Đã nạp mẫu vào form gửi", Severity.Info);
@@ -676,17 +774,19 @@
     {
         try
         {
+            static string Csv(string? value) => $"\"{(value ?? string.Empty).Replace("\"", "\"\"")}\"";
             var lines = new System.Text.StringBuilder();
             lines.AppendLine("Thời gian,Cổng,SIM nhận,Người gửi,Nội dung,OTP");
             foreach (var sms in IncomingSms)
             {
-                string content = (sms.Content ?? "").Replace("\"", "\"\"");
-                lines.AppendLine($"\"{sms.ReceivedTime}\",\"{sms.PortName}\",\"{GetReceiverDisplay(sms)}\",\"{sms.Sender}\",\"{content}\",\"{sms.Otp}\"");
+                lines.AppendLine(string.Join(",",
+                    Csv(sms.ReceivedTime), Csv(sms.PortName), Csv(GetReceiverDisplay(sms)),
+                    Csv(sms.Sender), Csv(sms.Content), Csv(sms.Otp)));
             }
             string fileName = $"sms_history_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
             string path = System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.Desktop), fileName);
-            await System.IO.File.WriteAllTextAsync(path, lines.ToString(), System.Text.Encoding.UTF8);
+            await System.IO.File.WriteAllTextAsync(path, lines.ToString(), new System.Text.UTF8Encoding(true));
             Snackbar.Add($"Đã xuất {IncomingSmsCount} tin → Desktop/{fileName}", Severity.Success);
         }
         catch (Exception ex)
@@ -730,6 +830,8 @@
     public void Dispose()
     {
         _timer?.Dispose();
+        _sendCts?.Cancel();
+        _sendCts?.Dispose();
         _queueCts?.Cancel();
         _queueCts?.Dispose();
     }

@@ -83,14 +83,14 @@
 
         <!-- TAB 1: MAPPING HIỆN TẠI -->
         <MudTabPanel Text="Mapping hiện tại">
-        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow-x:auto; overflow-y:hidden; margin-top:12px;">
             <MudTable Items="@FilteredPorts" Hover="true" Dense="true" Elevation="0" 
                       MultiSelection="true" @bind-SelectedItems="_selectedPorts"
-                      Style="background:white;" Breakpoint="Breakpoint.Sm">
+                      Style="background:white; min-width:1450px;" Breakpoint="Breakpoint.None">
                 <HeaderContent>
                     <MudTh Style="width:40px;"></MudTh>
                     <MudTh Style="white-space: nowrap;">COM</MudTh>
-                    <MudTh Style="white-space: nowrap;">CCID / Serial</MudTh>
+                    <MudTh Style="min-width:230px; white-space: nowrap;">CCID / Serial</MudTh>
                     <MudTh Style="white-space: nowrap;">IMEI hiện tại</MudTh>
                     <MudTh Style="white-space: nowrap;">IMEI gốc (backup)</MudTh>
                     <MudTh Style="white-space: nowrap;">SĐT</MudTh>
@@ -102,12 +102,12 @@
                     <MudTd>
                         <!-- Moved to MultiSelection natively -->
                     </MudTd>
-                    <MudTd Style="font-weight:600; white-space: nowrap;">@context.PortName</MudTd>
-                    <MudTd Style="@("font-family:monospace; font-size:13px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)</MudTd>
-                    <MudTd Style="@("font-family:monospace; font-size:13px; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)</MudTd>
-                    <MudTd Style="@("font-family:monospace; font-size:13px; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@(GetOriginalImei(context.Serial) ?? "—")</MudTd>
-                    <MudTd Style="@("white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
-                    <MudTd Style="white-space: nowrap;">@(context.NetworkProvider ?? "—")</MudTd>
+                    <MudTd Style="font-size:16px; font-weight:600; white-space: nowrap;">@context.PortName</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:16px; min-width:230px; white-space:nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:16px; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:16px; color:#64748B; white-space: nowrap; mso-number-format: '\\@';")">@(GetOriginalImei(context.Serial) ?? "—")</MudTd>
+                    <MudTd Style="@("font-size:16px; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.PhoneNumber) || context.PhoneNumber.Contains("Chưa") ? "—" : context.PhoneNumber)</MudTd>
+                    <MudTd Style="font-size:16px; white-space: nowrap;">@(context.NetworkProvider ?? "—")</MudTd>
                     <MudTd Style="white-space: nowrap;">
                         <gsm.Components.Shared.StatusBadge Status="@context.Status" />
                     </MudTd>
@@ -146,10 +146,10 @@
 
         <!-- TAB 2: BACKUP DATABASE -->
         <MudTabPanel Text="Backup Database">
-        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:12px;">
-            <MudTable Items="@_backupList" Hover="true" Dense="true" Elevation="0" Style="background:white;">
+        <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow-x:auto; overflow-y:hidden; margin-top:12px;">
+            <MudTable Items="@_backupList" Hover="true" Dense="true" Elevation="0" Breakpoint="Breakpoint.None" Style="background:white; min-width:980px;">
                 <HeaderContent>
-                    <MudTh Style="white-space: nowrap;">CCID</MudTh>
+                    <MudTh Style="min-width:230px; white-space: nowrap;">CCID</MudTh>
                     <MudTh Style="white-space: nowrap;">IMEI đã gán</MudTh>
                     <MudTh Style="white-space: nowrap;">Lần đầu</MudTh>
                     <MudTh Style="white-space: nowrap;">Lần cuối</MudTh>
@@ -157,11 +157,11 @@
                     <MudTh Style="width:100px; white-space: nowrap;">Thao tác</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="@("font-family:monospace; font-size:13px; white-space: nowrap; mso-number-format: '\\@';")">@context.Ccid</MudTd>
-                    <MudTd Style="@("font-family:monospace; font-size:13px; font-weight:600; white-space: nowrap; mso-number-format: '\\@';")">@context.Imei</MudTd>
-                    <MudTd Style="font-size:12px; white-space: nowrap;">@context.FirstUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
-                    <MudTd Style="font-size:12px; white-space: nowrap;">@context.LastUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
-                    <MudTd Style="white-space: nowrap;">@context.UseCount</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:16px; min-width:230px; white-space:nowrap; mso-number-format: '\\@';")">@context.Ccid</MudTd>
+                    <MudTd Style="@("font-family:monospace; font-size:16px; font-weight:600; white-space: nowrap; mso-number-format: '\\@';")">@context.Imei</MudTd>
+                    <MudTd Style="font-size:16px; white-space: nowrap;">@context.FirstUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
+                    <MudTd Style="font-size:16px; white-space: nowrap;">@context.LastUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
+                    <MudTd Style="font-size:16px; white-space: nowrap;">@context.UseCount</MudTd>
                     <MudTd Style="white-space: nowrap;">
                         <MudStack Row="true" Spacing="0">
                             <MudTooltip Text="Copy IMEI">
@@ -302,16 +302,15 @@
     {
         try
         {
-            var path = FileDialog.SaveFile($"imei_backup_{DateTime.Now:yyyyMMdd_HHmmss}.json", "JSON files (*.json)|*.json");
+            var path = FileDialog.SaveFile($"imei_backup_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx", "Excel Workbook (*.xlsx)|*.xlsx");
             if (string.IsNullOrEmpty(path)) return;
 
-            var json = System.Text.Json.JsonSerializer.Serialize(_backupList, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            await System.IO.File.WriteAllTextAsync(path, json);
-            Snackbar.Add($"Đã export backup thành công ra {path}", Severity.Success);
+            await Task.Run(() => Vm.ExportImeiBackupWorkbook(path));
+            Snackbar.Add($"Đã export backup XLSX thành công ra {path}", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add("Lỗi export: " + ex.Message, Severity.Error);
+            Snackbar.Add("Lỗi export XLSX: " + ex.Message, Severity.Error);
         }
     }
 
@@ -319,48 +318,23 @@
     {
         try
         {
-            var path = FileDialog.OpenFile("JSON files (*.json)|*.json");
+            var path = FileDialog.OpenFile("Excel Workbook (*.xlsx)|*.xlsx");
             if (string.IsNullOrEmpty(path)) return;
 
-            var json = await System.IO.File.ReadAllTextAsync(path);
-            var list = System.Text.Json.JsonSerializer.Deserialize<List<ImeiBackupItem>>(json);
-            if (list == null || !list.Any())
+            int imported = await Task.Run(() => Vm.ImportImeiBackupWorkbook(path));
+            if (imported == 0)
             {
-                Snackbar.Add("File rỗng hoặc sai định dạng", Severity.Warning);
+                Snackbar.Add("File rỗng hoặc không có dòng CCID/IMEI hợp lệ", Severity.Warning);
                 return;
             }
 
-            // Merge
-            foreach (var item in list)
-            {
-                var existing = _backupList.FirstOrDefault(x => x.Ccid == item.Ccid);
-                if (existing != null)
-                {
-                    existing.Imei = item.Imei;
-                    existing.LastUsed = item.LastUsed;
-                    existing.UseCount = item.UseCount;
-                }
-                else
-                {
-                    _backupList.Add(item);
-                }
-
-                // Đồng bộ sang Vm.ImeiCache
-                var entry = new SimBackupEntry
-                {
-                    Ccid = item.Ccid,
-                    Imei = item.Imei,
-                    CreatedAt = item.LastUsed.ToString("yyyy-MM-dd HH:mm:ss")
-                };
-                Vm.AddNewImeiCacheEntry(entry);
-            }
-
-            Snackbar.Add($"Đã import {list.Count} bản ghi", Severity.Success);
+            LoadBackup();
+            Snackbar.Add($"Đã import {imported} bản ghi từ XLSX", Severity.Success);
             StateHasChanged();
         }
         catch (Exception ex)
         {
-            Snackbar.Add("Lỗi import: " + ex.Message, Severity.Error);
+            Snackbar.Add("Lỗi import XLSX: " + ex.Message, Severity.Error);
         }
     }
 

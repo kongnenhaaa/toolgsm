@@ -1008,11 +1008,47 @@ namespace gsm.Services
                     ["handledBy"] = _machineId,
                     ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
                 };
-                using var resultContent = new StringContent(
-                    JsonSerializer.Serialize(resultPayload), Encoding.UTF8, "application/json");
-                using var resultResponse = await _restClient.PutAsync(
-                    $"{_databaseUrl}command_results/{pending.CommandId}.json", resultContent);
-                if (!resultResponse.IsSuccessStatusCode) return;
+                string resultJson = JsonSerializer.Serialize(resultPayload);
+                bool resultPersisted = false;
+                int attempt = 0;
+
+                // The SMS has already reached this machine, so a temporary
+                // Firebase outage must not lose the correlated OTP. Keep the
+                // command semaphore while retrying so the ordinary "sent"
+                // result cannot overwrite otp_received.
+                while (DateTime.UtcNow - pending.CreatedAtUtc <= TimeSpan.FromMinutes(5))
+                {
+                    if (!_pendingOtpCommands.TryGetValue(portId, out var current)
+                        || !string.Equals(current.CommandId, pending.CommandId, StringComparison.OrdinalIgnoreCase))
+                        return;
+
+                    attempt++;
+                    try
+                    {
+                        using var resultContent = new StringContent(
+                            resultJson, Encoding.UTF8, "application/json");
+                        using var resultResponse = await _restClient.PutAsync(
+                            $"{_databaseUrl}command_results/{pending.CommandId}.json", resultContent);
+                        if (resultResponse.IsSuccessStatusCode)
+                        {
+                            resultPersisted = true;
+                            break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        if (attempt == 1 || attempt % 10 == 0)
+                            _vm.AddLog($"[{portId}] [FIREBASE_OTP_RETRY] {ex.Message}", "WARN");
+                    }
+
+                    await Task.Delay(Math.Min(5000, 250 * attempt));
+                }
+
+                if (!resultPersisted)
+                {
+                    _vm.AddLog($"[{portId}] [FIREBASE_OTP_RESULT_ERROR] Không lưu được OTP cho {pending.CommandId} trong thời gian chờ.", "ERROR");
+                    return;
+                }
 
                 _otpCompletedCommands[pending.CommandId] = 0;
 

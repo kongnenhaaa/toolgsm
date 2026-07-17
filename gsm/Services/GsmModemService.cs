@@ -189,6 +189,9 @@ public class GsmModemService : IGsmModemService
 
     private async Task<string> ReadStoredSmsAsync(string port, string msgIndex)
     {
+        if (GetModemProfile(port)?.IsQuectel == true)
+            return await SendCommandAsync(port, $"AT+CMGR={msgIndex}", 25000, silent: true);
+
         // Quectel EC20/EC2x exposes uid, segment and total through QCMGR in text mode.
         // Fall back to standard CMGR for older firmware and non-Quectel modems.
         if (GetModemProfile(port)?.Supports(ModemCapability.QuectelStoredSms) == true)
@@ -308,6 +311,8 @@ public class GsmModemService : IGsmModemService
         }
 
         string sender = ParseSenderFromCmgr(smsContent);
+        if (sender == "Unknown" && !string.IsNullOrWhiteSpace(decoded.Sender))
+            sender = decoded.Sender;
         string? fullContent = TryAssembleMultipartExact(port, sender, decoded, msgIndex, smsContent, out var indicesToDelete);
         if (fullContent == null)
         {
@@ -400,11 +405,21 @@ public class GsmModemService : IGsmModemService
     }
 
     static readonly Regex CmgrHeaderRegex = new(
-        @"\+Q?CMGR:\s*""[^""]*"",\s*""([^""]+)""",
+        @"\+(?:Q?CMGR|CMT):\s*""[^""]*"",\s*""([^""]+)""",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     string ParseSenderFromCmgr(string raw)
     {
+        Match direct = Regex.Match(raw, @"\+CMT:\s*""([^""]+)""", RegexOptions.IgnoreCase);
+        if (direct.Success)
+        {
+            string directSender = DecodeSmsSender(direct.Groups[1].Value);
+            if (IsHexString(directSender))
+            {
+                try { return DecodeUcs2Hex(directSender); } catch { }
+            }
+            return directSender;
+        }
         var m = CmgrHeaderRegex.Match(raw);
         if (m.Success)
         {
@@ -979,6 +994,9 @@ public class GsmModemService : IGsmModemService
         QuectelModemProfile profile = await DetectModemProfileAsync(portName, ct);
 
         if (profile.IsQuectel)
+            await SendCommandAsync(portName, "AT+CMGF=0", 10000, silent: true);
+
+        if (profile.IsQuectel)
         {
             if (profile.Supports(ModemCapability.UrcPortRouting))
                 await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 10000, silent: true);
@@ -1206,6 +1224,7 @@ public class GsmModemService : IGsmModemService
         QuectelModemProfile profile = await DetectModemProfileAsync(portName, ct);
         if (profile.IsQuectel)
         {
+            await SendCommandAsync(portName, "AT+CMGF=0", 5000, silent: true);
             if (profile.Supports(ModemCapability.UrcPortRouting))
                 await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true);
             // Không ghi đè nwscanmode/nwscanseq khi reconnect; nhánh dev giữ nguyên
@@ -1652,6 +1671,29 @@ public class GsmModemService : IGsmModemService
             }
         }, token);
 
+        // Recovery sweep is independent from network/operator detection. +CMTI can be lost
+        // while a long AT command is running or while the USB serial driver reconnects.
+        // CMGL=ALL also recovers multipart segments already marked REC READ by CMGR before
+        // a restart. Successfully delivered messages are deleted, so subsequent sweeps do
+        // not emit duplicates.
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested && _serialPorts.ContainsKey(portName))
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30), token);
+                    if (!token.IsCancellationRequested && !IsCallInProgress(portName))
+                        await SweepUnreadSmsAsync(portName);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[SWEEP] Lỗi quét bù SMS: {ex.Message}" });
+                }
+            }
+        }, token);
+
         // Tạo luồng ngầm chờ thiết bị đăng ký mạng thành công để lấy nhà mạng (Tránh việc AT+COPS? chạy quá sớm lúc chưa có sóng)
         // Lặp vô hạn cho đến khi có mạng hoặc cổng bị rút
         _ = Task.Run(async () =>
@@ -1759,7 +1801,8 @@ public class GsmModemService : IGsmModemService
                 }
                 
                 // Sweep bù (quét tin nhắn kẹt định kỳ)
-                string cmgl = await SendCommandAsync(portName, "AT+CMGL=\"REC UNREAD\"", 25000, silent: true);
+                string cmglCommand = GetModemProfile(portName)?.IsQuectel == true ? "AT+CMGL=4" : "AT+CMGL=\"ALL\"";
+                string cmgl = await SendCommandAsync(portName, cmglCommand, 25000, silent: true);
                 if (!string.IsNullOrWhiteSpace(cmgl) && !cmgl.Contains("ERROR") && cmgl.Contains("+CMGL:"))
                 {
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[SWEEP] Vét được tin nhắn chưa đọc từ SIM!" });
@@ -2081,6 +2124,47 @@ public class GsmModemService : IGsmModemService
                     // trùng index hoặc đảo thứ tự các đoạn của cùng một tin dài.
                     foreach (Match match in matches) QueueStoredSmsRead(portName, match.Groups[1].Value);
                 }
+            }
+
+            // Some firmware only supports CNMI direct-delivery mode (2,2) and emits
+            // +CMT followed by the message body instead of storing an index and sending
+            // +CMTI. Consume complete +CMT frames here so those messages are not lost.
+            if (currentData.Contains("+CMT:"))
+            {
+                var directMatches = Regex.Matches(
+                    currentData,
+                    @"\+CMT:[^\r\n]*(?:\r?\n)([^\r\n]+)(?:\r?\n|$)",
+                    RegexOptions.IgnoreCase);
+                foreach (Match direct in directMatches)
+                {
+                    string rawDirect = direct.Value;
+                    DecodedSmsBody decodedDirect = SmsBodyDecoder.Decode(rawDirect);
+                    if (string.IsNullOrWhiteSpace(decodedDirect.Content)) continue;
+                    string senderDirect = ParseSenderFromCmgr(rawDirect);
+                    if (senderDirect == "Unknown" && !string.IsNullOrWhiteSpace(decodedDirect.Sender))
+                        senderDirect = decodedDirect.Sender;
+                    string? completeDirect;
+                    if (decodedDirect.Concatenation != null)
+                    {
+                        SmsAssemblyResult assembled = _exactMultipartAssembler.Add(
+                            portName, senderDirect, decodedDirect.Concatenation, decodedDirect.Content, "");
+                        completeDirect = assembled.Status == SmsAssemblyStatus.Completed ? assembled.Content : null;
+                    }
+                    else completeDirect = decodedDirect.Content;
+
+                    if (!string.IsNullOrWhiteSpace(completeDirect))
+                    {
+                        SmsReceived?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = completeDirect,
+                            Sender = senderDirect,
+                            Otp = ExtractOtp(completeDirect) ?? string.Empty
+                        });
+                    }
+                    buffer.Replace(rawDirect, "");
+                }
+                currentData = buffer.ToString();
             }
 
             // Xử lý kết quả quét AT+CMGL="REC UNREAD"
@@ -2873,7 +2957,10 @@ public class GsmModemService : IGsmModemService
             // Modem init đã set CMGF=1 + CSCS=UCS2 là đủ cho receive.
             if (_serialPorts.TryGetValue(portName, out var sp2) && sp2.IsOpen)
             {
-                await SendInnerAsync("AT+CSCS=\"UCS2\""); // Restore charset để nhận đúng tiếng Việt
+                if (GetModemProfile(portName)?.IsQuectel == true)
+                    await SendInnerAsync("AT+CMGF=0");
+                else
+                    await SendInnerAsync("AT+CSCS=\"UCS2\"");
             }
 
             semaphore.Release();
@@ -2885,7 +2972,10 @@ public class GsmModemService : IGsmModemService
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return;
         
         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đang quét tin nhắn tồn đọng (Sweep)..." });
-        await SendCommandAsync(portName, "AT+CMGL=\"REC UNREAD\"", 25000, silent: true);
+        // ALL is intentional: CMGR marks a multipart segment REC READ before the remaining
+        // segments arrive. Scanning only REC UNREAD loses that segment after restart.
+        string command = GetModemProfile(portName)?.IsQuectel == true ? "AT+CMGL=4" : "AT+CMGL=\"ALL\"";
+        await SendCommandAsync(portName, command, 25000, silent: true);
     }
 
     private void SignalOutgoingCallEnded(string portName, string reason)

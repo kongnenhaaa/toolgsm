@@ -26,7 +26,7 @@ public static class SettingsService
             {
                 var json = File.ReadAllText(SettingsFilePath);
                 var settings = JsonSerializer.Deserialize<AppSettings>(json);
-                return settings ?? new AppSettings();
+                return Normalize(settings ?? new AppSettings());
             }
             catch (Exception)
             {
@@ -35,21 +35,35 @@ public static class SettingsService
         }
 
         // Return default settings
-        return new AppSettings();
+        return Normalize(new AppSettings());
     }
 
     public static void SaveSettings(AppSettings settings)
     {
         try
         {
-            Current = settings;
+            Current = Normalize(settings);
             var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(settings, options);
+            var json = JsonSerializer.Serialize(Current, options);
             File.WriteAllText(SettingsFilePath, json);
         }
         catch (Exception)
         {
             // Ignored
         }
+    }
+
+    private static AppSettings Normalize(AppSettings settings)
+    {
+        settings.EnableApiServer = false;
+        settings.OtpWebhookUrl = "";
+        settings.PushOtpToWeb = false;
+        settings.FirebaseUrl = FirebaseService.DatabaseUrl;
+        settings.FirebaseDbUrl = FirebaseService.DatabaseUrl;
+        settings.FirebaseAuthToken = "";
+        settings.WriteOtpToFirebase = true;
+        if (string.IsNullOrWhiteSpace(settings.MachineId))
+            settings.MachineId = Environment.MachineName;
+        return settings;
     }
 }

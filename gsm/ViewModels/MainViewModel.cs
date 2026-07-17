@@ -39,7 +39,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private readonly FirebaseService _firebaseService;
     public ProxyManagerService ProxyManager { get; }
-    private readonly ApiServerService? _apiServerService;
     private readonly ConcurrentDictionary<string, string> _callFailures = new();
     private readonly ConcurrentDictionary<string, bool> _activeRamRecordings = new();
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
@@ -1253,14 +1252,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ProxyManager = new ProxyManagerService();
         ProxyManager.Start();
 
-        // API Server (port 8080)
-        if (SettingsService.Current.EnableApiServer)
-        {
-            _apiServerService = new ApiServerService(this);
-            _apiServerService.Start(SettingsService.Current.ApiServerPort);
-            AddLog($"[API] REST API server đang chạy tại http://localhost:{SettingsService.Current.ApiServerPort}/api/");
-        }
-
         _backgroundSupervisor.Start(new GsmBackgroundSupervisorContext
         {
             GetPorts = GetPortsSnapshot,
@@ -1445,6 +1436,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void AddLog(string message, string level = "INFO")
     {
+        message = TextEncodingNormalizer.RepairMojibake(message);
         try 
         {
             lock (_logFileLock)
@@ -1472,7 +1464,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 catch { }
             }
-            System.IO.File.AppendAllText(logFile, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}");
+            System.IO.File.AppendAllText(
+                logFile,
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}",
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             }
         }
         catch { }
@@ -3444,7 +3439,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
                 string senderPhone = "UNKNOWN";
                 string extractedOtp = "N/A";
-                string cleanContent = e.Data;
+                string cleanContent = TextEncodingNormalizer.RepairMojibake(e.Data);
 
                 // Nếu quá trình đọc tin nhắn gặp lỗi (VD: Lỗi Timeout Semaphore do đang kẹt gửi SMS)
                 if (cleanContent.StartsWith("ERROR:"))
@@ -3785,7 +3780,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (cfg.WriteOtpToFirebase && port != null)
                 {
-                    string machineId = cfg.MachineId ?? "machine-1";
+                    string machineId = FirebaseService.MachineId;
                     
                     if (extractedOtp != "N/A")
                     {
@@ -6518,10 +6513,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private static readonly object _cacheLock = new object();
 
     // Property hiển thị địa chỉ API ở Status Bar
-    public string ApiServerUrl =>
-        SettingsService.Current.EnableApiServer
-            ? $"API: http://localhost:{SettingsService.Current.ApiServerPort}/api"
-            : string.Empty;
+    public string ApiServerUrl => $"Firebase: {FirebaseService.DatabaseUrl}";
 
 
     // Import file Excel → gửi SMS hàng loạt
@@ -7435,7 +7427,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _firebaseService.Stop();
         _firebaseService.Dispose();
-        _apiServerService?.Stop();
         _modemService.DisconnectAll();
 
         _activeRamRecordings.Clear();

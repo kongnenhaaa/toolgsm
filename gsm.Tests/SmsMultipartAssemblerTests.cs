@@ -6,6 +6,80 @@ namespace gsm.Tests;
 public class SmsMultipartAssemblerTests
 {
     [Fact]
+    public void FullGsm7DeliverPdu_IsDecodedInsteadOfExposedAsHex()
+    {
+        const string pdu = "069148192050444006D0381C0E000062707180817582A00500035D02015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D16A385B8C4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(pdu);
+
+        Assert.DoesNotMatch("^[0-9A-F]+$", result.Content);
+        Assert.StartsWith("(TB) So huu 01 License", result.Content);
+        Assert.Equal(1, result.Concatenation?.Sequence);
+        Assert.Equal(2, result.Concatenation?.Total);
+        Assert.NotNull(result.Concatenation);
+        Assert.NotEqual("Unknown", result.Sender);
+    }
+
+    [Fact]
+    public void DirectCmtEnvelope_DecodesBodyWithoutLeakingHeader()
+    {
+        const string raw = "+CMT: \"ZALO\",\"\",\"26/07/17,09:31:44+28\"\r\nMa OTP cua ban la 123456\r\n";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.Equal("Ma OTP cua ban la 123456", result.Content);
+        Assert.Equal("123456", GsmModemService.ExtractOtp(result.Content));
+    }
+
+    [Fact]
+    public void ExactMultipart_AllowsSimIndexReuseForANewMessage()
+    {
+        var assembler = new SmsMultipartAssembler();
+        Assert.Equal(SmsAssemblyStatus.Waiting, assembler.Add("COM34", "888", new(10, 2, 1), "old-a", "0").Status);
+        Assert.Equal(SmsAssemblyStatus.Completed, assembler.Add("COM34", "888", new(10, 2, 2), "old-b", "1").Status);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting, assembler.Add("COM34", "888", new(11, 2, 1), "new-a", "0").Status);
+        SmsAssemblyResult next = assembler.Add("COM34", "888", new(11, 2, 2), "new-b", "1");
+
+        Assert.Equal(SmsAssemblyStatus.Completed, next.Status);
+        Assert.Equal("new-anew-b", next.Content);
+    }
+
+    [Fact]
+    public void ImplicitMultipart_AllowsSimIndexReuseForDifferentContent()
+    {
+        var assembler = new SmsImplicitMultipartAssembler();
+        string oldPart = new('A', 67);
+        string newPart = new('B', 67);
+        Assert.Equal(SmsAssemblyStatus.Waiting, assembler.Add("COM54", "Unknown", oldPart, "0").Status);
+        Assert.Equal(SmsAssemblyStatus.Completed, assembler.Add("COM54", "Unknown", "old-end", "1").Status);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting, assembler.Add("COM54", "Unknown", newPart, "0").Status);
+        SmsAssemblyResult next = assembler.Add("COM54", "Unknown", "new-end", "1");
+
+        Assert.Equal(SmsAssemblyStatus.Completed, next.Status);
+        Assert.Equal(newPart + "new-end", next.Content);
+    }
+
+    [Fact]
+    public void LongUndecodableHex_IsRetainedInsteadOfPublishedAndDeleted()
+    {
+        DecodedSmsBody result = SmsBodyDecoder.Decode("DEADBEEFDEADBEEFDEADBEEFDEADBEEF");
+
+        Assert.True(result.WasHex);
+        Assert.Empty(result.Content);
+        Assert.Equal("123456", SmsBodyDecoder.Decode("123456").Content);
+    }
+
+    [Theory]
+    [InlineData("ÄÃ£ phÃ¡t hiá»‡n tin nháº¯n", "Đã phát hiện tin nhắn")]
+    [InlineData("Sá»‘ dÆ°: 900 Ä‘", "Số dư: 900 đ")]
+    [InlineData("Nội dung tiếng Việt đúng", "Nội dung tiếng Việt đúng")]
+    public void MojibakeRepair_RepairsOnlyBrokenUtf8(string input, string expected)
+    {
+        Assert.Equal(expected, TextEncodingNormalizer.RepairMojibake(input));
+    }
+    [Fact]
     public async Task MoreThanSixtyFourPorts_AssembleWithoutCrossPortBlocking()
     {
         var assembler = new SmsMultipartAssembler();

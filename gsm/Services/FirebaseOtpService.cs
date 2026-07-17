@@ -16,14 +16,11 @@ public class FirebaseOtpService : IFirebaseOtpService
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     
-    private string DbUrl => SettingsService.Current.FirebaseDbUrl?.TrimEnd('/') ?? "";
-    private string? Auth => SettingsService.Current.FirebaseAuthToken;
+    private string DbUrl => FirebaseService.DatabaseUrl.TrimEnd('/');
 
     string Path(string relative)
     {
         var url = $"{DbUrl}/{relative.TrimStart('/')}.json";
-        if (!string.IsNullOrEmpty(Auth))
-            url += $"?auth={Uri.EscapeDataString(Auth)}";
         return url;
     }
 

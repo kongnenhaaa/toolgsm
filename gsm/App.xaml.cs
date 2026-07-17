@@ -55,7 +55,6 @@ namespace gsm
             serviceCollection.AddSingleton<IAudioService, AudioService>();
             serviceCollection.AddSingleton<INotifyService, NotifyService>();
             serviceCollection.AddSingleton<IFirebaseOtpService, FirebaseOtpService>();
-            serviceCollection.AddSingleton<ApiHostService>();
 
             Resources.Add("services", serviceCollection.BuildServiceProvider());
         }
@@ -63,14 +62,6 @@ namespace gsm
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
-
-            if (Resources["services"] is ServiceProvider sp)
-            {
-                var api = sp.GetRequiredService<ApiHostService>();
-                // Không await trước khi StartupUri tạo MainWindow. Nếu port API bị Windows
-                // giữ/chặn, WPF vẫn phải khởi động UI và toàn bộ luồng GSM bình thường.
-                _ = api.StartAsync();
-            }
 
             // Bắt lỗi trên luồng UI
             this.DispatcherUnhandledException += (s, args) =>

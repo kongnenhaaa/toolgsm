@@ -87,8 +87,13 @@ public sealed class GsmSmsService : IGsmSmsService
             {
                 try
                 {
-                    await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
-                    await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,8", 5000, true);
+                    if (_modem.GetModemProfile(portName)?.IsQuectel == true)
+                        await _modem.SendCommandAsync(portName, "AT+CMGF=0", 5000, true);
+                    else
+                    {
+                        await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
+                        await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,8", 5000, true);
+                    }
                 }
                 catch
                 {

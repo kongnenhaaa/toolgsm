@@ -578,6 +578,23 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
+    public async Task Sms_Ec20c_RestoresPduReceiveModeAfterTextModeSend()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM34", CcidA);
+        var modem = new FakeGsmModemService
+        {
+            ModemProfile = QuectelModemProfile.FromIdentity("Quectel", "EC20C", "EC20CEHCLGR06A01M1G")
+        };
+        using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
+
+        await sms.SendAsync("COM34", "0912345678", "hello");
+
+        Assert.Contains("COM34:AT+CMGF=0", modem.Commands);
+        Assert.DoesNotContain("COM34:AT+CSMP=17,167,0,8", modem.Commands);
+    }
+
+    [Fact]
     public async Task Ussd_CharsetRestoreFailure_DoesNotHideSuccessfulResult()
     {
         using var sessions = new PortSessionRegistry();

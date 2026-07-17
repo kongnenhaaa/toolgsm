@@ -32,14 +32,15 @@ public class AppSettings
 
     public bool EnableSenderWhitelist { get; set; } = false;
     public string SenderWhitelist { get; set; } = "";  // Chỉ nhận từ các số này
-    
-    // HTTP API Server
-    public bool EnableApiServer { get; set; } = true;
+
+    // Legacy settings retained only so old settings files can still be imported.
+    // No HTTP server is started by the application.
+    public bool EnableApiServer { get; set; } = false;
     public int ApiServerPort { get; set; } = 5000;
     
     // Web to GSM Bridge & Firebase
-    public string MachineId { get; set; } = "machine-1";
-    public string FirebaseDbUrl { get; set; } = "https://YOUR_PROJECT.firebaseio.com";
+    public string MachineId { get; set; } = Environment.MachineName;
+    public string FirebaseDbUrl { get; set; } = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
     public string FirebaseAuthToken { get; set; } = "";
     public bool WriteOtpToFirebase { get; set; } = true;
 

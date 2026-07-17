@@ -58,11 +58,10 @@ namespace gsm.Services
             var defaults = new AppSettings(); // class settings của bạn – giá trị mặc định
             
             // Gán default an toàn cho máy mới
-            defaults.EnableApiServer = true;
-            defaults.ApiServerPort = 5000;
             defaults.MachineId = Environment.MachineName; // hoặc "machine-1"
-            defaults.WriteOtpToFirebase = false; // tắt đến khi user điền URL
-            defaults.FirebaseDbUrl = "";
+            defaults.WriteOtpToFirebase = true;
+            defaults.FirebaseUrl = FirebaseService.DatabaseUrl;
+            defaults.FirebaseDbUrl = FirebaseService.DatabaseUrl;
             defaults.FirebaseAuthToken = "";
             
             var json = JsonSerializer.Serialize(defaults,

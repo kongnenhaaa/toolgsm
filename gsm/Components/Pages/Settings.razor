@@ -159,6 +159,7 @@
                     HTTP API Server
                 </MudText>
 
+                @* HTTP server removed; ToolWeb communicates only through Firebase.
                 <MudSwitch T="bool" @bind-Value="_enableApiServer"
                            Label="Bật API Server (REST HTTP)"
                            Color="Color.Primary" Class="mb-2" />
@@ -168,7 +169,7 @@
                                  Variant="Variant.Outlined" Margin="Margin.Dense"
                                  Style="max-width:160px;"
                                  Disabled="@(!_enableApiServer)"
-                                 HelperText="Mặc định: 5000 → http://localhost:5000" />
+                                 HelperText="Mặc định: 5000 → http://localhost:5000" /> *@
             </MudPaper>
 
         </MudItem>
@@ -243,6 +244,7 @@
                 </MudStack>
             </MudPaper>
 
+            @* Webhook removed: ToolWeb communicates only through Firebase.
             <!-- API / WEBHOOK -->
             <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
                 <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
@@ -267,6 +269,7 @@
                 </MudButton>
             </MudPaper>
 
+            *@
             <!-- FIREBASE -->
             <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
                 <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
@@ -277,7 +280,7 @@
                 <MudTextField @bind-Value="_firebaseUrl"
                               Label="Firebase Database URL"
                               Placeholder="https://your-project-default-rtdb.firebaseio.com/"
-                              Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" />
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" Disabled="true" />
                 <MudTextField @bind-Value="_machineId"
                               Label="Machine ID (Tên máy)"
                               Placeholder="machine-1"
@@ -491,7 +494,7 @@
             _otpWebhookUrl = cfg.OtpWebhookUrl ?? "";
             _pushOtpToWeb = cfg.PushOtpToWeb;
 
-            _firebaseUrl = cfg.FirebaseUrl ?? cfg.FirebaseDbUrl ?? "";
+            _firebaseUrl = gsm.Services.FirebaseService.DatabaseUrl;
             _machineId = cfg.MachineId ?? "machine-1";
             _writeOtpToFirebase = cfg.WriteOtpToFirebase;
 
@@ -557,7 +560,7 @@
             cfg.EnableAutoCallForwarding = _enableAutoCallForwarding;
             cfg.ForwardPhoneNumber = _forwardPhoneNumber.Trim();
 
-            cfg.EnableApiServer = _enableApiServer;
+            cfg.EnableApiServer = false;
             cfg.ApiServerPort = _apiServerPort;
 
             cfg.SoundOnSms = _soundOnSms;
@@ -575,8 +578,8 @@
             cfg.OtpWebhookUrl = _otpWebhookUrl.Trim();
             cfg.PushOtpToWeb = _pushOtpToWeb;
 
-            cfg.FirebaseUrl = _firebaseUrl.Trim();
-            cfg.FirebaseDbUrl = _firebaseUrl.Trim(); // Sync cả FirebaseDbUrl
+            cfg.FirebaseUrl = gsm.Services.FirebaseService.DatabaseUrl;
+            cfg.FirebaseDbUrl = gsm.Services.FirebaseService.DatabaseUrl;
             cfg.MachineId = _machineId.Trim();
             cfg.WriteOtpToFirebase = _writeOtpToFirebase;
 
@@ -646,7 +649,7 @@
         _otpWebhookUrl = "";
         _pushOtpToWeb = false;
 
-        _firebaseUrl = "";
+        _firebaseUrl = gsm.Services.FirebaseService.DatabaseUrl;
         _machineId = "machine-1";
         _writeOtpToFirebase = true;
 

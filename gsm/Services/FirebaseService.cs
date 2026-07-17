@@ -35,14 +35,20 @@ namespace gsm.Services
                 return GetDatabaseUrl();
             }
         }
-        private static readonly string _machineId = Environment.MachineName.Replace(".", "_").Replace("$", "").Replace("#", "").Replace("[", "").Replace("]", "");
+        public const string DatabaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+        public static string MachineId => SanitizeFirebaseKey(
+            string.IsNullOrWhiteSpace(SettingsService.Current.MachineId)
+                ? Environment.MachineName
+                : SettingsService.Current.MachineId);
+        private static string _machineId => MachineId;
+
+        private static string SanitizeFirebaseKey(string value) => value.Trim()
+            .Replace(".", "_").Replace("$", "").Replace("#", "")
+            .Replace("[", "").Replace("]", "").Replace("/", "_");
 
         private static string GetDatabaseUrl()
         {
-            var url = SettingsService.Current.FirebaseUrl;
-            if (string.IsNullOrEmpty(url)) url = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
-            if (!url.EndsWith("/")) url += "/";
-            return url;
+            return DatabaseUrl;
         }
 
         private static bool IsSpecificSmsError(string? errorMsg)
@@ -230,6 +236,9 @@ namespace gsm.Services
                 // Dữ liệu cần thiết cho Web
                 var portsData = _vm.Ports.ToDictionary(p => p.PortName, p => new {
                     id = p.PortName,
+                    portId = p.PortName,
+                    deviceName = p.DeviceName,
+                    machineId = _machineId,
                     phone = p.PhoneNumber,
                     status = p.Status == SimStatus.Active ? "online" : "offline",
                     otp = GetWebOtpValue(p.Otp),
@@ -249,7 +258,12 @@ namespace gsm.Services
                 await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/ports.json", content, ct);
 
                 // Sử dụng Server Timestamp của Firebase để tránh lệch giờ giữa PC và Web
-                var statusJson = "{\"lastSync\": {\".sv\": \"timestamp\"}}";
+                var statusJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+                {
+                    ["machineId"] = _machineId,
+                    ["deviceName"] = Environment.MachineName,
+                    ["lastSync"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                });
                 var statusContent = new StringContent(statusJson, Encoding.UTF8, "application/json");
                 await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/server_status.json", statusContent, ct);
             }

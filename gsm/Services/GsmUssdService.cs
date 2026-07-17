@@ -93,7 +93,9 @@ public sealed class GsmUssdService : IGsmUssdService
                         if (IsCurrent(session))
                         {
                             // SMS service dùng text mode. Khôi phục sau khi đã nhận xong +CUSD.
-                            try { await _modem.SendCommandAsync(portName, "AT+CMGF=1", 5000, true); }
+                            string receiveMode = _modem.GetModemProfile(portName)?.IsQuectel == true
+                                ? "AT+CMGF=0" : "AT+CMGF=1";
+                            try { await _modem.SendCommandAsync(portName, receiveMode, 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }
                             try { await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }

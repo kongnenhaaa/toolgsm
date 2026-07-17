@@ -210,6 +210,21 @@ public class SmsMultipartAssemblerTests
     }
 
     [Fact]
+    public void RepeatedSweep_DoesNotKeepIncompleteMultipartAliveForever()
+    {
+        var a = new SmsMultipartAssembler(TimeSpan.FromSeconds(5));
+        var start = DateTimeOffset.UtcNow;
+        SmsConcatInfo part = new(137, 12, 1);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            a.Add("COM29", "VinaPhone", part, new string('A', 67), "0", start).Status);
+        Assert.Equal(SmsAssemblyStatus.Duplicate,
+            a.Add("COM29", "VinaPhone", part, new string('A', 67), "0", start.AddSeconds(4)).Status);
+
+        Assert.Equal(1, a.RemoveExpired(start.AddSeconds(6)));
+    }
+
+    [Fact]
     public void CompletedStoredParts_AreNotEmittedTwiceDuringOverlappingSweeps()
     {
         var a = new SmsMultipartAssembler();

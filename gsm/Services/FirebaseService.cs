@@ -25,6 +25,7 @@ namespace gsm.Services
         private readonly CancellationTokenSource _cts = new();
         private Task? _listenTask;
         private Task? _syncTask;
+        private long _lastStaleCleanupAt;
         private readonly ConcurrentDictionary<string, byte> _scheduledCommands =
             new(StringComparer.OrdinalIgnoreCase);
         private const long StaleRunningCommandMs = 10 * 60 * 1000;
@@ -36,11 +37,16 @@ namespace gsm.Services
             }
         }
         public const string DatabaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+        private static readonly HashSet<string> BlockedMachineIds = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "DESKTOP-O8GDDKR"
+        };
         public static string MachineId => SanitizeFirebaseKey(
             string.IsNullOrWhiteSpace(SettingsService.Current.MachineId)
                 ? Environment.MachineName
                 : SettingsService.Current.MachineId);
         private static string _machineId => MachineId;
+        private static bool IsBlockedMachine => BlockedMachineIds.Contains(_machineId);
 
         private static string SanitizeFirebaseKey(string value) => value.Trim()
             .Replace(".", "_").Replace("$", "").Replace("#", "")
@@ -114,6 +120,11 @@ namespace gsm.Services
         public void Start()
         {
             if (_listenTask != null || _syncTask != null) return;
+            if (IsBlockedMachine)
+            {
+                _vm.AddLog($"[FIREBASE] Đã chặn machineId={_machineId}; không đồng bộ web và không nhận command.", "WARN");
+                return;
+            }
 
             // Xóa sạch trạng thái web_states của máy này khi bật toolgsm lên để hiển thị đầy đủ hết
             _ = Task.Run(async () =>
@@ -191,10 +202,11 @@ namespace gsm.Services
                     var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "sms" : "sms";
                     var error = "Command running quá 10 phút do toolgsm tắt ngang, đã tự timeout";
 
-                    await WriteCommandResultAsync(cmdId, portId, recipient, content, type, "failed", null, error);
+                    var resultPersisted = await WriteCommandResultAsync(cmdId, portId, recipient, content, type, "failed", null, error);
                     await UpdateCommandStatusAsync(cmdId, "failed", error);
                     await UpdateWebCommandStateAsync(portId, cmdId, "failed", error);
-                    await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                    if (resultPersisted)
+                        await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
                     _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "failed", null, error);
                 }
             }
@@ -216,6 +228,12 @@ namespace gsm.Services
                 // SSE nhận lệnh tức thời; polling bảo đảm không mất lệnh nếu stream
                 // bị ngắt đúng lúc web vừa ghi command.
                 await PollQueuedCommandsAsync(ct);
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (now - Interlocked.Read(ref _lastStaleCleanupAt) >= 60_000
+                    && Interlocked.Exchange(ref _lastStaleCleanupAt, now) <= now - 60_000)
+                {
+                    await CleanupStaleOwnedCommandsAsync();
+                }
                 await SyncPortsAsync(ct);
                 try
                 {
@@ -230,7 +248,7 @@ namespace gsm.Services
 
         private async Task SyncPortsAsync(CancellationToken ct)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
             try
             {
                 // Dữ liệu cần thiết cho Web
@@ -273,6 +291,7 @@ namespace gsm.Services
 
         private async Task ListenForCommandsAsync(CancellationToken ct)
         {
+            if (IsBlockedMachine) return;
             while (!ct.IsCancellationRequested)
             {
                 try
@@ -356,14 +375,39 @@ namespace gsm.Services
                     else
                     {
                         // Có command mới thêm vào, path có dạng "/-Nxxxx"
-                        string cmdId = path.Trim('/');
-                        ExecuteAndRemoveCommand(cmdId, dataElement);
+                        var segments = path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+                        if (segments.Length == 0) return;
+                        string cmdId = segments[0];
+                        if (segments.Length == 1 && dataElement.ValueKind == JsonValueKind.Object)
+                            ExecuteAndRemoveCommand(cmdId, dataElement);
+                        else
+                            _ = Task.Run(() => FetchAndProcessCommandAsync(cmdId, _cts.Token));
                     }
                 }
             }
             catch (Exception ex)
             {
                 _vm.AddLog($"[FIREBASE_EVENT_ERROR] Không đọc được sự kiện command: {ex.Message}", "WARN");
+            }
+        }
+
+        private async Task FetchAndProcessCommandAsync(string cmdId, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(cmdId) || ct.IsCancellationRequested) return;
+            try
+            {
+                using var response = await _restClient.GetAsync($"{_databaseUrl}commands/{cmdId}.json", ct);
+                if (!response.IsSuccessStatusCode) return;
+                var json = await response.Content.ReadAsStringAsync(ct);
+                if (string.IsNullOrWhiteSpace(json) || json == "null") return;
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    ExecuteAndRemoveCommand(cmdId, doc.RootElement.Clone());
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                _vm.AddLog($"[FIREBASE_COMMAND_FETCH_ERROR] {cmdId}: {ex.Message}", "WARN");
             }
         }
 
@@ -419,9 +463,34 @@ namespace gsm.Services
                 if (node.TryGetPropertyValue("machineId", out var machineNode))
                 {
                     var targetMachine = machineNode?.GetValue<string>();
-                    if (!string.IsNullOrWhiteSpace(targetMachine) && targetMachine != _machineId)
+                    if (!string.IsNullOrWhiteSpace(targetMachine)
+                        && !string.Equals(targetMachine.Trim(), _machineId, StringComparison.OrdinalIgnoreCase))
                     {
                         return false; // Lệnh dành cho máy khác
+                    }
+                }
+
+                // The web/Python side reserves the exact machine+COM before
+                // creating a command. Do not let another worker consume a
+                // command while that reservation is still alive.
+                var requestedPort = node.TryGetPropertyValue("portId", out var portNode)
+                    ? portNode?.GetValue<string>()?.Trim() : null;
+                var requestedMachine = node.TryGetPropertyValue("machineId", out var requestedMachineNode)
+                    ? requestedMachineNode?.GetValue<string>()?.Trim() : _machineId;
+                if (!string.IsNullOrWhiteSpace(requestedPort)
+                    && !string.Equals(requestedPort, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    var stateJson = await _restClient.GetStringAsync(
+                        $"{_databaseUrl}web_states/machines/{requestedMachine ?? _machineId}/ports/{requestedPort}.json");
+                    if (!string.IsNullOrWhiteSpace(stateJson) && stateJson != "null")
+                    {
+                        var stateNode = JsonNode.Parse(stateJson) as JsonObject;
+                        var reservationId = stateNode?["reservationId"]?.GetValue<string>();
+                        var expiresAt = stateNode?["reservationExpiresAt"]?.GetValue<long?>() ?? 0;
+                        if (!string.IsNullOrWhiteSpace(reservationId)
+                            && !string.Equals(reservationId, cmdId, StringComparison.OrdinalIgnoreCase)
+                            && expiresAt > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                            return false;
                     }
                 }
 
@@ -466,9 +535,9 @@ namespace gsm.Services
             }
         }
 
-        private async Task WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null)
+        private async Task<bool> WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null)
         {
-            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return;
+            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return false;
             try
             {
                 if (status == "failed" && !IsSpecificSmsError(error))
@@ -496,10 +565,20 @@ namespace gsm.Services
                 };
 
                 var json = JsonSerializer.Serialize(payload);
-                using var contentData = new StringContent(json, Encoding.UTF8, "application/json");
-                await _restClient.PutAsync($"{_databaseUrl}command_results/{cmdId}.json", contentData);
+                for (var attempt = 1; attempt <= 5; attempt++)
+                {
+                    using var contentData = new StringContent(json, Encoding.UTF8, "application/json");
+                    using var response = await _restClient.PutAsync($"{_databaseUrl}command_results/{cmdId}.json", contentData);
+                    if (response.IsSuccessStatusCode) return true;
+                    if (attempt < 5) await Task.Delay(TimeSpan.FromMilliseconds(250 * attempt));
+                }
+                _vm.AddLog($"[FIREBASE_RESULT_ERROR] Không lưu được kết quả lệnh {cmdId} sau 5 lần thử.", "ERROR");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _vm.AddLog($"[FIREBASE_RESULT_ERROR] {cmdId}: {ex.Message}", "WARN");
+            }
+            return false;
         }
 
         private async Task<string?> TryGetSpecificWebErrorAsync(string portId)
@@ -610,15 +689,28 @@ namespace gsm.Services
                 {
                     string targetMachine = machineIdEl.GetString() ?? "";
                     // Nếu có machineId mà không phải máy này thì bỏ qua (không xóa lệnh, để máy khác đọc)
-                    if (!string.IsNullOrEmpty(targetMachine) && targetMachine != _machineId)
+                    if (!string.IsNullOrEmpty(targetMachine)
+                        && !string.Equals(targetMachine.Trim(), _machineId, StringComparison.OrdinalIgnoreCase))
                     {
                         return;
                     }
                 }
 
-                if (cmdData.TryGetProperty("portId", out var portIdEl) &&
-                    cmdData.TryGetProperty("recipient", out var recipientEl) &&
-                    cmdData.TryGetProperty("content", out var contentEl))
+                JsonElement portIdEl = default;
+                JsonElement recipientEl = default;
+                JsonElement contentEl = default;
+                bool hasRequiredFields = cmdData.TryGetProperty("portId", out portIdEl) &&
+                    cmdData.TryGetProperty("recipient", out recipientEl) &&
+                    cmdData.TryGetProperty("content", out contentEl) &&
+                    portIdEl.ValueKind == JsonValueKind.String &&
+                    recipientEl.ValueKind == JsonValueKind.String &&
+                    contentEl.ValueKind == JsonValueKind.String;
+                if (!hasRequiredFields)
+                {
+                    _ = Task.Run(() => RejectMalformedCommandAsync(cmdId));
+                    return;
+                }
+                if (hasRequiredFields)
                 {
                     if (cmdData.TryGetProperty("status", out var statusEl))
                     {
@@ -629,9 +721,12 @@ namespace gsm.Services
                         }
                     }
 
-                    string portId = portIdEl.GetString() ?? "";
-                    string recipient = recipientEl.GetString() ?? "";
+                    string requestedPortId = (portIdEl.GetString() ?? "").Trim();
+                    var port = _vm.Ports.FirstOrDefault(p => string.Equals(p.PortName, requestedPortId, StringComparison.OrdinalIgnoreCase));
+                    string portId = port?.PortName ?? requestedPortId;
+                    string recipient = (recipientEl.GetString() ?? "").Trim();
                     string content = contentEl.GetString() ?? "";
+                    if (string.IsNullOrWhiteSpace(portId) || string.IsNullOrWhiteSpace(recipient)) return;
                     string type = cmdData.TryGetProperty("type", out var typeEl)
                         ? typeEl.GetString() ?? (recipient == "USSD" ? "balance" : "sms")
                         : (recipient == "USSD" ? "balance" : recipient == "SYSTEM" ? "system" : "sms");
@@ -660,7 +755,7 @@ namespace gsm.Services
                             isClaimed = true;
 
                             // Reset OTP cũ khi bắt đầu nhận lệnh mới để tránh kịch bản đọc nhầm OTP cũ
-                            var port = _vm.Ports.FirstOrDefault(p => p.PortName == portId);
+                            port = _vm.Ports.FirstOrDefault(p => string.Equals(p.PortName, portId, StringComparison.OrdinalIgnoreCase));
 
                             await UpdateWebCommandStateAsync(portId, cmdId, "running");
                             _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "running");
@@ -747,15 +842,21 @@ namespace gsm.Services
                                 {
                                     // An OTP can arrive before ExecuteSmsAsync finishes. Never let
                                     // the ordinary "sent" result overwrite the final OTP result.
-                                    if (!_otpCompletedCommands.ContainsKey(cmdId))
+                                    bool resultPersisted = _otpCompletedCommands.ContainsKey(cmdId);
+                                    if (!resultPersisted)
                                     {
                                         _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError);
-                                        await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
+                                        resultPersisted = await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
                                         await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
                                         await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
                                     }
                                 // Chỉ xóa khi đã xử lý xong (hoặc lỗi), tránh bị dính lệnh vĩnh viễn trên Firebase
-                                    await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                                    if (resultPersisted)
+                                    {
+                                        using var deleteResponse = await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+                                        if (!deleteResponse.IsSuccessStatusCode)
+                                            _vm.AddLog($"[FIREBASE] Chưa xóa được command {cmdId}: HTTP {(int)deleteResponse.StatusCode}", "WARN");
+                                    }
                                 }
                                 finally
                                 {
@@ -771,6 +872,24 @@ namespace gsm.Services
             {
                 _scheduledCommands.TryRemove(cmdId, out _);
                 _vm.AddLog($"[FIREBASE_COMMAND_ERROR] Lệnh {cmdId}: {ex.Message}", "ERROR");
+            }
+        }
+
+        private async Task RejectMalformedCommandAsync(string cmdId)
+        {
+            if (!_scheduledCommands.TryAdd(cmdId, 0)) return;
+            try
+            {
+                var persisted = await WriteCommandResultAsync(
+                    cmdId, "", "", "", "sms", "failed", null,
+                    "Malformed command: required portId/recipient/content fields are missing.");
+                await UpdateCommandStatusAsync(cmdId, "failed", "Malformed command");
+                if (persisted)
+                    await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
+            }
+            finally
+            {
+                _scheduledCommands.TryRemove(cmdId, out _);
             }
         }
 
@@ -934,6 +1053,7 @@ namespace gsm.Services
 
         private async Task PollQueuedCommandsAsync(CancellationToken ct)
         {
+            if (IsBlockedMachine) return;
             try
             {
                 using var response = await _restClient.GetAsync($"{_databaseUrl}commands.json", ct);
@@ -987,7 +1107,7 @@ namespace gsm.Services
 
         public static async Task SendSuccessToWebAsync(string portId)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
             try
             {
                 using var client = new HttpClient();
@@ -1011,7 +1131,7 @@ namespace gsm.Services
 
         public static async Task SendErrorToWebAsync(string portId, string errorMsg)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
             try
             {
                 using var client = new HttpClient();
@@ -1033,7 +1153,7 @@ namespace gsm.Services
 
         public static async Task ClearWebStateAsync(string portId)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
             try
             {
                 using var client = new HttpClient();

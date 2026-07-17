@@ -366,7 +366,6 @@ public sealed class SmsMultipartAssembler
             {
                 if (!string.Equals(old, content, StringComparison.Ordinal)) return new(SmsAssemblyStatus.Conflict, null, Array.Empty<string>());
                 if (!string.IsNullOrWhiteSpace(index)) buffer.Indices.Add(index);
-                buffer.LastUpdated = timestamp;
                 return new(SmsAssemblyStatus.Duplicate, null, Array.Empty<string>());
             }
             buffer.Parts.Add(concat.Sequence, content);

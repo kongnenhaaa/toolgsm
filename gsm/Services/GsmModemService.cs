@@ -76,6 +76,7 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, byte> _incomingAnswerOperations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new();
     private readonly ConcurrentDictionary<string, StringBuilder> _portBuffers = new();
+    private readonly ConcurrentDictionary<string, object> _portBufferLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _commandTcs = new();
     private readonly ConcurrentDictionary<string, int> _connectionErrors = new();
     private readonly ConcurrentDictionary<string, DateTime> _sleepingPorts = new();
@@ -185,7 +186,11 @@ public class GsmModemService : IGsmModemService
     private readonly SmsImplicitMultipartAssembler _implicitMultipartAssembler = new();
     private readonly ConcurrentDictionary<string, DateTime> _deliveredStoredSms = new();
     private readonly ConcurrentDictionary<string, Channel<string>> _smsReadQueues = new();
-    private readonly ConcurrentDictionary<string, byte> _queuedSmsIndices = new();
+    // Value 1 = one read is queued/running; value 2 = the same SIM index was
+    // announced again while it was busy and must be read once more. EC20 can
+    // recycle an index immediately after CMGD, so silently dropping the second
+    // notification can postpone a new SMS until the recovery sweep.
+    private readonly ConcurrentDictionary<string, int> _queuedSmsIndices = new();
 
     private async Task<string> ReadStoredSmsAsync(string port, string msgIndex)
     {
@@ -237,17 +242,26 @@ public class GsmModemService : IGsmModemService
             foreach (var item in _deliveredStoredSms.Where(x => now - x.Value > TimeSpan.FromMinutes(10)).ToArray())
                 _deliveredStoredSms.TryRemove(item.Key, out _);
             string deliveryKey = $"{port}\u001f{msgIndex}\u001f{rawStoredSms}";
-            if (!_deliveredStoredSms.TryAdd(deliveryKey, now)) return null;
+            // Mark only after the consumer accepts the SMS and CMGD succeeds.
+            // A failed UI dispatch must be retried by the next recovery sweep.
+            if (_deliveredStoredSms.ContainsKey(deliveryKey)) return null;
             if (!string.IsNullOrWhiteSpace(msgIndex)) indicesToDelete.Add(msgIndex);
             return decoded.Content;
         }
 
         SmsAssemblyResult result = _exactMultipartAssembler.Add(port, sender, decoded.Concatenation, decoded.Content, msgIndex);
+        // EC20 SIM storage commonly has only 10 records. A carrier SMS can be
+        // 11-12 parts, so waiting for all parts before CMGD deadlocks the SIM.
+        // The assembler already owns a safe in-memory copy of this decoded part;
+        // release only the current record so the next part/OTP has room to arrive.
+        if (!string.IsNullOrWhiteSpace(msgIndex)
+            && result.Status is SmsAssemblyStatus.Waiting or SmsAssemblyStatus.Completed or SmsAssemblyStatus.Duplicate)
+            indicesToDelete.Add(msgIndex);
         if (result.Status == SmsAssemblyStatus.Completed)
         {
-            indicesToDelete.AddRange(result.MessageIndices);
             return result.Content;
         }
+        if (result.Status == SmsAssemblyStatus.Duplicate) return null;
         if (result.Status is SmsAssemblyStatus.Invalid or SmsAssemblyStatus.Conflict)
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[MULTIPART] UDH không hợp lệ hoặc xung đột từ {sender}; giữ SMS trên SIM để quét lại." });
         return null;
@@ -256,7 +270,11 @@ public class GsmModemService : IGsmModemService
     private void QueueStoredSmsRead(string port, string msgIndex)
     {
         string queueKey = $"{port}\u001f{msgIndex}";
-        if (!_queuedSmsIndices.TryAdd(queueKey, 0)) return;
+        if (!_queuedSmsIndices.TryAdd(queueKey, 1))
+        {
+            _queuedSmsIndices.AddOrUpdate(queueKey, 2, static (_, _) => 2);
+            return;
+        }
 
         Channel<string> channel = _smsReadQueues.GetOrAdd(port, p =>
         {
@@ -281,7 +299,26 @@ public class GsmModemService : IGsmModemService
             {
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[SMS_QUEUE] Lỗi đọc index {msgIndex}: {ex.Message}. SMS vẫn được giữ trên SIM." });
             }
-            finally { _queuedSmsIndices.TryRemove($"{port}\u001f{msgIndex}", out _); }
+            finally
+            {
+                string queueKey = $"{port}\u001f{msgIndex}";
+                while (_queuedSmsIndices.TryGetValue(queueKey, out int pending))
+                {
+                    if (pending > 1)
+                    {
+                        if (!_queuedSmsIndices.TryUpdate(queueKey, 1, pending)) continue;
+                        if (!reader.Completion.IsCompleted
+                            && _smsReadQueues.TryGetValue(port, out Channel<string>? channel)
+                            && channel.Writer.TryWrite(msgIndex))
+                            break;
+                        _queuedSmsIndices.TryRemove(queueKey, out _);
+                        break;
+                    }
+
+                    if (_queuedSmsIndices.TryRemove(
+                        new KeyValuePair<string, int>(queueKey, pending))) break;
+                }
+            }
         }
     }
 
@@ -316,6 +353,12 @@ public class GsmModemService : IGsmModemService
         string? fullContent = TryAssembleMultipartExact(port, sender, decoded, msgIndex, smsContent, out var indicesToDelete);
         if (fullContent == null)
         {
+            foreach (string bufferedIndex in indicesToDelete.Distinct(StringComparer.Ordinal))
+            {
+                string deleteResponse = await SendCommandAsync(port, $"AT+CMGD={bufferedIndex},0", 5000, silent: true);
+                if (deleteResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[MULTIPART] Đã giữ phần {bufferedIndex} trong RAM nhưng chưa giải phóng được ô SIM; sweep sẽ thử lại." });
+            }
             if (decoded.Concatenation != null)
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[MULTIPART] sender={sender} ref={decoded.Concatenation.Reference} seq={decoded.Concatenation.Sequence}/{decoded.Concatenation.Total} index={msgIndex} chars={decoded.Content.Length}; đang chờ đủ phần." });
             return;
@@ -326,21 +369,38 @@ public class GsmModemService : IGsmModemService
         else if (indicesToDelete.Count > 1)
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[MULTIPART_FALLBACK_COMPLETE] sender={sender} total={indicesToDelete.Count} chars={fullContent.Length}" });
 
+        try
+        {
+            SmsReceived?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = port,
+                Data = fullContent,
+                MsgIndex = msgIndex,
+                Sender = sender,
+                Otp = ExtractOtp(fullContent) ?? string.Empty
+            });
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[SMS_QUEUE] Không phát được SMS index {msgIndex}; giữ nguyên trên SIM: {ex.Message}" });
+            return;
+        }
+
+        // SmsReceived handlers synchronously take ownership of the decoded
+        // content before returning. Delete immediately afterwards so a small
+        // EC20 SIM store cannot fill while the UI is busy. Only this service is
+        // allowed to issue CMGD for received messages; consumers must never
+        // delete the same recyclable index a second time.
         foreach (string index in indicesToDelete)
         {
             string deleteResponse = await SendCommandAsync(port, $"AT+CMGD={index},0", 5000, silent: true);
             if (deleteResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[SMS_QUEUE] Không xóa được index {index}; bộ chống trùng sẽ ngăn phát lại trong phiên này." });
+            if (!deleteResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                && decoded.Concatenation == null)
+                _deliveredStoredSms[$"{port}\u001f{index}\u001f{smsContent}"] = DateTime.UtcNow;
         }
 
-        SmsReceived?.Invoke(this, new GsmDataEventArgs
-        {
-            PortName = port,
-            Data = fullContent,
-            MsgIndex = msgIndex,
-            Sender = sender,
-            Otp = ExtractOtp(fullContent) ?? string.Empty
-        });
     }
 
     private class PendingMultipart
@@ -693,6 +753,7 @@ public class GsmModemService : IGsmModemService
                         _dataReceivedHandlers.TryAdd(p, handler);
                         _semaphores.TryAdd(p, new SemaphoreSlim(1, 1));
                         _portBuffers.TryAdd(p, new StringBuilder());
+                        _portBufferLocks.TryAdd(p, new object());
                         _connectionErrors.TryRemove(p, out _); // Reset lỗi khi kết nối thành công
                         if (_portLifetimeCts.TryRemove(p, out var staleLifetime))
                         {
@@ -1652,8 +1713,8 @@ public class GsmModemService : IGsmModemService
         }
 
         // Recover messages received while the tool was closed/configuring. Do not bulk-delete at
-        // startup: each stored index must pass through QCMGR and is deleted only after successful
-        // decoding, or after every segment of a concatenated SMS has been assembled.
+        // startup: each stored index must pass through CMGR and is deleted only after successful
+        // decoding. Multipart parts are retained in the assembler before their SIM slots are freed.
         _ = Task.Run(async () =>
         {
             try
@@ -2032,6 +2093,18 @@ public class GsmModemService : IGsmModemService
     }
 
     private void HandleDataReceived(string portName, SerialPort sp)
+    {
+        // SerialPort may raise overlapping DataReceived callbacks. StringBuilder,
+        // frame removal and command completion must be atomic per COM or one
+        // callback can overwrite/remove bytes still needed by another callback.
+        object gate = _portBufferLocks.GetOrAdd(portName, static _ => new object());
+        lock (gate)
+        {
+            HandleDataReceivedCore(portName, sp);
+        }
+    }
+
+    private void HandleDataReceivedCore(string portName, SerialPort sp)
     {
         if (_isDownloading.TryGetValue(portName, out var isDown) && isDown) return;
 
@@ -2456,6 +2529,7 @@ public class GsmModemService : IGsmModemService
         _serialPorts.Clear();
         _semaphores.Clear();
         _portBuffers.Clear();
+        _portBufferLocks.Clear();
         _commandTcs.Clear();
         _connectionErrors.Clear();
         _sleepingPorts.Clear();
@@ -2518,7 +2592,6 @@ public class GsmModemService : IGsmModemService
             // Không Dispose ngay: một SendCommandAsync đang kết thúc có thể còn Release().
             // Sau khi xóa khỏi dictionary semaphore sẽ được GC thu hồi an toàn.
             _semaphores.TryRemove(portName, out _);
-            _portBuffers.TryRemove(portName, out _);
             if (_commandTcs.TryRemove(portName, out var pendingCommand))
                 pendingCommand.TrySetResult("ERROR: Port disconnected");
             _connectionErrors.TryRemove(portName, out _);
@@ -2546,6 +2619,9 @@ public class GsmModemService : IGsmModemService
             _simInitInProgress.TryRemove(portName, out _);
             _simInsertInProgress.TryRemove(portName, out _);
         }
+
+        _portBuffers.TryRemove(portName, out _);
+        _portBufferLocks.TryRemove(portName, out _);
 
         // Dọn cancellation state kể cả khi kết nối bị lỗi giữa chừng trước lúc tạo semaphore.
         if (_pollingCts.TryRemove(portName, out var polling)) { try { polling.Cancel(); polling.Dispose(); } catch { } }
@@ -2631,20 +2707,9 @@ public class GsmModemService : IGsmModemService
 
         try
         {
-            // Xóa sạch bộ đệm trước khi gửi lệnh mới để tránh nhận rác/OK sót từ lệnh trước
-            try
-            {
-                sp.DiscardInBuffer();
-            }
-            catch {}
-
-            if (_portBuffers.TryGetValue(portName, out var buf))
-            {
-                lock (buf)
-                {
-                    buf.Clear();
-                }
-            }
+            // Do not discard serial data here. EC20 can emit +CMTI/+CMT in the
+            // short gap between AT commands; clearing either buffer drops OTPs.
+            // HandleDataReceived already removes completed command frames.
 
             if (!silent) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> {command}" });
             

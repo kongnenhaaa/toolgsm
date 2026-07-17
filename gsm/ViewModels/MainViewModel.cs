@@ -3432,7 +3432,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // +CMGR: "REC UNREAD","+84999999999",,"26/05/01,10:00:00+28"
         // Ma xac nhan Zalo cua ban la 123456
 
-        Application.Current.Dispatcher.InvokeAsync(async () =>
+        // Process the decoded SMS synchronously on the UI dispatcher. The modem
+        // service deletes the recyclable SIM index only after this handler has
+        // returned, so the UI has taken ownership before CMGD is issued.
+        Application.Current.Dispatcher.Invoke(() =>
         {
             try
             {
@@ -3588,11 +3591,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (isZaloError)
                 {
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
-                    return;
+                    // Keep processing and record the carrier/error SMS. Receiving
+                    // all SMS means business-rule errors must not disappear from
+                    // the inbox. GsmModemService exclusively owns CMGD.
                 }
 
                 // Tự động xác nhận đăng ký ezCom từ tổng đài (Hỗ trợ cả Y [mã] và EZ [mã])
@@ -3621,143 +3622,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         }
                     });
                     
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
-                    return;
+                    // The automatic reply is independent from inbox delivery;
+                    // continue below so the original SMS is still recorded.
                 }
 
                 // LUÔN CHẶN cảnh báo ezCom bất kể cài đặt Nhận tất cả hay không
                 if (cleanContentLower.Contains("thue bao ezcom chi duoc") || cleanContentLower.Contains("dich vu vinaphone khac"))
                 {
                     AddLog($"[{e.PortName}] Đã chặn tin nhắn hệ thống ezCom.");
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
-                    return;
+                    // Continue to the common receive path; never hide or delete
+                    // a real network SMS because of its content.
                 }
 
-                bool receiveAll = SettingsService.Current.ReceiveAllSms;
-                bool pendingWebOtp = _firebaseService.HasPendingOtpCommand(e.PortName);
-
-                if (!receiveAll && !pendingWebOtp)
-                {
-                    // Chặn tin nhắn rác từ nhà mạng / tổng đài hệ thống
-                    // isTopUpSender: sender là tổng đài nhà mạng Viettel/Vinaphone (không bao giờ là OTP thực)
-                    bool isTopUpSender = senderPhone == "8068"    // Viettel báo trừ tiền
-                                      || senderPhone == "900"
-                                      || senderPhone == "49515355"
-                                      || senderPhone == "57515253"
-                                      || senderPhone.StartsWith("VTT",      StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VNP",      StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VNPT",     StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VIETTEL",  StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VINAPHONE",StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("MOBIFONE", StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VIETNAMOBILE", StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("GMOBILE",  StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("WINTEL",   StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("ITELECOM", StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("ITEL",     StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("SKY",      StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("VNSKY",    StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("LOCAL",    StringComparison.OrdinalIgnoreCase)
-                                      || senderPhone.StartsWith("FPT",      StringComparison.OrdinalIgnoreCase);
-
-                    // isTopUpContent: nội dung mang dấu hiệu nạp tiền / cập nhật số dư
-                    bool isTopUpContent = cleanContentLower.Contains("da duoc nap")
-                                       || cleanContentLower.Contains("tai khoan cua quy khach")
-                                       || cleanContentLower.Contains("nap tien thanh cong")
-                                       || (cleanContentLower.Contains("so du hien tai") && !cleanContentLower.Contains("zalo"));
-
-                    bool isSpamContent = cleanContentLower.Contains("khoan airtime")
-                                      || cleanContentLower.Contains("ong su dung het")
-                                      || cleanContentLower.Contains("ng su dung het")
-                                      || cleanContentLower.Contains("chinh sach tai")
-                                      || cleanContentLower.Contains("tu choi nhan loi moi");
-
-                    if (isTopUpSender || isTopUpContent || isSpamContent)
-                    {
-                        AddLog($"[{e.PortName}] Đã chặn tin nhắn hệ thống/rác từ {senderPhone}");
-                        
-                        // Nếu là thông báo nạp tiền → tự động cập nhật lại TKC
-                        if (isTopUpContent)
-                        {
-                            AddLog($"[{e.PortName}] Phát hiện tin nhắn nạp thẻ, tự động cập nhật lại số dư...");
-                            _ = Task.Run(async () => 
-                            {
-                                await Task.Delay(2000);
-                                await CheckBalanceForPortAsync(e.PortName);
-                            });
-                        }
-
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        return;
-                    }
-
-                    // --- WHITELIST / BLACKLIST ---
-                var settings = SettingsService.Current;
-
-                if (settings.EnableSenderBlacklist && !string.IsNullOrWhiteSpace(settings.SenderBlacklist))
-                {
-                    var blacklist = settings.SenderBlacklist
-                        .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(s => s.Trim())
-                        .ToArray();
-
-                    bool isBlocked = blacklist.Any(b =>
-                        senderPhone.IndexOf(b, StringComparison.OrdinalIgnoreCase) >= 0);
-
-                    if (isBlocked)
-                    {
-                        AddLog($"[{e.PortName}] Đã chặn (Blacklist): {senderPhone}", "WARN");
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        return;
-                    }
-                }
-
-                if (settings.EnableSenderWhitelist && !string.IsNullOrWhiteSpace(settings.SenderWhitelist))
-                {
-                    var whitelist = settings.SenderWhitelist
-                        .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(s => s.Trim())
-                        .ToArray();
-
-                    bool isAllowed = whitelist.Any(w =>
-                        senderPhone.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0);
-
-                    if (!isAllowed)
-                    {
-                        AddLog($"[{e.PortName}] Bỏ qua (không trong Whitelist): {senderPhone}");
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        return;
-                    }
-                }
-                // --- END WHITELIST / BLACKLIST ---
-                    bool isZalo = cleanContent.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 || 
-                                  senderPhone.IndexOf("Zalo", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                  senderPhone.Contains("8500") || senderPhone.Contains("7539");
-                    bool isWhatsApp = cleanContent.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                      senderPhone.IndexOf("WhatsApp", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                      senderPhone.IndexOf("WA", StringComparison.OrdinalIgnoreCase) >= 0;
-                    bool isTelegram = cleanContent.IndexOf("Telegram", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                      senderPhone.IndexOf("Telegram", StringComparison.OrdinalIgnoreCase) >= 0;
-
-                    if (!isZalo && !isWhatsApp && !isTelegram)
-                    {
-                        AddLog($"[{e.PortName}] Đã chặn và xóa tin nhắn không hợp lệ từ {senderPhone}");
-                        if (!string.IsNullOrEmpty(e.MsgIndex))
-                        {
-                            await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                        }
-                        return;
-                    }
-                }
+                // Every decoded network SMS now continues through the common
+                // receive path. Whitelist/blacklist settings may control optional
+                // forwarding elsewhere, but must never suppress the local inbox.
 
                 // 2. Tìm OTP
                 extractedOtp = ExtractOtp(cleanContent);
@@ -3766,8 +3645,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
 
                 // ---------- LOAD SETTINGS ----------
-                var cfg = gsm.Services.SettingsService.Current;
-                if (cfg == null) return;
+                // Inbox delivery must not depend on settings being loaded. Use
+                // safe defaults for optional notifications while retaining the
+                // decoded SMS locally.
+                var cfg = gsm.Services.SettingsService.Current ?? new AppSettings();
 
                 // ---------- 0. FIREBASE (toolweb) ----------
                 // A pending web SMS command must always receive its correlated OTP result.
@@ -3946,11 +3827,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         _ = Services.WebhookService.TriggerAsync(rule, e.PortName, receiverPhone, senderPhone, extractedOtp, cleanContent);
                     }
 
-                    // Chỉ xóa tin nhắn sau khi đã trích xuất OTP thành công
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
+                    // GsmModemService deletes the SIM record after this handler returns.
                 }
                 else
                 {
@@ -3967,11 +3844,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         _ = Services.WebhookService.TriggerAsync(rule, e.PortName, receiverPhone, senderPhone, "N/A", cleanContent);
                     }
 
-                    // PHẢI XÓA SMS NGAY CẢ KHI KHÔNG CÓ OTP ĐỂ TRÁNH TRÀN BỘ NHỚ SIM (SIM FULL SẼ KHÔNG NHẬN ĐƯỢC SMS NỮA)
-                    if (!string.IsNullOrEmpty(e.MsgIndex))
-                    {
-                        await _modemService.SendCommandAsync(e.PortName, $"AT+CMGD={e.MsgIndex},0");
-                    }
+                    // GsmModemService owns CMGD for ordinary SMS as well.
                 }
             }
             catch (Exception ex)

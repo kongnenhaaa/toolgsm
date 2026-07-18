@@ -161,8 +161,17 @@ public sealed class GsmUssdService : IGsmUssdService
 
         string pin = await CommandAsync(session, "AT+CPIN?", 5000, token);
         if (IsCommandError(pin)) return $"ERROR: SIM status check failed ({pin.Trim()})";
+        // Retry CPIN: modem vừa khởi động hoặc SIM hot-plug có thể trả về bare OK
+        // trước khi report +CPIN: READY (giống pattern retry CREG bên dưới)
+        for (int pinProbe = 0; pinProbe < 3 && !Regex.IsMatch(pin, @"\+CPIN:\s*READY", RegexOptions.IgnoreCase); pinProbe++)
+        {
+            if (IsCommandError(pin)) break; // Lỗi thật, không retry
+            await _delay.WaitAsync(TimeSpan.FromSeconds(2), token);
+            pin = await CommandAsync(session, "AT+CPIN?", 5000, token);
+        }
         if (!Regex.IsMatch(pin, @"\+CPIN:\s*READY", RegexOptions.IgnoreCase))
             return $"ERROR: SIM not ready ({pin.Trim()})";
+
 
         // Tắt URC CREG chi tiết trong cửa sổ USSD để phản hồi lệnh không bị xen ngang.
         // Không thay đổi RAT/radio; cuối thao tác sẽ khôi phục CREG=2.

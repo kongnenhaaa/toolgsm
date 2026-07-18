@@ -2837,7 +2837,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     // Lưu kết quả USSD vào LastUssdResult (dùng cho tab USSD trong CommandPanel)
                     port.LastUssdResult = ussdContent;
-                    port.UpdateDisplayResult(CommandPanelTab);
+
+                    // Sửa lỗi Parse nhầm "1đ" từ tin nhắn báo không đủ tiền hoặc quảng cáo cước phí
+                    // Cập nhật hỗ trợ TKG (Tài Khoản Gốc) của Viettel, VinaPhone
+                    // Guard: bỏ qua nếu nội dung USSD chứa từ khoá quảng cáo/cước (tránh parse nhầm 1đ/900đ)
+                    bool ussdHasAdKeywords = Regex.IsMatch(ussdContent,
+                        @"cuoc|phi\s*dich\s*vu|uu\s*dai|goi\s*cuoc|tang\s*them|khuyen\s*mai|phi\s*truoc|phi\s*cuoc|khong\s*du|chua\s*du",
+                        RegexOptions.IgnoreCase);
+                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK|balance)[^\d]{0,20}(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)?", RegexOptions.IgnoreCase);
+                    if (strictMatch.Success) 
+                    {
+                        string rawVal = strictMatch.Groups[1].Value.Replace(".", "").Replace(",", "");
+                        // Reject số dư < 100 VND để tránh parse nhầm cước phí (vd: "1d/ngay", "900d cuoc")
+                        if (int.TryParse(rawVal, out int parsedBal) && (parsedBal >= 100 || !ussdHasAdKeywords))
+                        {
+                            string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
+                            port.Balance = strictMatch.Groups[1].Value + " " + unit;
+                        }
+                    }
+                    else
+                    {
+                        // Fallback nếu nhà mạng trả về format lạ, nhưng phải tránh các từ khóa rác và tránh cước phí (vd: 1000d/ngay)
+                        if (!ussdHasAdKeywords && !Regex.IsMatch(ussdContent, @"khong du|chua du|cuoc|uu dai|tang|gia|khong lo|ho tro|phi|dang ky", RegexOptions.IgnoreCase))
+                        {
+                            var fallback = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)(?!/)", RegexOptions.IgnoreCase);
+                            if (fallback.Success)
+                            {
+                                string fallbackRaw = fallback.Groups[1].Value.Replace(".", "").Replace(",", "");
+                                if (int.TryParse(fallbackRaw, out int fallbackBal) && fallbackBal >= 100)
+                                    port.Balance = fallback.Groups[1].Value + " " + fallback.Groups[2].Value;
+                            }
+                        }
+                    }
 
                     // Hiển thị kết quả USSD trên cột "Nội dung" trong bảng COM ngay lập tức
                     port.LastMessageContent = "[USSD] " + ussdContent;
@@ -2885,25 +2916,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 }
                             }
                         }
-                    }
-                    
-                    // Sửa lỗi Parse nhầm "1đ" từ tin nhắn báo không đủ tiền hoặc quảng cáo cước phí
-                    // Cập nhật hỗ trợ TKG (Tài Khoản Gốc) của Viettel, VinaPhone
-                    var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK|balance)[^\d]{0,20}(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)?", RegexOptions.IgnoreCase);
-                    if (strictMatch.Success) 
-                    {
-                        string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
-                        port.Balance = strictMatch.Groups[1].Value + " " + unit;
-                    }
-                    else
-                    {
-                        // Fallback nếu nhà mạng trả về format lạ, nhưng phải tránh các từ khóa rác và tránh cước phí (vd: 1000d/ngay)
-                        if (!Regex.IsMatch(ussdContent, @"khong du|chua du|cuoc|uu dai|tang|gia|khong lo|ho tro|phi|dang ky", RegexOptions.IgnoreCase))
-                        {
-                            var fallback = Regex.Match(ussdContent, @"(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)(?!/)", RegexOptions.IgnoreCase);
-                            if (fallback.Success) port.Balance = fallback.Groups[1].Value + " " + fallback.Groups[2].Value;
-                        }
-                    }
+                    }
 
                     // 1. HSD (Hạn sử dụng)
                     var expiryMatch = Regex.Match(ussdContent, @"(?:HSD|han\s*sd|han\s*su\s*dung|ngay\s*het\s*han)[^\d]{0,15}(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})", RegexOptions.IgnoreCase);
@@ -3507,16 +3520,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
 
                     // 2. Parse TKC từ SMS (nếu có)
-                    var strictMatch = Regex.Match(cleanContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK|balance)[^\d]{0,20}(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)?", RegexOptions.IgnoreCase);
-                    if (strictMatch.Success)
+                    // Guard: bỏ qua SMS chứa từ khóa quảng cáo/cước để tránh ghi đè TKC thật bằng số nhỏ (1đ, 900đ)
+                    bool smsHasAdKeywords = Regex.IsMatch(cleanContent,
+                        @"cuoc|phi\s*dich\s*vu|uu\s*dai|goi\s*cuoc|tang\s*them|khuyen\s*mai|phi\s*truoc|phi\s*cuoc|khong\s*du|chua\s*du",
+                        RegexOptions.IgnoreCase);
+                    if (!smsHasAdKeywords)
                     {
-                        string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
-                        string bal = strictMatch.Groups[1].Value + " " + unit;
-                        if (port.Balance != bal)
+                        var strictMatch = Regex.Match(cleanContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK|balance)[^\d]{0,20}(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)?", RegexOptions.IgnoreCase);
+                        if (strictMatch.Success)
                         {
-                            port.Balance = bal;
-                            AddLog($"[{e.PortName}] Đã cập nhật số dư từ SMS: {bal}", "SUCCESS");
-                            simMetadataChanged = true;
+                            string rawSmsVal = strictMatch.Groups[1].Value.Replace(".", "").Replace(",", "");
+                            // Reject số dư < 100 VND để tránh parse nhầm cước phí từ SMS
+                            if (int.TryParse(rawSmsVal, out int parsedSmsBalance) && parsedSmsBalance >= 100)
+                            {
+                                string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
+                                string bal = strictMatch.Groups[1].Value + " " + unit;
+                                if (port.Balance != bal)
+                                {
+                                    port.Balance = bal;
+                                    AddLog($"[{e.PortName}] Đã cập nhật số dư từ SMS: {bal}", "SUCCESS");
+                                    simMetadataChanged = true;
+                                }
+                            }
                         }
                     }
 
@@ -3935,6 +3960,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OtpReceivedEvent?.Invoke(portName, extractedOtp);
             Services.SoundAlertService.PlayOtp();
             ToastService.ShowOtp(portName, receiverPhone, extractedOtp, senderPhone);
+            // Trả OTP về Web Firebase (cho multipart SMS đã được gộm và timeout)
+            if (port != null)
+                _ = _firebaseService.PublishOtpForPendingCommandAsync(
+                    port.PortName, extractedOtp, content, senderPhone);
         }
 
         SmsMessages.Insert(0, new SmsMessage
@@ -3993,7 +4022,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OtpHistoryService.Append(portName, simPhone, senderPhone, newOtp, existing.Content);
 
             OtpReceivedEvent?.Invoke(portName, newOtp);
-            
+
+            // Trả OTP về Web Firebase (multipart SMS đã gộm đủ)
+            if (port != null)
+                _ = _firebaseService.PublishOtpForPendingCommandAsync(
+                    port.PortName, newOtp, existing.Content, senderPhone);
             Application.Current.Dispatcher.Invoke(() =>
             {
                 var newRecord = new Services.OtpRecord
@@ -5197,9 +5230,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
         {
+            // USSD cancelled do session thay đổi (hot-swap SIM) hoặc shutdown — không phải lỗi thật
+            bool isCancelledNotError = result.Contains("USSD operation cancelled", StringComparison.OrdinalIgnoreCase)
+                || result.Contains("SIM session changed", StringComparison.OrdinalIgnoreCase);
             RecordPortError(portName, result);
             MaybeCooldownPort(portName, result);
-            if (logResult) AddLog($"Kết quả từ {portName}: {result}", "ERROR");
+            if (logResult)
+            {
+                string logLevel = isCancelledNotError ? "WARN" : "ERROR";
+                AddLog($"Kết quả từ {portName}: {result}", logLevel);
+            }
         }
         else if (logResult)
         {

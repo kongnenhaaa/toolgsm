@@ -2128,9 +2128,13 @@ public class GsmModemService : IGsmModemService
             // Không reset buffer khi còn dữ liệu hợp lệ đang được xử lý. Chỉ reset khi thực sự overflow.
             if (buffer.Length > 32000)
             {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[WARNING] Buffer overflow ({buffer.Length} chars) — có thể bị mất dữ liệu. Đang làm sạch..." });
+                // Cuu cac +CMTI chua xu ly truoc khi xoa buffer de khong miss SMS
+                var salvageCmti = Regex.Matches(buffer.ToString(), @"\+CMTI:\s*""[^""]*"",\s*(\d+)");
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[WARNING] Buffer overflow ({buffer.Length} chars) - dang lam sach; cuu {salvageCmti.Count} CMTI." });
                 buffer.Clear();
                 currentData = "";
+                foreach (Match m in salvageCmti) QueueStoredSmsRead(portName, m.Groups[1].Value);
+                if (salvageCmti.Count == 0) _ = SweepUnreadSmsAsync(portName);
             }
 
             if (currentData.Contains("+CMS ERROR: 302") || currentData.Contains("memory full"))

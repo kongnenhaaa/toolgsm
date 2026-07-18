@@ -15,6 +15,7 @@ public static class SmsBodyDecoder
     {
         if (string.IsNullOrWhiteSpace(raw)) return new(string.Empty, null);
         var lines = raw.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n')
+            .Select(StripInterleavedModemUrc)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Where(x => !x.TrimStart().StartsWith("+CMGR:", StringComparison.OrdinalIgnoreCase) &&
                         !x.TrimStart().StartsWith("+QCMGR:", StringComparison.OrdinalIgnoreCase) &&
@@ -38,6 +39,27 @@ public static class SmsBodyDecoder
         return decoded.Concatenation == null && TryParseQcmgrConcat(raw, out var qcmgrConcat)
             ? decoded with { Concatenation = qcmgrConcat }
             : decoded;
+    }
+
+    private static string StripInterleavedModemUrc(string line)
+    {
+        string trimmed = line.Trim();
+        bool isModemUrc = Regex.IsMatch(
+            trimmed,
+            @"^\+(?:CTZE|CUSD|C(?:G|E)?REG|COPS|QIND|QSIMSTAT|CPIN|CCFC):",
+            RegexOptions.IgnoreCase);
+        if (!isModemUrc)
+            return line;
+
+        // EC20 can inject network-time, USSD and registration URCs in the middle
+        // of CMGR/QCMGR/CMT. Depending on serial chunk boundaries the following
+        // PDU is either on the next line or glued to that URC. Preserve only a
+        // long trailing hex payload; a standalone URC is not SMS text.
+        Match pdu = Regex.Match(
+            trimmed,
+            @"(?:^|\s)(?<pdu>[0-9A-F]{32,})\s*$",
+            RegexOptions.IgnoreCase);
+        return pdu.Success ? pdu.Groups["pdu"].Value : string.Empty;
     }
 
     private static bool TryDecodeHex(string hex, out DecodedSmsBody decoded)

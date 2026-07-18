@@ -20,6 +20,40 @@ public class SmsMultipartAssemblerTests
         Assert.NotEqual("Unknown", result.Sender);
     }
 
+    [Theory]
+    [InlineData("+CTZE: \"+28\",0,\"2026/07/17,10:32:46\" 069148192050444006D0381C0E000062707171236482A0050003B602015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D566B69CED4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C")]
+    [InlineData("+CTZE: \"+28\",0,\"2026/07/17,10:32:46\"\r\n069148192050444006D0381C0E000062707171236482A0050003B602015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D566B69CED4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C")]
+    public void Ec20CtzeUrc_DoesNotContaminateAdjacentPdu(string raw)
+    {
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.StartsWith("(TB) So huu 01 License", result.Content);
+        Assert.Equal(new SmsConcatInfo(0xB6, 2, 1), result.Concatenation);
+        Assert.NotEqual("Unknown", result.Sender);
+    }
+
+    [Fact]
+    public void InterleavedUssdUrc_DoesNotReplaceStoredSmsBody()
+    {
+        const string pdu = "069148192050444006D0381C0E000062707171236482A0050003B602015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D566B69CED4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C";
+        string raw = "+CMGR: 0,,23\r\n+CUSD: 0,\"0053006F002000540042\",15\r\n" + pdu + "\r\nOK\r\n";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.StartsWith("(TB) So huu 01 License", result.Content);
+        Assert.Equal(new SmsConcatInfo(0xB6, 2, 1), result.Concatenation);
+        Assert.True(GsmModemService.IsCompleteStoredSmsResponse(raw));
+    }
+
+    [Theory]
+    [InlineData("+CTZE: \"+28\",0,\"2026/07/17,10:32:46\"\r\nOK\r\n")]
+    [InlineData("+CUSD: 0,\"0053006F002000540042\",15\r\nOK\r\n")]
+    [InlineData("+COPS: 0,0,\"VinaPhone VINAPHONE\",7\r\nOK\r\n")]
+    public void StoredSmsCompletion_RejectsUrcOrCommandNoiseWithoutCmgrHeader(string raw)
+    {
+        Assert.False(GsmModemService.IsCompleteStoredSmsResponse(raw));
+    }
+
     [Fact]
     public void DirectCmtEnvelope_DecodesBodyWithoutLeakingHeader()
     {

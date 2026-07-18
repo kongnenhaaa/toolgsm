@@ -2364,6 +2364,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var afterRadio = await VerifyIdentityAsync("radio-on-final", requireLiveCcid: true);
         if (!afterRadio.Valid)
         {
+            // EC20C firmware bug: một số phiên bản EC20CEHDLGR chỉ ghi IMEI vào RAM cache
+            // khi CFUN=0, NV flash chưa được commit cho đến khi có full reboot (CFUN=1,1).
+            // Thử reboot NV một lần trước khi từ chối hoàn toàn để tránh bỏ lỡ trường hợp này.
+            AddLog($"[{port.PortName}] [NV_COMMIT_RETRY] IMEI sau CFUN=1 không khớp — thử reboot NV (AT+CFUN=1,1) để force-commit...", "WARN");
+            string cfunReset = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1,1", 15000, silent: true);
+            if (!cfunReset.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                await Task.Delay(4000, token); // Chờ modem khởi động lại hoàn toàn
+                var afterReset = await VerifyIdentityAsync("radio-on-after-nv-commit", requireLiveCcid: true);
+                if (afterReset.Valid)
+                {
+                    AddLog($"[{port.PortName}] [NV_COMMIT_OK] Sau reboot NV IMEI đã khớp: {afterReset.Imei}", "SUCCESS");
+                    _modemService.StartPollingNetwork(port.PortName);
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        if (IsSimSessionCurrent(port.PortName, ccid, epoch))
+                        {
+                            port.IsRebooting = false;
+                            port.Imei = afterReset.Imei;
+                            MarkPortActiveAfterInit(port.PortName);
+                        }
+                    });
+                    return IsSimSessionCurrent(port.PortName, ccid, epoch);
+                }
+                AddLog($"[{port.PortName}] [NV_COMMIT_FAIL] Sau reboot NV vẫn không khớp. Giữ sóng tắt.", "ERROR");
+            }
             await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
             AddLog($"[{port.PortName}] Danh tính SIM thay đổi sau khi bật radio. Đã tắt sóng khẩn cấp.", "ERROR");
             return false;

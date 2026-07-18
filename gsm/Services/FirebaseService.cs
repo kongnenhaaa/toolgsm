@@ -207,7 +207,7 @@ namespace gsm.Services
                     await UpdateWebCommandStateAsync(portId, cmdId, "failed", error);
                     if (resultPersisted)
                         await _restClient.DeleteAsync($"{_databaseUrl}commands/{cmdId}.json");
-                    _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "failed", null, error);
+                    _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "failed", null, error, "Firebase");
                 }
             }
             catch { }
@@ -731,7 +731,7 @@ namespace gsm.Services
                         ? typeEl.GetString() ?? (recipient == "USSD" ? "balance" : "sms")
                         : (recipient == "USSD" ? "balance" : recipient == "SYSTEM" ? "system" : "sms");
                     if (!_scheduledCommands.TryAdd(cmdId, 0)) return;
-                    _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "queued");
+                    _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "queued", source: "Firebase");
 
                     Application.Current.Dispatcher.Invoke(() => 
                     {
@@ -758,7 +758,7 @@ namespace gsm.Services
                             port = _vm.Ports.FirstOrDefault(p => string.Equals(p.PortName, portId, StringComparison.OrdinalIgnoreCase));
 
                             await UpdateWebCommandStateAsync(portId, cmdId, "running");
-                            _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "running");
+                            _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, "running", source: "Firebase");
 
                             if (recipient == "USSD" && content == "BALANCE")
                             {
@@ -845,7 +845,7 @@ namespace gsm.Services
                                     bool resultPersisted = _otpCompletedCommands.ContainsKey(cmdId);
                                     if (!resultPersisted)
                                     {
-                                        _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError);
+                                        _vm.UpsertCommandQueue(cmdId, portId, type, recipient, content, finalStatus, finalResult, finalError, "Firebase");
                                         resultPersisted = await WriteCommandResultAsync(cmdId, portId, recipient, content, type, finalStatus, finalResult, finalError);
                                         await UpdateCommandStatusAsync(cmdId, finalStatus, finalError);
                                         await UpdateWebCommandStateAsync(portId, cmdId, finalStatus, finalError);
@@ -910,6 +910,49 @@ namespace gsm.Services
 
         public bool HasPendingOtpCommand(string portId) =>
             !string.IsNullOrWhiteSpace(portId) && _pendingOtpCommands.ContainsKey(portId);
+
+        public async Task MarkPendingCommandFailedAsync(
+            string portId,
+            string error,
+            string? carrierResponse = null)
+        {
+            if (string.IsNullOrWhiteSpace(portId)
+                || !_pendingOtpCommands.TryGetValue(portId, out var pending))
+            {
+                await SendErrorToWebAsync(portId, error);
+                return;
+            }
+
+            var resultSemaphore = _commandResultSemaphores.GetOrAdd(
+                pending.CommandId, _ => new SemaphoreSlim(1, 1));
+            await resultSemaphore.WaitAsync();
+            try
+            {
+                if (!_pendingOtpCommands.TryGetValue(portId, out var current)
+                    || !string.Equals(current.CommandId, pending.CommandId, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                // Carrier responses arrive after +CMGS and are the real business result.
+                // Prevent the ordinary "sent" completion from overwriting this failure.
+                _otpCompletedCommands[pending.CommandId] = 0;
+                _vm.UpsertCommandQueue(
+                    pending.CommandId, portId, "sms", pending.Recipient, pending.Content,
+                    "failed", carrierResponse, error, "Firebase");
+
+                await WriteCommandResultAsync(
+                    pending.CommandId, portId, pending.Recipient, pending.Content,
+                    "sms", "failed", carrierResponse, error);
+                await UpdateCommandStatusAsync(pending.CommandId, "failed", error);
+                await UpdateWebCommandStateAsync(portId, pending.CommandId, "failed", error);
+
+                _pendingOtpCommands.TryRemove(
+                    new KeyValuePair<string, PendingWebOtpCommand>(portId, pending));
+            }
+            finally
+            {
+                resultSemaphore.Release();
+            }
+        }
 
         private async Task<string> ExecuteSmsAsync(string portId, string recipient, string content)
         {
@@ -1072,7 +1115,7 @@ namespace gsm.Services
 
                 _vm.UpsertCommandQueue(
                     pending.CommandId, portId, "sms", pending.Recipient, pending.Content,
-                    "otp_received", "OTP received");
+                    "otp_received", "OTP received", source: "Firebase");
                 _pendingOtpCommands.TryRemove(
                     new KeyValuePair<string, PendingWebOtpCommand>(portId, pending));
                 }

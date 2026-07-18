@@ -1325,7 +1325,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(TopProblemPort));
     }
 
-    public void UpsertCommandQueue(string commandId, string portId, string type, string recipient, string content, string status, string? result = null, string? error = null)
+    public void UpsertCommandQueue(
+        string commandId,
+        string portId,
+        string type,
+        string recipient,
+        string content,
+        string status,
+        string? result = null,
+        string? error = null,
+        string? source = null)
     {
         if (string.IsNullOrWhiteSpace(commandId)) return;
 
@@ -1340,6 +1349,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             item.PortId = portId;
             item.Type = type;
+            if (!string.IsNullOrWhiteSpace(source))
+                item.Source = source.Trim();
+            else if (string.IsNullOrWhiteSpace(item.Source))
+                item.Source = "Tool";
             item.Recipient = recipient;
             item.Content = content;
             item.Status = status;
@@ -3572,13 +3585,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (cleanContentLower.Contains("sai dau so") || cleanContentLower.Contains("sai cú pháp") || cleanContentLower.Contains("sai cu phap"))
                 {
                     AddLog($"[{e.PortName}] LỖI ZALO: Hệ thống Firebase đẩy lệnh gửi sai đầu số dịch vụ (Ví dụ: Zalo yêu cầu gửi 7539 nhưng lại gửi 8500)! Vui lòng sửa mã nguồn trên Web/Firebase.", "ERROR");
-                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Chọn sai đầu số rồi kìa");
+                    _ = _firebaseService.MarkPendingCommandFailedAsync(
+                        e.PortName, "⚠️ Chọn sai đầu số rồi kìa", cleanContent);
                     isZaloError = true;
                 }
                 else if (cleanContentLower.Contains("khong thuc hien yeu cau") || cleanContentLower.Contains("không thực hiện yêu cầu"))
                 {
                     AddLog($"[{e.PortName}] LỖI ZALO: SĐT đang không có yêu cầu mã xác thực Zalo.", "ERROR");
-                    _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ SĐT đang không yêu cầu mã");
+                    _ = _firebaseService.MarkPendingCommandFailedAsync(
+                        e.PortName, "⚠️ SĐT đang không yêu cầu mã", cleanContent);
                     isZaloError = true;
                 }
                 else if (cleanContentLower.Contains("khong du tien") || cleanContentLower.Contains("không đủ tiền"))
@@ -3591,13 +3606,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         if (int.TryParse(balanceNum, out var balanceValue) && balanceValue > 500)
                         {
                             AddLog($"[{e.PortName}] ⚠️ Nhà mạng báo hết tiền nhưng số dư vẫn còn ({port.Balance}). Đây có thể là lỗi tạm thời.", "WARNING");
-                            // Không gửi lỗi "Hết tiền" lên web, chỉ ghi log
+                            _ = _firebaseService.MarkPendingCommandFailedAsync(
+                                e.PortName,
+                                $"Nhà mạng từ chối tiện ích vì không đủ tiền; TKC đang hiển thị {port.Balance}",
+                                cleanContent);
                             isZaloError = true;
                         }
                         else
                         {
                             AddLog($"[{e.PortName}] LỖI SIM: Tài khoản không đủ tiền để gửi SMS! Số dư: {port.Balance}", "ERROR");
-                            _ = gsm.Services.FirebaseService.SendErrorToWebAsync(e.PortName, "⚠️ Hết tiền");
+                            _ = _firebaseService.MarkPendingCommandFailedAsync(
+                                e.PortName, "⚠️ Hết tiền", cleanContent);
                             isZaloError = true;
                         }
                     }
@@ -3610,6 +3629,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             await Task.Delay(2000);
                             await CheckBalanceForPortAsync(e.PortName);
                         });
+                        _ = _firebaseService.MarkPendingCommandFailedAsync(
+                            e.PortName, "⚠️ Nhà mạng báo không đủ tiền", cleanContent);
                         isZaloError = true;
                     }
                 }

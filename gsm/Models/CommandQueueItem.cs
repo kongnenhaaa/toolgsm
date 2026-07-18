@@ -14,6 +14,9 @@ public partial class CommandQueueItem : ObservableObject
     private string _type = string.Empty;
 
     [ObservableProperty]
+    private string _source = string.Empty;
+
+    [ObservableProperty]
     private string _recipient = string.Empty;
 
     [ObservableProperty]

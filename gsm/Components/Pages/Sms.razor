@@ -189,6 +189,7 @@
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT SIM</MudTh>
                     <MudTh>Đầu số</MudTh>
+                    <MudTh>OTP</MudTh>
                     <MudTh>Nội dung</MudTh>
                     <MudTh>Trạng thái</MudTh>
                     <MudTh>Kết quả</MudTh>
@@ -206,6 +207,9 @@
                     <MudTd Style="font-weight:600;">@context.PortId</MudTd>
                     <MudTd Style="white-space:nowrap; font-weight:600;">@GetQueueSimPhone(context.PortId)</MudTd>
                     <MudTd>@context.Recipient</MudTd>
+                    <MudTd Style="font-family:monospace; font-weight:700; color:#D97706; white-space:nowrap;">
+                        @GetQueueOtp(context.PortId)
+                    </MudTd>
                     <MudTd Style="white-space:nowrap;"
                            title="@context.Content">@context.Content</MudTd>
                     <MudTd>
@@ -383,6 +387,13 @@
         var phone = Ports.FirstOrDefault(p =>
             string.Equals(p.PortName, portId, StringComparison.OrdinalIgnoreCase))?.PhoneNumber;
         return string.IsNullOrWhiteSpace(phone) ? "Trống" : phone;
+    }
+
+    string GetQueueOtp(string portId)
+    {
+        var otp = Ports.FirstOrDefault(p =>
+            string.Equals(p.PortName, portId, StringComparison.OrdinalIgnoreCase))?.Otp;
+        return string.IsNullOrWhiteSpace(otp) || otp == "N/A" ? "—" : otp;
     }
 
     static string GetQueueResult(CommandQueueItem item)

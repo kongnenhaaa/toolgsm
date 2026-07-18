@@ -2296,8 +2296,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string liveImei = NormalizeImei(rawImei);
             string rawStoredImei = await _modemService.SendCommandAsync(port.PortName, "AT+EGMR=0,7", 8000, silent: true, ct: token);
             string storedImei = NormalizeImei(rawStoredImei);
+            // Đọc IMEI slot 2 (slot 10) — thanh ghi nhà mạng cũng đọc khi thiết bị đăng ký BTS.
+            // Nếu slot 10 không khớp expectedImei thì modem có thể broadcast IMEI cũ lên mạng.
+            string rawStored2Imei = await _modemService.SendCommandAsync(port.PortName, "AT+EGMR=0,10", 8000, silent: true, ct: token);
+            string stored2Imei = NormalizeImei(rawStored2Imei);
             bool storedMatches = Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(
                 rawStoredImei, expectedImei);
+            bool stored2Matches = Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(
+                rawStored2Imei, expectedImei);
             bool sessionCurrent = IsSimSessionCurrent(port.PortName, ccid, epoch);
             bool ccidMatches = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase);
             bool ccidDeferred = false;
@@ -2311,11 +2317,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             bool valid = (ccidMatches || ccidDeferred)
                       && Services.ImeiManagementService.AreEquivalentImei(liveImei, expectedImei)
                       && storedMatches
+                      && stored2Matches
                       && sessionCurrent;
             if (!valid)
-                AddLog($"[{port.PortName}] [IMEI_VERIFY] phase={phase}; expected={expectedImei}; CGSN={liveImei}; EGMR={storedImei}; CCID={liveCcid}", "ERROR");
+                AddLog($"[{port.PortName}] [IMEI_VERIFY] phase={phase}; expected={expectedImei}; CGSN={liveImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; CCID={liveCcid}", "ERROR");
             else
-                AddLog($"[{port.PortName}] [IMEI_VERIFY_OK] phase={phase}; expected={expectedImei}; CGSN={liveImei}; EGMR={storedImei}; CCID={(ccidDeferred ? "deferred-radio-off" : liveCcid)}", "SUCCESS");
+                AddLog($"[{port.PortName}] [IMEI_VERIFY_OK] phase={phase}; expected={expectedImei}; CGSN={liveImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; CCID={(ccidDeferred ? "deferred-radio-off" : liveCcid)}", "SUCCESS");
             return (valid, liveImei);
         }
 

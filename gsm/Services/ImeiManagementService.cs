@@ -467,27 +467,51 @@ public class ImeiManagementService
                         }
                     }
 
+                    if (!isDisconnected && !isUnsupported)
+                    {
+                        // Ghi thêm vào IMEI slot 2 (slot 10) cùng giá trị để modem không
+                        // broadcast IMEI cũ lên mạng khi đăng ký với BTS.
+                        string write2Resp = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,10,\"{targetImei}\"", 10000, silent: true);
+                        if (IsConnectionError(write2Resp))
+                        {
+                            isDisconnected = true;
+                        }
+                        else if (write2Resp.Contains("ERROR"))
+                        {
+                            Log($"[{portName}] [IMEI2_UNSUPPORTED] Slot 10 không hỗ trợ hoặc ghi thất bại (bỏ qua): {write2Resp.Trim()}", "WARN");
+                        }
+                        else
+                        {
+                            Log($"[{portName}] [IMEI2_WRITTEN] Đã ghi IMEI slot 10 thành công: {targetImei}", "INFO");
+                        }
+                    }
+
                     string finalImeiResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
                     string finalImei = NormalizeImei(finalImeiResp);
                     string storedImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
                     string storedImei = NormalizeImei(storedImeiResp);
-                    bool storedRegisterMatches = StoredImeiMatchesOrUnavailable(
-                        storedImeiResp, targetImei);
+                    bool storedRegisterMatches = StoredImeiMatchesOrUnavailable(storedImeiResp, targetImei);
 
-                    if (AreEquivalentImei(finalImei, targetImei) && storedRegisterMatches)
+                    // Đọc và xác minh IMEI slot 2 (slot 10) — slot mà nhà mạng cũng đọc khi thiết bị đăng ký mạng.
+                    string stored2ImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,10", 10000, silent: true);
+                    string stored2Imei = NormalizeImei(stored2ImeiResp);
+                    bool stored2RegisterMatches = StoredImeiMatchesOrUnavailable(stored2ImeiResp, targetImei);
+
+                    Log($"[{portName}] [IMEI_WRITE_VERIFY] CGSN={finalImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; expected={targetImei}");
+
+                    if (AreEquivalentImei(finalImei, targetImei) && storedRegisterMatches && stored2RegisterMatches)
                     {
                         if (!await SessionIsValidAsync())
                             return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi sau khi ghi IMEI" };
 
                         success = true;
                         dispatcherInvoke(() => port.Imei = targetImei);
-                        Log($"[{portName}] Ghi đè IMEI thành công ở lần thử {attempt}: {targetImei}", "SUCCESS");
+                        Log($"[{portName}] Ghi đè IMEI thành công ở lần thử {attempt}: {targetImei} (slot7 ✓, slot10 ✓)", "SUCCESS");
 
                         // Giữ radio ở CFUN=0. Caller phải xác minh lại CCID/IMEI rồi mới
                         // được bật CFUN=1; tránh SIM mới lên mạng trong cửa sổ chưa xác thực.
-                        Log($"[{portName}] IMEI đã ghi và xác minh; tiếp tục giữ radio tắt chờ xác minh CCID cuối.", "INFO");
+                        Log($"[{portName}] IMEI đã ghi và xác minh cả 2 slot; tiếp tục giữ radio tắt chờ xác minh CCID cuối.", "INFO");
                         
-                        // Tr? v? Applied (không phải Matched) vì IMEI đã thành công được thay đổi
                         // Caller tiếp tục qua cổng xác minh và cấu hình offline trước khi bật radio.
                         return new ImeiProcessResult
                         {
@@ -510,7 +534,7 @@ public class ImeiManagementService
                         }
                         else
                         {
-                            Log($"[{portName}] Ghi đè IMEI thất bại ở lần thử {attempt} (CGSN={finalImei}; EGMR={storedImei}). Giữ sóng tắt.", "ERROR");
+                            Log($"[{portName}] Ghi đè IMEI thất bại ở lần thử {attempt} (CGSN={finalImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}). Giữ sóng tắt.", "ERROR");
                         }
                     }
                 }
@@ -536,6 +560,8 @@ public class ImeiManagementService
             string checkFinalImei = string.Empty;
             string checkStoredImei = string.Empty;
             string checkStoredResp = string.Empty;
+            string checkStored2Resp = string.Empty;
+            string checkStored2Imei = string.Empty;
             for (int i = 0; i < 3; i++)
             {
                 if (!await SessionIsValidAsync())
@@ -544,14 +570,17 @@ public class ImeiManagementService
                 checkFinalImei = NormalizeImei(checkFinalResp);
                 checkStoredResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
                 checkStoredImei = NormalizeImei(checkStoredResp);
+                // Xác minh IMEI slot 2 — thanh ghi nhà mạng cũng đọc khi thiết bị đăng ký BTS
+                checkStored2Resp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,10", 10000, silent: true);
+                checkStored2Imei = NormalizeImei(checkStored2Resp);
                 if (!string.IsNullOrEmpty(checkFinalImei)) break;
                 await Task.Delay(1000, ct);
             }
             
-            bool storedFinalMatches = StoredImeiMatchesOrUnavailable(
-                checkStoredResp, expectedImei);
-            bool matched = AreEquivalentImei(checkFinalImei, expectedImei) && storedFinalMatches;
-            Log($"[{portName}] [IMEI_FINAL] CGSN={checkFinalImei}, EGMR={checkStoredImei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
+            bool storedFinalMatches  = StoredImeiMatchesOrUnavailable(checkStoredResp, expectedImei);
+            bool stored2FinalMatches = StoredImeiMatchesOrUnavailable(checkStored2Resp, expectedImei);
+            bool matched = AreEquivalentImei(checkFinalImei, expectedImei) && storedFinalMatches && stored2FinalMatches;
+            Log($"[{portName}] [IMEI_FINAL] CGSN={checkFinalImei}, EGMR_slot7={checkStoredImei}, EGMR_slot10={checkStored2Imei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
 
             if (matched)
             {

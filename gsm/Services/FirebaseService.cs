@@ -1253,7 +1253,29 @@ namespace gsm.Services
                 client.BaseAddress = new Uri(GetDatabaseUrl());
                 if (await CanPatchStaticWebStateAsync(client, portId)) return;
 
-                // Xóa toàn bộ trạng thái web_states của cổng (bao gồm cả hiddenOtp) để cổng mới mở lên hiển thị đầy đủ
+                var currentJson = await client.GetStringAsync($"/web_states/machines/{_machineId}/ports/{portId}.json");
+                if (string.IsNullOrWhiteSpace(currentJson) || currentJson == "null") return;
+
+                // Reconnect chỉ được dọn lỗi tạm thời; không xóa OTP/nội dung SMS
+                // đang được web giữ lại.
+                using var currentDoc = JsonDocument.Parse(currentJson);
+                var root = currentDoc.RootElement;
+                var keepOtp = root.TryGetProperty("otp", out var otpValue)
+                    && otpValue.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(otpValue.GetString());
+                var keepSms = root.TryGetProperty("smsContent", out var smsValue)
+                    && smsValue.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(smsValue.GetString());
+                if (keepOtp || keepSms)
+                {
+                    using var clearError = new StringContent(
+                        JsonSerializer.Serialize(new { errorMsg = (string?)null }),
+                        Encoding.UTF8,
+                        "application/json");
+                    await client.PatchAsync($"/web_states/machines/{_machineId}/ports/{portId}.json", clearError);
+                    return;
+                }
+
                 await client.DeleteAsync($"/web_states/machines/{_machineId}/ports/{portId}.json");
             }
             catch { }

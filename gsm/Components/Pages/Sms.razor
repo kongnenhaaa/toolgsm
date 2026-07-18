@@ -187,7 +187,8 @@
                     <MudTh>Nguồn</MudTh>
                     <MudTh>Mã yêu cầu</MudTh>
                     <MudTh>Cổng</MudTh>
-                    <MudTh>SĐT</MudTh>
+                    <MudTh>SĐT SIM</MudTh>
+                    <MudTh>Đầu số</MudTh>
                     <MudTh>Nội dung</MudTh>
                     <MudTh>Trạng thái</MudTh>
                     <MudTh>Kết quả</MudTh>
@@ -203,6 +204,7 @@
                     <MudTd Style="font-family:monospace; font-size:11px; white-space:nowrap;"
                            title="@context.CommandId">@ShortCommandId(context.CommandId)</MudTd>
                     <MudTd Style="font-weight:600;">@context.PortId</MudTd>
+                    <MudTd Style="white-space:nowrap; font-weight:600;">@GetQueueSimPhone(context.PortId)</MudTd>
                     <MudTd>@context.Recipient</MudTd>
                     <MudTd Style="white-space:nowrap;"
                            title="@context.Content">@context.Content</MudTd>
@@ -375,6 +377,13 @@
         string.IsNullOrWhiteSpace(commandId) || commandId.Length <= 14
             ? commandId
             : commandId[..14] + "…";
+
+    string GetQueueSimPhone(string portId)
+    {
+        var phone = Ports.FirstOrDefault(p =>
+            string.Equals(p.PortName, portId, StringComparison.OrdinalIgnoreCase))?.PhoneNumber;
+        return string.IsNullOrWhiteSpace(phone) ? "Trống" : phone;
+    }
 
     static string GetQueueResult(CommandQueueItem item)
     {

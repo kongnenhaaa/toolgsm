@@ -3813,7 +3813,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (port != null)
                 {
                     port.Sender = senderPhone;
-                    port.Otp = extractedOtp;
+                    // SMS thường không có OTP không được phép ghi "N/A" đè mã
+                    // đã nhận trước đó trên COM.
+                    if (extractedOtp != "N/A")
+                        port.Otp = extractedOtp;
                     port.LastMessageContent = cleanContent;
                     port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
                 }

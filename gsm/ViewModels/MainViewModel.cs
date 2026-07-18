@@ -7073,20 +7073,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private static void ApplyBackupMetadata(SimPort port, SimBackupEntry entry)
     {
-        static void Apply(string value, Action<string> assign)
-        {
-            if (!string.IsNullOrWhiteSpace(value)) assign(value);
-        }
+        // Khi khởi động: chỉ khôi phục SĐT từ backup (CCID → SĐT).
+        // Các trường động (Balance, NetworkProvider, ExpiryDate, Lock, SimRegDate...)
+        // sẽ được fetch mới khi tool đang chạy (USSD/AT+COPS/SMS) và
+        // tự lưu ngược vào file backup qua UpdateImeiCacheEntry.
+        if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
+            port.PhoneNumber = entry.PhoneNumber;
 
-        Apply(entry.PhoneNumber, value => port.PhoneNumber = value);
-        Apply(entry.NetworkProvider, value => port.NetworkProvider = value);
-        Apply(entry.Balance, value => port.Balance = value);
-        Apply(entry.PromotionBalance, value => port.PromotionBalance = value);
-        Apply(entry.ExpiryDate, value => port.ExpiryDate = value);
-        Apply(entry.CreatedAt, value => port.CreatedAt = value);
-        Apply(entry.SimRegDate, value => port.SimRegDate = value);
-        Apply(entry.Lock1C, value => port.Lock1C = value);
-        Apply(entry.Lock2C, value => port.Lock2C = value);
+        // CreatedAt là metadata tĩnh, không thay đổi — giữ lại.
+        if (!string.IsNullOrWhiteSpace(entry.CreatedAt))
+            port.CreatedAt = entry.CreatedAt;
     }
 
     public void RemoveImeiCacheEntry(string ccid)

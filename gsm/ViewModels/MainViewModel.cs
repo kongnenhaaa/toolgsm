@@ -4419,7 +4419,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     AddLog($"[{session.Port}] Lấy được OTP từ cuộc gọi: {session.Otp}", "SUCCESS");
                 }
             }
-            
+
+            // Tự động cập nhật TKC sau khi kết thúc cuộc gọi đến
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2000);
+                await CheckBalanceForPortAsync(session.Port);
+            });
+
             await NotifyFromIncomingCallAsync(session, port);
         });
     }
@@ -4596,6 +4603,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
                 _ = _notifyService.SendTelegramAsync(callEndCfg.TelegramBotToken, callEndCfg.TelegramChatId, endText);
             }
+
+            // Tự động cập nhật TKC sau khi kết thúc cuộc gọi
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(2000);
+                await CheckBalanceForPortAsync(e.PortName);
+            });
         });
     }
     [RelayCommand]
@@ -5990,6 +6004,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             RecordSmsSuccess(portName);
             AddLog($"[{portName}] [WEB_SMS_SENT] Đã gửi đến {phoneNumber}; đang chờ OTP.", "SUCCESS");
+            // Tự động cập nhật TKC sau khi gửi SMS (delay 3s để modem ổn định)
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(3000);
+                await CheckBalanceForPortAsync(portName);
+            });
         }
         else
         {
@@ -6016,6 +6036,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             RecordSmsSuccess(portName);
             AddLog($"[{portName}] Gửi tin nhắn đến {phoneNumber} thành công.", "SUCCESS");
+            // Tự động cập nhật TKC sau khi gửi SMS
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(3000);
+                await CheckBalanceForPortAsync(portName);
+            });
         }
         else
         {

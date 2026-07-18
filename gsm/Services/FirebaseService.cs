@@ -263,6 +263,11 @@ namespace gsm.Services
                     network = p.NetworkProvider,
                     balance = p.Balance,
                     signal = p.SignalStrength,
+                    // Keep the exact carrier message in the periodic snapshot. SyncPortsAsync
+                    // replaces the full ports node, so omitting these fields would erase lastSms.
+                    smsContent = p.LastMessageContent,
+                    smsSender = p.Sender,
+                    smsReceivedAt = p.LastReceivedTime,
                     timeoutCount = p.TimeoutCount,
                     smsErrorCount = p.SmsErrorCount,
                     reconnectCount = p.ReconnectCount,
@@ -535,7 +540,7 @@ namespace gsm.Services
             }
         }
 
-        private async Task<bool> WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null)
+        private async Task<bool> WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null, string? smsContent = null)
         {
             if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return false;
             try
@@ -559,6 +564,7 @@ namespace gsm.Services
                     type,
                     status,
                     result,
+                    smsContent,
                     error,
                     handledBy = _machineId,
                     updatedAt = new Dictionary<string, string> { [".sv"] = "timestamp" }
@@ -596,7 +602,7 @@ namespace gsm.Services
             }
         }
 
-        private async Task UpdateWebCommandStateAsync(string portId, string cmdId, string status, string? error = null)
+        private async Task UpdateWebCommandStateAsync(string portId, string cmdId, string status, string? error = null, string? smsContent = null)
         {
             if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(portId) || portId == "ALL") return;
             try
@@ -630,6 +636,12 @@ namespace gsm.Services
                 else if (status is "sent" or "done" or "success")
                 {
                     payload["errorMsg"] = null;
+                }
+
+                if (!string.IsNullOrWhiteSpace(smsContent))
+                {
+                    payload["smsContent"] = smsContent;
+                    payload["smsContentAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" };
                 }
 
                 var json = JsonSerializer.Serialize(payload);
@@ -941,9 +953,9 @@ namespace gsm.Services
 
                 await WriteCommandResultAsync(
                     pending.CommandId, portId, pending.Recipient, pending.Content,
-                    "sms", "failed", carrierResponse, error);
+                    "sms", "failed", carrierResponse, error, carrierResponse);
                 await UpdateCommandStatusAsync(pending.CommandId, "failed", error);
-                await UpdateWebCommandStateAsync(portId, pending.CommandId, "failed", error);
+                await UpdateWebCommandStateAsync(portId, pending.CommandId, "failed", error, carrierResponse);
 
                 _pendingOtpCommands.TryRemove(
                     new KeyValuePair<string, PendingWebOtpCommand>(portId, pending));
@@ -1103,6 +1115,8 @@ namespace gsm.Services
                         ["commandStatus"] = "otp_received",
                         ["smsSent"] = false,
                         ["otp"] = otp,
+                        ["smsContent"] = smsContent,
+                        ["smsSender"] = sender,
                         ["errorMsg"] = null,
                         ["otpReceivedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" },
                         ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }

@@ -61,7 +61,7 @@ public static class MyVnptService
         return new MyVnptOtpSession(normalizedPhone, accountExists, deviceInfo, userAgent);
     }
 
-    public static async Task SendOtpAsync(
+    public static async Task<MyVnptOtpSession> SendOtpAsync(
         MyVnptOtpSession session,
         CancellationToken cancellationToken = default,
         Action<string, string>? addLogCallback = null)
@@ -78,19 +78,42 @@ public static class MyVnptService
             cancellationToken,
             addLogCallback);
 
-        if (GetResponseValue(otpContent, "error_code", "errorCode") != "0")
+        string? otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
+        string otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
+
+        // Nếu otp_send với authen_register bị VNPT từ chối "Chưa có tài khoản",
+        // thực ra số đã có TK nhưng authen_check_account báo sai → thử lại với authen_miss_password.
+        if (otpCode != "0" && !session.AccountExists
+            && otpMessage.Contains("tài khoản", StringComparison.OrdinalIgnoreCase))
         {
-            string message = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
-            // VNPT trả thông báo này khi OTP của chính thuê bao vẫn đang được xử lý.
-            // Tiếp tục chờ SMS thay vì đánh dấu lỗi hoặc gửi thêm một yêu cầu OTP.
-            if (IsOtpAlreadyPendingMessage(message))
-            {
-                addLogCallback?.Invoke("[VNPT_HTTP] otp_send báo OTP đang được xử lý; tiếp tục chờ SMS.", "INFO");
-                return;
-            }
-            throw new InvalidOperationException(message);
+            addLogCallback?.Invoke(
+                $"[VNPT_HTTP] otp_send register báo chưa có TK, thử lại với miss_password...", "INFO");
+            otpContent = await PostAsync(
+                "otp_send",
+                new { msisdn = session.Phone, otp_service = "authen_miss_password" },
+                session.DeviceInfo,
+                session.UserAgent,
+                cancellationToken,
+                addLogCallback);
+            otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
+            otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
+            // Cập nhật session để SetPasswordAsync dùng đúng API
+            session = session with { AccountExists = true };
         }
 
+        if (otpCode != "0")
+        {
+            // VNPT trả thông báo này khi OTP của chính thuê bao vẫn đang được xử lý.
+            // Tiếp tục chờ SMS thay vì đánh dấu lỗi hoặc gửi thêm một yêu cầu OTP.
+            if (IsOtpAlreadyPendingMessage(otpMessage))
+            {
+                addLogCallback?.Invoke("[VNPT_HTTP] otp_send báo OTP đang được xử lý; tiếp tục chờ SMS.", "INFO");
+                return session;
+            }
+            throw new InvalidOperationException(otpMessage);
+        }
+
+        return session;
     }
 
     public static async Task<MyVnptPasswordResult> SetPasswordAsync(

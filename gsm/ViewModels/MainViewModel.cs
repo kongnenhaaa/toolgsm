@@ -531,7 +531,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                         // Đăng ký pending trước otp_send để không bỏ lỡ SMS về cực nhanh.
                         // Giữ khóa workflow đến khi otp_send có phản hồi, sau đó COM kế tiếp mới chạy check.
-                        await MyVnptService.SendOtpAsync(
+                        // SendOtpAsync có thể trả về session mới nếu fallback register→miss_password.
+                        apiSession = await MyVnptService.SendOtpAsync(
                             apiSession,
                             operationToken,
                             (message, type) => AddLog($"[{port.PortName}] {message}", type));

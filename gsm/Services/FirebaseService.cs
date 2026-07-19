@@ -29,6 +29,7 @@ namespace gsm.Services
         private readonly ConcurrentDictionary<string, byte> _scheduledCommands =
             new(StringComparer.OrdinalIgnoreCase);
         private const long StaleRunningCommandMs = 10 * 60 * 1000;
+        private static readonly TimeSpan PendingOtpWaitTimeout = TimeSpan.FromMinutes(5);
         private string _databaseUrl 
         {
             get 
@@ -823,6 +824,7 @@ namespace gsm.Services
                                     if (finalResult.Contains("Timeout"))
                                     {
                                         finalStatus = "maybe_sent";
+                                        RefreshPendingOtpWaitStart(portId, ref pendingOtp);
                                     }
                                     else
                                     {
@@ -835,6 +837,7 @@ namespace gsm.Services
                                 else
                                 {
                                     finalStatus = "sent";
+                                    RefreshPendingOtpWaitStart(portId, ref pendingOtp);
                                 }
                             }
                         }
@@ -919,6 +922,15 @@ namespace gsm.Services
             new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, byte> _otpCompletedCommands =
             new(StringComparer.OrdinalIgnoreCase);
+
+        private void RefreshPendingOtpWaitStart(string portId, ref PendingWebOtpCommand pending)
+        {
+            var refreshed = pending with { CreatedAtUtc = DateTime.UtcNow };
+            // OTP có thể về ngay khi ExecuteSmsAsync chưa trả kết quả. Chỉ cập nhật nếu
+            // pending cũ vẫn còn; tuyệt đối không tạo lại request đã nhận OTP xong.
+            if (_pendingOtpCommands.TryUpdate(portId, refreshed, pending))
+                pending = refreshed;
+        }
 
         public bool HasPendingOtpCommand(string portId) =>
             !string.IsNullOrWhiteSpace(portId) && _pendingOtpCommands.ContainsKey(portId);
@@ -1032,7 +1044,7 @@ namespace gsm.Services
                 || otp == "N/A") return;
 
             if (!_pendingOtpCommands.TryGetValue(portId, out var pending)) return;
-            if (DateTime.UtcNow - pending.CreatedAtUtc > TimeSpan.FromMinutes(5))
+            if (DateTime.UtcNow - pending.CreatedAtUtc > PendingOtpWaitTimeout)
             {
                 _pendingOtpCommands.TryRemove(
                     new KeyValuePair<string, PendingWebOtpCommand>(portId, pending));
@@ -1071,7 +1083,7 @@ namespace gsm.Services
                 // Firebase outage must not lose the correlated OTP. Keep the
                 // command semaphore while retrying so the ordinary "sent"
                 // result cannot overwrite otp_received.
-                while (DateTime.UtcNow - pending.CreatedAtUtc <= TimeSpan.FromMinutes(5))
+                while (DateTime.UtcNow - pending.CreatedAtUtc <= PendingOtpWaitTimeout)
                 {
                     if (!_pendingOtpCommands.TryGetValue(portId, out var current)
                         || !string.Equals(current.CommandId, pending.CommandId, StringComparison.OrdinalIgnoreCase))

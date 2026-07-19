@@ -1576,13 +1576,21 @@ public class GsmModemService : IGsmModemService
                         }
                         else
                         {
+                            // SIM phát hiện thành công qua active probe – reset bộ đếm để
+                            // active probe lần sau không bị cộng dồn từ chu kỳ cũ.
                             failedActiveProbeCycles = 0;
+                            hardRecoveryAttempts = 0;
                         }
                     }
                 }
 
                 if (hasSim)
                 {
+                    if (!IsCurrentLoop()) break;
+                    // Cho SIM stack của EC20 ổn định sau hot-plug (đặc biệt sau rút/cắm nhanh)
+                    // trước khi HandleSimInsertedAsync đọc CCID. Nếu bỏ qua delay này, EC20 vẫn
+                    // đang khởi động SIM → CCID sẽ trả ERROR → lại quay về WAITING_FOR_SIM.
+                    try { await Task.Delay(3000, token); } catch { break; }
                     if (!IsCurrentLoop()) break;
                     _lastSimState[portName] = true;
                     await HandleSimInsertedAsync(portName);
@@ -1798,18 +1806,39 @@ public class GsmModemService : IGsmModemService
 
                 attempts++;
 
-                // Chỉ dò thụ động. Trước đây cứ 30 giây ToolGSM lại tự
-                // CFUN=4 -> CFUN=1 -> COPS=0, khiến các EC20 bắt sóng chậm bị reset
-                // liên tục. Việc reset/cấu hình mạng chỉ được thực hiện bằng
-                // nút Fix EC20 do người dùng chủ động.
-                if (attempts > 15)
+                // Sau ~2.5 phút không có COPS (30 lần * 5 giây): force AT+COPS=0 để EC20
+                // tự chọn lại nhà mạng. Thường xảy ra sau khi thay SIM + ghi IMEI mới,
+                // EC20 cần kích hoạt lại auto-selection thay vì chờ thụ động vô hạn.
+                if (attempts == 30)
+                {
+                    waitingNoticeCount++;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[NETWORK_WAITING] Chưa có COPS sau ~2.5 phút (lần {waitingNoticeCount}); gửi AT+COPS=0 để kích hoạt lại auto-select nhà mạng."
+                    });
+                    await SendCommandAsync(portName, "AT+COPS=0", 8000, silent: true, ct: token);
+                }
+                // Sau ~5 phút (60 lần): mini reboot EC20 để giải phóng radio stack bị kẹt
+                else if (attempts >= 60)
                 {
                     attempts = 0;
                     waitingNoticeCount++;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = $"[NETWORK_WAITING] Modem vẫn phản hồi nhưng chưa có COPS (lần chờ {waitingNoticeCount}); tiếp tục dò, không reset RF."
+                        Data = $"[NETWORK_WAITING] Vẫn chưa có COPS sau ~5 phút (lần {waitingNoticeCount}); mini reboot EC20 (CFUN=1,1)."
+                    });
+                    await SendCommandAsync(portName, "AT+CFUN=1,1", 12000, silent: true, ct: token);
+                    try { await Task.Delay(8000, token); } catch { break; }
+                }
+                else if (attempts % 15 == 0)
+                {
+                    waitingNoticeCount++;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[NETWORK_WAITING] Modem vẫn phản hồi nhưng chưa có COPS (lần chờ {waitingNoticeCount}); tiếp tục dò."
                     });
                 }
             }

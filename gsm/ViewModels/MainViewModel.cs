@@ -2302,8 +2302,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string stored2Imei = NormalizeImei(rawStored2Imei);
             bool storedMatches = Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(
                 rawStoredImei, expectedImei);
-            bool stored2Matches = Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(
-                rawStored2Imei, expectedImei);
+            // Bỏ qua verify slot 10 nếu giá trị không phải IMEI 15 chữ số hợp lệ.
+            // EC20CEFASGR lưu IMEI rác 16 chữ số trong slot 10 và không cho phép ghi đè.
+            bool stored2Matches = stored2Imei.Length != 15
+                || Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(rawStored2Imei, expectedImei);
             bool sessionCurrent = IsSimSessionCurrent(port.PortName, ccid, epoch);
             bool ccidMatches = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase);
             bool ccidDeferred = false;

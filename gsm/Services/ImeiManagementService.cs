@@ -448,6 +448,7 @@ public class ImeiManagementService
                     Log($"[{portName}] Thử ghi IMEI lần {attempt}/3...");
 
                     bool isDisconnected = false;
+                    bool slot2Written = false;
                     string writeResp = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000);
                     if (IsConnectionError(writeResp))
                     {
@@ -471,31 +472,47 @@ public class ImeiManagementService
                     {
                         // Ghi thêm vào IMEI slot 2 (slot 10) cùng giá trị để modem không
                         // broadcast IMEI cũ lên mạng khi đăng ký với BTS.
-                        string write2Resp = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,10,\"{targetImei}\"", 10000, silent: true);
+                        // EC20F/EC20CEHCLGR cần delay đủ lớn sau EGMR=1,7 trước khi ghi
+                        // slot 10 và verify — AT+CGSN trả về rỗng nếu gọi quá sớm.
+                        // Dùng CancellationToken.None để delay không bị cắt khi session invalidate.
+                        await Task.Delay(1500, CancellationToken.None);
+                        string write2Resp = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,10,\"{targetImei}\"", 10000);
                         if (IsConnectionError(write2Resp))
                         {
                             isDisconnected = true;
                         }
                         else if (write2Resp.Contains("ERROR"))
                         {
-                            Log($"[{portName}] [IMEI2_UNSUPPORTED] Slot 10 không hỗ trợ hoặc ghi thất bại (bỏ qua): {write2Resp.Trim()}", "WARN");
+                            Log($"[{portName}] [IMEI2_UNSUPPORTED] Slot 10 không hỗ trợ hoặc ghi thất bại (bỏ qua verify slot10): {write2Resp.Trim()}", "WARN");
                         }
                         else
                         {
+                            slot2Written = true;
                             Log($"[{portName}] [IMEI2_WRITTEN] Đã ghi IMEI slot 10 thành công: {targetImei}", "INFO");
                         }
+                        // Delay sau slot 10 để NV được flush trước khi đọc lại verify
+                        if (!isDisconnected) await Task.Delay(1000, CancellationToken.None);
+                    }
+                    else if (!isDisconnected)
+                    {
+                        // EGMR thất bại nhưng chưa disconnect — vẫn cần delay để modem ổn định
+                        await Task.Delay(1000, CancellationToken.None);
                     }
 
-                    string finalImeiResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
+                    string finalImeiResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000);
                     string finalImei = NormalizeImei(finalImeiResp);
-                    string storedImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
+                    string storedImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000);
                     string storedImei = NormalizeImei(storedImeiResp);
                     bool storedRegisterMatches = StoredImeiMatchesOrUnavailable(storedImeiResp, targetImei);
 
                     // Đọc và xác minh IMEI slot 2 (slot 10) — slot mà nhà mạng cũng đọc khi thiết bị đăng ký mạng.
-                    string stored2ImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,10", 10000, silent: true);
+                    string stored2ImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,10", 10000);
                     string stored2Imei = NormalizeImei(stored2ImeiResp);
-                    bool stored2RegisterMatches = StoredImeiMatchesOrUnavailable(stored2ImeiResp, targetImei);
+                    // Nếu slot 10 không ghi được (ERROR), bỏ qua verify slot 10 —
+                    // một số firmware (EC20CEFASGR) lưu IMEI sai 16 chữ số trong slot 10
+                    // không được sử dụng cho đăng ký BTS thực tế.
+                    bool stored2RegisterMatches = !slot2Written
+                        || StoredImeiMatchesOrUnavailable(stored2ImeiResp, targetImei);
 
                     Log($"[{portName}] [IMEI_WRITE_VERIFY] CGSN={finalImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; expected={targetImei}");
 
@@ -578,7 +595,11 @@ public class ImeiManagementService
             }
             
             bool storedFinalMatches  = StoredImeiMatchesOrUnavailable(checkStoredResp, expectedImei);
-            bool stored2FinalMatches = StoredImeiMatchesOrUnavailable(checkStored2Resp, expectedImei);
+            // Bỏ qua verify slot 10 nếu giá trị đọc về không phải IMEI 15 chữ số hợp lệ
+            // (EC20CEFASGR lưu IMEI rác 16 chữ số trong slot 10 và không cho phép ghi đè)
+            bool slot10IsValidImei = checkStored2Imei.Length == 15;
+            bool stored2FinalMatches = !slot10IsValidImei
+                || StoredImeiMatchesOrUnavailable(checkStored2Resp, expectedImei);
             bool matched = AreEquivalentImei(checkFinalImei, expectedImei) && storedFinalMatches && stored2FinalMatches;
             Log($"[{portName}] [IMEI_FINAL] CGSN={checkFinalImei}, EGMR_slot7={checkStoredImei}, EGMR_slot10={checkStored2Imei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
 

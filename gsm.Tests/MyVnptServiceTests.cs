@@ -50,6 +50,22 @@ public sealed class MyVnptServiceTests
         Assert.True(MyVnptService.IsOtpAlreadyPendingMessage(content));
     }
 
+    [Theory]
+    [InlineData("reg_nok", "Đăng ký không thành công")]
+    [InlineData("1", "Thuê bao đã có tài khoản trên hệ thống")]
+    [InlineData("1", "Tai khoan da ton tai")]
+    [InlineData("1", "Account already exists")]
+    public void IsAccountAlreadyExistsResponse_RecognizesRegisterConflicts(string code, string message)
+    {
+        Assert.True(MyVnptService.IsAccountAlreadyExistsResponse(code, message));
+    }
+
+    [Fact]
+    public void IsAccountAlreadyExistsResponse_RejectsMissingAccountMessage()
+    {
+        Assert.False(MyVnptService.IsAccountAlreadyExistsResponse("1", "Chưa có tài khoản VNPortal"));
+    }
+
     [Fact]
     public void GetFriendlyExceptionMessage_ExplainsServiceUnavailable()
     {

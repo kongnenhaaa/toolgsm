@@ -44,17 +44,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
     private sealed class PendingMyVnptPasswordOperation
     {
-        private int _otpClaimed;
+        private readonly object _otpClaimLock = new();
+        private readonly HashSet<string> _usedOtps = new(StringComparer.Ordinal);
+        private bool _otpClaimed;
         public required string PortName { get; init; }
         public required string Ccid { get; init; }
         public required long Epoch { get; init; }
         public required string LocalPhone { get; init; }
         public required string Password { get; init; }
-        public required MyVnptOtpSession ApiSession { get; init; }
+        public required MyVnptOtpSession ApiSession { get; set; }
         public required CancellationToken CancellationToken { get; init; }
         public TaskCompletionSource<MyVnptPasswordResult> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public bool TryClaimOtp() => Interlocked.CompareExchange(ref _otpClaimed, 1, 0) == 0;
+
+        public bool TryClaimOtp(string otp)
+        {
+            lock (_otpClaimLock)
+            {
+                if (_otpClaimed || _usedOtps.Contains(otp)) return false;
+                _otpClaimed = true;
+                _usedOtps.Add(otp);
+                return true;
+            }
+        }
+
+        public void UpdateApiSession(MyVnptOtpSession session)
+        {
+            lock (_otpClaimLock)
+                ApiSession = session;
+        }
+
+        public void PrepareForNextOtp(MyVnptOtpSession session)
+        {
+            lock (_otpClaimLock)
+            {
+                ApiSession = session;
+                _otpClaimed = false;
+            }
+        }
     }
 
     private readonly ConcurrentDictionary<string, PendingMyVnptPasswordOperation> _pendingMyVnptPasswordPorts =
@@ -142,6 +169,59 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 pending.Password,
                 (message, type) => AddLog(message, type),
                 pending.CancellationToken);
+
+            if (result.NeedsRetryWithMissPassword)
+            {
+                if (!IsSimSessionCurrent(pending.PortName, pending.Ccid, pending.Epoch))
+                {
+                    pending.Completion.TrySetResult(new MyVnptPasswordResult(false, "SIM đã thay đổi trước khi gửi lại OTP"));
+                    return;
+                }
+
+                MyVnptOtpSession recoverySession = pending.ApiSession with { AccountExists = true };
+                await _vnptOtpIssueWorkflowGate.WaitAsync(pending.CancellationToken);
+                try
+                {
+                    // Mở nhận OTP trước khi gọi API để không bỏ lỡ SMS về rất nhanh.
+                    // OTP cũ nằm trong _usedOtps nên SMS lặp lại không thể bị dùng lần hai.
+                    pending.PrepareForNextOtp(recoverySession);
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        var port = Ports.FirstOrDefault(p =>
+                            string.Equals(p.PortName, pending.PortName, StringComparison.OrdinalIgnoreCase));
+                        if (port != null)
+                        {
+                            port.VnptStatus = "Yêu cầu lại OTP...";
+                            port.LastMessageContent = "Tài khoản đã tồn tại; đang gửi OTP quên mật khẩu mới...";
+                        }
+                        AddLog($"[{pending.PortName}] [VNPT_FLOW] Gửi OTP authen_miss_password mới...", "INFO");
+                    });
+
+                    recoverySession = await MyVnptService.SendOtpAsync(
+                        recoverySession,
+                        pending.CancellationToken,
+                        (message, type) => AddLog($"[{pending.PortName}] {message}", type));
+                    pending.UpdateApiSession(recoverySession);
+
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        var port = Ports.FirstOrDefault(p =>
+                            string.Equals(p.PortName, pending.PortName, StringComparison.OrdinalIgnoreCase));
+                        if (port != null)
+                        {
+                            port.VnptStatus = "Đợi tin nhắn...";
+                            port.LastMessageContent = "Đang đợi OTP quên mật khẩu mới...";
+                        }
+                        AddLog($"[{pending.PortName}] [VNPT_FLOW] Đã gửi OTP quên mật khẩu; tiếp tục chờ SMS.", "INFO");
+                    });
+                }
+                finally
+                {
+                    _vnptOtpIssueWorkflowGate.Release();
+                }
+                return;
+            }
+
             pending.Completion.TrySetResult(result);
         }
         catch (OperationCanceledException)
@@ -536,6 +616,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             apiSession,
                             operationToken,
                             (message, type) => AddLog($"[{port.PortName}] {message}", type));
+                        pending.UpdateApiSession(apiSession);
                         if (!IsSimSessionCurrent(port.PortName, vnptCcid, vnptEpoch)
                             || port.Status != SimStatus.Active)
                             throw new OperationCanceledException(operationToken);
@@ -3891,7 +3972,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 MyVnptService.NormalizePhone(receiverPhone),
                                 pending.ApiSession.Phone,
                                 StringComparison.Ordinal)
-                            && pending.TryClaimOtp())
+                            && pending.TryClaimOtp(extractedOtp))
                         {
                             AddLog($"[{e.PortName}] Phát hiện OTP MyVNPT, tiến hành đổi mật khẩu...", "INFO");
                             _ = CompletePendingMyVnptPasswordAsync(pending, extractedOtp);

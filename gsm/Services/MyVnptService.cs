@@ -14,7 +14,7 @@ public sealed record MyVnptOtpSession(
     string DeviceInfo,
     string UserAgent);
 
-public sealed record MyVnptPasswordResult(bool Success, string Message);
+public sealed record MyVnptPasswordResult(bool Success, string Message, bool NeedsRetryWithMissPassword = false);
 
 public static class MyVnptService
 {
@@ -76,13 +76,10 @@ public static class MyVnptService
         CancellationToken cancellationToken = default,
         Action<string, string>? addLogCallback = null)
     {
+        string otpService = session.AccountExists ? "authen_miss_password" : "authen_register";
         string otpContent = await PostAsync(
             "otp_send",
-            new
-            {
-                msisdn = session.Phone,
-                otp_service = session.AccountExists ? "authen_miss_password" : "authen_register"
-            },
+            new { msisdn = session.Phone, otp_service = otpService },
             session.DeviceInfo,
             session.UserAgent,
             cancellationToken,
@@ -91,14 +88,16 @@ public static class MyVnptService
         string? otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
         string otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
 
-        // VNPT API đôi khi trả sai trạng thái tài khoản ở bước check.
-        // Nếu otp_send thất bại với lỗi liên quan "tài khoản", thử service ngược lại.
-        if (otpCode != "0" && otpMessage.Contains("tài khoản", StringComparison.OrdinalIgnoreCase))
+        // VNPT đôi khi trả trạng thái tài khoản không nhất quán ở authen_check_account.
+        // Nếu loại OTP hiện tại không khớp, thử đúng một lần với loại còn lại.
+        if (otpCode != "0" && IsAccountStateConflictMessage(otpMessage))
         {
-            bool fallbackExists = !session.AccountExists; // thử service ngược lại
-            string fallbackService = fallbackExists ? "authen_miss_password" : "authen_register";
+            bool fallbackAccountExists = !session.AccountExists;
+            string fallbackService = fallbackAccountExists ? "authen_miss_password" : "authen_register";
             addLogCallback?.Invoke(
-                $"[VNPT_HTTP] otp_send thất bại ({otpMessage.Trim()}), thử lại với {fallbackService}...", "INFO");
+                $"[VNPT_HTTP] otp_send {otpService} thất bại ({otpMessage.Trim()}); thử lại với {fallbackService}.",
+                "INFO");
+
             otpContent = await PostAsync(
                 "otp_send",
                 new { msisdn = session.Phone, otp_service = fallbackService },
@@ -108,14 +107,12 @@ public static class MyVnptService
                 addLogCallback);
             otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
             otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
-            // Cập nhật AccountExists để SetPasswordAsync dùng đúng service
-            session = session with { AccountExists = fallbackExists };
+            if (otpCode == "0" || IsOtpAlreadyPendingMessage(otpMessage))
+                session = session with { AccountExists = fallbackAccountExists };
         }
 
         if (otpCode != "0")
         {
-            // VNPT trả thông báo này khi OTP của chính thuê bao vẫn đang được xử lý.
-            // Tiếp tục chờ SMS thay vì đánh dấu lỗi hoặc gửi thêm một yêu cầu OTP.
             if (IsOtpAlreadyPendingMessage(otpMessage))
             {
                 addLogCallback?.Invoke("[VNPT_HTTP] otp_send báo OTP đang được xử lý; tiếp tục chờ SMS.", "INFO");
@@ -144,6 +141,7 @@ public static class MyVnptService
                 return new MyVnptPasswordResult(false, "Mật khẩu không hợp lệ");
 
             string hashedPassword = CreateMd5(password).ToUpperInvariant();
+
             string targetService = session.AccountExists ? "authen_miss_password" : "authen_register";
             object payload = session.AccountExists
                 ? new { msisdn = session.Phone, otp, password = hashedPassword }
@@ -158,7 +156,10 @@ public static class MyVnptService
                 addLogCallback);
 
             string mode = session.AccountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
-            if (GetResponseValue(responseContent, "error_code", "errorCode") == "0")
+            string respCode = GetResponseValue(responseContent, "error_code", "errorCode") ?? "null";
+            string respMsg  = GetResponseMessage(responseContent, "Lỗi đặt pass");
+
+            if (respCode == "0")
             {
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {session.Phone} thành công ({mode}).", "SUCCESS");
                 AppendPasswordBackup(session.Phone, password);
@@ -166,9 +167,23 @@ public static class MyVnptService
                     session.AccountExists ? "Đặt lại pass thành công" : "Đăng ký thành công");
             }
 
-            string error = GetResponseMessage(responseContent, "Lỗi đặt pass");
-            addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {session.Phone} thất bại ({mode}): {error}", "ERROR");
-            return new MyVnptPasswordResult(false, error);
+            // Log chi tiết error_code để debug
+            addLogCallback?.Invoke(
+                $"[{portName}] [VNPT_DEBUG] {targetService} error_code={respCode} msg={respMsg}", "WARN");
+
+            // Bước check có thể báo chưa có TK nhưng register mới phát hiện thuê bao đã có TK.
+            // Caller phải phát một OTP authen_miss_password mới vì OTP register vừa dùng không
+            // được tái sử dụng cho luồng quên mật khẩu.
+            if (!session.AccountExists && IsAccountAlreadyExistsResponse(respCode, respMsg))
+            {
+                addLogCallback?.Invoke(
+                    $"[{portName}] [VNPT_FLOW] {respCode} ({respMsg}); chuyển sang quên mật khẩu và gửi OTP mới.",
+                    "INFO");
+                return new MyVnptPasswordResult(false, respMsg, NeedsRetryWithMissPassword: true);
+            }
+
+            addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {session.Phone} thất bại ({mode}): {respMsg}", "ERROR");
+            return new MyVnptPasswordResult(false, respMsg);
         }
         catch (OperationCanceledException)
         {
@@ -191,6 +206,23 @@ public static class MyVnptService
         !string.IsNullOrWhiteSpace(message)
         && (message.Contains("đang gửi OTP", StringComparison.OrdinalIgnoreCase)
             || message.Contains("dang gui OTP", StringComparison.OrdinalIgnoreCase));
+
+    internal static bool IsAccountAlreadyExistsResponse(string? errorCode, string? message) =>
+        string.Equals(errorCode, "reg_nok", StringComparison.OrdinalIgnoreCase)
+        || (!string.IsNullOrWhiteSpace(message)
+            && (message.Contains("đã có tài khoản", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("da co tai khoan", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("đã tồn tại", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("da ton tai", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("đăng ký không thành công", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("dang ky khong thanh cong", StringComparison.OrdinalIgnoreCase)));
+
+    private static bool IsAccountStateConflictMessage(string? message) =>
+        !string.IsNullOrWhiteSpace(message)
+        && (message.Contains("tài khoản", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("tai khoan", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("account", StringComparison.OrdinalIgnoreCase));
 
     public static string NormalizePhone(string? phone)
     {

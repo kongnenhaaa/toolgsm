@@ -51,12 +51,22 @@ public static class MyVnptService
             addLogCallback);
 
         string? checkCode = GetResponseValue(checkContent, "error_code", "errorCode");
+        string checkMessage = GetResponseMessage(checkContent, "");
+        // error_code=3: đã có tài khoản → quên mật khẩu
+        // error_code=0: chưa có tài khoản → đăng ký
+        // error_code=1: "Chưa có tài khoản VNPortal" → đăng ký (một số version API VNPT trả 1 thay vì 0)
+        // Các code khác: log ra rồi thử đăng ký (an toàn hơn throw)
         bool accountExists = checkCode switch
         {
             "3" => true,
-            "0" => false,
-            _ => throw new InvalidOperationException(GetResponseMessage(checkContent, "Không xác định được trạng thái tài khoản MyVNPT"))
+            "0" or "1" => false,
+            _ => string.IsNullOrWhiteSpace(checkMessage)
+                 || checkMessage.Contains("tài khoản", StringComparison.OrdinalIgnoreCase)
+                    ? false  // có vẻ là chưa có TK
+                    : throw new InvalidOperationException(GetResponseMessage(checkContent, "Không xác định được trạng thái tài khoản MyVNPT"))
         };
+        addLogCallback?.Invoke(
+            $"[VNPT_HTTP] authen_check_account: code={checkCode} → accountExists={accountExists}", "INFO");
 
         return new MyVnptOtpSession(normalizedPhone, accountExists, deviceInfo, userAgent);
     }
@@ -81,24 +91,25 @@ public static class MyVnptService
         string? otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
         string otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
 
-        // Nếu otp_send với authen_register bị VNPT từ chối "Chưa có tài khoản",
-        // thực ra số đã có TK nhưng authen_check_account báo sai → thử lại với authen_miss_password.
-        if (otpCode != "0" && !session.AccountExists
-            && otpMessage.Contains("tài khoản", StringComparison.OrdinalIgnoreCase))
+        // VNPT API đôi khi trả sai trạng thái tài khoản ở bước check.
+        // Nếu otp_send thất bại với lỗi liên quan "tài khoản", thử service ngược lại.
+        if (otpCode != "0" && otpMessage.Contains("tài khoản", StringComparison.OrdinalIgnoreCase))
         {
+            bool fallbackExists = !session.AccountExists; // thử service ngược lại
+            string fallbackService = fallbackExists ? "authen_miss_password" : "authen_register";
             addLogCallback?.Invoke(
-                $"[VNPT_HTTP] otp_send register báo chưa có TK, thử lại với miss_password...", "INFO");
+                $"[VNPT_HTTP] otp_send thất bại ({otpMessage.Trim()}), thử lại với {fallbackService}...", "INFO");
             otpContent = await PostAsync(
                 "otp_send",
-                new { msisdn = session.Phone, otp_service = "authen_miss_password" },
+                new { msisdn = session.Phone, otp_service = fallbackService },
                 session.DeviceInfo,
                 session.UserAgent,
                 cancellationToken,
                 addLogCallback);
             otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
             otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
-            // Cập nhật session để SetPasswordAsync dùng đúng API
-            session = session with { AccountExists = true };
+            // Cập nhật AccountExists để SetPasswordAsync dùng đúng service
+            session = session with { AccountExists = fallbackExists };
         }
 
         if (otpCode != "0")

@@ -14,9 +14,61 @@
             }
             else
             {
-                <MudText Typo="Typo.subtitle2" Style="color:#64748B; font-weight:600;" Class="mr-4">
-                    Tất cả cổng (@Ports.Count())
+                var statActive    = Ports.Count(p => p.Status == SimStatus.Active);
+                var statConn      = Ports.Count(p => p.Status == SimStatus.Connecting);
+                var statWaitSim   = Ports.Count(p => p.Status == "Chờ cắm SIM");
+                var statWaitAccpt = Ports.Count(p => p.Status == SimStatus.WaitingAccept);
+                var statNoResp    = Ports.Count(p => p.Status == SimStatus.NoResponse);
+                var statBlocked   = Ports.Count(p => p.Status == SimStatus.SecurityBlocked || p.Status == SimStatus.Quarantined);
+                var statTotal     = Ports.Count();
+                var isDark        = gsm.Services.SettingsService.Current.DarkMode;
+                var titleColor    = isDark ? "color:#E2E8F0; font-weight:600;" : "color:#64748B; font-weight:600;";
+
+                <MudText Typo="Typo.subtitle2" Style="@titleColor" Class="mr-3">
+                    Tất cả cổng (@statTotal)
                 </MudText>
+                @if (statActive > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled"
+                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
+                        ✅ Active: @statActive
+                    </MudChip>
+                }
+                @if (statConn > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
+                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
+                        🔄 Kết nối: @statConn
+                    </MudChip>
+                }
+                @if (statWaitAccpt > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
+                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
+                        ⏳ Chờ chấp nhận: @statWaitAccpt
+                    </MudChip>
+                }
+                @if (statWaitSim > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
+                             Style="@($"height:22px; font-size:11px; font-weight:600; {(isDark ? "color:#CBD5E1; border-color:#94A3B8;" : "")}")" Class="mr-1">
+                        📵 Chờ SIM: @statWaitSim
+                    </MudChip>
+                }
+                @if (statNoResp > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined"
+                             Style="height:22px; font-size:11px; font-weight:600; border-color:#EF4444;" Class="mr-1">
+                        ⚠️ Không phản hồi: @statNoResp
+                    </MudChip>
+                }
+                @if (statBlocked > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled"
+                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
+                        🚫 Bị chặn: @statBlocked
+                    </MudChip>
+                }
             }
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>

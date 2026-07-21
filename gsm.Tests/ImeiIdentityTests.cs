@@ -54,14 +54,26 @@ public sealed class ImeiIdentityTests
     [Theory]
     [InlineData("+EGMR: \"351488165212710\"\r\nOK", "351488165212715", true)]
     [InlineData("+EGMR: \"355008370781449\"\r\nOK", "351488165212715", false)]
-    [InlineData("ERROR", "351488165212715", true)]
-    [InlineData("OK", "351488165212715", true)]
+    [InlineData("ERROR", "351488165212715", false)]
+    [InlineData("ERROR: Timeout", "351488165212715", false)]
+    [InlineData("", "351488165212715", false)]
+    [InlineData("OK", "351488165212715", false)]
     public void StoredImei_WhenReported_MustMatchTarget(
         string response,
         string expected,
         bool matches)
     {
         Assert.Equal(matches, ImeiManagementService.StoredImeiMatchesOrUnavailable(response, expected));
+    }
+
+    [Theory]
+    [InlineData("+CFUN: 0\r\nOK", true)]
+    [InlineData("+CFUN: 4\r\nOK", true)]
+    [InlineData("+CFUN: 1\r\nOK", false)]
+    [InlineData("ERROR", false)]
+    public void Ec20RadioOffConfirmation_OnlyAcceptsCfunZeroOrFour(string response, bool expected)
+    {
+        Assert.Equal(expected, GsmModemService.IsRadioDisabledResponse(response));
     }
 
     [Theory]

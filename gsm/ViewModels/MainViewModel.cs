@@ -2362,135 +2362,113 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SimPort port, string ccid, string expectedImei, long epoch, CancellationToken token)
     {
         if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return false;
+        bool radioMayBeOn = false;
+        bool activationSucceeded = false;
 
-        string cfunOff = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 10000, silent: true);
-        if (cfunOff.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+        async Task ForceRadioOffBestEffortAsync()
         {
-            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
-            return false;
+            try
+            {
+                await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 8000, silent: true);
+                string state = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN?", 3000, silent: true);
+                AddLog($"[{port.PortName}] [RADIO_FAILSAFE] {state.Trim()}",
+                    IsRadioStackDisabled(state) ? "WARN" : "ERROR");
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{port.PortName}] [RADIO_FAILSAFE_FAILED] {ex.Message}", "ERROR");
+            }
         }
 
-        async Task<(bool Valid, string Imei)> VerifyIdentityAsync(string phase, bool requireLiveCcid)
+        async Task<(bool Valid, string Imei)> VerifyIdentityAsync(
+            string phase, bool radioMustBeOff, int ccidAttempts)
         {
-            string liveCcid = await ReadLiveCcidAsync(
-                port.PortName, token, attempts: requireLiveCcid ? 4 : 1);
-            string rawImei = await _modemService.SendCommandAsync(port.PortName, "AT+CGSN", 8000, silent: true, ct: token);
+            // Đọc IMEI trước CCID để phát hiện sai danh tính sớm nhất sau CFUN=1.
+            string cfun = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CFUN?", 3000, silent: true, ct: token);
+            string rawImei = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CGSN", 8000, silent: true, ct: token);
             string liveImei = NormalizeImei(rawImei);
-            string rawStoredImei = await _modemService.SendCommandAsync(port.PortName, "AT+EGMR=0,7", 8000, silent: true, ct: token);
+            string rawStoredImei = await _modemService.SendCommandAsync(
+                port.PortName, "AT+EGMR=0,7", 8000, silent: true, ct: token);
             string storedImei = NormalizeImei(rawStoredImei);
-            // Đọc IMEI slot 2 (slot 10) — thanh ghi nhà mạng cũng đọc khi thiết bị đăng ký BTS.
-            // Nếu slot 10 không khớp expectedImei thì modem có thể broadcast IMEI cũ lên mạng.
-            string rawStored2Imei = await _modemService.SendCommandAsync(port.PortName, "AT+EGMR=0,10", 8000, silent: true, ct: token);
+            string rawStored2Imei = await _modemService.SendCommandAsync(
+                port.PortName, "AT+EGMR=0,10", 8000, silent: true, ct: token);
             string stored2Imei = NormalizeImei(rawStored2Imei);
-            bool storedMatches = Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(
-                rawStoredImei, expectedImei);
-            // Bỏ qua verify slot 10 nếu giá trị không phải IMEI 15 chữ số hợp lệ.
-            // EC20CEFASGR lưu IMEI rác 16 chữ số trong slot 10 và không cho phép ghi đè.
-            bool stored2Matches = stored2Imei.Length != 15
-                || Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(rawStored2Imei, expectedImei);
-            bool sessionCurrent = IsSimSessionCurrent(port.PortName, ccid, epoch);
-            bool ccidMatches = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase);
-            bool ccidDeferred = false;
-            if (!ccidMatches && string.IsNullOrWhiteSpace(liveCcid) && !requireLiveCcid && sessionCurrent)
-            {
-                string cfun = await _modemService.SendCommandAsync(
-                    port.PortName, "AT+CFUN?", 3000, silent: true, ct: token);
-                ccidDeferred = IsRadioStackDisabled(cfun);
-            }
+            string liveCcid = await ReadLiveCcidAsync(port.PortName, token, attempts: ccidAttempts);
 
-            bool valid = (ccidMatches || ccidDeferred)
+            bool cfunMatches = radioMustBeOff
+                ? IsRadioStackDisabled(cfun)
+                : Regex.IsMatch(cfun, @"\+CFUN:\s*1\b", RegexOptions.IgnoreCase);
+            bool valid = cfunMatches
+                      && string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
                       && Services.ImeiManagementService.AreEquivalentImei(liveImei, expectedImei)
-                      && storedMatches
-                      && stored2Matches
-                      && sessionCurrent;
-            if (!valid)
-                AddLog($"[{port.PortName}] [IMEI_VERIFY] phase={phase}; expected={expectedImei}; CGSN={liveImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; CCID={liveCcid}", "ERROR");
-            else
-                AddLog($"[{port.PortName}] [IMEI_VERIFY_OK] phase={phase}; expected={expectedImei}; CGSN={liveImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; CCID={(ccidDeferred ? "deferred-radio-off" : liveCcid)}", "SUCCESS");
+                      && Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(rawStoredImei, expectedImei)
+                      && Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(rawStored2Imei, expectedImei)
+                      && IsSimSessionCurrent(port.PortName, ccid, epoch);
+
+            AddLog($"[{port.PortName}] [{(valid ? "IMEI_VERIFY_OK" : "IMEI_VERIFY")}] phase={phase}; CFUN={cfun.Trim()}; expected={expectedImei}; CGSN={liveImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; CCID={liveCcid}",
+                valid ? "SUCCESS" : "ERROR");
             return (valid, liveImei);
         }
 
-        // Xác minh khi radio vẫn tắt. Nếu firmware không cung cấp được CCID ở trạng
-        // thái này thì fail-closed, tuyệt đối không bật sóng để thử đoán.
-        var beforeRadio = await VerifyIdentityAsync("radio-off-before-config", requireLiveCcid: false);
-        if (!beforeRadio.Valid)
-        {
-            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
-            AddLog($"[{port.PortName}] Xác minh CCID/IMEI khi radio tắt thất bại. Giữ CFUN=4.", "ERROR");
-            return false;
-        }
-
-        bool configured;
         try
         {
-            configured = await _modemService.ReinitializeSettingsAsync(port.PortName, token);
-        }
-        catch (OperationCanceledException)
-        {
-            return false;
-        }
+            string cfunOff = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CFUN=4", 10000, silent: true, ct: token);
+            string cfunOffState = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CFUN?", 3000, silent: true, ct: token);
+            if (cfunOff.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || !IsRadioStackDisabled(cfunOffState))
+                return false;
 
-        if (!configured || !IsSimSessionCurrent(port.PortName, ccid, epoch)) return false;
-
-        var afterConfig = await VerifyIdentityAsync("radio-off-after-config", requireLiveCcid: false);
-        if (!afterConfig.Valid)
-        {
-            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
-            AddLog($"[{port.PortName}] Danh tính SIM thay đổi trong lúc cấu hình offline. Đã giữ radio tắt.", "ERROR");
-            return false;
-        }
-
-        string cfunOn = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1", 12000, silent: true);
-        if (cfunOn.Contains("ERROR", StringComparison.OrdinalIgnoreCase)) return false;
-        await Task.Delay(2000, token);
-
-        // Kiểm tra lần hai ngay sau khi bật radio; sai khác bất kỳ sẽ tắt sóng lại.
-        var afterRadio = await VerifyIdentityAsync("radio-on-final", requireLiveCcid: true);
-        if (!afterRadio.Valid)
-        {
-            // EC20C firmware bug: một số phiên bản EC20CEHDLGR chỉ ghi IMEI vào RAM cache
-            // khi CFUN=0, NV flash chưa được commit cho đến khi có full reboot (CFUN=1,1).
-            // Thử reboot NV một lần trước khi từ chối hoàn toàn để tránh bỏ lỡ trường hợp này.
-            AddLog($"[{port.PortName}] [NV_COMMIT_RETRY] IMEI sau CFUN=1 không khớp — thử reboot NV (AT+CFUN=1,1) để force-commit...", "WARN");
-            string cfunReset = await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=1,1", 15000, silent: true);
-            if (!cfunReset.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            // Không defer CCID. Firmware không đọc được CCID trong CFUN=4 phải fail-closed.
+            var beforeRadio = await VerifyIdentityAsync("radio-off-before-config", radioMustBeOff: true, ccidAttempts: 4);
+            if (!beforeRadio.Valid)
             {
-                await Task.Delay(4000, token); // Chờ modem khởi động lại hoàn toàn
-                var afterReset = await VerifyIdentityAsync("radio-on-after-nv-commit", requireLiveCcid: true);
-                if (afterReset.Valid)
-                {
-                    AddLog($"[{port.PortName}] [NV_COMMIT_OK] Sau reboot NV IMEI đã khớp: {afterReset.Imei}", "SUCCESS");
-                    _modemService.StartPollingNetwork(port.PortName);
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        if (IsSimSessionCurrent(port.PortName, ccid, epoch))
-                        {
-                            port.IsRebooting = false;
-                            port.Imei = afterReset.Imei;
-                            MarkPortActiveAfterInit(port.PortName);
-                        }
-                    });
-                    return IsSimSessionCurrent(port.PortName, ccid, epoch);
-                }
-                AddLog($"[{port.PortName}] [NV_COMMIT_FAIL] Sau reboot NV vẫn không khớp. Giữ sóng tắt.", "ERROR");
+                AddLog($"[{port.PortName}] Xác minh CCID/IMEI khi radio tắt thất bại. Không bật RF.", "ERROR");
+                return false;
             }
-            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
-            AddLog($"[{port.PortName}] Danh tính SIM thay đổi sau khi bật radio. Đã tắt sóng khẩn cấp.", "ERROR");
-            return false;
-        }
 
-        _modemService.StartPollingNetwork(port.PortName);
+            bool configured = await _modemService.ReinitializeSettingsAsync(port.PortName, token);
+            if (!configured || !IsSimSessionCurrent(port.PortName, ccid, epoch)) return false;
 
-        await Application.Current.Dispatcher.InvokeAsync(() =>
-        {
-            if (IsSimSessionCurrent(port.PortName, ccid, epoch))
+            var afterConfig = await VerifyIdentityAsync("radio-off-after-config", radioMustBeOff: true, ccidAttempts: 4);
+            if (!afterConfig.Valid) return false;
+
+            // Từ dòng này, timeout cũng phải được coi là RF có thể đã bật.
+            radioMayBeOn = true;
+            string cfunOn = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CFUN=1", 15000, silent: true);
+            if (cfunOn.Contains("ERROR", StringComparison.OrdinalIgnoreCase)) return false;
+
+            // Không delay mù: kiểm tra CGSN/EGMR trước, rồi mới chờ CCID sẵn sàng.
+            var afterRadio = await VerifyIdentityAsync("radio-on-final", radioMustBeOff: false, ccidAttempts: 6);
+            if (!afterRadio.Valid)
             {
+                AddLog($"[{port.PortName}] Danh tính sau CFUN=1 không khớp; cấm reboot NV và tắt RF ngay.", "ERROR");
+                return false;
+            }
+
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
                 port.IsRebooting = false;
                 port.Imei = afterRadio.Imei;
                 MarkPortActiveAfterInit(port.PortName);
-            }
-        });
-        return true;
+            });
+
+            activationSucceeded = IsSimSessionCurrent(port.PortName, ccid, epoch)
+                && port.Status == SimStatus.Active;
+            if (activationSucceeded) _modemService.StartPollingNetwork(port.PortName);
+            return activationSucceeded;
+        }
+        finally
+        {
+            // Cancellation/timeout/exception sau CFUN=1 không được để RF bật ngoài kiểm soát.
+            if (radioMayBeOn && !activationSucceeded)
+                await ForceRadioOffBestEffortAsync();
+        }
     }
 
     public async Task<bool> ResetNetworkSafelyAsync(string portName)
@@ -2538,19 +2516,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return matches;
         }
 
-        // EC20CEHDLGR08A05M1G không trả QCCID/CCID khi CFUN=0/4. Phiên này đã được
-        // tạo từ CCID đọc thật trước đó; trong lúc RF tắt chỉ cho phép trì hoãn việc
-        // đối chiếu CCID nếu modem xác nhận đúng là radio stack đang tắt. Sau CFUN=1,
-        // CompletePortInitializationAsync bắt buộc đọc lại CCID thật trước khi Active.
-        string cfun = await _modemService.SendCommandAsync(
-            portName, "AT+CFUN?", 3000, silent: true, ct: token);
-        if (IsRadioStackDisabled(cfun) && IsSimSessionCurrent(portName, ccid, epoch))
-        {
-            AddLog($"[{portName}] [SESSION_VERIFY_DEFERRED] CCID không khả dụng ở {cfun.Trim()}; sẽ đối chiếu bắt buộc sau CFUN=1.", "INFO");
-            return true;
-        }
-
-        AddLog($"[{portName}] [SESSION_VERIFY_FAILED] Không đọc được CCID khi radio đang bật; hủy xử lý IMEI.", "ERROR");
+        // Không được defer sang sau CFUN=1: lúc đó EC20 đã có thể attach mạng.
+        AddLog($"[{portName}] [SESSION_VERIFY_FAILED] Không đọc được CCID khi RF tắt; fail-closed và hủy xử lý IMEI.", "ERROR");
         return false;
     }
 
@@ -2703,6 +2670,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
+            await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 8000, silent: true);
             AddLog($"[{portName}] Khởi tạo SIM quá hạn 2 phút; giải phóng khóa và chuyển recovery.", "WARN");
             if (IsSimSessionCurrent(portName, ccid, epoch))
             {
@@ -2715,9 +2683,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 });
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 8000, silent: true);
+        }
         catch (Exception ex)
         {
+            await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 8000, silent: true);
             if (IsSimSessionCurrent(portName, ccid, epoch))
             {
                 AddLog($"[{portName}] Lỗi xử lý phiên SIM: {ex.Message}", "ERROR");
@@ -2981,8 +2953,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         // Reject số dư < 100 VND để tránh parse nhầm cước phí (vd: "1d/ngay", "900d cuoc")
                         if (int.TryParse(rawVal, out int parsedBal) && (parsedBal >= 100 || !ussdHasAdKeywords))
                         {
-                            string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
-                            port.Balance = strictMatch.Groups[1].Value + " " + unit;
+                            port.Balance = strictMatch.Groups[1].Value + "đ";
                         }
                     }
                     else
@@ -2995,7 +2966,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             {
                                 string fallbackRaw = fallback.Groups[1].Value.Replace(".", "").Replace(",", "");
                                 if (int.TryParse(fallbackRaw, out int fallbackBal) && fallbackBal >= 100)
-                                    port.Balance = fallback.Groups[1].Value + " " + fallback.Groups[2].Value;
+                                    port.Balance = fallback.Groups[1].Value + "đ";
                             }
                         }
                     }
@@ -3663,8 +3634,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             // Reject số dư < 100 VND để tránh parse nhầm cước phí từ SMS
                             if (int.TryParse(rawSmsVal, out int parsedSmsBalance) && parsedSmsBalance >= 100)
                             {
-                                string unit = string.IsNullOrEmpty(strictMatch.Groups[2].Value) ? "đ" : strictMatch.Groups[2].Value;
-                                string bal = strictMatch.Groups[1].Value + " " + unit;
+                                string bal = strictMatch.Groups[1].Value + "đ";
                                 if (port.Balance != bal)
                                 {
                                     port.Balance = bal;
@@ -4971,7 +4941,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }
 
-        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn chạy lệnh Fix Modem cho {targetPorts.Count} modem?\nThao tác này sẽ thiết lập lại cấu hình mạng và khởi động lại modem.", "Fix Modem", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
+        if (System.Windows.MessageBox.Show($"Bạn có chắc muốn chạy lệnh Fix Modem cho {targetPorts.Count} modem?\nThao tác này sẽ thiết lập lại cấu hình và khởi tạo SIM stack trong chế độ khóa RF.", "Fix Modem", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) != System.Windows.MessageBoxResult.Yes)
             return;
 
         SnackbarMessageQueue.Enqueue($"Đang gửi lệnh Fix Modem cho {targetPorts.Count} cổng...");
@@ -4993,8 +4963,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     commands.Add("AT+QURCCFG=\"urcport\",\"uart1\"");
                 if (profile?.Supports(ModemCapability.NetworkScanConfig) == true)
                     commands.Add("AT+QCFG=\"nwscanmode\",0,1");
-                if (profile?.Supports(ModemCapability.SimHotplugConfig) == true)
-                    commands.Add("AT+QSIMDET=1,0");
+                // Không tự ghi QSIMDET polarity. Mức insert phụ thuộc cách đấu
+                // USIM_PRESENCE của từng board và chỉ có hiệu lực sau reboot.
                 if (profile?.Supports(ModemCapability.SimStatusUrc) == true)
                     commands.Add("AT+QSIMSTAT=1");
 

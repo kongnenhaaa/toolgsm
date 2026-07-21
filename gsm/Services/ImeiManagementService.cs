@@ -213,13 +213,12 @@ public class ImeiManagementService
         if (string.IsNullOrWhiteSpace(response)
             || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
             || response.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
-            return true;
+            return false;
 
         string storedImei = NormalizeImeiValue(response);
-        // Một số firmware chỉ trả OK cho lệnh đọc EGMR. Khi nó thực sự trả về đủ
-        // 15 số thì bắt buộc phải khớp; không bỏ qua một thanh ghi sai chỉ vì IMEI
-        // đó có check digit không hợp lệ.
-        return storedImei.Length == 0 || AreEquivalentImei(storedImei, expectedImei);
+        // Đường đăng ký mạng phải fail-closed: "OK" không kèm giá trị, timeout và
+        // thanh ghi không đọc được đều không phải bằng chứng rằng NV đã chứa IMEI mới.
+        return storedImei.Length == 15 && AreEquivalentImei(storedImei, expectedImei);
     }
 
     private static int CalculateCheckDigit(string first14Digits)
@@ -416,23 +415,36 @@ public class ImeiManagementService
 
             expectedImei = targetImei;
 
-            // 5. Tiến hành ghi IMEI lên modem nếu khác với IMEI hiện tại
+            // 5. Chỉ coi là đã sẵn sàng khi CGSN và cả hai thanh ghi NV đều khớp.
             bool targetAlreadyPresent = AreEquivalentImei(targetImei, currentImei);
+            bool storedTargetsPresent = false;
+            if (targetAlreadyPresent && !string.IsNullOrEmpty(targetImei))
+            {
+                string preStored7 = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
+                string preStored10 = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,10", 10000, silent: true);
+                storedTargetsPresent = StoredImeiMatchesOrUnavailable(preStored7, targetImei)
+                    && StoredImeiMatchesOrUnavailable(preStored10, targetImei);
+            }
+            bool writeRequired = !string.IsNullOrEmpty(targetImei)
+                && (!targetAlreadyPresent || !storedTargetsPresent);
             if (targetAlreadyPresent
                 && !string.Equals(targetImei, currentImei, StringComparison.Ordinal)
-                && !string.IsNullOrEmpty(targetImei))
+                && storedTargetsPresent)
             {
                 Log($"[{portName}] [IMEI_EQUIVALENT] modem={currentImei}; backup={targetImei}; cùng TAC+SNR 14 số, chỉ khác Check Digit/Spare Digit. Không tráng lại.", "SUCCESS");
             }
-            if (!string.IsNullOrEmpty(targetImei) && !targetAlreadyPresent)
+            if (writeRequired)
             {
                 Log($"[{portName}] [IMEI_TARGET] source={targetSource} CCID={ccid} target_imei={targetImei}");
-                Log($"[{portName}] [IMEI_CHANGE] IMEI hiện tại ({currentImei}) khác mục tiêu ({targetImei}). Bắt đầu ghi đè...", "WARNING");
+                Log($"[{portName}] [IMEI_CHANGE] CGSN hoặc NV slot chưa khớp mục tiêu {targetImei}. Bắt đầu ghi đồng bộ hai slot...", "WARNING");
                 
                 string cfun0 = await _modemService.SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true);
-                if (!cfun0.Contains("OK"))
+                string cfun0State = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
+                if (!cfun0.Contains("OK")
+                    || !System.Text.RegularExpressions.Regex.IsMatch(
+                        cfun0State, @"\+CFUN:\s*0\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 {
-                    Log($"[{portName}] Tắt sóng (AT+CFUN=0) thất bại. Hủy ghi IMEI.", "ERROR");
+                    Log($"[{portName}] Không xác nhận được CFUN=0 trước khi ghi IMEI. Hủy ghi.", "ERROR");
                     return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOffFailed };
                 }
                 
@@ -483,7 +495,7 @@ public class ImeiManagementService
                         }
                         else if (write2Resp.Contains("ERROR"))
                         {
-                            Log($"[{portName}] [IMEI2_UNSUPPORTED] Slot 10 không hỗ trợ hoặc ghi thất bại (bỏ qua verify slot10): {write2Resp.Trim()}", "WARN");
+                            Log($"[{portName}] [IMEI2_WRITE_FAILED] Slot 10 không ghi được; không cho phép bật RF: {write2Resp.Trim()}", "ERROR");
                         }
                         else
                         {
@@ -508,11 +520,8 @@ public class ImeiManagementService
                     // Đọc và xác minh IMEI slot 2 (slot 10) — slot mà nhà mạng cũng đọc khi thiết bị đăng ký mạng.
                     string stored2ImeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,10", 10000);
                     string stored2Imei = NormalizeImei(stored2ImeiResp);
-                    // Nếu slot 10 không ghi được (ERROR), bỏ qua verify slot 10 —
-                    // một số firmware (EC20CEFASGR) lưu IMEI sai 16 chữ số trong slot 10
-                    // không được sử dụng cho đăng ký BTS thực tế.
-                    bool stored2RegisterMatches = !slot2Written
-                        || StoredImeiMatchesOrUnavailable(stored2ImeiResp, targetImei);
+                    bool stored2RegisterMatches = slot2Written
+                        && StoredImeiMatchesOrUnavailable(stored2ImeiResp, targetImei);
 
                     Log($"[{portName}] [IMEI_WRITE_VERIFY] CGSN={finalImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; expected={targetImei}");
 
@@ -595,11 +604,7 @@ public class ImeiManagementService
             }
             
             bool storedFinalMatches  = StoredImeiMatchesOrUnavailable(checkStoredResp, expectedImei);
-            // Bỏ qua verify slot 10 nếu giá trị đọc về không phải IMEI 15 chữ số hợp lệ
-            // (EC20CEFASGR lưu IMEI rác 16 chữ số trong slot 10 và không cho phép ghi đè)
-            bool slot10IsValidImei = checkStored2Imei.Length == 15;
-            bool stored2FinalMatches = !slot10IsValidImei
-                || StoredImeiMatchesOrUnavailable(checkStored2Resp, expectedImei);
+            bool stored2FinalMatches = StoredImeiMatchesOrUnavailable(checkStored2Resp, expectedImei);
             bool matched = AreEquivalentImei(checkFinalImei, expectedImei) && storedFinalMatches && stored2FinalMatches;
             Log($"[{portName}] [IMEI_FINAL] CGSN={checkFinalImei}, EGMR_slot7={checkStoredImei}, EGMR_slot10={checkStored2Imei}, expected={expectedImei}, matched={matched.ToString().ToLowerInvariant()}", matched ? "SUCCESS" : "ERROR");
 

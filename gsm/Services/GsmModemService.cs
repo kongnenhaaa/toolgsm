@@ -94,9 +94,9 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
     private readonly ConcurrentDictionary<string, bool> _simStackDisabledByTool = new();
     private readonly ConcurrentDictionary<string, int> _simRemovalEvidenceCounts = new();
-    // A CFUN=1,1 reboot temporarily reports CPIN NOT READY / QSIMSTAT=0 even when the
-    // card is still inserted. While this marker is present, removal monitors must not
-    // turn that boot window into a hot-plug removal and force the modem back to CFUN=4.
+    // An offline SIM-stack restart (CFUN=0 -> CFUN=4) can temporarily report
+    // CPIN NOT READY / QSIMSTAT=0 while the card is still inserted. During that
+    // window, removal monitors must not mistake the transient state for a hot-swap.
     private readonly ConcurrentDictionary<string, byte> _rebootRecoveryInProgress = new();
     /// <summary>Guard chống race condition: đánh dấu port đang trong quá trình khởi tạo SIM đầu tiên.</summary>
     private readonly ConcurrentDictionary<string, bool> _simInitInProgress = new();
@@ -207,7 +207,7 @@ public class GsmModemService : IGsmModemService
         return await SendCommandAsync(port, $"AT+CMGR={msgIndex}", 25000, silent: true);
     }
 
-    private static bool IsCompleteStoredSmsResponse(string response, string? requiredHeader = null)
+    internal static bool IsCompleteStoredSmsResponse(string response, string? requiredHeader = null)
     {
         if (string.IsNullOrWhiteSpace(response) || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)) return false;
         if (requiredHeader != null && !response.Contains(requiredHeader, StringComparison.OrdinalIgnoreCase)) return false;
@@ -762,6 +762,10 @@ public class GsmModemService : IGsmModemService
                         _portLifetimeCts[p] = new CancellationTokenSource();
                         
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Đã kết nối thành công {p} (Baud: {baudRate})" });
+                        // [SECURITY CRITICAL] Tắt radio NGAY sau khi port mở — trước cả GlobalSimMonitor.
+                        // Nếu chờ đến InitializeOpenedPortsAsync, với 32 ports COM đầu tiên
+                        // sẽ expose IMEI gốc lên mạng suốt thời gian chờ mở các port còn lại.
+                        try { sp.Write("AT+CFUN=4\r"); } catch { }
                         // Báo UI ngay khi COM đã mở, không chờ quá trình đọc SIM/CCID hoàn tất.
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = "[PORT_OPENED]" });
                         
@@ -875,6 +879,32 @@ public class GsmModemService : IGsmModemService
         }
 
         return ccid;
+    }
+
+    internal static bool IsRadioDisabledResponse(string? response) =>
+        Regex.IsMatch(response ?? string.Empty, @"\+CFUN:\s*(?:0|4)\b", RegexOptions.IgnoreCase);
+
+    private async Task<bool> ConfirmCfunAsync(string portName, int expected, CancellationToken ct = default)
+    {
+        string state = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
+        return Regex.IsMatch(state, $@"\+CFUN:\s*{expected}\b", RegexOptions.IgnoreCase);
+    }
+
+    /// <summary>
+    /// Khởi tạo lại SIM stack mà không bao giờ bật RF. Theo EC20, CFUN=0 tắt SIM+RF,
+    /// còn CFUN=4 bật lại phần SIM trong airplane mode nhưng vẫn khóa phát/thu RF.
+    /// </summary>
+    private async Task<bool> RestartSimStackOfflineAsync(string portName, CancellationToken ct = default)
+    {
+        string minimum = await SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true, ct: ct);
+        if (IsCommandFailure(minimum) || !await ConfirmCfunAsync(portName, 0, ct)) return false;
+
+        await Task.Delay(500, ct);
+        string airplane = await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct: ct);
+        if (IsCommandFailure(airplane) || !await ConfirmCfunAsync(portName, 4, ct)) return false;
+
+        await Task.Delay(800, ct);
+        return true;
     }
 
     private async Task InitializeModemAsync(string portName, CancellationToken ct)
@@ -1090,8 +1120,8 @@ public class GsmModemService : IGsmModemService
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
         }
         
-        // Ưu tiên đọc SIM khi RF vẫn tắt. Chỉ dùng CFUN=1 ngắn hạn như fallback
-        // cho firmware EC20 không cho đọc CCID ở CFUN=0/4.
+        // Chỉ đọc/khởi tạo SIM khi RF vẫn tắt. Không được dùng CFUN=1 làm fallback:
+        // trên EC20 đó là full functionality và có thể bắt đầu attach ngay.
         // Giữ CFUN=4: EC20 vẫn tắt RF nhưng SIM stack còn hoạt động. CFUN=0 trên một số
         // firmware tắt cả SIM stack và làm SIM đã cắm sẵn bị nhận nhầm thành "SIM failure".
         await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true);
@@ -1100,9 +1130,9 @@ public class GsmModemService : IGsmModemService
         string initialCpin = await SendCommandAsync(portName, "AT+CPIN?", 3000, silent: true);
         bool simLocked = initialCpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
                       || initialCpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-        // Under CFUN=4, EC20 commonly reports NOT READY/CME 10 while the card is still
-        // physically inserted. Only an explicit NOT INSERTED is conclusive here; all
-        // other states must go through the brief CFUN=1 + CCID probe below.
+        // Under CFUN=4, EC20 có thể báo NOT READY/CME 10 dù SIM vẫn đang cắm.
+        // Chỉ NOT INSERTED là kết luận chắc chắn; trạng thái khác được kiểm tra lại
+        // bằng chu kỳ CFUN=0 -> 4 an toàn ở dưới.
         bool definitelyNoSim = initialCpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase);
         if (simLocked)
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {initialCpin.Trim()}" });
@@ -1118,21 +1148,21 @@ public class GsmModemService : IGsmModemService
                 bool physicallyPresent = Regex.IsMatch(initialCpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
                                        || Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
                 // Một số EC20 trả SIM failure/QSIMSTAT=0 khi CFUN=4 dù SIM đã cắm sẵn.
-                // Với lỗi chung (không phải NOT INSERTED), bật stack ngắn hạn để xác minh thật.
+                // Khởi tạo lại stack bằng CFUN=0 -> 4; cả hai trạng thái đều khóa RF.
                 if (physicallyPresent || !definitelyNoSim)
                 {
-                    await SendCommandAsync(portName, "AT+CFUN=1", 8000, silent: true);
-                    await Task.Delay(1800, ct);
-                    string enabledCpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-                    simLocked = enabledCpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                             || enabledCpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-                    ccid = await ReadCcidWithFallbackAsync(portName, 5000, false);
-                    await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                    if (await RestartSimStackOfflineAsync(portName, ct))
+                    {
+                        string enabledCpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
+                        simLocked = enabledCpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
+                                 || enabledCpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
+                        ccid = await ReadCcidWithFallbackAsync(portName, 5000, false);
+                    }
                 }
             }
         }
 
-        if (!ccid.Contains("ERROR"))
+        if (HasReadableCcid(ccid))
         {
             _lastSimState[portName] = true;
             
@@ -1153,7 +1183,7 @@ public class GsmModemService : IGsmModemService
             
             string cnum = await SendCommandAsync(portName, "AT+CNUM", 10000, silent: true);
 
-            // PARSE_IMEI đã được emit ở trên (trước CFUN=1) - không emit lại ở đây
+            // PARSE_IMEI đã được emit ở trên khi RF vẫn tắt - không emit lại ở đây.
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
             if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
         }
@@ -1170,10 +1200,10 @@ public class GsmModemService : IGsmModemService
     public async Task ReloadSimAsync(string portName)
     {
         if (!_serialPorts.ContainsKey(portName)) return;
-        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[INFO] Đang khởi động lại phần cứng để nhận SIM..." });
-        
-        // Gửi lệnh khởi động lại mềm (Reset module)
-        await SendCommandAsync(portName, "AT+CFUN=1,1", 10000);
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[INFO] Đang khởi tạo lại SIM stack ở chế độ khóa RF..." });
+
+        if (!await RestartSimStackOfflineAsync(portName))
+            throw new InvalidOperationException("Không thể khởi tạo lại SIM stack an toàn bằng CFUN=0 -> CFUN=4");
     }
 
     public async Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default)
@@ -1185,9 +1215,8 @@ public class GsmModemService : IGsmModemService
         {
             await ReloadSimAsync(portName);
 
-            // ReinitializeSettingsAsync waits for AT to come back instead of assuming a
-            // fixed five-second boot time. EC20/EC25 firmware and a busy USB hub can need
-            // considerably longer after CFUN=1,1.
+            // Không reboot CFUN=1,1: EC20 sẽ trở lại full functionality và có thể attach
+            // trước khi danh tính được xác minh. Chỉ cấu hình lại trong CFUN=4.
             if (!await ReinitializeSettingsAsync(portName, ct)) return false;
 
             bool simReady = false;
@@ -1227,8 +1256,7 @@ public class GsmModemService : IGsmModemService
                 }
                 if (simReady) break;
 
-                // NOT READY/CME 10 is expected during boot. Do not emit WAITING_FOR_SIM
-                // and do not enter the CFUN=4 hot-plug loop during this grace period.
+                // NOT READY/CME 10 có thể xuất hiện khi SIM stack vừa chuyển 0 -> 4.
                 await Task.Delay(1500, ct);
             }
 
@@ -1270,7 +1298,12 @@ public class GsmModemService : IGsmModemService
             return false;
         }
 
-        await Task.Delay(1000, ct);
+        // [SECURITY CRITICAL] Tắt radio NGAY khi modem online sau reboot.
+        // EC20 boot mặc định CFUN=1 → expose IMEI gốc lên mạng nếu không tắt sớm.
+        // Caller (CompletePortInitializationAsync) sẽ bật CFUN=1 SAU KHI ghi IMEI mới.
+        await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+        await Task.Delay(500, ct);
+
         await SendCommandAsync(portName, "ATE0", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true);
         await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, silent: true);
@@ -1471,7 +1504,6 @@ public class GsmModemService : IGsmModemService
 
             int cfunCheckCounter = 0;
             int failedActiveProbeCycles = 0;
-            int hardRecoveryAttempts = 0;
             bool contactErrorReported = false;
             while (!token.IsCancellationRequested)
             {
@@ -1479,15 +1511,30 @@ public class GsmModemService : IGsmModemService
                 if (!IsCurrentLoop()) break;
                 if (!_serialPorts.ContainsKey(portName)) break;
 
-                // Kiểm tra CFUN mỗi 10 giây
+                // Kiểm tra CFUN ở mọi vòng 2 giây. Bộ đếm riêng chỉ dùng cho probe CCID.
                 cfunCheckCounter++;
-                if (cfunCheckCounter >= 5)
-                {
+                bool runCcidProbe = cfunCheckCounter >= 5;
+                if (runCcidProbe)
                     cfunCheckCounter = 0;
-                    string cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
-                    if (!cfunStatus.Contains("+CFUN: 4") && !cfunStatus.Contains("+CFUN: 0"))
+
+                string cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
+                if (!IsRadioDisabledResponse(cfunStatus))
+                {
+                    await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                    cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
+                    if (!IsRadioDisabledResponse(cfunStatus))
                     {
-                        await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
+                        await SendCommandAsync(portName, "AT+CFUN=0", 8000, silent: true);
+                        cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
+                        if (!IsRadioDisabledResponse(cfunStatus))
+                        {
+                            LogMessage?.Invoke(this, new GsmDataEventArgs
+                            {
+                                PortName = portName,
+                                Data = "[STATUS_NO_RESPONSE] Không xác nhận được RF đã tắt; dừng probe SIM trên cổng này."
+                            });
+                            continue;
+                        }
                     }
                 }
 
@@ -1508,78 +1555,38 @@ public class GsmModemService : IGsmModemService
                     if (!IsCurrentLoop()) break;
                     hasSim = Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
 
-                    // Firmware EC20 có thể giấu trạng thái SIM khi CFUN=4. Mỗi 10 giây bật
-                    // SIM stack ngắn hạn để phát hiện chắc chắn SIM đã cắm sẵn/hot-plug.
-                    if (!hasSim && cfunCheckCounter == 0)
+                    // Firmware EC20 có thể giấu trạng thái SIM khi CFUN=4. Mỗi 10 giây
+                    // thử đọc CCID rồi khởi tạo lại SIM stack bằng CFUN=0 -> 4 nếu cần.
+                    // Tuyệt đối không dùng CFUN=1/CFUN=1,1 trước khi IMEI đã được ghi.
+                    if (!hasSim && runCcidProbe)
                     {
-                        await SendCommandAsync(portName, "AT+CFUN=1", 8000, silent: true);
-                        if (!IsCurrentLoop()) break;
-                        for (int attempt = 0; attempt < 3 && !hasSim; attempt++)
+                        string safeCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
+                        hasSim = HasReadableCcid(safeCcid);
+
+                        if (!hasSim)
                         {
-                            await Task.Delay(attempt == 0 ? 1800 : 1200, token);
-                            string enabledCpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-                            hasSim = Regex.IsMatch(enabledCpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
-                            if (!hasSim)
+                            if (!IsCurrentLoop()) break;
+                            if (await RestartSimStackOfflineAsync(portName, token))
                             {
-                                string enabledQsim = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
-                                    ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
-                                    : string.Empty;
-                                hasSim = Regex.IsMatch(enabledQsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
-                            }
-                            if (!hasSim)
-                            {
-                                string enabledCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
-                                hasSim = HasReadableCcid(enabledCcid);
+                                string offlineCpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
+                                hasSim = Regex.IsMatch(offlineCpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
+                                if (!hasSim)
+                                {
+                                    safeCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
+                                    hasSim = HasReadableCcid(safeCcid);
+                                }
                             }
                         }
+
                         if (!hasSim)
                         {
                             failedActiveProbeCycles++;
-                            await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
-
-                            // Nếu SIM_DET/stack của riêng module bị kẹt sau khi thay SIM nhanh,
-                            // reboot riêng EC20 tối đa hai lần. Không reboot vô hạn khi khe thực sự
-                            // không tiếp xúc hoặc không có SIM.
-                            if (failedActiveProbeCycles >= 6 && hardRecoveryAttempts < 2)
-                            {
-                                if (!IsCurrentLoop()) break;
-                                failedActiveProbeCycles = 0;
-                                hardRecoveryAttempts++;
-                                LogMessage?.Invoke(this, new GsmDataEventArgs
-                                {
-                                    PortName = portName,
-                                    Data = $"[SIM_RECOVERY] COM vẫn phản hồi nhưng chưa đọc được SIM; reboot riêng module lần {hardRecoveryAttempts}/2..."
-                                });
-
-                                await SendCommandAsync(portName, "AT+CFUN=1,1", 10000, silent: true);
-                                try { await Task.Delay(12000, token); } catch { break; }
-                                if (!IsCurrentLoop()) break;
-
-                                for (int bootProbe = 0; bootProbe < 5 && !hasSim; bootProbe++)
-                                {
-                                    string ping = await SendCommandAsync(portName, "AT", 3000, silent: true);
-                                    if (!ping.Contains("OK", StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        await Task.Delay(1000, token);
-                                        continue;
-                                    }
-
-                                    string rebootCpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-                                    hasSim = rebootCpin.Contains("READY", StringComparison.OrdinalIgnoreCase)
-                                          && !rebootCpin.Contains("NOT READY", StringComparison.OrdinalIgnoreCase);
-                                    if (!hasSim) await Task.Delay(1200, token);
-                                }
-
-                                if (!hasSim)
-                                    await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
-                            }
                         }
                         else
                         {
-                            // SIM phát hiện thành công qua active probe – reset bộ đếm để
-                            // active probe lần sau không bị cộng dồn từ chu kỳ cũ.
+                            // SIM phát hiện thành công — reset bộ đếm
                             failedActiveProbeCycles = 0;
-                            hardRecoveryAttempts = 0;
+                            contactErrorReported = false;
                         }
                     }
                 }
@@ -1587,24 +1594,24 @@ public class GsmModemService : IGsmModemService
                 if (hasSim)
                 {
                     if (!IsCurrentLoop()) break;
-                    // Cho SIM stack của EC20 ổn định sau hot-plug (đặc biệt sau rút/cắm nhanh)
-                    // trước khi HandleSimInsertedAsync đọc CCID. Nếu bỏ qua delay này, EC20 vẫn
-                    // đang khởi động SIM → CCID sẽ trả ERROR → lại quay về WAITING_FOR_SIM.
-                    try { await Task.Delay(3000, token); } catch { break; }
+                    // [SECURITY FIX] Tắt radio NGAY KHI phát hiện SIM — trước delay 3s.
+                    // Nếu không, modem attach mạng với IMEI gốc trong suốt 3 giây chờ.
+                    await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                    // Cho SIM stack của EC20 ổn định sau hot-plug
+                    try { await Task.Delay(1500, token); } catch { break; }
                     if (!IsCurrentLoop()) break;
                     _lastSimState[portName] = true;
                     await HandleSimInsertedAsync(portName);
                     break;
                 }
 
-                if (!contactErrorReported && hardRecoveryAttempts >= 2 && failedActiveProbeCycles >= 3)
+                if (!contactErrorReported && failedActiveProbeCycles >= 6)
                 {
-                    // Chỉ phát một lần cho mỗi chu kỳ chờ, tránh spam log/UI.
                     contactErrorReported = true;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = "[SIM_CONTACT_ERROR] COM vẫn sống nhưng EC20 báo không có SIM sau hai lần recovery. Kiểm tra chiều SIM/tiếp điểm/khe. Tool vẫn tiếp tục tự dò."
+                        Data = "[SIM_CONTACT_ERROR] Không đọc được SIM khi RF tắt. Đã fail-closed tại CFUN=4; kiểm tra USIM_PRESENCE/QSIMDET, polarity và tiếp điểm khe SIM."
                     });
                 }
             }
@@ -1631,8 +1638,13 @@ public class GsmModemService : IGsmModemService
 
         try
         {
-            // Đợi thẻ SIM khởi động bên trong modem và URC QSIMSTAT đến tay handler.
-            await Task.Delay(2000);
+            // [SECURITY FIX] Tắt radio NGAY LẬP TỨC khi phát hiện SIM hot-plug,
+            // trước cả delay và CPIN check — ngăn modem kịp đăng ký mạng với IMEI gốc.
+            // VNPT/carrier ghi nhận IMEI trong vòng ~0.5s kể từ khi modem attach mạng.
+            await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+
+            // Đợi SIM khởi động đủ để phản hồi CPIN (ngắn hơn trước vì radio đã tắt)
+            await Task.Delay(1000);
 
             string cpinState = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
             if (cpinState.Contains("SIM PIN") || cpinState.Contains("SIM PUK"))
@@ -1641,11 +1653,8 @@ public class GsmModemService : IGsmModemService
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpinState.Trim()}" });
                 return;
             }
-        
-            // Đảm bảo tắt sóng trước khi làm việc với CCID/IMEI.
-            await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
 
-        // Đọc IMEI hiện tại
+        // Đọc IMEI hiện tại (radio đã tắt, IMEI đọc từ NV)
             string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
             string cleanImei = "";
             if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
@@ -1656,20 +1665,21 @@ public class GsmModemService : IGsmModemService
 
         // Đọc CCID
             string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
-            bool hasSim = !pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp);
+            bool hasSim = HasReadableCcid(pollResp);
 
-            // Một số EC20 không cho đọc CCID khi CFUN=4. Chỉ bật SIM stack trong thời gian
-            // ngắn để đọc danh tính, rồi tắt radio lại trước khi phát sự kiện xử lý IMEI.
+            // Một số EC20 cần khởi tạo lại SIM stack trước khi đọc được CCID ở airplane mode.
+            // Chỉ dùng CFUN=0 -> 4; CFUN=1 là full functionality và bị cấm ở giai đoạn này.
             if (!hasSim)
             {
-                await SendCommandAsync(portName, "AT+CFUN=1", 8000, silent: true);
-                for (int attempt = 0; attempt < 3 && !hasSim; attempt++)
+                if (await RestartSimStackOfflineAsync(portName))
                 {
-                    await Task.Delay(attempt == 0 ? 1800 : 1200);
-                    pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
-                    hasSim = !pollResp.Contains("ERROR") && !string.IsNullOrWhiteSpace(pollResp);
+                    for (int attempt = 0; attempt < 3 && !hasSim; attempt++)
+                    {
+                        await Task.Delay(attempt == 0 ? 500 : 1000);
+                        pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
+                        hasSim = HasReadableCcid(pollResp);
+                    }
                 }
-                await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
             }
 
             if (hasSim)
@@ -1819,7 +1829,8 @@ public class GsmModemService : IGsmModemService
                     });
                     await SendCommandAsync(portName, "AT+COPS=0", 8000, silent: true, ct: token);
                 }
-                // Sau ~5 phút (60 lần): mini reboot EC20 để giải phóng radio stack bị kẹt
+                // Sau ~5 phút: đăng xuất/chọn lại mạng nhưng không reboot module. CFUN=1,1
+                // có thể nạp lại danh tính cũ trước khi tool kịp xác minh.
                 else if (attempts >= 60)
                 {
                     attempts = 0;
@@ -1827,10 +1838,11 @@ public class GsmModemService : IGsmModemService
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = $"[NETWORK_WAITING] Vẫn chưa có COPS sau ~5 phút (lần {waitingNoticeCount}); mini reboot EC20 (CFUN=1,1)."
+                        Data = $"[NETWORK_WAITING] Vẫn chưa có COPS sau ~5 phút (lần {waitingNoticeCount}); đăng xuất và chọn lại mạng, không reboot EC20."
                     });
-                    await SendCommandAsync(portName, "AT+CFUN=1,1", 12000, silent: true, ct: token);
-                    try { await Task.Delay(8000, token); } catch { break; }
+                    await SendCommandAsync(portName, "AT+COPS=2", 10000, silent: true, ct: token);
+                    try { await Task.Delay(1500, token); } catch { break; }
+                    await SendCommandAsync(portName, "AT+COPS=0", 15000, silent: true, ct: token);
                 }
                 else if (attempts % 15 == 0)
                 {

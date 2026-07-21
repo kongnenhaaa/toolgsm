@@ -5472,8 +5472,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || !IsPortReadyForOperation(portName))
             return "ERROR: SIM session changed";
 
-        return await _modemService.SendCommandAsync(
+        string result = await _modemService.SendCommandAsync(
             portName, $"AT+CUSD=1,\"{ussdCode}\",15", 10000, silent: true, ct: token);
+        if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
+        {
+            // Thử lại không kèm tham số DCS (15) cho mạng 4G VoLTE VinaPhone
+            result = await _modemService.SendCommandAsync(
+                portName, $"AT+CUSD=1,\"{ussdCode}\"", 10000, silent: true, ct: token);
+        }
+        return result;
     }
 
     private async Task<string> SendInitialUssdFallbackAsync(

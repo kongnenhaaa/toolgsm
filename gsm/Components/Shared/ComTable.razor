@@ -285,7 +285,7 @@
         var waitingForSim = candidates.Where(port => (port.Status ?? string.Empty) == "Chờ cắm SIM").ToList();
         if (waitingForSim.Count > 0)
         {
-            Snackbar.Add($"Đang quét lại SIM trên {waitingForSim.Count} cổng...", Severity.Info);
+            Snackbar.Add($"Đang quét lại SIM cho {candidates.Count} cổng ({waitingForSim.Count} cổng chờ SIM)...", Severity.Info);
             await RunAllPortsAsync(waitingForSim, port => ModemService.HandleSimInsertedAsync(port.PortName));
 
             for (int attempt = 0; attempt < 20; attempt++)

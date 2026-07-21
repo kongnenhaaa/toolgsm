@@ -412,10 +412,21 @@ public class ImeiManagementService
 
             // Sequence captured from SAuto: CFUN=4, verify, write slot 7,
             // wait 500 ms, read slot 7, wait 100 ms, then reset with CFUN=1,1.
-            string cfun4 = await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true);
-            string cfunState = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
-            if (!CommandSucceeded(cfun4)
-                || !System.Text.RegularExpressions.Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            // SAuto retry sequence for CFUN=4:
+            bool radioOff = false;
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                string cfun4 = await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true);
+                await Task.Delay(200, ct);
+                string cfunState = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
+                if (System.Text.RegularExpressions.Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    radioOff = true;
+                    break;
+                }
+            }
+
+            if (!radioOff)
             {
                 return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOffFailed };
             }
@@ -747,13 +758,22 @@ public class ImeiManagementService
                 Log($"[{portName}] [IMEI_TARGET] source={targetSource} CCID={ccid} target_imei={targetImei}");
                 Log($"[{portName}] [IMEI_CHANGE] CGSN hoặc NV slot chưa khớp mục tiêu {targetImei}. Bắt đầu ghi đồng bộ hai slot...", "WARNING");
                 
-                string cfun0 = await _modemService.SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true);
-                string cfun0State = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
-                if (!cfun0.Contains("OK")
-                    || !System.Text.RegularExpressions.Regex.IsMatch(
-                        cfun0State, @"\+CFUN:\s*0\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                bool radioOffLegacy = false;
+                for (int attempt = 0; attempt < 3; attempt++)
                 {
-                    Log($"[{portName}] Không xác nhận được CFUN=0 trước khi ghi IMEI. Hủy ghi.", "ERROR");
+                    string cfun4 = await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true);
+                    await Task.Delay(200, ct);
+                    string cfunState = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
+                    if (System.Text.RegularExpressions.Regex.IsMatch(cfunState, @"\+CFUN:\s*[04]\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    {
+                        radioOffLegacy = true;
+                        break;
+                    }
+                }
+
+                if (!radioOffLegacy)
+                {
+                    Log($"[{portName}] Không xác nhận được CFUN=4 trước khi ghi IMEI. Hủy ghi.", "ERROR");
                     return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOffFailed };
                 }
                 

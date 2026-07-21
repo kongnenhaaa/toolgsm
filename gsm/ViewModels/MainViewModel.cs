@@ -5269,13 +5269,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             int round = 0;
             string currentStage = string.Empty;
+            // Khi true: *111# đã thất bại hoàn toàn → bỏ qua identity, chạy thẳng *101#
+            bool identityGivenUp = false;
             while (IsSimSessionCurrent(port.PortName, ccid, epoch)
                 && port.Status == SimStatus.Active
                 && !_initialAccountLookupCompleted.ContainsKey(lookupKey))
             {
                 token.ThrowIfCancellationRequested();
-                bool needsIdentity = string.IsNullOrWhiteSpace(port.PhoneNumber)
-                    || string.IsNullOrWhiteSpace(port.SimRegDate);
+                // needsIdentity chỉ true khi chưa bỏ cuộc *111# VÀ còn thiếu SĐT/NgàyKH
+                bool needsIdentity = !identityGivenUp
+                    && (string.IsNullOrWhiteSpace(port.PhoneNumber)
+                        || string.IsNullOrWhiteSpace(port.SimRegDate));
                 string ussdCode = needsIdentity ? "*111#" : "*101#";
                 if (!string.Equals(currentStage, ussdCode, StringComparison.Ordinal))
                 {
@@ -5287,7 +5291,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     port.LastMessageContent = needsIdentity
                         ? $"[USSD][ĐANG CHẠY] *111# lấy SĐT/Ngày KH – vòng {round}"
-                        : $"[USSD][ĐANG CHẠY] *101# lấy TKC/HSD – vòng {round}";
+                        : $"[USSD][ĐANG CHẠY] *101# lấy SĐT/TKC/HSD – vòng {round}";
                     port.Sender = "USSD";
                     port.IsBalanceLoading = true;
                 });
@@ -5315,7 +5319,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     && !string.IsNullOrWhiteSpace(port.ExpiryDate))
                 {
                     _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
-                    AddLog($"[{port.PortName}] [USSD_AUTO_COMPLETE] *101# hoàn tất; TKC={port.Balance}, HSD={port.ExpiryDate}.", "SUCCESS");
+                    string sdt101 = string.IsNullOrWhiteSpace(port.PhoneNumber) ? "(chưa có SĐT)" : $"SĐT={port.PhoneNumber}";
+                    AddLog($"[{port.PortName}] [USSD_AUTO_COMPLETE] *101# hoàn tất; {sdt101}, TKC={port.Balance}, HSD={port.ExpiryDate}.", "SUCCESS");
                     break;
                 }
 
@@ -5326,31 +5331,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         port.PortName, ccid, epoch, ussdCode, token);
                     await Task.Delay(10000, token);
 
-                    bool fallbackComplete = needsIdentity
-                        ? !string.IsNullOrWhiteSpace(port.PhoneNumber)
-                            && !string.IsNullOrWhiteSpace(port.SimRegDate)
-                        : !string.IsNullOrWhiteSpace(port.Balance)
-                            && !string.IsNullOrWhiteSpace(port.ExpiryDate);
-                    if (fallbackComplete)
+                    if (needsIdentity)
                     {
-                        if (needsIdentity)
+                        // *111# fallback thành công → chuyển sang *101#
+                        if (!string.IsNullOrWhiteSpace(port.PhoneNumber) && !string.IsNullOrWhiteSpace(port.SimRegDate))
                         {
-                            AddLog($"[{port.PortName}] [USSD_IDENTITY_COMPLETE] *111# dự phòng đã lấy SĐT={port.PhoneNumber}, Ngày KH={port.SimRegDate}; chuyển sang *101#.", "SUCCESS");
+                            AddLog($"[{port.PortName}] [USSD_IDENTITY_COMPLETE] *111# fallback lấy SĐT={port.PhoneNumber}, Ngày KH={port.SimRegDate}; chuyển sang *101#.", "SUCCESS");
                             continue;
                         }
 
-                        _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
-                        AddLog($"[{port.PortName}] [USSD_AUTO_COMPLETE] *101# dự phòng hoàn tất; TKC={port.Balance}, HSD={port.ExpiryDate}.", "SUCCESS");
+                        // *111# hoàn toàn thất bại → bỏ qua, dùng *101# để lấy tất cả (SĐT+TKC+HSD+NgàyĐK+Khóa)
+                        identityGivenUp = true;
+                        AddLog($"[{port.PortName}] [USSD_111_GIVEUP] *111# không phản hồi sau SAuto + fallback; chuyển sang *101# để lấy SĐT/TKC/HSD.", "WARN");
+                        continue; // → vòng tiếp theo: needsIdentity=false → chạy *101#
+                    }
+                    else
+                    {
+                        // *101# fallback: kiểm tra kết quả
+                        if (!string.IsNullOrWhiteSpace(port.Balance) && !string.IsNullOrWhiteSpace(port.ExpiryDate))
+                        {
+                            _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
+                            string sdtFb = string.IsNullOrWhiteSpace(port.PhoneNumber) ? "(chưa có SĐT)" : $"SĐT={port.PhoneNumber}";
+                            AddLog($"[{port.PortName}] [USSD_AUTO_COMPLETE] *101# fallback hoàn tất; {sdtFb}, TKC={port.Balance}, HSD={port.ExpiryDate}.", "SUCCESS");
+                            break;
+                        }
+
+                        // *101# cũng thất bại hoàn toàn → dừng
+                        AddLog($"[{port.PortName}] [USSD_AUTO_FAILED] *101# không trả dữ liệu sau SAuto + fallback ({fallback}). Dùng Tải lại SIM.", "ERROR");
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            port.LastMessageContent = "[USSD][LỖI] *101# không phản hồi; dùng Tải lại SIM để thử lại";
+                            port.Sender = "USSD";
+                        });
                         break;
                     }
-
-                    AddLog($"[{port.PortName}] [USSD_AUTO_FAILED] {ussdCode} không trả dữ liệu sau chuỗi SAuto và fallback ({fallback}).", "ERROR");
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        port.LastMessageContent = $"[USSD][LỖI] {ussdCode} không phản hồi; dùng Tải lại SIM để thử lại";
-                        port.Sender = "USSD";
-                    });
-                    break;
                 }
 
                 int retrySeconds = Math.Clamp(AppSettings.UssdRetrySeconds, 10, 300);

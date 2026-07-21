@@ -4204,6 +4204,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (port != null)
         {
             port.Sender = senderPhone;
+            port.LastSmsSender = senderPhone;
             port.Otp = extractedOtp;
             port.LastMessageContent = content;
             port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
@@ -4364,6 +4365,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (port != null)
         {
             port.Sender = senderPhone;
+            port.LastSmsSender = senderPhone;
             if (newOtp != "N/A") port.Otp = newOtp;
             port.LastMessageContent = existing.Content;
             port.LastReceivedTime = existing.ReceivedTime;
@@ -5307,10 +5309,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 && !_initialAccountLookupCompleted.ContainsKey(lookupKey))
             {
                 token.ThrowIfCancellationRequested();
-                // needsIdentity chỉ true khi chưa bỏ cuộc *111# VÀ còn thiếu SĐT/NgàyKH
-                bool needsIdentity = !identityGivenUp
-                    && (string.IsNullOrWhiteSpace(port.PhoneNumber)
-                        || string.IsNullOrWhiteSpace(port.SimRegDate));
+                // VinaPhone thường trả về SĐT qua *111#. Ngày KH là phụ, nếu có thì tốt, không có cũng không sao.
+                // Tránh kẹt vòng lặp nhiều lần chỉ vì thiếu Ngày KH khi đã lấy được SĐT từ nguồn khác.
+                bool needsIdentity = !identityGivenUp && string.IsNullOrWhiteSpace(port.PhoneNumber);
                 string ussdCode = needsIdentity ? "*111#" : "*101#";
                 if (!string.Equals(currentStage, ussdCode, StringComparison.Ordinal))
                 {
@@ -5345,10 +5346,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 if (needsIdentity
-                    && !string.IsNullOrWhiteSpace(port.PhoneNumber)
-                    && !string.IsNullOrWhiteSpace(port.SimRegDate))
+                    && !string.IsNullOrWhiteSpace(port.PhoneNumber))
                 {
-                    AddLog($"[{port.PortName}] [USSD_IDENTITY_COMPLETE] *111# đã lấy SĐT={port.PhoneNumber}, Ngày KH={port.SimRegDate}; chuyển sang *101#.", "SUCCESS");
+                    string dateLog = string.IsNullOrWhiteSpace(port.SimRegDate) ? "(không có Ngày KH)" : $"Ngày KH={port.SimRegDate}";
+                    AddLog($"[{port.PortName}] [USSD_IDENTITY_COMPLETE] *111# đã lấy SĐT={port.PhoneNumber}, {dateLog}; chuyển sang *101#.", "SUCCESS");
                     continue;
                 }
 
@@ -5372,9 +5373,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (needsIdentity)
                     {
                         // *111# fallback thành công → chuyển sang *101#
-                        if (!string.IsNullOrWhiteSpace(port.PhoneNumber) && !string.IsNullOrWhiteSpace(port.SimRegDate))
+                        if (!string.IsNullOrWhiteSpace(port.PhoneNumber))
                         {
-                            AddLog($"[{port.PortName}] [USSD_IDENTITY_COMPLETE] *111# fallback lấy SĐT={port.PhoneNumber}, Ngày KH={port.SimRegDate}; chuyển sang *101#.", "SUCCESS");
+                            string dateLog = string.IsNullOrWhiteSpace(port.SimRegDate) ? "(không có Ngày KH)" : $"Ngày KH={port.SimRegDate}";
+                            AddLog($"[{port.PortName}] [USSD_IDENTITY_COMPLETE] *111# fallback lấy SĐT={port.PhoneNumber}, {dateLog}; chuyển sang *101#.", "SUCCESS");
                             continue;
                         }
 

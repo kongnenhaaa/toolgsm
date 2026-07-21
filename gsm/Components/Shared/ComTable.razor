@@ -205,8 +205,12 @@
                 else if (col.Name == "Otp")
                 {
                     <MudTd Style="@($"font-weight:600; font-size:16px; {_brd} color:#60A5FA; white-space:nowrap;")">
-                        @(string.IsNullOrEmpty(context.Otp) ? "—" : context.Otp)
+                        @(string.IsNullOrEmpty(context.Otp) ? "-" : context.Otp)
                     </MudTd>
+                }
+                else if (col.Name == "LastSmsSender")
+                {
+                    <MudTd Style="@($"font-weight:600; font-size:16px; {_brd} color:#38BDF8; white-space:nowrap;")">@(string.IsNullOrEmpty(context.LastSmsSender) ? "-" : context.LastSmsSender)</MudTd>
                 }
                 else if (col.Name == "LastMessageContent")
                 {
@@ -540,6 +544,7 @@
             new() { Name = "ForwardedTo", Header = "Chuyển tiếp" },
             new() { Name = "VnptStatus", Header = "Trạng thái VNPT" },
             new() { Name = "Otp", Header = "OTP" },
+            new() { Name = "LastSmsSender", Header = "Người gửi SMS" },
             new() { Name = "LastMessageContent", Header = "Nội dung" }
         };
     }
@@ -615,6 +620,7 @@
                 "ForwardedTo"        => p.ForwardedTo ?? "",
                 "VnptStatus"         => p.VnptStatus ?? "",
                 "Otp"                => p.Otp ?? "",
+                "LastSmsSender"      => p.LastSmsSender ?? "",
                 "LastMessageContent" => p.LastMessageContent ?? "",
                 _                    => ""
             });

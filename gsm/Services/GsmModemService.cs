@@ -379,7 +379,7 @@ public class GsmModemService : IGsmModemService
 
         string sender = ParseSenderFromCmgr(smsContent);
         if (sender == "Unknown" && !string.IsNullOrWhiteSpace(decoded.Sender))
-            sender = decoded.Sender;
+            sender = DecodeSmsSender(decoded.Sender);
         string? fullContent = TryAssembleMultipartExact(port, sender, decoded, msgIndex, smsContent, out var indicesToDelete);
         if (fullContent == null)
         {
@@ -1086,11 +1086,11 @@ public class GsmModemService : IGsmModemService
         string imei = await SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true, ct: ct);
         await Task.Delay(100, ct);
         await SendCommandAsync(portName, "AT+CNMI?", 5000, silent: true, ct: ct);
-        await SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, silent: true, ct: ct);
         await Task.Delay(300, ct);
         await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true, ct: ct);
         await Task.Delay(300, ct);
-        await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CMGF=0", 5000, silent: true, ct: ct);
         await Task.Delay(300, ct);
         await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, ct: ct);
         await SendCommandAsync(portName, "AT+CMGD=1,4", 5000, silent: true, ct: ct);

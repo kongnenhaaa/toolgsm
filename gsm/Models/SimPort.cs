@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace gsm.Models;
 
@@ -91,6 +91,8 @@ public partial class SimPort : ObservableObject
 
     public string LastUssdResult { get; set; } = string.Empty;
     public string LastSmsResult { get; set; } = string.Empty;
+    [ObservableProperty]
+    private string _lastSmsSender = string.Empty;
     public string LastCallResult { get; set; } = string.Empty;
     public string LastMmsResult { get; set; } = string.Empty;
     public string LastImeiResult { get; set; } = string.Empty;

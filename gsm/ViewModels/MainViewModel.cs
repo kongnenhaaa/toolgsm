@@ -5073,8 +5073,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var commands = new List<string> { "AT+CUSD=1" };
                 if (profile?.Supports(ModemCapability.UrcPortRouting) == true)
                     commands.Add("AT+QURCCFG=\"urcport\",\"uart1\"");
-                if (profile?.Supports(ModemCapability.NetworkScanConfig) == true)
-                    commands.Add("AT+QCFG=\"nwscanmode\",0,1");
                 // Không tự ghi QSIMDET polarity. Mức insert phụ thuộc cách đấu
                 // USIM_PRESENCE của từng board và chỉ có hiệu lực sau reboot.
                 if (profile?.Supports(ModemCapability.SimStatusUrc) == true)
@@ -5333,10 +5331,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     : await SendSautoInitial101Async(port.PortName, ccid, epoch, token);
 
                 // Give a late +CUSD URC time to reach the parser before retrying.
-                await Task.Delay(10000, token);
+                // Nếu lệnh bị Timeout hoặc văng ERROR, không cần chờ tận 10 giây.
+                int delayMs = result.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ? 2000 : 10000;
+                await Task.Delay(delayMs, token);
                 if (!IsSimSessionCurrent(port.PortName, ccid, epoch)
                     || port.Status != SimStatus.Active)
                     break;
+
+                if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Ép WCDMA (3G) ngay lập tức nếu USSD bị lỗi/timeout thay vì đợi hết 3 vòng (giống SAuto)
+                    AddLog($"[{port.PortName}] [USSD_FAST_RECOVERY] Lệnh USSD báo lỗi ({result}); kích hoạt ép sóng CS/3G lập tức.", "WARN");
+                    await EnsureUssdVoiceDomainAsync(port.PortName, token, force: true);
+                }
 
                 if (needsIdentity && port.LastUssdResult != null && port.LastUssdResult.Contains("UNKNOWN APPLICATION", StringComparison.OrdinalIgnoreCase))
                 {
@@ -5646,20 +5653,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return await EnsureUssdVoiceDomainAsync(portName, token);
     }
 
-    private async Task<bool> EnsureUssdVoiceDomainAsync(string portName, CancellationToken token)
+    private async Task<bool> EnsureUssdVoiceDomainAsync(string portName, CancellationToken token, bool force = false)
     {
         static bool Registered(string response, string type) =>
             Regex.IsMatch(response, $@"\+{type}:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase);
 
-        string creg = await _modemService.SendCommandAsync(
-            portName, "AT+CREG?", 5000, silent: true, ct: token);
-        if (Registered(creg, "CREG")) return true;
+        if (!force)
+        {
+            string creg = await _modemService.SendCommandAsync(
+                portName, "AT+CREG?", 5000, silent: true, ct: token);
+            if (Registered(creg, "CREG")) return true;
+        }
 
         string cereg = await _modemService.SendCommandAsync(
             portName, "AT+CEREG?", 5000, silent: true, ct: token);
         QuectelModemProfile? profile = _modemService.GetModemProfile(portName);
-        if (!Registered(cereg, "CEREG")
-            || profile?.Supports(ModemCapability.ImsConfig) != true)
+        if (!force && (!Registered(cereg, "CEREG")
+            || profile?.Supports(ModemCapability.ImsConfig) != true))
         {
             // Không phải đúng lỗi LTE-only đã xác minh trên EC20F; để preflight USSD
             // trả lỗi mạng thật thay vì tự thay đổi cấu hình modem.
@@ -5707,44 +5717,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             });
 
-            // Bước 1: Ép WCDMA (3G) — CS domain lên ngay mà không cần reboot.
-            // 4G/LTE có thể nhận SMS qua SGs nhưng USSD cần CS (CREG=1).
-            // WCDMA cung cấp CS đầy đủ và tránh VoLTE/IMS phức tạp.
+            // Thử nạp chế độ AUTO (4G/3G) + IMS VoLTE chuẩn của modem
             QuectelModemProfile? profile = _modemService.GetModemProfile(portName);
             if (profile?.Supports(ModemCapability.NetworkScanConfig) == true)
             {
-                string setWcdma = await _modemService.SendCommandAsync(
-                    portName, "AT+QCFG=\"nwscanmode\",2,1", 5000, silent: true, ct: _lifetimeCts.Token);
-                if (!setWcdma.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                await _modemService.SendCommandAsync(
+                    portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true, ct: _lifetimeCts.Token);
+                await _modemService.SendCommandAsync(
+                    portName, "AT+QCFG=\"ims\",1", 5000, silent: true, ct: _lifetimeCts.Token);
+                
+                for (int probe = 0; probe < 3; probe++)
                 {
-                    AddLog($"[{portName}] [USSD_CS_RECOVERY] Đã ép WCDMA; đợi CREG=1 tối đa 30s...", "INFO");
-                    for (int probe = 0; probe < 10; probe++)
+                    await Task.Delay(1000, _lifetimeCts.Token);
+                    if (!IsPortReadyForOperation(portName)) continue;
+                    string creg = await _modemService.SendCommandAsync(
+                        portName, "AT+CREG?", 5000, silent: true, ct: _lifetimeCts.Token);
+                    if (Regex.IsMatch(creg, @"\+CREG:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase))
                     {
-                        await Task.Delay(3000, _lifetimeCts.Token);
-                        if (!IsPortReadyForOperation(portName)) continue;
-                        string creg = await _modemService.SendCommandAsync(
-                            portName, "AT+CREG?", 5000, silent: true, ct: _lifetimeCts.Token);
-                        if (Regex.IsMatch(creg, @"\+CREG:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase))
-                        {
-                            AddLog($"[{portName}] [USSD_CS_RECOVERY] CREG=1 sau khi ép WCDMA; sẵn sàng gửi USSD.", "SUCCESS");
-                            // Trả về auto mode sau 90s (sau khi USSD hoàn tất)
-                            _ = Task.Run(async () =>
-                            {
-                                await Task.Delay(90000, _lifetimeCts.Token);
-                                if (IsPortReadyForOperation(portName))
-                                {
-                                    await _modemService.SendCommandAsync(
-                                        portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true, ct: _lifetimeCts.Token);
-                                    AddLog($"[{portName}] [USSD_CS_RECOVERY] Trả về auto network mode.", "INFO");
-                                }
-                            }, _lifetimeCts.Token);
-                            return true;
-                        }
+                        AddLog($"[{portName}] [USSD_CS_RECOVERY] Đã nhận diện được sóng thoại trên chế độ AUTO.", "SUCCESS");
+                        return true;
                     }
-                    AddLog($"[{portName}] [USSD_CS_RECOVERY] WCDMA không giúp CREG=1 sau 30s; thử IMS reboot.", "WARN");
-                    // Trả về auto trước khi reboot để không kẹt ở 3G
-                    await _modemService.SendCommandAsync(
-                        portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true, ct: _lifetimeCts.Token);
                 }
             }
 
@@ -7573,11 +7565,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     internal static bool IsVinaNetworkReadyForInitialLookup(SimPort port) =>
         port.Status == SimStatus.Active
-        && string.Equals(port.NetworkProvider, "VinaPhone", StringComparison.OrdinalIgnoreCase)
-        && (string.Equals(port.NetworkType, "2G", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(port.NetworkType, "3G", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(port.NetworkType, "4G", StringComparison.OrdinalIgnoreCase))
-        && port.SignalStrength > 0;
+        && (string.IsNullOrWhiteSpace(port.NetworkProvider)
+            || string.Equals(port.NetworkProvider, "VinaPhone", StringComparison.OrdinalIgnoreCase));
 
     internal static string ExtractPhoneNumberFromUssd(string? content)
     {

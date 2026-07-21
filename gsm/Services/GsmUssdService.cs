@@ -68,16 +68,14 @@ public sealed class GsmUssdService : IGsmUssdService
                 else
                 {
                     if (!IsCurrent(session)) return SessionChangedError;
-                    string encodedUssd = EncodeUcs2(ussdCode);
                     try
                     {
                         if (!IsCurrent(session)) return SessionChangedError;
-                        // Chuỗi tương thích EC20/Simmart: PDU mode + UCS2, mã USSD UTF-16BE
-                        // và không ép DCS. Mỗi COM có port lock riêng nên nhiều modem vẫn chạy song song.
-                        await CommandAsync(session, "AT+CMGF=0", 5000, token);
-                        await CommandAsync(session, "AT+CSCS=\"UCS2\"", 5000, token);
+                        // Chuỗi tương thích SAuto: Text mode + GSM charset
+                        await CommandAsync(session, "AT+CMGF=1", 5000, token);
+                        await CommandAsync(session, "AT+CSCS=\"GSM\"", 5000, token);
                         result = await _modem.SendCommandAsync(
-                            portName, $"AT+CUSD=1,\"{encodedUssd}\"", ct: token);
+                            portName, $"AT+CUSD=1,\"{ussdCode}\"", ct: token);
 
                         // Một số SIM/firmware chỉ trả OK sau khi nhận lệnh nhưng tổng đài
                         // không mở phiên USSD. Không được coi OK trần là thành công.
@@ -86,18 +84,15 @@ public sealed class GsmUssdService : IGsmUssdService
                         {
                             result = $"ERROR: Modem accepted USSD but network returned no +CUSD (attempt {attempt})";
                         }
-                        await _delay.WaitAsync(TimeSpan.FromSeconds(3.5), token);
+                        await _delay.WaitAsync(TimeSpan.FromSeconds(1.0), token);
                     }
                     finally
                     {
                         if (IsCurrent(session))
                         {
-                            // SMS service dùng text mode. Khôi phục sau khi đã nhận xong +CUSD.
-                            string receiveMode = _modem.GetModemProfile(portName)?.IsQuectel == true
-                                ? "AT+CMGF=0" : "AT+CMGF=1";
-                            try { await _modem.SendCommandAsync(portName, receiveMode, 5000, true); }
+                            try { await _modem.SendCommandAsync(portName, "AT+CMGF=1", 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }
-                            try { await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true); }
+                            try { await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }
                             try { await _modem.SendCommandAsync(portName, "AT+CREG=2", 5000, true); }
                             catch { /* Polling COPS vẫn tiếp tục hoạt động. */ }

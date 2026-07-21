@@ -1,4 +1,4 @@
-@using gsm.Models
+﻿@using gsm.Models
 @using gsm.Components.Shared
 @inject gsm.Services.IGsmModemService ModemService
 @inject gsm.ViewModels.MainViewModel Vm
@@ -65,8 +65,6 @@
             }
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>
-            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.SimCard" Class="mr-2"
-                       Variant="Variant.Outlined" Color="Color.Error" OnClick="ReloadSimSelected">Tải lại SIM</MudButton>
             @{
                 var pendingList = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
                 var pendingCount = pendingList.Count(IsImeiActionPending);
@@ -267,34 +265,6 @@
         {
             await Vm.RefreshPortAsync(port.PortName);
         }
-    }
-
-    async Task ReloadSimSelected()
-    {
-        var list = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
-        if (!list.Any()) return;
-
-        Snackbar.Add($"Đang tải lại SIM cho {list.Count} cổng...", Severity.Info);
-        int success = 0;
-        int failed = 0;
-        await RunAllPortsAsync(list, async p =>
-        {
-            try
-            {
-                if (await Vm.ReloadPortSafelyAsync(p.PortName))
-                    Interlocked.Increment(ref success);
-                else
-                    Interlocked.Increment(ref failed);
-            }
-            catch
-            {
-                Interlocked.Increment(ref failed);
-            }
-        });
-        Snackbar.Add($"Tải lại SIM: {success} COM đã bắt đầu reload, {failed} COM không thể khởi động.",
-            failed == 0 ? Severity.Success : Severity.Warning);
-        SelectedItems.Clear();
-        await SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
     [Inject] private IDialogService DialogService { get; set; } = default!;

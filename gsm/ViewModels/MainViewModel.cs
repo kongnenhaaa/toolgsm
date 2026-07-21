@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -2068,6 +2068,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 _initialAccountLookupCompleted.TryRemove(key, out _);
         }
+        // Xoa flag IMS recovery de phien SIM moi duoc thu lai neu CS van chua san sang.
+        foreach (string key in _ussdVoiceRecoveryAttempted.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _ussdVoiceRecoveryAttempted.TryRemove(key, out _);
+        }
         // Xóa flag IMS recovery để phiên SIM mới được thử lại nếu CS vẫn chưa sẵn sàng.
         // Không xóa sẽ khiến USSD tiếp tục lỗi sau "Tải lại SIM" vì recoveryKey cũ còn tồn tại.
         foreach (string key in _ussdVoiceRecoveryAttempted.Keys)
@@ -3005,6 +3011,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
             else if (e.Data.Contains("+CUSD:"))
             {
                 port.IsBalanceLoading = false;
+                // mode=1 = menu tuong tac (*101# VinaPhone tra menu truoc khi tra data)
+                var cusdModeM = Regex.Match(e.Data, @"\+CUSD:\s*(\d+)");
+                if (cusdModeM.Success && cusdModeM.Groups[1].Value == "1")
+                {
+                    AddLog($"[{e.PortName}] [USSD_MENU] *101# menu (mode=1); tu reply \"1\" de lay TKC/HSD.", "INFO");
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(600, _lifetimeCts.Token);
+                        if (IsPortReadyForOperation(e.PortName))
+                            await _modemService.SendCommandAsync(e.PortName, "AT+CUSD=1,\"1\",15", 10000, silent: true, ct: _lifetimeCts.Token);
+                    }, _lifetimeCts.Token);
+                    return;
+                }
                 var match = Regex.Match(e.Data, @"\+CUSD:.*?""(.*?)(?:""|$)", RegexOptions.Singleline);
                 if (match.Success)
                 {
@@ -3073,7 +3092,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                                 }
                             }
                         }
-                    }
+                    }
+
 
                     // 1. HSD (Hạn sử dụng)
                     var expiryMatch = Regex.Match(ussdContent, @"(?:HSD|han\s*sd|han\s*su\s*dung|ngay\s*het\s*han)[^\d]{0,15}(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})", RegexOptions.IgnoreCase);
@@ -5525,14 +5545,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ? cancellationToken
             : _lifetimeCts.Token;
 
-        bool voiceReady = await EnsureUssdVoiceDomainAsync(portName, effectiveToken);
-        if (!voiceReady || !IsPortReadyForOperation(portName))
-        {
-            string recoveryError = "ERROR: LTE registered but CS/IMS recovery did not complete";
-            RecordPortError(portName, recoveryError);
-            return recoveryError;
-        }
-
+        // EnsureUssdVoiceDomain chạy nền (fire-and-forget) thay vì block.
+        // EC20 vẫn gửi +CUSD URC dù CREG báo lỗi — không cần chặn USSD.
+        _ = EnsureUssdVoiceDomainAsync(portName, effectiveToken);
         string result = await _ussdService.SendAsync(portName, ussdCode, maxAttempts, effectiveToken);
 
         // EC20F có thể đang CREG=1, nhận CUSD bằng OK, rồi rớt riêng miền CS trong

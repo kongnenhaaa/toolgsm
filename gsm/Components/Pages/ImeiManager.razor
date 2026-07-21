@@ -31,6 +31,12 @@
         Restore tất cả
     </MudButton>
 
+    <MudButton Variant="Variant.Filled" Color="Color.Warning"
+               StartIcon="@Icons.Material.Filled.Brush"
+               OnClick="PaintAllNew" Size="Size.Small">
+        Tạo IMEI mới tất cả
+    </MudButton>
+
     <MudButton Variant="Variant.Text" Color="Color.Error" 
                StartIcon="@Icons.Material.Filled.DeleteSweep"
                OnClick="ClearAllBackup" Size="Size.Small">
@@ -63,9 +69,9 @@
     </MudItem>
     <MudItem xs="6" sm="3">
         <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudText Typo="Typo.caption" Style="color:#64748B;">Chờ Accept</MudText>
+            <MudText Typo="Typo.caption" Style="color:#64748B;">Chặn SIM</MudText>
             <MudText Typo="Typo.h5" Color="Color.Warning" Style="font-weight:700;">
-                @Ports.Count(p => p.Status == SimStatus.SecurityBlocked)
+                @Ports.Count(p => p.Status == SimStatus.WaitingAccept || p.Status == SimStatus.SecurityBlocked)
             </MudText>
         </MudPaper>
     </MudItem>
@@ -120,11 +126,12 @@
                             <MudTooltip Text="Restore IMEI từ backup">
                                 <MudIconButton Icon="@Icons.Material.Filled.Restore" Size="Size.Small" Color="Color.Primary"
                                                OnClick="@(() => RestoreOne(context))" 
-                                               Disabled="@(string.IsNullOrEmpty(GetOriginalImei(context.Serial)))" />
+                                               Disabled="@(string.IsNullOrEmpty(GetOriginalImei(context.Serial)) || !IsWaitingForImeiAction(context))" />
                             </MudTooltip>
                             <MudTooltip Text="Tráng IMEI mới">
                                 <MudIconButton Icon="@Icons.Material.Filled.Brush" Size="Size.Small" Color="Color.Warning"
-                                               OnClick="@(() => PaintNewImei(context))" />
+                                               OnClick="@(() => PaintNewImei(context))"
+                                               Disabled="@(!IsWaitingForImeiAction(context))" />
                             </MudTooltip>
                             <MudTooltip Text="Xóa mapping">
                                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
@@ -340,7 +347,9 @@
 
     async Task RestoreAll()
     {
-        var targets = Ports.Where(p => !string.IsNullOrEmpty(p.Serial) && !string.IsNullOrEmpty(GetOriginalImei(p.Serial))).ToList();
+        var targets = Ports.Where(p => IsWaitingForImeiAction(p)
+            && !string.IsNullOrEmpty(p.Serial)
+            && !string.IsNullOrEmpty(GetOriginalImei(p.Serial))).ToList();
         if (!targets.Any())
         {
             Snackbar.Add("Không có cổng nào có IMEI gốc/backup", Severity.Warning);
@@ -355,16 +364,40 @@
         if (confirm != true) return;
 
         Snackbar.Add($"Bắt đầu Restore IMEI cho {targets.Count} cổng...", Severity.Info);
-        foreach (var port in targets)
-        {
-            var original = GetOriginalImei(port.Serial);
-            if (!string.IsNullOrEmpty(original) && port.Imei != original)
-            {
-                await PerformPaintImeiAsync(port, original);
-            }
-        }
+        BackendConcurrency.ConfigureThreadPool(targets.Count);
+        await Task.WhenAll(targets.Select(port =>
+            PerformPaintImeiAsync(
+                port,
+                GetOriginalImei(port.Serial)!,
+                overwriteBackupWithCurrentImei: false)));
         Snackbar.Add("Hoàn tất restore", Severity.Success);
     }
+
+    async Task PaintAllNew()
+    {
+        var targets = Ports.Where(IsWaitingForImeiAction).ToList();
+        if (!targets.Any())
+        {
+            Snackbar.Add("Không có SIM nào đang chờ tạo IMEI mới", Severity.Warning);
+            return;
+        }
+
+        var confirm = await DialogService.ShowMessageBox(
+            "Xác nhận tạo IMEI mới",
+            $"Tạo và tráng IMEI mới cho tất cả {targets.Count} SIM đang chờ?",
+            yesText: "Tạo IMEI mới", cancelText: "Hủy");
+        if (confirm != true) return;
+
+        BackendConcurrency.ConfigureThreadPool(targets.Count);
+        await Task.WhenAll(targets.Select(port =>
+            PerformPaintImeiAsync(
+                port,
+                gsm.Services.ImeiManagementService.GenerateRandomImei(),
+                overwriteBackupWithCurrentImei: true)));
+    }
+
+    static bool IsWaitingForImeiAction(SimPort port) =>
+        port.Status == SimStatus.WaitingAccept || port.Status == SimStatus.SecurityBlocked;
 
     async Task RestoreOne(SimPort port)
     {
@@ -378,7 +411,7 @@
 
         if (confirm != true) return;
 
-        await PerformPaintImeiAsync(port, original);
+        await PerformPaintImeiAsync(port, original, overwriteBackupWithCurrentImei: false);
     }
 
     async Task PaintNewImei(SimPort port)
@@ -391,14 +424,18 @@
         if (confirm != true) return;
 
         string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
-        await PerformPaintImeiAsync(port, targetImei);
+        await PerformPaintImeiAsync(port, targetImei, overwriteBackupWithCurrentImei: true);
     }
 
-    async Task PerformPaintImeiAsync(SimPort port, string targetImei)
+    async Task PerformPaintImeiAsync(
+        SimPort port,
+        string targetImei,
+        bool overwriteBackupWithCurrentImei)
     {
         try
         {
-            bool success = await Vm.PaintImeiForCurrentSimAsync(port.PortName, targetImei);
+            bool success = await Vm.PaintImeiForCurrentSimAsync(
+                port.PortName, targetImei, overwriteBackupWithCurrentImei);
             
             if (success)
             {

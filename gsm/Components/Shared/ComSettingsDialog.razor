@@ -116,7 +116,22 @@
         var allColTemplates = GetDefaultColumns();
         
         // Sắp xếp cột theo thứ tự đã lưu (hoặc mặc định)
-        var savedOrder = cfg.ColumnOrder ?? new List<string>();
+        var savedOrder = (cfg.ColumnOrder ?? new List<string>())
+            .SelectMany(name => name == "NetworkSignal"
+                ? new[] { "NetworkType", "Signal" }
+                : new[] { name })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (savedOrder.Count > 0
+            && !savedOrder.Contains("NetworkType", StringComparer.OrdinalIgnoreCase)
+            && !savedOrder.Contains("Signal", StringComparer.OrdinalIgnoreCase))
+        {
+            int providerIndex = savedOrder.FindIndex(name =>
+                name.Equals("NetworkProvider", StringComparison.OrdinalIgnoreCase));
+            int insertIndex = providerIndex >= 0 ? providerIndex + 1 : savedOrder.Count;
+            savedOrder.Insert(insertIndex, "NetworkType");
+            savedOrder.Insert(insertIndex + 1, "Signal");
+        }
         var orderedTemplates = new List<ColumnItem>();
 
         foreach (var colName in savedOrder)
@@ -133,6 +148,11 @@
 
         // Đọc cấu hình các cột bị ẩn
         var hiddenCols = new HashSet<string>(cfg.HiddenColumns ?? new List<string>());
+        if (hiddenCols.Remove("NetworkSignal"))
+        {
+            hiddenCols.Add("NetworkType");
+            hiddenCols.Add("Signal");
+        }
         foreach (var col in orderedTemplates)
         {
             col.Visible = !hiddenCols.Contains(col.Name);
@@ -203,8 +223,10 @@
             new() { Name = "PortName", Header = "Cổng" },
             new() { Name = "Status", Header = "Trạng thái" },
             new() { Name = "NetworkProvider", Header = "Nhà mạng" },
-            new() { Name = "Balance", Header = "Số dư" },
-            new() { Name = "PhoneNumber", Header = "Số điện thoại" },
+            new() { Name = "NetworkType", Header = "Mạng" },
+            new() { Name = "Signal", Header = "Tín hiệu" },
+            new() { Name = "Balance", Header = "TKC" },
+            new() { Name = "PhoneNumber", Header = "SĐT" },
             new() { Name = "Imei", Header = "IMEI" },
             new() { Name = "Serial", Header = "CCID" },
             new() { Name = "ExpiryDate", Header = "HSD" },

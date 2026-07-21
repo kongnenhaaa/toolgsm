@@ -121,6 +121,19 @@ body { overflow: hidden; }
 .com-table-shell { overflow: hidden; background: rgb(255 255 255 / .96) !important; border: 1px solid var(--gsm-border) !important; border-radius: var(--gsm-radius-lg) !important; box-shadow: var(--gsm-shadow-sm); }
 .com-toolbar { min-height: 54px !important; padding: 8px 12px !important; gap: 5px; overflow-x: auto; background: linear-gradient(180deg, #fbfdff, #f8fafc) !important; border-bottom: 1px solid var(--gsm-border); }
 .com-toolbar::-webkit-scrollbar { height: 5px; }
+.com-stat-chip {
+    height: 28px !important;
+    min-height: 28px !important;
+    padding-inline: 9px !important;
+    border-radius: 999px !important;
+    font-size: 11px !important;
+    line-height: 1 !important;
+    font-weight: 700 !important;
+    letter-spacing: 0 !important;
+    white-space: nowrap;
+}
+.com-stat-chip .mud-chip-content { display: inline-flex; align-items: center; line-height: 1; }
+.com-stat-chip .mud-chip-icon { width: 15px; height: 15px; margin-inline: 0 5px; font-size: 15px !important; }
 .com-table .mud-table-head .mud-table-cell { height: 42px; background: #f8fafc !important; color: #64748b !important; font-size: 11px; font-weight: 750; letter-spacing: .035em; text-transform: uppercase; border-bottom: 1px solid #dbe3ee !important; }
 .com-table .mud-table-row { transition: background .16s ease, box-shadow .16s ease; }
 .com-table .mud-table-row:hover { background: #f5f9ff !important; box-shadow: inset 3px 0 #93c5fd; }

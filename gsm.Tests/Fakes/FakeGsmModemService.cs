@@ -15,7 +15,6 @@ public sealed class FakeGsmModemService : IGsmModemService
     public bool CallInProgress { get; set; }
     public QuectelModemProfile? ModemProfile { get; set; }
 
-    public Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
@@ -77,6 +76,7 @@ public sealed class FakeGsmModemService : IGsmModemService
     public void Disconnect(string portName) { }
     public void DisconnectAll() { }
     public void StartHotplugWaitLoop(string portName) { }
+    public Task HandleSimInsertedAsync(string portName) => Task.CompletedTask;
     public Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
     public Task ReloadSimAsync(string portName) => Task.CompletedTask;
     public Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);

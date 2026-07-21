@@ -17,9 +17,8 @@
                 var statActive    = Ports.Count(p => p.Status == SimStatus.Active);
                 var statConn      = Ports.Count(p => p.Status == SimStatus.Connecting);
                 var statWaitSim   = Ports.Count(p => p.Status == "Chờ cắm SIM");
-                var statWaitAccpt = Ports.Count(p => p.Status == SimStatus.WaitingAccept);
                 var statNoResp    = Ports.Count(p => p.Status == SimStatus.NoResponse);
-                var statBlocked   = Ports.Count(p => p.Status == SimStatus.SecurityBlocked || p.Status == SimStatus.Quarantined);
+                var statBlocked   = Ports.Count(p => p.Status == SimStatus.WaitingAccept || p.Status == SimStatus.SecurityBlocked || p.Status == SimStatus.Quarantined);
                 var statTotal     = Ports.Count();
                 var isDark        = gsm.Services.SettingsService.Current.DarkMode;
                 var titleColor    = isDark ? "color:#E2E8F0; font-weight:600;" : "color:#64748B; font-weight:600;";
@@ -30,43 +29,37 @@
                 @if (statActive > 0)
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Filled"
-                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
-                        ✅ Active: @statActive
+                             Icon="@Icons.Material.Filled.CheckCircle" Class="mr-1 com-stat-chip">
+                        Active: @statActive
                     </MudChip>
                 }
                 @if (statConn > 0)
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled"
-                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
-                        🔄 Kết nối: @statConn
-                    </MudChip>
-                }
-                @if (statWaitAccpt > 0)
-                {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled"
-                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
-                        ⏳ Chờ chấp nhận: @statWaitAccpt
+                             Icon="@Icons.Material.Filled.Sync" Class="mr-1 com-stat-chip">
+                        Kết nối: @statConn
                     </MudChip>
                 }
                 @if (statWaitSim > 0)
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Outlined"
-                             Style="@($"height:22px; font-size:11px; font-weight:600; {(isDark ? "color:#CBD5E1; border-color:#94A3B8;" : "")}")" Class="mr-1">
-                        📵 Chờ SIM: @statWaitSim
+                             Icon="@Icons.Material.Filled.SimCardAlert"
+                             Style="@($"{(isDark ? "color:#CBD5E1; border-color:#94A3B8;" : "")}")" Class="mr-1 com-stat-chip">
+                        Chờ SIM: @statWaitSim
                     </MudChip>
                 }
                 @if (statNoResp > 0)
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Outlined"
-                             Style="height:22px; font-size:11px; font-weight:600; border-color:#EF4444;" Class="mr-1">
-                        ⚠️ Không phản hồi: @statNoResp
+                             Icon="@Icons.Material.Filled.Warning" Style="border-color:#EF4444;" Class="mr-1 com-stat-chip">
+                        Không phản hồi: @statNoResp
                     </MudChip>
                 }
                 @if (statBlocked > 0)
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled"
-                             Style="height:22px; font-size:11px; font-weight:600;" Class="mr-1">
-                        🚫 Bị chặn: @statBlocked
+                             Icon="@Icons.Material.Filled.Block" Class="mr-1 com-stat-chip">
+                        Chặn SIM: @statBlocked
                     </MudChip>
                 }
             }
@@ -75,25 +68,22 @@
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.SimCard" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Error" OnClick="ReloadSimSelected">Tải lại SIM</MudButton>
             @{
-                // Không chọn cổng: cho phép Accept toàn bộ SIM đang chờ.
-                // Có chọn cổng: chỉ Accept các SIM đang chờ trong selection.
                 var pendingList = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
-                var pendingCount = pendingList.Count(IsPendingAccept);
+                var pendingCount = pendingList.Count(IsImeiActionPending);
             }
             
-            @if (pendingCount > 0)
-            {
-                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" Class="mr-2"
-                           StartIcon="@Icons.Material.Filled.CheckCircle"
-                           OnClick="AcceptSelectedPending"
-                           Disabled="@_bulkAccepting">
-                    @(_bulkAccepting
-                        ? "Đang chấp nhận..."
-                        : SelectedItems.Any()
-                            ? $"CHẤP NHẬN ĐÃ CHỌN ({pendingCount})"
-                            : $"CHẤP NHẬN TẤT CẢ ({pendingCount})")
-                </MudButton>
-            }
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning" Class="mr-2"
+                       StartIcon="@Icons.Material.Filled.Brush"
+                       OnClick="CreateNewImeiSelected"
+                       Disabled="@_bulkImeiAction">
+                @(_bulkImeiAction ? "Đang xử lý..." : pendingCount > 0 ? $"TẠO IMEI MỚI ({pendingCount})" : "TẠO IMEI MỚI")
+            </MudButton>
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="mr-2"
+                       StartIcon="@Icons.Material.Filled.Restore"
+                       OnClick="RestoreImeiSelected"
+                       Disabled="@_bulkImeiAction">
+                @(pendingCount > 0 ? $"KHÔI PHỤC IMEI ({pendingCount})" : "KHÔI PHỤC IMEI")
+            </MudButton>
 
                   <MudSpacer />
             @if (SelectedItems.Any())
@@ -157,6 +147,17 @@
                 {
                     <MudTd Style="@($"{_brd} {_body} white-space:nowrap; font-size:16px;")">@RenderLoadingOrValue(context, context.NetworkProvider)</MudTd>
                 }
+                else if (col.Name == "NetworkType")
+                {
+                    <MudTd Style="@($"{_brd} {_body} white-space:nowrap; font-size:16px;")">@RenderLoadingOrValue(context, context.NetworkType)</MudTd>
+                }
+                else if (col.Name == "Signal")
+                {
+                    var signalColor = context.SignalRssi >= 20 && context.SignalRssi <= 31
+                        ? "color:#16A34A;"
+                        : context.SignalRssi is >= 1 and < 15 ? "color:#DC2626;" : _body;
+                    <MudTd Style="@($"{_brd} {signalColor} white-space:nowrap; font-size:16px; font-weight:600;")">@RenderLoadingOrValue(context, context.SignalDisplay)</MudTd>
+                }
                 else if (col.Name == "Balance")
                 {
                     <MudTd Style="@($"color:#22C55E; font-weight:600; {_brd} white-space:nowrap; font-size:16px;")">
@@ -181,15 +182,15 @@
                 }
                 else if (col.Name == "SimRegDate")
                 {
-                    <MudTd Style="@($"font-size:16px; {_brd} {_body} white-space:nowrap;")">@(context.SimRegDate ?? "—")</MudTd>
+                    <MudTd Style="@($"font-size:16px; {_brd} {_body} white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.SimRegDate) ? "—" : context.SimRegDate)</MudTd>
                 }
                 else if (col.Name == "Lock1C")
                 {
-                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@(context.Lock1C ?? "—")</MudTd>
+                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.Lock1C) ? "—" : context.Lock1C)</MudTd>
                 }
                 else if (col.Name == "Lock2C")
                 {
-                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@(context.Lock2C ?? "—")</MudTd>
+                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.Lock2C) ? "—" : context.Lock2C)</MudTd>
                 }
                 else if (col.Name == "ForwardedTo")
                 {
@@ -236,17 +237,14 @@
     [Parameter]
     public EventCallback<HashSet<SimPort>> SelectedItemsChanged { get; set; }
 
-    [Parameter] public EventCallback<SimPort> OnAccept { get; set; }
     [Parameter] public EventCallback<SimPort> OnRefresh { get; set; }
 
-    private HashSet<string> _accepting = new();
-
-    bool IsPendingAccept(SimPort p)
+    bool IsImeiActionPending(SimPort p)
     {
         if (p == null) return false;
         var s = p.Status ?? "";
 
-        // Loại trừ tuyệt đối các trạng thái không thể chấp nhận
+        // Chỉ các cổng đang bị chặn chờ thao tác IMEI mới được xử lý.
         if (s == gsm.Models.SimStatus.Active
             || s == gsm.Models.SimStatus.Connecting
             || s == gsm.Models.SimStatus.NoResponse
@@ -255,26 +253,9 @@
             return false;
         }
 
-        // Chỉ cho phép Accept khi đang WaitingAccept (SIM mới chưa duyệt)
-        // hoặc SecurityBlocked (SIM bị chặn bảo mật cần tráng lại IMEI)
+        // WaitingAccept chỉ được giữ để tương thích dữ liệu trạng thái cũ; UI hiển thị là Chặn SIM.
         return s == gsm.Models.SimStatus.WaitingAccept
             || s == gsm.Models.SimStatus.SecurityBlocked;
-    }
-
-    async Task AcceptOne(SimPort port)
-    {
-        if (port == null || _accepting.Contains(port.PortName)) return;
-        _accepting.Add(port.PortName);
-        try
-        {
-            if (OnAccept.HasDelegate)
-                await OnAccept.InvokeAsync(port);
-        }
-        finally
-        {
-            _accepting.Remove(port.PortName);
-            StateHasChanged();
-        }
     }
 
     async Task RefreshOne(SimPort port)
@@ -295,7 +276,7 @@
         Snackbar.Add($"Đang tải lại SIM cho {list.Count} cổng...", Severity.Info);
         int success = 0;
         int failed = 0;
-        await RunBoundedAsync(list, 4, async p =>
+        await RunAllPortsAsync(list, async p =>
         {
             try
             {
@@ -317,55 +298,135 @@
 
     [Inject] private IDialogService DialogService { get; set; } = default!;
 
-    bool _bulkAccepting;
+    bool _bulkImeiAction;
 
-    async Task AcceptSelectedPending()
+    async Task<List<SimPort>> RefreshPortsForImeiActionAsync()
     {
-        bool acceptAll = !SelectedItems.Any();
-        var list = acceptAll
-            ? Ports.Where(IsPendingAccept).ToList()
-            : SelectedItems.Where(IsPendingAccept).ToList();
-        if (!list.Any())
+        var candidates = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
+        var waitingForSim = candidates.Where(port => (port.Status ?? string.Empty) == "Chờ cắm SIM").ToList();
+        if (waitingForSim.Count > 0)
         {
-            Snackbar.Add("Không có cổng nào đang Chờ Accept", Severity.Warning);
-            return;
+            Snackbar.Add($"Đang quét lại SIM trên {waitingForSim.Count} cổng...", Severity.Info);
+            await RunAllPortsAsync(waitingForSim, port => ModemService.HandleSimInsertedAsync(port.PortName));
+
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                if (waitingForSim.All(port => (port.Status ?? string.Empty) != "Chờ cắm SIM")) break;
+                await Task.Delay(250);
+            }
         }
 
-        // Accept toàn bộ luôn phải xác nhận rõ ràng; selection lớn cũng cần xác nhận.
-        if (acceptAll || list.Count > 5)
-        {
-            var ok = await DialogService.ShowMessageBox(
-                "Xác nhận",
-                acceptAll
-                    ? $"Không có COM nào được tick. Chấp nhận TẤT CẢ {list.Count} SIM đang chờ và tráng IMEI?"
-                    : $"Chấp nhận SIM + tráng IMEI cho {list.Count} cổng đã chọn?\nChỉ Accept khi đã chắc SIM đúng.",
-                yesText: "Chấp nhận", cancelText: "Hủy");
-            if (ok != true) return;
-        }
+        return candidates;
+    }
 
-        _bulkAccepting = true;
+    bool CanCreateImei(SimPort port) =>
+        (port.Status ?? string.Empty) == "Chờ cắm SIM"
+        || IsImeiActionPending(port)
+        || port.Status == gsm.Models.SimStatus.Active;
+
+    static string Digits(string? value) =>
+        new((value ?? string.Empty).Where(char.IsDigit).ToArray());
+
+    async Task CreateNewImeiSelected()
+    {
+        if (_bulkImeiAction) return;
+        _bulkImeiAction = true;
         try
         {
-            var tasks = list.Select(async port =>
+            var candidates = await RefreshPortsForImeiActionAsync();
+            var targets = candidates.Where(CanCreateImei).ToList();
+            if (targets.Count == 0)
             {
-                try
-                {
-                    if (OnAccept.HasDelegate)
-                    {
-                        await OnAccept.InvokeAsync(port);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Snackbar.Add($"[{port.PortName}] Lỗi: {ex.Message}", Severity.Error);
-                }
+                Snackbar.Add("Không có cổng modem nào sẵn sàng để tạo IMEI mới.", Severity.Warning);
+                return;
+            }
+
+            var ok = await DialogService.ShowMessageBox(
+                "Tạo IMEI mới",
+                $"Tạo IMEI mới cho {targets.Count} cổng? Cổng chưa cắm SIM vẫn được xử lý.",
+                yesText: "Tạo IMEI mới", cancelText: "Hủy");
+            if (ok != true) return;
+
+            int success = 0;
+            await RunAllPortsAsync(targets, async port =>
+            {
+                string target = gsm.Services.ImeiManagementService.GenerateRandomImei();
+                bool hasSim = !string.IsNullOrWhiteSpace(Digits(port.Serial));
+                bool applied = hasSim
+                    ? await Vm.PaintImeiForCurrentSimAsync(
+                        port.PortName, target, overwriteBackupWithCurrentImei: true)
+                    : await Vm.PaintImeiWithoutSimAsync(
+                        port.PortName, target, backupCurrentBeforeWrite: true);
+                if (applied)
+                    Interlocked.Increment(ref success);
             });
-            await Task.WhenAll(tasks);
-            Snackbar.Add($"Đã hoàn thành gửi lệnh chấp nhận cho {list.Count} cổng.", Severity.Success);
+            Snackbar.Add($"Tạo IMEI mới hoàn tất: {success}/{targets.Count} cổng.",
+                success == targets.Count ? Severity.Success : Severity.Warning);
         }
         finally
         {
-            _bulkAccepting = false;
+            _bulkImeiAction = false;
+            StateHasChanged();
+        }
+    }
+
+    async Task RestoreImeiSelected()
+    {
+        if (_bulkImeiAction) return;
+        _bulkImeiAction = true;
+        try
+        {
+            var candidates = await RefreshPortsForImeiActionAsync();
+            var restoreImeis = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var port in candidates.Where(CanCreateImei))
+            {
+                string ccid = Digits(port.Serial);
+                if (!string.IsNullOrWhiteSpace(ccid)
+                    && Vm.ImeiCache.TryGetValue(ccid, out var simEntry)
+                    && gsm.Services.ImeiManagementService.IsValidImei(simEntry.Imei))
+                {
+                    restoreImeis[port.PortName] = simEntry.Imei;
+                }
+                else if (string.IsNullOrWhiteSpace(ccid)
+                    && Vm.TryGetModemImeiBackup(port.PortName, out var modemEntry))
+                {
+                    restoreImeis[port.PortName] = modemEntry.Imei;
+                }
+            }
+            var targets = candidates.Where(port => restoreImeis.ContainsKey(port.PortName)).ToList();
+
+            if (targets.Count == 0)
+            {
+                Snackbar.Add("Không có cổng nào có IMEI backup phù hợp trong XLSX.", Severity.Warning);
+                return;
+            }
+
+            var ok = await DialogService.ShowMessageBox(
+                "Khôi phục IMEI",
+                $"Khôi phục IMEI gần nhất từ XLSX cho {targets.Count} cổng?",
+                yesText: "Khôi phục", cancelText: "Hủy");
+            if (ok != true) return;
+
+            int success = 0;
+            await RunAllPortsAsync(targets, async port =>
+            {
+                string backupImei = restoreImeis[port.PortName];
+                bool hasSim = !string.IsNullOrWhiteSpace(Digits(port.Serial));
+                bool applied = hasSim
+                    ? await Vm.PaintImeiForCurrentSimAsync(
+                        port.PortName, backupImei, overwriteBackupWithCurrentImei: false)
+                    : await Vm.PaintImeiWithoutSimAsync(
+                        port.PortName, backupImei, backupCurrentBeforeWrite: false);
+                if (applied)
+                    Interlocked.Increment(ref success);
+            });
+            Snackbar.Add($"Khôi phục IMEI hoàn tất: {success}/{targets.Count} cổng.",
+                success == targets.Count ? Severity.Success : Severity.Warning);
+        }
+        finally
+        {
+            _bulkImeiAction = false;
+            StateHasChanged();
         }
     }
 
@@ -385,25 +446,12 @@
         await SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
-    private static async Task RunBoundedAsync(
+    private static Task RunAllPortsAsync(
         IReadOnlyCollection<SimPort> ports,
-        int maxConcurrency,
         Func<SimPort, Task> operation)
     {
-        using var gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
-        var tasks = ports.Select(async port =>
-        {
-            await gate.WaitAsync();
-            try
-            {
-                await operation(port);
-            }
-            finally
-            {
-                gate.Release();
-            }
-        });
-        await Task.WhenAll(tasks);
+        gsm.Services.BackendConcurrency.ConfigureThreadPool(ports.Count);
+        return Task.WhenAll(ports.Select(operation));
     }
 
     private static string GetRowClass(SimPort port, int rowNumber) => port.Status switch
@@ -446,8 +494,28 @@
         get
         {
             var cfg = SettingsService.Current;
-            var savedOrder = cfg.ColumnOrder ?? new List<string>();
+            var savedOrder = (cfg.ColumnOrder ?? new List<string>())
+                .SelectMany(name => name == "NetworkSignal"
+                    ? new[] { "NetworkType", "Signal" }
+                    : new[] { name })
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (savedOrder.Count > 0
+                && !savedOrder.Contains("NetworkType", StringComparer.OrdinalIgnoreCase)
+                && !savedOrder.Contains("Signal", StringComparer.OrdinalIgnoreCase))
+            {
+                int providerIndex = savedOrder.FindIndex(name =>
+                    name.Equals("NetworkProvider", StringComparison.OrdinalIgnoreCase));
+                int insertIndex = providerIndex >= 0 ? providerIndex + 1 : savedOrder.Count;
+                savedOrder.Insert(insertIndex, "NetworkType");
+                savedOrder.Insert(insertIndex + 1, "Signal");
+            }
             var hiddenCols = new HashSet<string>(cfg.HiddenColumns ?? new List<string>());
+            if (hiddenCols.Remove("NetworkSignal"))
+            {
+                hiddenCols.Add("NetworkType");
+                hiddenCols.Add("Signal");
+            }
 
             var defaultCols = GetDefaultColumns();
             var ordered = new List<ColumnItem>();
@@ -482,8 +550,10 @@
             new() { Name = "PortName", Header = "Cổng" },
             new() { Name = "Status", Header = "Trạng thái" },
             new() { Name = "NetworkProvider", Header = "Nhà mạng" },
-            new() { Name = "Balance", Header = "Số dư" },
-            new() { Name = "PhoneNumber", Header = "Số điện thoại" },
+            new() { Name = "NetworkType", Header = "Mạng" },
+            new() { Name = "Signal", Header = "Tín hiệu" },
+            new() { Name = "Balance", Header = "TKC" },
+            new() { Name = "PhoneNumber", Header = "SĐT" },
             new() { Name = "Imei", Header = "IMEI" },
             new() { Name = "Serial", Header = "CCID" },
             new() { Name = "ExpiryDate", Header = "HSD" },
@@ -546,6 +616,8 @@
                 "PortName"           => p.PortName ?? "",
                 "Status"             => p.Status?.ToString() ?? "",
                 "NetworkProvider"    => p.NetworkProvider ?? "",
+                "NetworkType"        => p.NetworkType ?? "",
+                "Signal"             => p.SignalDisplay,
                 "Balance"            => p.Balance ?? "",
                 "PhoneNumber"        => p.PhoneNumber ?? "",
                 "Imei"               => p.Imei ?? "",

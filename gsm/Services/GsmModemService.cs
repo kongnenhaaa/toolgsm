@@ -31,6 +31,7 @@ public interface IGsmModemService
     void Disconnect(string portName);
     void DisconnectAll();
     void StartHotplugWaitLoop(string portName);
+    Task HandleSimInsertedAsync(string portName);
     Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default);
     Task ReloadSimAsync(string portName);
     Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default);
@@ -38,7 +39,6 @@ public interface IGsmModemService
     bool IsCallInProgress(string portName);
     QuectelModemProfile? GetModemProfile(string portName);
 
-    Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
 
     // Events
     event EventHandler<GsmDataEventArgs> SmsReceived;
@@ -135,7 +135,6 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _portLifetimeCts = new();
     private readonly object _connectLock = new object();
 
-    public Func<string, string, bool>? RequiresSimAcceptanceCheck { get; set; }
 
     public bool IsCallInProgress(string portName) =>
         _outgoingCallOperations.ContainsKey(portName)
@@ -891,12 +890,12 @@ public class GsmModemService : IGsmModemService
             ccid = await SendCommandAsync(portName, "AT+QCCID", timeoutMs, silent);
         }
         
-        if (ccid.Contains("ERROR") || string.IsNullOrWhiteSpace(ccid))
+        if (!HasReadableCcid(ccid))
         {
             ccid = await SendCommandAsync(portName, "AT+CCID", timeoutMs, silent);
         }
 
-        if (ccid.Contains("ERROR") || string.IsNullOrWhiteSpace(ccid))
+        if (!HasReadableCcid(ccid))
         {
             string crsm = await SendCommandAsync(portName, "AT+CRSM=176,12258,0,0,10", timeoutMs, silent);
             if (!crsm.Contains("ERROR") && crsm.Contains("+CRSM:"))
@@ -1714,32 +1713,35 @@ public class GsmModemService : IGsmModemService
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
             }
 
-        // Đọc CCID
-            string pollResp = await SendCommandAsync(portName, "AT+ICCID", 5000, silent: true);
+            // EC20F không phải firmware nào cũng trả cùng một lệnh ở CFUN=4.
+            // Thử QCCID -> ICCID -> CRSM trước, rồi reset riêng SIM stack bằng 0 -> 4
+            // và thử lại. RF không bao giờ được bật trong giai đoạn nhận diện này.
+            string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
             bool hasSim = HasReadableCcid(pollResp);
 
-            // Một số EC20 cần khởi tạo lại SIM stack trước khi đọc được CCID ở airplane mode.
-            // Chỉ dùng CFUN=0 -> 4; CFUN=1 là full functionality và bị cấm ở giai đoạn này.
+            if (!hasSim && await RestartSimStackOfflineAsync(portName))
+            {
+                for (int attempt = 0; attempt < 4 && !hasSim; attempt++)
+                {
+                    cpinState = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
+                    pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
+                    hasSim = HasReadableCcid(pollResp);
+                    if (!hasSim && attempt < 3)
+                        await Task.Delay(750);
+                }
+            }
+
             if (hasSim)
             {
-            string ccid = Regex.Match(pollResp, @"\d{18,22}").Value;
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid}" });
+                string ccid = Regex.Match(pollResp, @"(?<!\d)89\d{16,20}(?!\d)").Value;
+                _lastSimState[portName] = true;
+                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid}" });
 
-            bool isNewSim = true;
-            if (RequiresSimAcceptanceCheck != null)
-            {
-                isNewSim = RequiresSimAcceptanceCheck(ccid, cleanImei);
-            }
-
-            var settings = gsm.Services.SettingsService.Current;
-            if (settings != null && settings.EnableNewSimIntakeMode && !settings.AutoAccept && isNewSim)
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_WAITING_ACCEPT] SIM mới đã cắm – CHỜ USER CHẤP NHẬN" });
-            }
-            else 
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận diện SIM thay nóng qua URC, đang cấu hình..." });
-            }
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận diện SIM; RF giữ tắt và chờ thao tác IMEI."
+                });
             }
             else
             {
@@ -1815,13 +1817,14 @@ public class GsmModemService : IGsmModemService
         // Lặp vô hạn cho đến khi có mạng hoặc cổng bị rút
         _ = Task.Run(async () =>
         {
-            int attempts = 0;
+            int cycles = 0;
             int waitingNoticeCount = 0;
+            bool operatorReported = false;
             while (true)
             {
                 try
                 {
-                    await Task.Delay(2000, token);
+                    await Task.Delay(500, token);
                 }
                 catch (TaskCanceledException)
                 {
@@ -1831,58 +1834,62 @@ public class GsmModemService : IGsmModemService
                 if (token.IsCancellationRequested) break;
                 if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
                 if (IsCallInProgress(portName)) continue;
-                
+
+                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true, ct: token);
+                if (cpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
+                    || cpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase))
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}" });
+                    continue;
+                }
+
+                await Task.Delay(100, token);
+                string csqStr = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true, ct: token);
+                if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
+
+                cycles++;
+                if (cycles % 5 != 0) continue;
+
                 string copsStr = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true, ct: token);
                 var match = Regex.Match(copsStr, @"\+COPS:\s*\d+\s*,\s*\d+\s*,\s*""([^""]+)""(?:,\s*(\d+))?");
                 if (copsStr.Contains("+COPS:") && match.Success)
                 {
                     string act = match.Groups[2].Success ? match.Groups[2].Value : "?";
-                    string netType = act switch
-                    {
-                        "0" => "2G",
-                        "2" => "3G",
-                        "7" => "LTE/4G",
-                        _ => $"Unknown({act})"
-                    };
+                    string netType = MapCopsAccessTechnology(act);
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_TYPE] {netType}" });
                     
                     // Lấy mạng thành công, nhả sự kiện ra để ViewModel bắt và tự động chạy USSD
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = copsStr.Trim() });
-                    StartKeepAliveLoop(portName);
-                    break;
+                    operatorReported = true;
+                    continue;
                 }
 
-                attempts++;
+                if (operatorReported) continue;
 
-                // Sau ~2.5 phút không có COPS (30 lần * 5 giây): force AT+COPS=0 để EC20
-                // tự chọn lại nhà mạng. Thường xảy ra sau khi thay SIM + ghi IMEI mới,
-                // EC20 cần kích hoạt lại auto-selection thay vì chờ thụ động vô hạn.
-                if (attempts == 30)
+                // Chỉ quan sát COPS. Không phát COPS=0/COPS=2 và không ép 2G/3G/4G;
+                // EC20 tự đăng ký sau CFUN=1,1 giống luồng đã capture từ SAuto.
+                if (cycles == 150)
                 {
                     waitingNoticeCount++;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = $"[NETWORK_WAITING] Chưa có COPS sau ~2.5 phút (lần {waitingNoticeCount}); gửi AT+COPS=0 để kích hoạt lại auto-select nhà mạng."
+                        Data = $"[NETWORK_WAITING] Chưa có COPS sau ~2.5 phút (lần {waitingNoticeCount}); chỉ tiếp tục theo dõi, không phát lệnh đăng ký mạng."
                     });
-                    await SendCommandAsync(portName, "AT+COPS=0", 8000, silent: true, ct: token);
                 }
-                // Sau ~5 phút: đăng xuất/chọn lại mạng nhưng không reboot module. CFUN=1,1
-                // có thể nạp lại danh tính cũ trước khi tool kịp xác minh.
-                else if (attempts >= 60)
+                // Sau ~5 phút vẫn chỉ báo trạng thái; không thay đổi lựa chọn nhà mạng.
+                else if (cycles >= 300)
                 {
-                    attempts = 0;
+                    cycles = 0;
                     waitingNoticeCount++;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = $"[NETWORK_WAITING] Vẫn chưa có COPS sau ~5 phút (lần {waitingNoticeCount}); đăng xuất và chọn lại mạng, không reboot EC20."
+                        Data = $"[NETWORK_WAITING] Vẫn chưa có COPS sau ~5 phút (lần {waitingNoticeCount}); chỉ tiếp tục theo dõi, không COPS=2/COPS=0."
                     });
-                    await SendCommandAsync(portName, "AT+COPS=2", 10000, silent: true, ct: token);
-                    try { await Task.Delay(1500, token); } catch { break; }
-                    await SendCommandAsync(portName, "AT+COPS=0", 15000, silent: true, ct: token);
                 }
-                else if (attempts % 15 == 0)
+                else if (cycles % 75 == 0)
                 {
                     waitingNoticeCount++;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
@@ -1894,6 +1901,14 @@ public class GsmModemService : IGsmModemService
             }
         }, token);
     }
+
+    internal static string MapCopsAccessTechnology(string? act) => act?.Trim() switch
+    {
+        "0" or "1" or "3" or "8" => "2G",
+        "2" or "4" or "5" or "6" => "3G",
+        "7" or "9" => "4G",
+        _ => string.IsNullOrWhiteSpace(act) || act == "?" ? string.Empty : $"Unknown({act.Trim()})"
+    };
 
     public void StartKeepAliveLoop(string portName)
     {
@@ -1926,18 +1941,21 @@ public class GsmModemService : IGsmModemService
                 if (!_serialPorts.ContainsKey(portName)) break;
                 if (IsCallInProgress(portName)) continue;
                 
-                string vendor = _portVendors.TryGetValue(portName, out var v) ? v : "";
-                if (vendor.Contains("QUECTEL"))
+                await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
+                await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
+                string csq = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true);
+                if (csq.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csq.Trim() });
+
+                string cops = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true);
+                var copsMatch = Regex.Match(cops, @"\+COPS:\s*\d+\s*,\s*\d+\s*,\s*""([^""]+)""(?:,\s*(\d+))?");
+                if (copsMatch.Success)
                 {
-                    await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
-                    await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
-                    await SendCommandAsync(portName, "AT+QCSQ", 5000, silent: true);
-                }
-                else
-                {
-                    await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
-                    await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
-                    await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true);
+                    string act = copsMatch.Groups[2].Success ? copsMatch.Groups[2].Value : "?";
+                    string netType = MapCopsAccessTechnology(act);
+                    if (!string.IsNullOrWhiteSpace(netType))
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_TYPE] {netType}" });
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = cops.Trim() });
                 }
                 
                 // Sweep bù (quét tin nhắn kẹt định kỳ)

@@ -89,7 +89,7 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" OnAccept="HandleAcceptOne" />
+        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
     </MudTabPanel>
 
     <!-- TAB 2: LỊCH SỬ CUỘC GỌI -->
@@ -398,19 +398,6 @@
         "Chờ"       => Color.Warning,
         _           => Color.Default
     };
-
-    // ========== 1. ACCEPT SIM ==========
-    async Task HandleAcceptOne(SimPort port)
-    {
-        try
-        {
-            await Vm.AcceptNewSimAsync(port.PortName);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"[{port.PortName}] Accept lỗi: {ex.Message}", Severity.Error);
-        }
-    }
 
     // ========== 2. GỌI NGAY ==========
     async Task<bool> MakeCall()

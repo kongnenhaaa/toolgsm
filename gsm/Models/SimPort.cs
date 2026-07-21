@@ -212,6 +212,23 @@ public partial class SimPort : ObservableObject
     private int _signalStrength = 0; // 0 to 100
 
     [ObservableProperty]
+    private int _signalRssi = 99; // Raw +CSQ RSSI: 0..31, 99 = unknown
+
+    public string SignalDisplay => SignalRssi switch
+    {
+        99 => string.Empty,
+        >= 20 and <= 31 => $"GOOD {SignalRssi}",
+        >= 15 => $"NORMAL {SignalRssi}",
+        >= 1 => $"WEAK {SignalRssi}",
+        _ => "NO SIGNAL"
+    };
+
+    partial void OnSignalRssiChanged(int value) => OnPropertyChanged(nameof(SignalDisplay));
+
+    [ObservableProperty]
+    private string _networkType = string.Empty;
+
+    [ObservableProperty]
     private string _forwardedTo = string.Empty; // SĐT đang được chuyển hướng cuộc gọi đến
 
     // #8: true nếu hết hạn trong vòng 7 ngày

@@ -41,20 +41,10 @@
 
         <!-- Actions chính -->
         <MudStack Spacing="1" Class="mt-2">
-            @if (IsPendingAccept())
-            {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" 
-                           FullWidth="true" OnClick="OnAcceptClicked" StartIcon="@Icons.Material.Filled.VerifiedUser">
-                    Accept SIM &amp; xác minh IMEI
-                </MudButton>
-            }
-            else
-            {
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small" 
-                           FullWidth="true" OnClick="OnRefreshClicked" StartIcon="@Icons.Material.Filled.Refresh">
-                    Làm mới dữ liệu
-                </MudButton>
-            }
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                       FullWidth="true" OnClick="OnRefreshClicked" StartIcon="@Icons.Material.Filled.Refresh">
+                Làm mới dữ liệu
+            </MudButton>
 
             <!-- Quick actions -->
             <MudStack Row="true" Spacing="1">
@@ -90,22 +80,17 @@
 
 @code {
     [Parameter] public SimPort Port { get; set; } = new();
-    [Parameter] public EventCallback<SimPort> OnAccept { get; set; }
     [Parameter] public EventCallback<SimPort> OnRefresh { get; set; }
     [Parameter] public EventCallback<SimPort> OnCheckBalance { get; set; }
     [Parameter] public EventCallback<SimPort> OnUssd { get; set; }
     [Parameter] public EventCallback<SimPort> OnSms { get; set; }
     [Parameter] public EventCallback<SimPort> OnCall { get; set; }
 
-    async Task OnAcceptClicked() => await OnAccept.InvokeAsync(Port);
     async Task OnRefreshClicked() => await OnRefresh.InvokeAsync(Port);
     async Task CheckBalance() => await OnCheckBalance.InvokeAsync(Port);
     async Task OpenUssd() => await OnUssd.InvokeAsync(Port);
     async Task OpenSms() => await OnSms.InvokeAsync(Port);
     async Task OpenCall() => await OnCall.InvokeAsync(Port);
-
-    bool IsPendingAccept() => Port.Status == gsm.Models.SimStatus.WaitingAccept
-                           || Port.Status == gsm.Models.SimStatus.SecurityBlocked;
 
     string GetStateClass() => Port.Status switch
     {

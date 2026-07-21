@@ -200,6 +200,9 @@ public partial class SimPort : ObservableObject
     private string _simRegDate = string.Empty;
 
     [ObservableProperty]
+    private string _simType = string.Empty;
+
+    [ObservableProperty]
     private string _lock1C = string.Empty;
 
     [ObservableProperty]

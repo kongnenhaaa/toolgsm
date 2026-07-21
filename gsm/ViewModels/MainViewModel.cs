@@ -3113,6 +3113,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         UpdateImeiCacheEntry(port.Serial, entry => entry.SimRegDate = regDate);
                     }
 
+                    // Lấy loại SIM (ví dụ: VINA690, VINACARD)
+                    var simTypeMatch = Regex.Match(ussdContent, @"So\s*TB\s*\d+\s*\(\s*([A-Za-z0-9]+)\s*\)", RegexOptions.IgnoreCase);
+                    if (simTypeMatch.Success)
+                    {
+                        port.SimType = simTypeMatch.Groups[1].Value.Trim().ToUpper();
+                    }
+
                     // 3. Khoa 1C (Khóa 1 chiều)
                     var lock1cMatch = Regex.Match(ussdContent, @"(?:Khoa\s*1C|Khoa\s*mot\s*chieu)[^\d]{0,15}(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})", RegexOptions.IgnoreCase);
                     if (lock1cMatch.Success)

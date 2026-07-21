@@ -7,8 +7,10 @@ namespace gsm.Tests;
 public sealed class SautoInitialLookupTests
 {
     [Theory]
+    [InlineData("VinaPhone", "2G", 55, SimStatus.Active, true)]
     [InlineData("VinaPhone", "3G", 55, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "4G", 55, SimStatus.Active, false)]
+    [InlineData("VinaPhone", "4G", 55, SimStatus.Active, true)]
+    [InlineData("VinaPhone", "5G", 55, SimStatus.Active, false)]
     [InlineData("Viettel", "3G", 55, SimStatus.Active, false)]
     [InlineData("VinaPhone", "3G", 0, SimStatus.Active, false)]
     [InlineData("VinaPhone", "3G", 55, SimStatus.WaitingAccept, false)]
@@ -23,7 +25,7 @@ public sealed class SautoInitialLookupTests
             Status = status
         };
 
-        Assert.Equal(expected, MainViewModel.IsVina3gReadyForInitialLookup(port));
+        Assert.Equal(expected, MainViewModel.IsVinaNetworkReadyForInitialLookup(port));
     }
 
     [Theory]
@@ -59,4 +61,19 @@ public sealed class SautoInitialLookupTests
     [InlineData("MSISDN: 0912345678", "0912345678")]
     public void Sauto111Response_ExtractsCompletePhoneNumber(string response, string expected) =>
         Assert.Equal(expected, MainViewModel.ExtractPhoneNumberFromUssd(response));
+
+    [Fact]
+    public void Sauto111MenuResponse_ExtractsPhoneAndActivationDateWithoutReadingMenuDigits()
+    {
+        const string response = """
+            +CUSD: 1,"TB :0915496792,Ngay KH:23/06/2026.Bam so tuong ung de tra cuu:
+            1-TK bang tien
+            2-TK luu luong thoai
+            3-TK luu luong SMS
+            4-TK luu luong data",15
+            """;
+
+        Assert.Equal("0915496792", MainViewModel.ExtractPhoneNumberFromUssd(response));
+        Assert.Equal("23/06/2026", MainViewModel.ExtractSimRegDateFromUssd(response));
+    }
 }

@@ -272,6 +272,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, byte> _ussdVoiceRecoveryAttempted = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _ussdRecoveryRetryOwners = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _initialBalanceLookupOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _initialAccountLookupCompleted = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxAutomaticRecoveryAttempts = 3;
     // Mỗi lần cắm/rút SIM tạo một epoch mới. Mọi tác vụ IMEI/Accept phải giữ đúng
     // epoch + CCID; tác vụ của SIM cũ không được phép cập nhật SIM mới trên cùng COM.
@@ -2056,6 +2057,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _portSessions.Invalidate(portName);
         _initializingPorts.TryRemove(portName, out _);
+        string prefix = portName + "|";
+        foreach (string key in _initialAccountLookupCompleted.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _initialAccountLookupCompleted.TryRemove(key, out _);
+        }
     }
 
     private bool TryBeginPortInitialization(string portName, out Guid lease)
@@ -2971,13 +2978,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     port.SignalRssi = rssi;
                     port.SignalStrength = percent;
-                    TryStartVina3gInitialLookup(port);
+                    TryStartVinaInitialLookup(port);
                 }
             }
             else if (e.Data.StartsWith("[NETWORK_TYPE]", StringComparison.Ordinal))
             {
                 port.NetworkType = e.Data.Replace("[NETWORK_TYPE]", string.Empty).Trim();
-                TryStartVina3gInitialLookup(port);
+                TryStartVinaInitialLookup(port);
             }
             else if (e.Data.Contains("+CUSD:"))
             {
@@ -3066,10 +3073,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
 
                     // 2. Ngay KH (Ngày kích hoạt / Đăng ký SIM)
-                    var khMatch = Regex.Match(ussdContent, @"(?:Ngay\s*KH|Ngay\s*kich\s*hoat|Ngay\s*DK|Ngay\s*dang\s*ky)[^\d]{0,15}(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})", RegexOptions.IgnoreCase);
-                    if (khMatch.Success)
+                    string regDate = ExtractSimRegDateFromUssd(ussdContent);
+                    if (!string.IsNullOrWhiteSpace(regDate))
                     {
-                        string regDate = khMatch.Groups[1].Value;
                         port.SimRegDate = regDate;
                         UpdateImeiCacheEntry(port.Serial, entry => entry.SimRegDate = regDate);
                     }
@@ -3166,7 +3172,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                         // Chạy độc lập để các tác vụ hậu mạng khác không phải chờ. Hàm này sở hữu
                         // loading-state và luôn kết thúc spinner kể cả nhà mạng không trả +CUSD.
-                        TryStartVina3gInitialLookup(port);
+                        TryStartVinaInitialLookup(port);
 
                         if (!IsSimSessionCurrent(port.PortName, activeCcid, activeEpoch)
                             || port.Status != SimStatus.Active) return;
@@ -3210,26 +3216,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             }
                         }
 
-                        // Truy vấn trạng thái chuyển hướng thực tế từ nhà mạng để đồng bộ UI
-                        if (!IsSimSessionCurrent(port.PortName, activeCcid, activeEpoch)
-                            || port.Status != SimStatus.Active) return;
-
-                        string ccfcStatus = await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,2", timeoutMs: 8000);
-                        var ccfcMatch = Regex.Match(ccfcStatus, @"\+CCFC:\s*1,\s*1,\s*""([^""]+)""");
-                        if (ccfcMatch.Success)
+                        // The SAuto activation path does not query CCFC. Only touch call
+                        // forwarding when that independent feature is explicitly enabled;
+                        // otherwise every periodic COPS response would inject AT+CCFC=0,2
+                        // into the activation/USSD flow and contend with *111#.
+                        if (AppSettings != null
+                            && AppSettings.EnableAutoCallForwarding
+                            && IsSimSessionCurrent(port.PortName, activeCcid, activeEpoch)
+                            && port.Status == SimStatus.Active)
                         {
-                            string activeFwd = ccfcMatch.Groups[1].Value;
-                            Application.Current.Dispatcher.Invoke(() =>
+                            string ccfcStatus = await _modemService.SendCommandAsync(
+                                port.PortName, "AT+CCFC=0,2", timeoutMs: 8000);
+                            var ccfcMatch = Regex.Match(ccfcStatus, @"\+CCFC:\s*1,\s*1,\s*""([^""]+)""");
+                            if (ccfcMatch.Success)
                             {
-                                port.ForwardedTo = activeFwd;
-                            });
-                        }
-                        else if (AppSettings == null || !AppSettings.EnableAutoCallForwarding)
-                        {
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                port.ForwardedTo = string.Empty;
-                            });
+                                string activeFwd = ccfcMatch.Groups[1].Value;
+                                Application.Current.Dispatcher.Invoke(() =>
+                                {
+                                    port.ForwardedTo = activeFwd;
+                                });
+                            }
                         }
                         }
                         catch (OperationCanceledException) { }
@@ -5123,9 +5129,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
 
-    private void TryStartVina3gInitialLookup(SimPort port)
+    private void TryStartVinaInitialLookup(SimPort port)
     {
-        if (!IsVina3gReadyForInitialLookup(port)
+        if (!IsVinaNetworkReadyForInitialLookup(port)
             || !TryGetCurrentSimSession(port.PortName, out var ccid, out var epoch, out var token))
         {
             return;
@@ -5138,9 +5144,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SimPort port, string ccid, long epoch, CancellationToken token)
     {
         if (!IsSimSessionCurrent(port.PortName, ccid, epoch)
-            || !IsVina3gReadyForInitialLookup(port)
-            || (!string.IsNullOrWhiteSpace(port.PhoneNumber)
-                && !string.IsNullOrWhiteSpace(port.SimRegDate)))
+            || !IsVinaNetworkReadyForInitialLookup(port))
             return;
 
         // Phiên trước đang sở hữu lần retry sau phục hồi IMS. Không tạo thêm một
@@ -5149,9 +5153,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_ussdRecoveryRetryOwners.ContainsKey(recoveryRetryKey)) return;
 
         string lookupKey = $"{port.PortName}|{NormalizeCcid(ccid)}|{epoch}";
+        if (_initialAccountLookupCompleted.ContainsKey(lookupKey)) return;
         if (!_initialBalanceLookupOwners.TryAdd(lookupKey, 0)) return;
 
-        AddLog($"[{port.PortName}] [VINA_3G_READY] VinaPhone; 3G; CSQ={port.SignalRssi}. Chạy *111# theo trace SAuto.", "SUCCESS");
+        AddLog($"[{port.PortName}] [VINA_NETWORK_READY] VinaPhone; {port.NetworkType}; CSQ={port.SignalRssi}. Chạy tuần tự *111# → *101#.", "SUCCESS");
 
         await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
         try
@@ -5159,28 +5164,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             int round = 0;
             while (IsSimSessionCurrent(port.PortName, ccid, epoch)
                 && port.Status == SimStatus.Active
-                && (string.IsNullOrWhiteSpace(port.PhoneNumber)
-                    || string.IsNullOrWhiteSpace(port.SimRegDate)))
+                && !_initialAccountLookupCompleted.ContainsKey(lookupKey))
             {
                 token.ThrowIfCancellationRequested();
                 round++;
+                bool needsIdentity = string.IsNullOrWhiteSpace(port.PhoneNumber)
+                    || string.IsNullOrWhiteSpace(port.SimRegDate);
+                string ussdCode = needsIdentity ? "*111#" : "*101#";
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
-                    port.LastMessageContent = $"[USSD][ĐANG CHẠY] Tự dò SĐT/Ngày KH – vòng {round}";
+                    port.LastMessageContent = needsIdentity
+                        ? $"[USSD][ĐANG CHẠY] *111# lấy SĐT/Ngày KH – vòng {round}"
+                        : $"[USSD][ĐANG CHẠY] *101# lấy TKC/HSD – vòng {round}";
                     port.Sender = "USSD";
                     port.IsBalanceLoading = true;
                 });
 
-                var lookupResults = new List<string>();
-                if (string.IsNullOrWhiteSpace(port.PhoneNumber)
-                    || string.IsNullOrWhiteSpace(port.SimRegDate))
-                {
-                    string identityResult = await SendSautoInitial111Async(
-                        port.PortName, ccid, epoch, token);
-                    lookupResults.Add($"*111#={identityResult}");
-                }
-
-                string result = string.Join("; ", lookupResults);
+                string result = needsIdentity
+                    ? await SendSautoInitial111Async(port.PortName, ccid, epoch, token)
+                    : await SendSautoInitial101Async(port.PortName, ccid, epoch, token);
 
                 // Give a late +CUSD URC time to reach the parser before retrying.
                 await Task.Delay(10000, token);
@@ -5188,15 +5190,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     || port.Status != SimStatus.Active)
                     break;
 
-                if (!string.IsNullOrWhiteSpace(port.PhoneNumber)
+                if (needsIdentity
+                    && !string.IsNullOrWhiteSpace(port.PhoneNumber)
                     && !string.IsNullOrWhiteSpace(port.SimRegDate))
                 {
-                    AddLog($"[{port.PortName}] [USSD_AUTO_COMPLETE] Đã lấy đủ SĐT={port.PhoneNumber}, Ngày KH={port.SimRegDate}; dừng retry.", "SUCCESS");
+                    AddLog($"[{port.PortName}] [USSD_IDENTITY_COMPLETE] *111# đã lấy SĐT={port.PhoneNumber}, Ngày KH={port.SimRegDate}; chuyển sang *101#.", "SUCCESS");
+                    continue;
+                }
+
+                if (!needsIdentity
+                    && !string.IsNullOrWhiteSpace(port.Balance)
+                    && !string.IsNullOrWhiteSpace(port.ExpiryDate))
+                {
+                    _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
+                    AddLog($"[{port.PortName}] [USSD_AUTO_COMPLETE] *101# hoàn tất; TKC={port.Balance}, HSD={port.ExpiryDate}.", "SUCCESS");
                     break;
                 }
 
                 int retrySeconds = Math.Clamp(AppSettings.UssdRetrySeconds, 10, 300);
-                AddLog($"[{port.PortName}] [USSD_AUTO_RETRY] Vòng {round} chưa đủ SĐT/Ngày KH ({result}); thử lại sau {retrySeconds} giây.", "WARN");
+                string expected = needsIdentity ? "SĐT/Ngày KH" : "TKC/HSD";
+                AddLog($"[{port.PortName}] [USSD_AUTO_RETRY] {ussdCode} vòng {round} chưa lấy được {expected} ({result}); thử lại sau {retrySeconds} giây.", "WARN");
                 await Task.Delay(TimeSpan.FromSeconds(retrySeconds), token);
             }
         }
@@ -5215,14 +5228,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private async Task<string> SendSautoInitial111Async(
         string portName, string ccid, long epoch, CancellationToken token)
+        => await SendSautoInitialUssdAsync(portName, ccid, epoch, "*111#", token);
+
+    private async Task<string> SendSautoInitial101Async(
+        string portName, string ccid, long epoch, CancellationToken token)
+        => await SendSautoInitialUssdAsync(portName, ccid, epoch, "*101#", token);
+
+    private async Task<string> SendSautoInitialUssdAsync(
+        string portName, string ccid, long epoch, string ussdCode, CancellationToken token)
     {
         if (!IsSimSessionCurrent(portName, ccid, epoch)
             || !IsPortReadyForOperation(portName))
             return "ERROR: SIM session changed";
 
-        // Exact automatic lookup observed in every SAuto capture. Do not run the
-        // generic USSD preflight here: it adds AT/CREG/CMGF/CSCS commands that are
-        // absent from this path in SAuto.
+        // Keep the automatic SAuto lookup path minimal for both *111# and *101#.
+        // The generic preflight adds AT/CREG/CMGF/CSCS commands that do not belong
+        // between these two sequential lookups.
         string cancel = await _modemService.SendCommandAsync(
             portName, "AT+CUSD=2", 5000, silent: true, ct: token);
         if (cancel.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
@@ -5234,7 +5255,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return "ERROR: SIM session changed";
 
         return await _modemService.SendCommandAsync(
-            portName, "AT+CUSD=1,\"*111#\",15", 10000, silent: true, ct: token);
+            portName, $"AT+CUSD=1,\"{ussdCode}\",15", 10000, silent: true, ct: token);
     }
 
     private async Task ContinueInitialBalanceLookupAfterRecoveryAsync(string portName)
@@ -5251,9 +5272,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
             if (port == null
                 || port.Status != SimStatus.Active
-                || !IsSimSessionCurrent(portName, ccid, epoch)
-                || (!string.IsNullOrWhiteSpace(port.PhoneNumber)
-                    && !string.IsNullOrWhiteSpace(port.SimRegDate)))
+                || !IsSimSessionCurrent(portName, ccid, epoch))
                 return;
 
             AddLog($"[{portName}] [USSD_SESSION_CONTINUE] Phiên SIM mới tiếp tục dò SĐT/TKC/HSD sau recovery.", "INFO");
@@ -7283,10 +7302,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return false;
     }
 
-    internal static bool IsVina3gReadyForInitialLookup(SimPort port) =>
+    internal static bool IsVinaNetworkReadyForInitialLookup(SimPort port) =>
         port.Status == SimStatus.Active
         && string.Equals(port.NetworkProvider, "VinaPhone", StringComparison.OrdinalIgnoreCase)
-        && string.Equals(port.NetworkType, "3G", StringComparison.OrdinalIgnoreCase)
+        && (string.Equals(port.NetworkType, "2G", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(port.NetworkType, "3G", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(port.NetworkType, "4G", StringComparison.OrdinalIgnoreCase))
         && port.SignalStrength > 0;
 
     internal static string ExtractPhoneNumberFromUssd(string? content)
@@ -7324,6 +7345,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         else if (!phone.StartsWith("0", StringComparison.Ordinal))
             phone = "0" + phone;
         return phone;
+    }
+
+    internal static string ExtractSimRegDateFromUssd(string? content)
+    {
+        Match match = Regex.Match(
+            content ?? string.Empty,
+            @"(?:Ngay\s*KH|Ngay\s*kich\s*hoat|Ngay\s*DK|Ngay\s*dang\s*ky)[^\d]{0,15}(?<date>\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})",
+            RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups["date"].Value : string.Empty;
     }
 
     internal static bool TryParseCsqResponse(string? response, out int rssi, out int percent)

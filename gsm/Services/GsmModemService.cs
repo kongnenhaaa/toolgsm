@@ -2517,6 +2517,16 @@ public class GsmModemService : IGsmModemService
                     if (_commandTcs.TryGetValue(portName, out var t) && t.Task.AsyncState is string c
                         && c.StartsWith("AT+CUSD=1", StringComparison.OrdinalIgnoreCase))
                     {
+                        // +CUSD is both the completion payload for the pending command and an
+                        // unsolicited modem event consumed by MainViewModel.  Previously this
+                        // branch completed the command without publishing the event, so the UI
+                        // never parsed the phone number/activation date even though the modem
+                        // had returned them successfully.
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = ussdData.Trim()
+                        });
                         t.TrySetResult(currentData.Substring(0, match.Index + match.Length).Trim());
                         buffer.Remove(0, match.Index + match.Length);
                     }

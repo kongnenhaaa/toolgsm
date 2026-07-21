@@ -45,14 +45,13 @@ public sealed class ImeiRestoreTests
     }
 
     [Fact]
-    public async Task ExistingBackup_IsCanonicalizedWrittenAndVerifiedThroughCgsnAndEgmr()
+    public async Task ExistingBackup_UsesCapturedSautoSlot7Sequence()
     {
         const string ccid = "89840200011750541177";
         const string currentImei = "867702058238604";
         const string storedBackupImei = "355008370781440";
         const string canonicalBackupImei = "355008370781449";
         string modemImei = currentImei;
-        string modemImei2 = currentImei;
 
         var modem = new FakeGsmModemService
         {
@@ -63,18 +62,10 @@ public sealed class ImeiRestoreTests
                     modemImei = canonicalBackupImei;
                     return Task.FromResult("OK");
                 }
-                if (command.StartsWith("AT+EGMR=1,10,", StringComparison.Ordinal))
-                {
-                    modemImei2 = canonicalBackupImei;
-                    return Task.FromResult("OK");
-                }
-
                 return Task.FromResult(command switch
                 {
-                    "AT+CFUN?" => "+CFUN: 0\r\nOK",
-                    "AT+CGSN" => modemImei + "\r\nOK",
-                    "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
-                    "AT+EGMR=0,10" => $"+EGMR: \"{modemImei2}\"\r\nOK",
+                    "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
                     _ => "OK"
                 });
             }
@@ -82,7 +73,6 @@ public sealed class ImeiRestoreTests
         var service = new ImeiManagementService(modem);
         var port = new SimPort { PortName = "COM40", Serial = ccid, Imei = currentImei };
         var backup = new SimBackupEntry { Ccid = ccid, Imei = storedBackupImei };
-        SimBackupEntry? saved = null;
         var settings = new AppSettings
         {
             EnableImeiRestore = true,
@@ -95,22 +85,31 @@ public sealed class ImeiRestoreTests
             currentImei,
             settings,
             _ => backup,
-            entry => saved = entry,
+            _ => { },
             action => action(),
             validateIdentityAsync: () => Task.FromResult(true));
 
         Assert.Equal(ImeiProcessStatus.Applied, result.Status);
         Assert.Equal(canonicalBackupImei, result.FinalImei);
+        Assert.True(result.ModemResetRequested);
         Assert.Equal(canonicalBackupImei, modemImei);
-        Assert.Equal(canonicalBackupImei, saved?.Imei);
+        Assert.Equal(
+        [
+            "COM40:AT+CFUN=4",
+            "COM40:AT+CFUN?",
+            $"COM40:AT+EGMR=1,7,\"{canonicalBackupImei}\"",
+            "COM40:AT+EGMR=0,7;",
+            "COM40:AT+CFUN=1,1"
+        ], modem.Commands);
         Assert.Contains($"COM40:AT+EGMR=1,7,\"{canonicalBackupImei}\"", modem.Commands);
-        Assert.Contains("COM40:AT+CGSN", modem.Commands);
-        Assert.Contains("COM40:AT+EGMR=0,7", modem.Commands);
-        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CFUN=1", StringComparison.Ordinal));
+        Assert.Contains("COM40:AT+EGMR=0,7;", modem.Commands);
+        Assert.Contains("COM40:AT+CFUN=1,1", modem.Commands);
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CGSN", StringComparison.Ordinal));
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("EGMR=1,10", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task Restore_DoesNotSucceedWhenCgsnMatchesButStoredImeiIsDifferent()
+    public async Task Restore_DoesNotResetWhenSlot7ReadbackIsDifferent()
     {
         const string ccid = "89840200011750541177";
         const string currentImei = "867702058238604";
@@ -121,10 +120,8 @@ public sealed class ImeiRestoreTests
         {
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
-                "AT+CFUN?" => "+CFUN: 0\r\nOK",
-                "AT+CGSN" => targetImei + "\r\nOK",
-                "AT+EGMR=0,7" => $"+EGMR: \"{wrongStoredImei}\"\r\nOK",
-                "AT+EGMR=0,10" => $"+EGMR: \"{targetImei}\"\r\nOK",
+                "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                "AT+EGMR=0,7;" => $"+EGMR: \"{wrongStoredImei}\"\r\nOK",
                 _ => "OK"
             })
         };
@@ -148,7 +145,58 @@ public sealed class ImeiRestoreTests
     }
 
     [Fact]
-    public async Task Restore_FailsClosedWhenSlot10CannotBeWritten()
+    public async Task NewImei_SavesOriginalBackupBeforeFirstModemWrite()
+    {
+        const string ccid = "89840200011750541177";
+        const string originalImei = "352054261826334";
+        string writtenImei = string.Empty;
+        var events = new List<string>();
+        SimBackupEntry? saved = null;
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) =>
+            {
+                events.Add($"CMD:{command}");
+                if (command.StartsWith("AT+EGMR=1,7,", StringComparison.Ordinal))
+                {
+                    writtenImei = System.Text.RegularExpressions.Regex.Match(command, @"\d{15}").Value;
+                    return Task.FromResult("OK");
+                }
+                return Task.FromResult(command switch
+                {
+                    "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                    "AT+EGMR=0,7;" => $"+EGMR: \"{writtenImei}\"\r\nOK",
+                    _ => "OK"
+                });
+            }
+        };
+        var service = new ImeiManagementService(modem);
+        var port = new SimPort { PortName = "COM43", Serial = ccid, Imei = originalImei };
+
+        ImeiProcessResult result = await service.ProcessImeiAsync(
+            port,
+            ccid,
+            originalImei,
+            new AppSettings { EnableImeiRestore = true, EnableNewSimIntakeMode = true },
+            _ => saved,
+            entry =>
+            {
+                saved = entry;
+                events.Add($"SAVE:{entry.Imei}");
+            },
+            action => action(),
+            forceAccept: true,
+            validateIdentityAsync: () => Task.FromResult(true));
+
+        Assert.Equal(ImeiProcessStatus.Applied, result.Status);
+        Assert.Equal(originalImei, saved?.Imei);
+        Assert.Equal("imei_backup.xlsx", saved?.SourceFile);
+        Assert.True(events.IndexOf($"SAVE:{originalImei}") < events.IndexOf("CMD:AT+CFUN=4"));
+        Assert.NotEqual(originalImei, result.FinalImei);
+    }
+
+    [Fact]
+    public async Task Restore_DoesNotUseSlot10OrCgsn()
     {
         const string ccid = "89840200011750541177";
         const string currentImei = "867702058238604";
@@ -164,15 +212,10 @@ public sealed class ImeiRestoreTests
                     modemImei = targetImei;
                     return Task.FromResult("OK");
                 }
-                if (command.StartsWith("AT+EGMR=1,10,", StringComparison.Ordinal))
-                    return Task.FromResult("ERROR");
-
                 return Task.FromResult(command switch
                 {
-                    "AT+CFUN?" => "+CFUN: 0\r\nOK",
-                    "AT+CGSN" => modemImei + "\r\nOK",
-                    "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
-                    "AT+EGMR=0,10" => $"+EGMR: \"{currentImei}\"\r\nOK",
+                    "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
                     _ => "OK"
                 });
             }
@@ -191,7 +234,9 @@ public sealed class ImeiRestoreTests
             action => action(),
             validateIdentityAsync: () => Task.FromResult(true));
 
-        Assert.Equal(ImeiProcessStatus.SecurityBlocked, result.Status);
-        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CFUN=1", StringComparison.Ordinal));
+        Assert.Equal(ImeiProcessStatus.Applied, result.Status);
+        Assert.Contains("COM42:AT+CFUN=1,1", modem.Commands);
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CGSN", StringComparison.Ordinal));
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("EGMR=1,10", StringComparison.Ordinal));
     }
 }

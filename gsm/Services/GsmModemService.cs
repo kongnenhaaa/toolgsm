@@ -70,6 +70,37 @@ public class GsmModemService : IGsmModemService
         string VidPid,
         int InterfaceNumber);
 
+    private sealed record SautoInitializationResult(
+        QuectelModemProfile Profile,
+        string ImeiResponse,
+        string CpinResponse,
+        bool RadioLocked);
+
+    internal static IReadOnlyList<string> SautoInitializationCommandOrder { get; } =
+    [
+        "\u001b",
+        "ATI",
+        "AT+CPMS=\"ME\",\"SM\",\"MT\"",
+        "AT+CFUN=4",
+        "AT+CNMI=1,1,0,0,0",
+        "AT+CFUN?",
+        "AT+EGMR=0,7;",
+        "AT+CNMI?",
+        "AT+CSCS=\"GSM\"",
+        "AT+QURCCFG=\"urcport\",\"uart1\"",
+        "AT+CMGF=1",
+        "AT+CPMS=\"SM\",\"SM\",\"SM\"",
+        "AT+CMGD=1,4",
+        "AT+CPMS=\"ME\",\"ME\",\"ME\"",
+        "AT+CMGD=1,4",
+        "AT+CPMS=\"SM\",\"SM\",\"SM\"",
+        "AT+CPMS?",
+        "AT+CNMI=1,1,0,0,0",
+        "AT+QCFG=\"nwscanmode\",0,1",
+        "AT+QURCCFG=\"urcport\",\"uart1\"",
+        "AT+CPIN?"
+    ];
+
     private readonly ConcurrentDictionary<string, SerialPort> _serialPorts = new();
     private readonly ConcurrentDictionary<string, gsm.Models.IncomingCallSession> _incomingCalls = new();
     private readonly ConcurrentDictionary<string, byte> _incomingCallNotifications = new(StringComparer.OrdinalIgnoreCase);
@@ -762,10 +793,6 @@ public class GsmModemService : IGsmModemService
                         _portLifetimeCts[p] = new CancellationTokenSource();
                         
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = $"Đã kết nối thành công {p} (Baud: {baudRate})" });
-                        // [SECURITY CRITICAL] Tắt radio NGAY sau khi port mở — trước cả GlobalSimMonitor.
-                        // Nếu chờ đến InitializeOpenedPortsAsync, với 32 ports COM đầu tiên
-                        // sẽ expose IMEI gốc lên mạng suốt thời gian chờ mở các port còn lại.
-                        try { sp.Write("AT+CFUN=4\r"); } catch { }
                         // Báo UI ngay khi COM đã mở, không chờ quá trình đọc SIM/CCID hoàn tất.
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = p, Data = "[PORT_OPENED]" });
                         
@@ -999,202 +1026,144 @@ public class GsmModemService : IGsmModemService
         return explicitNotInserted || (transientNotReady && removalUrcPending);
     }
 
-    private async Task InitializeModemCoreAsync(string portName, CancellationToken ct)
+    private async Task SendEscapeWithoutResponseAsync(string portName, CancellationToken ct)
+    {
+        if (!EnsurePortOpen(portName, out var sp) || sp == null)
+            throw new IOException($"Không mở được {portName} để gửi ESC.");
+        if (!_semaphores.TryGetValue(portName, out var semaphore))
+            throw new IOException($"Không có khóa serial cho {portName}.");
+
+        await semaphore.WaitAsync(ct);
+        try
+        {
+            sp.Write("\u001b");
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+    }
+
+    private async Task<SautoInitializationResult> RunSautoInitializationSequenceAsync(
+        string portName,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
-        // [SECURITY] Gửi lệnh ngắt sóng NGAY LẬP TỨC ngay khi mở cổng COM, không chờ đợi PING AT.
-        // Ngăn chặn tối đa việc modem kịp đăng ký vào mạng bằng IMEI phần cứng khi vừa khởi động.
-        await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
-        ct.ThrowIfCancellationRequested();
-        
-        // Kiểm tra kết nối cơ bản
-        string ping = "ERROR";
-        for (int i = 0; i < 5; i++)
+
+        await SendEscapeWithoutResponseAsync(portName, ct);
+        await Task.Delay(600, ct);
+
+        string ati = await SendCommandAsync(portName, "ATI", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CPMS=\"ME\",\"SM\",\"MT\"", 5000, silent: true, ct: ct);
+        await Task.Delay(300, ct);
+
+        string cfun4 = await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct: ct);
+        await Task.Delay(200, ct);
+        await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 5000, silent: true, ct: ct);
+        await Task.Delay(800, ct);
+        string cfunState = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
+
+        bool radioLocked = !IsCommandFailure(cfun4)
+            && Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", RegexOptions.IgnoreCase);
+        if (!radioLocked)
         {
-            ping = await SendCommandAsync(portName, "AT", 3000, silent: true);
-            if (!ping.Contains("Timeout") && !ping.Contains("ERROR")) break;
-            await Task.Delay(500, ct);
+            await Task.Delay(300, ct);
+            cfun4 = await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct: ct);
+            cfunState = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
+            radioLocked = !IsCommandFailure(cfun4)
+                && Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", RegexOptions.IgnoreCase);
         }
-        
-        if (ping.Contains("Timeout") || ping.Contains("ERROR"))
+
+        if (!radioLocked)
         {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Bỏ qua cổng vì không phản hồi lệnh AT cơ bản: {ping}" });
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE]" });
+            return new SautoInitializationResult(
+                QuectelModemProfile.FromIdentity(string.Empty, string.Empty, string.Empty),
+                "ERROR",
+                "ERROR",
+                false);
+        }
+
+        await Task.Delay(700, ct);
+        string imei = await SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true, ct: ct);
+        await Task.Delay(100, ct);
+        await SendCommandAsync(portName, "AT+CNMI?", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, silent: true, ct: ct);
+        await Task.Delay(300, ct);
+        await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true, ct: ct);
+        await Task.Delay(300, ct);
+        await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true, ct: ct);
+        await Task.Delay(300, ct);
+        await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CMGD=1,4", 5000, silent: true, ct: ct);
+        await Task.Delay(500, ct);
+        await SendCommandAsync(portName, "AT+CPMS=\"ME\",\"ME\",\"ME\"", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CMGD=1,4", 5000, silent: true, ct: ct);
+        await Task.Delay(500, ct);
+        await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 5000, silent: true, ct: ct);
+        await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true, ct: ct);
+        await Task.Delay(500, ct);
+        await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true, ct: ct);
+        await Task.Delay(500, ct);
+        string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true, ct: ct);
+
+        string model = Regex.Match(ati, @"\b(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}\b", RegexOptions.IgnoreCase).Value;
+        var profile = QuectelModemProfile.FromIdentity(
+            ati.Contains("Quectel", StringComparison.OrdinalIgnoreCase) ? "Quectel" : string.Empty,
+            model,
+            ati);
+        _portVendors[portName] = profile.Manufacturer.ToUpperInvariant();
+        _modemProfiles[portName] = profile;
+        return new SautoInitializationResult(profile, imei, cpin, true);
+    }
+
+    private async Task InitializeModemCoreAsync(string portName, CancellationToken ct)
+    {
+        SautoInitializationResult result = await RunSautoInitializationSequenceAsync(portName, ct);
+        if (!result.RadioLocked)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[STATUS_NO_RESPONSE] Không xác nhận được CFUN=4 theo chuỗi SAuto."
+            });
             return;
         }
 
-        // Ngắt sóng ngay, chặn đăng ký mạng bằng IMEI cũ
-        bool cfunOffSuccess = false;
-        for (int i = 0; i < 5; i++)
+        LogMessage?.Invoke(this, new GsmDataEventArgs
         {
-            // Kiểm tra trạng thái hiện tại trước - nếu đã CFUN=4 hoặc CFUN=0 thì OK luôn
-            string cfunStatus = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
-            if (Regex.IsMatch(cfunStatus, @"\+CFUN:\s*[04]"))
-            {
-                cfunOffSuccess = true;
-                break;
-            }
+            PortName = portName,
+            Data = $"[MODEM_PROFILE] manufacturer={result.Profile.Manufacturer}; model={result.Profile.Model}; firmware={result.Profile.Firmware}; capabilities={result.Profile.CapabilityText}"
+        });
 
-            string cfunResp = await SendCommandAsync(portName, "AT+CFUN=4", 15000, silent: true);
-            // FIX: Điều kiện đúng: thành công khi KHÔNG có ERROR (hoặc modem đã ở CFUN=4 rồi)
-            if (!cfunResp.Contains("ERROR"))
-            {
-                cfunOffSuccess = true;
-                break;
-            }
-            // Nếu +CME ERROR: 303 (operation not allowed) → modem có thể đã ở CFUN=4 sẵn, kiểm tra lại
-            if (cfunResp.Contains("+CME ERROR"))
-            {
-                string reCheck = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true);
-                if (Regex.IsMatch(reCheck, @"\+CFUN:\s*[04]"))
-                {
-                    cfunOffSuccess = true;
-                    break;
-                }
-            }
-            await Task.Delay(1000, ct);
-        }
-        
-        if (!cfunOffSuccess)
-        {
-            // Fallback an toàn: CFUN=0 vẫn tắt RF. Nếu cả hai đều thất bại thì
-            // dừng khởi tạo, không tiếp tục trên một modem có thể đang online.
-            string minimumMode = await SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true);
-            cfunOffSuccess = !minimumMode.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
-            if (!cfunOffSuccess)
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_NO_RESPONSE] Không thể tắt radio an toàn (CFUN=4/0 đều thất bại)" });
-                return;
-            }
-        }
-        await Task.Delay(500, ct);
+        string cleanImei = Regex.Match(result.ImeiResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
+        if (!string.IsNullOrWhiteSpace(cleanImei))
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
 
-        await SendCommandAsync(portName, "ATE0", 30000); // Turn off echo
-        await SendCommandAsync(portName, "AT+CMGF=1", 30000); // Set SMS to text mode
-        await SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 30000); // Đọc được tiếng Việt
-        await SendCommandAsync(portName, "AT+CLIP=1", 30000); // Hiển thị thông tin người gọi
-        
-        // Cấu hình nâng cao
-        await SendCommandAsync(portName, "AT+CMEE=2", 10000, silent: true); 
-        await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 10000, silent: true);
-        await SendCommandAsync(portName, "AT+CREG=2", 10000, silent: true);
-        await SendCommandAsync(portName, "AT+CGREG=2", 10000, silent: true);
-        await SendCommandAsync(portName, "AT+CEREG=2", 10000, silent: true);
-        await SendCommandAsync(portName, "AT+CRC=1", 10000, silent: true);
-        
-        QuectelModemProfile profile = await DetectModemProfileAsync(portName, ct);
-
-        if (profile.IsQuectel)
-            await SendCommandAsync(portName, "AT+CMGF=0", 10000, silent: true);
-
-        if (profile.IsQuectel)
-        {
-            if (profile.Supports(ModemCapability.UrcPortRouting))
-                await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 10000, silent: true);
-            // Giữ nguyên chế độ mạng do modem/SIM đang sử dụng. Chỉ chức năng USSD
-            // hoặc nút Fix EC20 do người dùng chủ động mới được thay nwscanmode.
-            // Nhánh dev không ghi đè IMS của firmware/nhà mạng. Chỉ bật cưỡng bức
-            // khi người dùng đã chủ động bật tùy chọn VoLTE; khi tắt thì không gửi lệnh.
-            if (gsm.Services.SettingsService.Current?.EnableVolte == true
-                && profile.Supports(ModemCapability.ImsConfig))
-                await SendCommandAsync(portName, "AT+QCFG=\"ims\",1", 5000, silent: true);
-            if (profile.Supports(ModemCapability.VoiceCall))
-            {
-                await ConfigureVoiceAudioAsync(portName);
-            }
-            // Không ghi QSIMDET tự động. Mức SIM_DET là đặc tính của bo mạch, không
-            // phải của model EC20; ép level=0 rồi reboot có thể làm một số khay đang
-            // có SIM bị firmware báo nhầm là đã rút. Tool dùng CPIN/QSIMSTAT/CCID để
-            // xác minh hot-plug mà không thay cấu hình chân phần cứng của thiết bị.
-            if (profile.Supports(ModemCapability.SimStatusUrc))
-                await SendCommandAsync(portName, "AT+QSIMSTAT=1", 10000, silent: true);
-            if (profile.Supports(ModemCapability.DtmfDetection))
-                await SendCommandAsync(portName, "AT+QTONEDET=1", 30000);
-        }
-        
-        string imei = await SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
-        if (!imei.Contains("ERROR") && !string.IsNullOrWhiteSpace(imei))
-        {
-            string cleanImei = imei.Replace("OK", "").Trim();
-            if (!string.IsNullOrWhiteSpace(cleanImei))
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
-        }
-        
-        // Chỉ đọc/khởi tạo SIM khi RF vẫn tắt. Không được dùng CFUN=1 làm fallback:
-        // trên EC20 đó là full functionality và có thể bắt đầu attach ngay.
-        // Giữ CFUN=4: EC20 vẫn tắt RF nhưng SIM stack còn hoạt động. CFUN=0 trên một số
-        // firmware tắt cả SIM stack và làm SIM đã cắm sẵn bị nhận nhầm thành "SIM failure".
-        await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true);
-        await Task.Delay(500, ct);
-        string ccid = "ERROR";
-        string initialCpin = await SendCommandAsync(portName, "AT+CPIN?", 3000, silent: true);
-        bool simLocked = initialCpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                      || initialCpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-        // Under CFUN=4, EC20 có thể báo NOT READY/CME 10 dù SIM vẫn đang cắm.
-        // Chỉ NOT INSERTED là kết luận chắc chắn; trạng thái khác được kiểm tra lại
-        // bằng chu kỳ CFUN=0 -> 4 an toàn ở dưới.
-        bool definitelyNoSim = initialCpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase);
+        bool simLocked = result.CpinResponse.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
+                      || result.CpinResponse.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
+        bool simReady = Regex.IsMatch(result.CpinResponse, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
         if (simLocked)
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {initialCpin.Trim()}" });
-
-        if (!definitelyNoSim && !simLocked)
         {
-            ccid = await ReadCcidWithFallbackAsync(portName, 5000, false);
-            if (ccid.Contains("ERROR") || string.IsNullOrWhiteSpace(ccid))
-            {
-                string qsim = profile.Supports(ModemCapability.SimStatusUrc)
-                    ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
-                    : string.Empty;
-                bool physicallyPresent = Regex.IsMatch(initialCpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
-                                       || Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
-                // Một số EC20 trả SIM failure/QSIMSTAT=0 khi CFUN=4 dù SIM đã cắm sẵn.
-                // Khởi tạo lại stack bằng CFUN=0 -> 4; cả hai trạng thái đều khóa RF.
-                if (physicallyPresent || !definitelyNoSim)
-                {
-                    if (await RestartSimStackOfflineAsync(portName, ct))
-                    {
-                        string enabledCpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-                        simLocked = enabledCpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                                 || enabledCpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-                        ccid = await ReadCcidWithFallbackAsync(portName, 5000, false);
-                    }
-                }
-            }
+            _lastSimState[portName] = false;
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {result.CpinResponse.Trim()}" });
+            return;
         }
 
+        string ccid = simReady
+            ? await SendCommandAsync(portName, "AT+ICCID", 5000, silent: true, ct: ct)
+            : "ERROR";
         if (HasReadableCcid(ccid))
         {
             _lastSimState[portName] = true;
-            
-            // Giữ radio tắt; ViewModel chỉ bật lại sau khi xác minh CCID/IMEI cuối cùng.
-            await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
-            await Task.Delay(500, ct);
-            
-            // Cấu hình đẩy SMS: 2,1 để lưu vào SIM và gửi +CMTI (phù hợp với Regex lấy msgIndex)
-            string cnmi = await SendCommandAsync(portName, "AT+CNMI=2,1,0,0,0", 10000, silent: true); 
-            if (cnmi.Contains("ERROR")) 
-            {
-                cnmi = await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 10000, silent: true);
-                if (cnmi.Contains("ERROR"))
-                {
-                    await SendCommandAsync(portName, "AT+CNMI=2,2,0,0,0", 10000, silent: true);
-                }
-            } 
-            
-            string cnum = await SendCommandAsync(portName, "AT+CNUM", 10000, silent: true);
-
-            // PARSE_IMEI đã được emit ở trên khi RF vẫn tắt - không emit lại ở đây.
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
-            if (!cnum.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CNUM] {cnum.Replace("OK", "").Trim()}" });
+            return;
         }
-        else
-        {
-            _lastSimState[portName] = false;
-            if (!imei.Contains("ERROR")) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei.Replace("OK", "").Trim()}" });
-            if (!simLocked)
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Không đọc được SIM" });
-            StartHotplugWaitLoop(portName);
-        }
+
+        _lastSimState[portName] = false;
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Không đọc được SIM" });
+        StartHotplugWaitLoop(portName);
     }
 
     public async Task ReloadSimAsync(string portName)
@@ -1376,6 +1345,7 @@ public class GsmModemService : IGsmModemService
                 if (!_serialPorts.ContainsKey(portName)) break;
                 if (IsCallInProgress(portName)) continue;
                 if (_rebootRecoveryInProgress.ContainsKey(portName)) continue;
+                if (_pollingCts.ContainsKey(portName) || _simInitInProgress.ContainsKey(portName)) continue;
 
                 string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
                 
@@ -1468,6 +1438,87 @@ public class GsmModemService : IGsmModemService
     }
 
     public void StartHotplugWaitLoop(string portName)
+    {
+        if (_keepAliveCts.TryRemove(portName, out var oldKeepAlive))
+        {
+            try { oldKeepAlive.Cancel(); oldKeepAlive.Dispose(); } catch { }
+        }
+
+        CancellationTokenSource loopCts;
+        lock (_pollingCts)
+        {
+            if (_pollingCts.TryGetValue(portName, out var oldCts))
+            {
+                try { oldCts.Cancel(); oldCts.Dispose(); } catch { }
+            }
+            loopCts = new CancellationTokenSource();
+            _pollingCts[portName] = loopCts;
+        }
+
+        CancellationToken token = loopCts.Token;
+        bool IsCurrentLoop() => !token.IsCancellationRequested
+            && _pollingCts.TryGetValue(portName, out var current)
+            && ReferenceEquals(current, loopCts);
+
+        _ = Task.Run(async () =>
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[WAITING_FOR_SIM] Đang chờ SIM theo chuỗi khởi tạo SAuto; RF giữ ở CFUN=4"
+            });
+
+            while (IsCurrentLoop() && _serialPorts.ContainsKey(portName))
+            {
+                try
+                {
+                    // The captured SAuto no-SIM loop starts a fresh initialization pass
+                    // roughly once per nine seconds. The sequence itself accounts for
+                    // most of that interval; one second separates consecutive passes.
+                    await Task.Delay(1000, token);
+                    SautoInitializationResult result = await RunSautoInitializationSequenceAsync(portName, token);
+                    if (!result.RadioLocked) continue;
+
+                    string imei = Regex.Match(result.ImeiResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
+                    if (!string.IsNullOrEmpty(imei))
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei}" });
+
+                    if (result.CpinResponse.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
+                        || result.CpinResponse.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {result.CpinResponse.Trim()}" });
+                        continue;
+                    }
+
+                    if (!Regex.IsMatch(result.CpinResponse, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase))
+                        continue;
+
+                    string ccidResponse = await SendCommandAsync(portName, "AT+ICCID", 5000, silent: true, ct: token);
+                    if (!HasReadableCcid(ccidResponse)) continue;
+
+                    _lastSimState[portName] = true;
+                    string ccid = Regex.Match(ccidResponse, @"\d{18,22}").Value;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid}" });
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận SIM theo chuỗi SAuto" });
+                    break;
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[WAITING_FOR_SIM] Lặp khởi tạo lỗi: {ex.Message}" });
+                }
+            }
+
+            // Keep the lease in the dictionary while MainViewModel verifies/writes IMEI.
+            // StartPollingNetwork or a restarted hot-plug loop will atomically replace it;
+            // meanwhile the global monitor cannot inject extra AT commands into the trace.
+        });
+    }
+
+    private void StartHotplugWaitLoopLegacy(string portName)
     {
         if (_keepAliveCts.TryRemove(portName, out var oldKeepAlive))
         {
@@ -1655,36 +1706,23 @@ public class GsmModemService : IGsmModemService
             }
 
         // Đọc IMEI hiện tại (radio đã tắt, IMEI đọc từ NV)
-            string currentImei = await SendCommandAsync(portName, "AT+CGSN", 5000, silent: true);
+            string currentImei = await SendCommandAsync(portName, "AT+EGMR=0,7;", 5000, silent: true);
             string cleanImei = "";
             if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
             {
-                cleanImei = currentImei.Replace("OK", "").Trim();
+                cleanImei = Regex.Match(currentImei, @"(?<!\d)\d{15}(?!\d)").Value;
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
             }
 
         // Đọc CCID
-            string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
+            string pollResp = await SendCommandAsync(portName, "AT+ICCID", 5000, silent: true);
             bool hasSim = HasReadableCcid(pollResp);
 
             // Một số EC20 cần khởi tạo lại SIM stack trước khi đọc được CCID ở airplane mode.
             // Chỉ dùng CFUN=0 -> 4; CFUN=1 là full functionality và bị cấm ở giai đoạn này.
-            if (!hasSim)
-            {
-                if (await RestartSimStackOfflineAsync(portName))
-                {
-                    for (int attempt = 0; attempt < 3 && !hasSim; attempt++)
-                    {
-                        await Task.Delay(attempt == 0 ? 500 : 1000);
-                        pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
-                        hasSim = HasReadableCcid(pollResp);
-                    }
-                }
-            }
-
             if (hasSim)
             {
-            string ccid = pollResp.Replace("OK", "").Trim();
+            string ccid = Regex.Match(pollResp, @"\d{18,22}").Value;
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid}" });
 
             bool isNewSim = true;

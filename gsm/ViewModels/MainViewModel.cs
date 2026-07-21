@@ -2340,13 +2340,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             ct.ThrowIfCancellationRequested();
             string raw = await _modemService.SendCommandAsync(
-                portName, "AT+QCCID", 3000, silent: true, ct: ct);
+                portName, "AT+ICCID", 3000, silent: true, ct: ct);
             string ccid = NormalizeCcid(raw);
-            if (!string.IsNullOrWhiteSpace(ccid)) return ccid;
-
-            raw = await _modemService.SendCommandAsync(
-                portName, "AT+CCID", 3000, silent: true, ct: ct);
-            ccid = NormalizeCcid(raw);
             if (!string.IsNullOrWhiteSpace(ccid)) return ccid;
 
             if (attempt < attempts) await Task.Delay(500, ct);
@@ -2386,15 +2381,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Đọc IMEI trước CCID để phát hiện sai danh tính sớm nhất sau CFUN=1.
             string cfun = await _modemService.SendCommandAsync(
                 port.PortName, "AT+CFUN?", 3000, silent: true, ct: token);
-            string rawImei = await _modemService.SendCommandAsync(
-                port.PortName, "AT+CGSN", 8000, silent: true, ct: token);
-            string liveImei = NormalizeImei(rawImei);
             string rawStoredImei = await _modemService.SendCommandAsync(
-                port.PortName, "AT+EGMR=0,7", 8000, silent: true, ct: token);
-            string storedImei = NormalizeImei(rawStoredImei);
-            string rawStored2Imei = await _modemService.SendCommandAsync(
-                port.PortName, "AT+EGMR=0,10", 8000, silent: true, ct: token);
-            string stored2Imei = NormalizeImei(rawStored2Imei);
+                port.PortName, "AT+EGMR=0,7;", 8000, silent: true, ct: token);
+            string liveImei = Regex.Match(rawStoredImei ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
             string liveCcid = await ReadLiveCcidAsync(port.PortName, token, attempts: ccidAttempts);
 
             bool cfunMatches = radioMustBeOff
@@ -2402,12 +2391,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 : Regex.IsMatch(cfun, @"\+CFUN:\s*1\b", RegexOptions.IgnoreCase);
             bool valid = cfunMatches
                       && string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
-                      && Services.ImeiManagementService.AreEquivalentImei(liveImei, expectedImei)
-                      && Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(rawStoredImei, expectedImei)
-                      && Services.ImeiManagementService.StoredImeiMatchesOrUnavailable(rawStored2Imei, expectedImei)
+                      && string.Equals(liveImei, expectedImei, StringComparison.Ordinal)
                       && IsSimSessionCurrent(port.PortName, ccid, epoch);
 
-            AddLog($"[{port.PortName}] [{(valid ? "IMEI_VERIFY_OK" : "IMEI_VERIFY")}] phase={phase}; CFUN={cfun.Trim()}; expected={expectedImei}; CGSN={liveImei}; EGMR_slot7={storedImei}; EGMR_slot10={stored2Imei}; CCID={liveCcid}",
+            AddLog($"[{port.PortName}] [{(valid ? "IMEI_VERIFY_OK" : "IMEI_VERIFY")}] phase={phase}; CFUN={cfun.Trim()}; expected={expectedImei}; EGMR_slot7={liveImei}; CCID={liveCcid}",
                 valid ? "SUCCESS" : "ERROR");
             return (valid, liveImei);
         }
@@ -2469,6 +2456,58 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (radioMayBeOn && !activationSucceeded)
                 await ForceRadioOffBestEffortAsync();
         }
+    }
+
+    private async Task<bool> CompleteSautoResetAsync(
+        SimPort port, string ccid, string expectedImei, long epoch, CancellationToken token)
+    {
+        // SAuto has already issued CFUN=1,1 after an exact slot-7 readback. Do not
+        // send another CFUN transition here; wait for EC20 to boot and verify the
+        // persisted value before starting normal network polling.
+        await Task.Delay(7000, token);
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return false;
+
+            string storedResponse = await _modemService.SendCommandAsync(
+                port.PortName, "AT+EGMR=0,7;", 8000, silent: true, ct: token);
+            string storedImei = Regex.Match(storedResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
+            string cpin = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CPIN?", 5000, silent: true, ct: token);
+            string liveCcidResponse = await _modemService.SendCommandAsync(
+                port.PortName, "AT+ICCID", 5000, silent: true, ct: token);
+            string liveCcid = NormalizeCcid(liveCcidResponse);
+
+            bool ready = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
+                && string.Equals(storedImei, expectedImei, StringComparison.Ordinal)
+                && string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase);
+            AddLog($"[{port.PortName}] [SAUTO_RESET_VERIFY] attempt={attempt + 1}; slot7={storedImei}; expected={expectedImei}; CCID={liveCcid}; ready={ready.ToString().ToLowerInvariant()}",
+                ready ? "SUCCESS" : "INFO");
+
+            if (ready)
+            {
+                // These are the first network-state reads seen after SAuto's reset.
+                await _modemService.SendCommandAsync(port.PortName, "AT+CSQ", 5000, silent: true, ct: token);
+                await _modemService.SendCommandAsync(port.PortName, "AT+COPS?", 5000, silent: true, ct: token);
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
+                    port.IsRebooting = false;
+                    port.Imei = expectedImei;
+                    MarkPortActiveAfterInit(port.PortName);
+                });
+                bool active = IsSimSessionCurrent(port.PortName, ccid, epoch)
+                    && port.Status == SimStatus.Active;
+                if (active) _modemService.StartPollingNetwork(port.PortName);
+                return active;
+            }
+
+            await Task.Delay(1000, token);
+        }
+
+        await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
+        return false;
     }
 
     public async Task<bool> ResetNetworkSafelyAsync(string portName)
@@ -2536,8 +2575,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string currentImei = NormalizeImei(port.Imei);
             if (string.IsNullOrEmpty(currentImei))
             {
-                string imeiResp = await _modemService.SendCommandAsync(portName, "AT+CGSN", 10000, silent: true);
-                currentImei = NormalizeImei(imeiResp);
+                string imeiResp = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true);
+                currentImei = Regex.Match(imeiResp ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
             }
 
             if (string.IsNullOrEmpty(currentImei) || !IsSimSessionCurrent(portName, ccid, epoch))
@@ -2602,15 +2641,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     UpdateDashboard();
                 });
 
-                bool active = await CompletePortInitializationAsync(port, ccid, result.FinalImei, epoch, initializationToken);
-                if (active && (result.Status == Services.ImeiProcessStatus.Applied
-                               || Services.ImeiManagementService.IsValidImei(NormalizeImei(explicitTargetImei))))
+                bool active = result.ModemResetRequested
+                    ? await CompleteSautoResetAsync(port, ccid, result.FinalImei, epoch, initializationToken)
+                    : await CompletePortInitializationAsync(port, ccid, result.FinalImei, epoch, initializationToken);
+                if (active && FindImeiBackupEntry(ccid) != null)
                 {
                     var existing = FindImeiBackupEntry(ccid);
                     AddNewImeiCacheEntry(new SimBackupEntry
                     {
                         Ccid = ccid,
-                        Imei = result.FinalImei,
+                        Imei = existing!.Imei,
                         PhoneNumber = port.PhoneNumber,
                         CreatedAt = existing?.CreatedAt ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                         SourceFile = string.IsNullOrWhiteSpace(result.TargetSource)
@@ -3517,7 +3557,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void ModemService_PortDisconnected(object? sender, GsmDataEventArgs e)
     {
-        InvalidateSimSession(e.PortName);
+        var resettingPort = Ports.FirstOrDefault(port => port.PortName == e.PortName);
+        if (resettingPort?.IsRebooting != true)
+            InvalidateSimSession(e.PortName);
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
             var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
@@ -7035,17 +7077,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // Excel may lock the main workbook while the user is viewing it. Keep the
                 // complete snapshot separately so accepted SIMs survive a restart and are
                 // merged automatically on the next successful save.
+                bool pendingSaved = false;
                 try
                 {
-                    string tempPath = AppPaths.ForRuntimeFile("imei_backup.tmp.xlsx");
+                    string directory = Path.GetDirectoryName(_imeiCacheFilePath) ?? AppPaths.RuntimeDirectory;
+                    string tempPath = Path.Combine(directory, "imei_backup.tmp.xlsx");
                     if (File.Exists(tempPath))
+                    {
                         File.Move(tempPath, _pendingImeiCacheFilePath, overwrite: true);
+                        pendingSaved = File.Exists(_pendingImeiCacheFilePath);
+                    }
                 }
                 catch (Exception pendingEx)
                 {
                     AddLog($"Lỗi lưu snapshot IMEI dự phòng: {pendingEx.Message}", "ERROR");
                 }
                 AddLog($"Lỗi ghi file imei_backup.xlsx: {ex.Message}", "ERROR");
+                if (!pendingSaved)
+                    throw new IOException("Không lưu được imei_backup.xlsx hoặc snapshot dự phòng.", ex);
             }
         }
     }
@@ -7129,9 +7178,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (currentPort != null) EnrichBackupEntry(newEntry, currentPort);
         lock (_imeiCacheLock)
         {
-            _imeiCache[normalizedCcid] = newEntry;
+            if (_imeiCache.TryGetValue(normalizedCcid, out var existing)
+                && Services.ImeiManagementService.TryNormalizeBackupImei(existing.Imei, out _))
+            {
+                // First-write-wins: IMEI đầu tiên là IMEI gốc. Các lần tráng/khôi phục
+                // chỉ được bổ sung metadata, tuyệt đối không thay thế trường IMEI.
+                MergeBackupEntryFirstWriteWins(existing, newEntry);
+                if (currentPort != null) EnrichBackupEntry(existing, currentPort);
+            }
+            else
+            {
+                newEntry.SourceFile = "imei_backup.xlsx";
+                _imeiCache[normalizedCcid] = newEntry;
+            }
             SaveImeiCache();
         }
+    }
+
+    internal static void MergeBackupEntryFirstWriteWins(SimBackupEntry target, SimBackupEntry source)
+    {
+        static void Copy(string value, Action<string> assign)
+        {
+            if (!string.IsNullOrWhiteSpace(value)) assign(value.Trim());
+        }
+
+        Copy(source.PhoneNumber, value => target.PhoneNumber = value);
+        Copy(source.NetworkProvider, value => target.NetworkProvider = value);
+        Copy(source.Balance, value => target.Balance = value);
+        Copy(source.PromotionBalance, value => target.PromotionBalance = value);
+        Copy(source.ExpiryDate, value => target.ExpiryDate = value);
+        Copy(source.SimRegDate, value => target.SimRegDate = value);
+        Copy(source.Lock1C, value => target.Lock1C = value);
+        Copy(source.Lock2C, value => target.Lock2C = value);
+        Copy(source.UpdatedAt, value => target.UpdatedAt = value);
+        Copy(source.LastPortName, value => target.LastPortName = value);
+        Copy(source.DeviceName, value => target.DeviceName = value);
+        Copy(source.HardwareName, value => target.HardwareName = value);
+        Copy(source.ModemManufacturer, value => target.ModemManufacturer = value);
+        Copy(source.ModemModel, value => target.ModemModel = value);
+        Copy(source.ModemFirmware, value => target.ModemFirmware = value);
+        Copy(source.ModemCapabilities, value => target.ModemCapabilities = value);
+        Copy(source.Status, value => target.Status = value);
+        if (source.SignalStrength != 0) target.SignalStrength = source.SignalStrength;
     }
 
     private void UpdateImeiCacheEntry(string ccid, Action<SimBackupEntry> updateAction)

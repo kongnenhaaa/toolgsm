@@ -1,4 +1,4 @@
-﻿@using gsm.Models
+@using gsm.Models
 @using gsm.Components.Shared
 @inject gsm.Services.IGsmModemService ModemService
 @inject gsm.ViewModels.MainViewModel Vm
@@ -165,6 +165,10 @@
                 else if (col.Name == "PhoneNumber")
                 {
                     <MudTd Style="@($"{_brd} {_body} white-space:nowrap; mso-number-format:'\\@'; font-size:16px;")">@RenderLoadingOrValue(context, context.PhoneNumber)</MudTd>
+                }
+                else if (col.Name == "SimType")
+                {
+                    <MudTd Style="@($"font-size:16px; font-weight:600; color:var(--mud-palette-info); {_brd} {_body} white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.SimType) ? "-" : context.SimType)</MudTd>
                 }
                 else if (col.Name == "Imei")
                 {

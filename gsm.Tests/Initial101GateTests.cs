@@ -76,4 +76,14 @@ public sealed class SautoInitialLookupTests
         Assert.Equal("0915496792", MainViewModel.ExtractPhoneNumberFromUssd(response));
         Assert.Equal("23/06/2026", MainViewModel.ExtractSimRegDateFromUssd(response));
     }
+
+    [Theory]
+    [InlineData("354434778044431", "354434778044431", true)]
+    [InlineData("\r\n354434778044431\r\nOK", "354434778044431", true)]
+    [InlineData("353982261250411", "354434778044431", false)]
+    [InlineData("", "354434778044431", false)]
+    [InlineData("354434778044431", "", false)]
+    public void RefreshedSession_ResumesOnlyWithPreviouslyVerifiedImei(
+        string currentImei, string verifiedImei, bool expected) =>
+        Assert.Equal(expected, MainViewModel.IsVerifiedImeiResumeMatch(currentImei, verifiedImei));
 }

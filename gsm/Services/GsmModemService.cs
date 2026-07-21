@@ -1843,6 +1843,52 @@ public class GsmModemService : IGsmModemService
                     continue;
                 }
 
+                // StartGlobalSimMonitor deliberately yields while this active polling CTS owns
+                // the port. Therefore removal evidence must be completed here; otherwise an
+                // unsolicited QSIMSTAT/CPIN removal URC remains stuck at one evidence forever
+                // and the UI continues displaying the old SIM as Active.
+                bool stackDisabledByTool = _simStackDisabledByTool.TryGetValue(
+                    portName, out bool stackDisabled) && stackDisabled;
+                bool removalUrcPending = _simRemovalEvidenceCounts.TryGetValue(
+                    portName, out int removalEvidence) && removalEvidence > 0;
+                if (ShouldVerifySimRemoval(cpin, stackDisabledByTool, removalUrcPending))
+                {
+                    string qsimstat = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
+                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true, ct: token)
+                        : string.Empty;
+                    string liveCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
+                    bool stillPresent = Regex.IsMatch(
+                        qsimstat, @"\+QSIMSTAT:\s*1\s*,\s*1", RegexOptions.IgnoreCase)
+                        || HasReadableCcid(liveCcid);
+
+                    if (stillPresent)
+                    {
+                        _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                    }
+                    else
+                    {
+                        int evidence = _simRemovalEvidenceCounts.AddOrUpdate(
+                            portName, 1, (_, old) => old + 1);
+                        if (evidence >= 3)
+                        {
+                            _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                            _lastSimState[portName] = false;
+                            LogMessage?.Invoke(this, new GsmDataEventArgs
+                            {
+                                PortName = portName,
+                                Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (Polling Active)!"
+                            });
+                            await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true, ct: token);
+                            StartHotplugWaitLoop(portName);
+                            break;
+                        }
+                    }
+                }
+                else if (Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase))
+                {
+                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                }
+
                 await Task.Delay(100, token);
                 string csqStr = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true, ct: token);
                 if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))

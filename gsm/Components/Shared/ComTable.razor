@@ -161,7 +161,7 @@
                 else if (col.Name == "Balance")
                 {
                     <MudTd Style="@($"color:#22C55E; font-weight:600; {_brd} white-space:nowrap; font-size:16px;")">
-                        @RenderLoadingOrValue(context, context.Balance, forceLoading: context.IsBalanceLoading)
+                        @RenderLoadingOrValue(context, FormatBalanceValue(context.Balance), forceLoading: context.IsBalanceLoading)
                     </MudTd>
                 }
                 else if (col.Name == "PhoneNumber")
@@ -255,7 +255,8 @@
 
         // WaitingAccept chỉ được giữ để tương thích dữ liệu trạng thái cũ; UI hiển thị là Chặn SIM.
         return s == gsm.Models.SimStatus.WaitingAccept
-            || s == gsm.Models.SimStatus.SecurityBlocked;
+            || s == gsm.Models.SimStatus.SecurityBlocked
+            || s == gsm.Models.SimStatus.ImeiError;
     }
 
     async Task RefreshOne(SimPort port)
@@ -460,6 +461,7 @@
         gsm.Models.SimStatus.WaitingAccept => "row-pending",
         gsm.Models.SimStatus.Connecting => "row-processing",
         gsm.Models.SimStatus.SecurityBlocked => "row-error",
+        gsm.Models.SimStatus.ImeiError => "row-error",
         gsm.Models.SimStatus.NoResponse => "row-error",
         _ => "row-idle"
     };
@@ -596,6 +598,14 @@
             @(!string.IsNullOrEmpty(value) ? value : fallback)
         }
     };
+    private static string FormatBalanceValue(string? value)
+    {
+        string balance = (value ?? string.Empty).Trim();
+        return balance.EndsWith("đ", StringComparison.OrdinalIgnoreCase)
+            ? balance[..^1].TrimEnd()
+            : balance;
+    }
+
     void CopyToExcel()
     {
         var cols = VisibleColumns;
@@ -618,7 +628,7 @@
                 "NetworkProvider"    => p.NetworkProvider ?? "",
                 "NetworkType"        => p.NetworkType ?? "",
                 "Signal"             => p.SignalDisplay,
-                "Balance"            => p.Balance ?? "",
+                "Balance"            => FormatBalanceValue(p.Balance),
                 "PhoneNumber"        => p.PhoneNumber ?? "",
                 "Imei"               => p.Imei ?? "",
                 "Serial"             => p.Serial ?? "",

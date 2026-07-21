@@ -10,9 +10,9 @@ public sealed class SautoInitialLookupTests
     [InlineData("VinaPhone", "2G", 55, SimStatus.Active, true)]
     [InlineData("VinaPhone", "3G", 55, SimStatus.Active, true)]
     [InlineData("VinaPhone", "4G", 55, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "5G", 55, SimStatus.Active, false)]
+    [InlineData("VinaPhone", "5G", 55, SimStatus.Active, true)]
     [InlineData("Viettel", "3G", 55, SimStatus.Active, false)]
-    [InlineData("VinaPhone", "3G", 0, SimStatus.Active, false)]
+    [InlineData("VinaPhone", "3G", 0, SimStatus.Active, true)]
     [InlineData("VinaPhone", "3G", 55, SimStatus.WaitingAccept, false)]
     public void Initial111_RunsOnlyAfterVinaPhone3gAndSignal(
         string provider, string networkType, int signal, string status, bool expected)

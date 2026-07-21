@@ -5472,14 +5472,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || !IsPortReadyForOperation(portName))
             return "ERROR: SIM session changed";
 
+        // Gửi lệnh USSD chuẩn không kèm tham số DCS (15) trước để mạng 4G/3G VoLTE phản hồi ngay (< 1s)
         string result = await _modemService.SendCommandAsync(
-            portName, $"AT+CUSD=1,\"{ussdCode}\",15", 10000, silent: true, ct: token);
+            portName, $"AT+CUSD=1,\"{ussdCode}\"", 10000, silent: true, ct: token);
         if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
             || result.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
         {
-            // Thử lại không kèm tham số DCS (15) cho mạng 4G VoLTE VinaPhone
+            // Thử lại kèm tham số DCS (15) cho các SIM GSM 2G truyền thống
             result = await _modemService.SendCommandAsync(
-                portName, $"AT+CUSD=1,\"{ussdCode}\"", 10000, silent: true, ct: token);
+                portName, $"AT+CUSD=1,\"{ussdCode}\",15", 10000, silent: true, ct: token);
         }
         return result;
     }

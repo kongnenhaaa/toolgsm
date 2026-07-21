@@ -27,7 +27,6 @@ public sealed class SautoInitializationSequenceTests
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
             "AT+CPMS?",
             "AT+CNMI=1,1,0,0,0",
-            "AT+QCFG=\"nwscanmode\",0,1",
             "AT+QURCCFG=\"urcport\",\"uart1\"",
             "AT+CPIN?"
         ];

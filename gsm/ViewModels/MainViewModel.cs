@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -3028,12 +3028,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     bool ussdHasAdKeywords = Regex.IsMatch(ussdContent,
                         @"cuoc|phi\s*dich\s*vu|uu\s*dai|goi\s*cuoc|tang\s*them|khuyen\s*mai|phi\s*truoc|phi\s*cuoc|khong\s*du|chua\s*du",
                         RegexOptions.IgnoreCase);
+                    bool isMenu = Regex.IsMatch(ussdContent, @"1\..*?2\.|bam so|chon", RegexOptions.IgnoreCase);
+
                     var strictMatch = Regex.Match(ussdContent, @"(?:TK\s*goc|TKG|TK\s*chinh|TKC|Tai khoan chinh|Tài khoản chính|Tai khoan|Tài khoản|So du|Số dư|TK|balance)[^\d]{0,20}(\d+[\.\,]\d+|\d+)\s*(d|đ|vnd|vnđ|dong|đồng)?", RegexOptions.IgnoreCase);
                     if (strictMatch.Success) 
                     {
                         string rawVal = strictMatch.Groups[1].Value.Replace(".", "").Replace(",", "");
-                        // Reject số dư < 100 VND để tránh parse nhầm cước phí (vd: "1d/ngay", "900d cuoc")
-                        if (int.TryParse(rawVal, out int parsedBal) && (parsedBal >= 100 || !ussdHasAdKeywords))
+                        // Reject số dư < 100 VND để tránh parse nhầm cước phí hoặc menu (vd: "1.TK 2.Goi cuoc")
+                        if (int.TryParse(rawVal, out int parsedBal) && (parsedBal >= 100 || (!ussdHasAdKeywords && !isMenu)))
                         {
                             port.Balance = strictMatch.Groups[1].Value;
                         }
@@ -3092,7 +3094,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         // Fallback: Lấy ngày đầu tiên xuất hiện trong USSD
                         var genericExpiryMatch = Regex.Match(ussdContent, @"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b");
-                        if (genericExpiryMatch.Success) port.ExpiryDate = genericExpiryMatch.Groups[1].Value;
+                        if (genericExpiryMatch.Success) 
+                        {
+                            string matchedDate = genericExpiryMatch.Groups[1].Value;
+                            // Tránh lấy nhầm Ngay KH làm HSD
+                            if (!Regex.IsMatch(ussdContent, @"(?i)(?:Ngay\s*KH|Ngay\s*kich\s*hoat|Ngay\s*DK|Ngay\s*dang\s*ky)[^\d]{0,15}" + Regex.Escape(matchedDate)))
+                            {
+                                port.ExpiryDate = matchedDate;
+                            }
+                        }
                     }
 
                     // 2. Ngay KH (Ngày kích hoạt / Đăng ký SIM)

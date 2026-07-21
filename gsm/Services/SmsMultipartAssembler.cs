@@ -75,14 +75,21 @@ public static class SmsBodyDecoder
         int offset = 0;
         SmsConcatInfo? concat = null;
         if (TryFindUdh(bytes, out int headerBytes, out var parsed)) { offset = headerBytes; concat = parsed; }
-        else
-        {
-            bool ucs2 = bytes.Length % 2 == 0 && Enumerable.Range(0, bytes.Length / 2).Any(i => bytes[i * 2] is 0x00 or 0x01 or 0x1E);
-            if (!ucs2) return false; // Do not turn a plain numeric OTP like 1234 into an arbitrary glyph.
-        }
 
         int count = bytes.Length - offset;
         if ((count & 1) != 0 && count > 0 && bytes[offset] == 0) { offset++; count--; } // EC20 alignment byte
+
+        // Heuristic: If it's purely printable ASCII, it's not UCS2 (fixes VinaPhone sending GSM7 text as hex).
+        bool isAscii = count > 0 && Enumerable.Range(offset, count).All(i => bytes[i] >= 0x20 && bytes[i] <= 0x7E || bytes[i] == 0x0A || bytes[i] == 0x0D);
+        if (isAscii)
+        {
+            decoded = new(Encoding.ASCII.GetString(bytes, offset, count).TrimEnd('\0'), concat, true);
+            return true;
+        }
+
+        bool ucs2 = count % 2 == 0 && Enumerable.Range(offset / 2, count / 2).Any(i => bytes[offset + i * 2] is 0x00 or 0x01 or 0x1E);
+        if (!ucs2 && concat == null) return false;
+
         if ((count & 1) != 0) return false;
         decoded = new(Encoding.BigEndianUnicode.GetString(bytes, offset, count).TrimEnd('\0'), concat, true);
         return true;
@@ -138,9 +145,23 @@ public static class SmsBodyDecoder
             {
                 int headerSeptets = (headerBytes * 8 + 6) / 7;
                 int textSeptets = Math.Max(0, userDataLength - headerSeptets);
-                // UDH is padded to a septet boundary; text starts after the fill bits,
-                // not immediately at headerBytes * 8.
-                content = DecodeGsm7(userData, textSeptets, headerSeptets * 7);
+                
+                // Heuristic: If userDataLength equals the actual byte length and is > 8, 
+                // it's mathematically impossible to be packed GSM-7 (where bytes = ceil(septets * 7/8)). 
+                // It must be unpacked ASCII (network bug).
+                bool isUnpackedAscii = userDataLength == userData.Length && userDataLength > 8;
+                
+                if (isUnpackedAscii)
+                {
+                    int byteCount = Math.Min(userDataLength - headerBytes, userData.Length - headerBytes);
+                    content = Encoding.ASCII.GetString(userData.Slice(headerBytes, Math.Max(0, byteCount)));
+                }
+                else
+                {
+                    // UDH is padded to a septet boundary; text starts after the fill bits,
+                    // not immediately at headerBytes * 8.
+                    content = DecodeGsm7(userData, textSeptets, headerSeptets * 7);
+                }
             }
             else
             {

@@ -180,14 +180,32 @@ public sealed class GsmUssdService : IGsmUssdService
         bool registered = IsCsRegistered(registration);
         // CFUN vừa bật trên 32/64 cổng có thể cần vài giây mới vào CS. Chờ thụ động
         // thay vì COPS=0 hoặc đổi WCDMA/GSM làm các modem tự rớt mạng lẫn nhau.
-        for (int probe = 0; probe < 5 && !registered; probe++)
+        // Tăng lên 10 probe × 3s = 30s để xử lý trường hợp CS domain lên chậm sau đổi network mode.
+        for (int probe = 0; probe < 10 && !registered; probe++)
         {
             await _delay.WaitAsync(TimeSpan.FromSeconds(3), token);
             registration = await CommandAsync(session, "AT+CREG?", 5000, token);
             registered = IsCsRegistered(registration);
         }
         if (!registered)
-            return $"ERROR: SIM not registered on CS network ({registration.Trim()})";
+        {
+            // Phân biệt trạng thái để dễ debug:
+            // stat=2 = đang tìm (searching) — có thể do 3G chưa phủ hoặc chưa kịp đăng ký
+            // stat=3 = bị từ chối (denied) — lỗi thật, không nên gửi USSD
+            var statMatch = Regex.Match(registration, @"\+CREG:\s*\d+\s*,\s*(\d+)");
+            int stat = statMatch.Success && int.TryParse(statMatch.Groups[1].Value, out int s) ? s : -1;
+            if (stat == 2)
+            {
+                // Vẫn đang tìm mạng CS — thử gửi USSD vì EC20 đôi khi xử lý được
+                // dù CREG chưa cập nhật kịp (hành vi thực tế quan sát thấy trên modem này).
+                // Nếu gửi vẫn fail, lỗi sẽ hiện rõ ở tầng AT+CUSD.
+            }
+            else
+            {
+                return $"ERROR: SIM not registered on CS network ({registration.Trim()})";
+            }
+        }
+
 
         // CSQ=99 thường chỉ là chưa có số đo tức thời. Simmart vẫn gửi USSD trong trường
         // hợp này; chỉ dùng CSQ để chẩn đoán, không loại bỏ một COM đang CREG=1/5.

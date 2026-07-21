@@ -2068,6 +2068,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 _initialAccountLookupCompleted.TryRemove(key, out _);
         }
+        // Xóa flag IMS recovery để phiên SIM mới được thử lại nếu CS vẫn chưa sẵn sàng.
+        // Không xóa sẽ khiến USSD tiếp tục lỗi sau "Tải lại SIM" vì recoveryKey cũ còn tồn tại.
+        foreach (string key in _ussdVoiceRecoveryAttempted.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _ussdVoiceRecoveryAttempted.TryRemove(key, out _);
+        }
     }
 
     private bool TryBeginPortInitialization(string portName, out Guid lease)
@@ -5661,15 +5668,65 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            AddLog($"[{portName}] [USSD_IMS_RECOVERY] LTE đã đăng ký nhưng chưa có CS; bật IMS và reboot riêng COM.", "WARN");
+            AddLog($"[{portName}] [USSD_CS_RECOVERY] LTE đã đăng ký nhưng CS chưa sẵn sàng; thử ép WCDMA để lấy CS domain nhanh.", "WARN");
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 var port = Ports.FirstOrDefault(p => p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
                 if (port != null)
                 {
-                    port.LastMessageContent = "[USSD][ĐANG CHẠY] Bật IMS và đăng ký lại dịch vụ thoại...";
+                    port.LastMessageContent = "[USSD][ĐANG CHẠY] Đang ép 3G để đăng ký thoại/USSD...";
                     port.Sender = "USSD";
                 }
+            });
+
+            // Bước 1: Ép WCDMA (3G) — CS domain lên ngay mà không cần reboot.
+            // 4G/LTE có thể nhận SMS qua SGs nhưng USSD cần CS (CREG=1).
+            // WCDMA cung cấp CS đầy đủ và tránh VoLTE/IMS phức tạp.
+            QuectelModemProfile? profile = _modemService.GetModemProfile(portName);
+            if (profile?.Supports(ModemCapability.NetworkScanConfig) == true)
+            {
+                string setWcdma = await _modemService.SendCommandAsync(
+                    portName, "AT+QCFG=\"nwscanmode\",2,1", 5000, silent: true, ct: _lifetimeCts.Token);
+                if (!setWcdma.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddLog($"[{portName}] [USSD_CS_RECOVERY] Đã ép WCDMA; đợi CREG=1 tối đa 30s...", "INFO");
+                    for (int probe = 0; probe < 10; probe++)
+                    {
+                        await Task.Delay(3000, _lifetimeCts.Token);
+                        if (!IsPortReadyForOperation(portName)) continue;
+                        string creg = await _modemService.SendCommandAsync(
+                            portName, "AT+CREG?", 5000, silent: true, ct: _lifetimeCts.Token);
+                        if (Regex.IsMatch(creg, @"\+CREG:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase))
+                        {
+                            AddLog($"[{portName}] [USSD_CS_RECOVERY] CREG=1 sau khi ép WCDMA; sẵn sàng gửi USSD.", "SUCCESS");
+                            // Trả về auto mode sau 90s (sau khi USSD hoàn tất)
+                            _ = Task.Run(async () =>
+                            {
+                                await Task.Delay(90000, _lifetimeCts.Token);
+                                if (IsPortReadyForOperation(portName))
+                                {
+                                    await _modemService.SendCommandAsync(
+                                        portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true, ct: _lifetimeCts.Token);
+                                    AddLog($"[{portName}] [USSD_CS_RECOVERY] Trả về auto network mode.", "INFO");
+                                }
+                            }, _lifetimeCts.Token);
+                            return true;
+                        }
+                    }
+                    AddLog($"[{portName}] [USSD_CS_RECOVERY] WCDMA không giúp CREG=1 sau 30s; thử IMS reboot.", "WARN");
+                    // Trả về auto trước khi reboot để không kẹt ở 3G
+                    await _modemService.SendCommandAsync(
+                        portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true, ct: _lifetimeCts.Token);
+                }
+            }
+
+            // Bước 2: IMS + reboot (phương án nặng hơn)
+            AddLog($"[{portName}] [USSD_IMS_RECOVERY] Bật IMS và reboot riêng COM.", "WARN");
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                var port = Ports.FirstOrDefault(p => p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                if (port != null)
+                    port.LastMessageContent = "[USSD][ĐANG CHẠY] Bật IMS và đăng ký lại dịch vụ thoại...";
             });
 
             string ims = await _modemService.SendCommandAsync(
@@ -5692,10 +5749,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 await Task.Delay(2000, _lifetimeCts.Token);
                 if (!IsPortReadyForOperation(portName)) continue;
-
-                string creg = await _modemService.SendCommandAsync(
+                string cregAfter = await _modemService.SendCommandAsync(
                     portName, "AT+CREG?", 5000, silent: true, ct: _lifetimeCts.Token);
-                if (Regex.IsMatch(creg, @"\+CREG:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(cregAfter, @"\+CREG:\s*\d+\s*,\s*[15]\b", RegexOptions.IgnoreCase))
                 {
                     AddLog($"[{portName}] [USSD_IMS_RECOVERY] Đã đăng ký CS sau reboot; tiếp tục USSD.", "SUCCESS");
                     return true;
@@ -5711,7 +5767,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            AddLog($"[{portName}] [USSD_IMS_RECOVERY] {ex.Message}", "ERROR");
+            AddLog($"[{portName}] [USSD_CS_RECOVERY] {ex.Message}", "ERROR");
             return false;
         }
     }

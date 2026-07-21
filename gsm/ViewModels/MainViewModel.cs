@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -3011,19 +3011,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             else if (e.Data.Contains("+CUSD:"))
             {
                 port.IsBalanceLoading = false;
-                // mode=1 = menu tuong tac (*101# VinaPhone tra menu truoc khi tra data)
-                var cusdModeM = Regex.Match(e.Data, @"\+CUSD:\s*(\d+)");
-                if (cusdModeM.Success && cusdModeM.Groups[1].Value == "1")
-                {
-                    AddLog($"[{e.PortName}] [USSD_MENU] *101# menu (mode=1); tu reply \"1\" de lay TKC/HSD.", "INFO");
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(600, _lifetimeCts.Token);
-                        if (IsPortReadyForOperation(e.PortName))
-                            await _modemService.SendCommandAsync(e.PortName, "AT+CUSD=1,\"1\",15", 10000, silent: true, ct: _lifetimeCts.Token);
-                    }, _lifetimeCts.Token);
-                    return;
-                }
                 var match = Regex.Match(e.Data, @"\+CUSD:.*?""(.*?)(?:""|$)", RegexOptions.Singleline);
                 if (match.Success)
                 {

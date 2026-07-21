@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -5332,6 +5332,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (!IsSimSessionCurrent(port.PortName, ccid, epoch)
                     || port.Status != SimStatus.Active)
                     break;
+
+                if (needsIdentity && port.LastUssdResult != null && port.LastUssdResult.Contains("UNKNOWN APPLICATION", StringComparison.OrdinalIgnoreCase))
+                {
+                    AddLog($"[{port.PortName}] [USSD_111_REJECTED] Nhà mạng không hỗ trợ *111# (báo UNKNOWN APPLICATION). Bỏ qua và chuyển sang *101# ngay lập tức.", "WARN");
+                    identityGivenUp = true;
+                    continue;
+                }
 
                 if (needsIdentity
                     && !string.IsNullOrWhiteSpace(port.PhoneNumber)

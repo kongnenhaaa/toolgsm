@@ -71,11 +71,11 @@ public sealed class GsmUssdService : IGsmUssdService
                     try
                     {
                         if (!IsCurrent(session)) return SessionChangedError;
-                        // Chuỗi tương thích SAuto: Text mode + GSM charset
-                        await CommandAsync(session, "AT+CMGF=1", 5000, token);
-                        await CommandAsync(session, "AT+CSCS=\"GSM\"", 5000, token);
+                        // Chuỗi tương thích SAuto: PDU mode + UCS2 charset + Hex encoded USSD
+                        await CommandAsync(session, "AT+CMGF=0", 5000, token);
+                        await CommandAsync(session, "AT+CSCS=\"UCS2\"", 5000, token);
                         result = await _modem.SendCommandAsync(
-                            portName, $"AT+CUSD=1,\"{ussdCode}\"", ct: token);
+                            portName, $"AT+CUSD=1,\"{EncodeUcs2(ussdCode)}\"", ct: token);
 
                         // Một số SIM/firmware chỉ trả OK sau khi nhận lệnh nhưng tổng đài
                         // không mở phiên USSD. Không được coi OK trần là thành công.

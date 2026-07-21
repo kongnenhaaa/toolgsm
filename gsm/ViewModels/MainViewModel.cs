@@ -2429,7 +2429,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // send another CFUN transition here; wait for EC20 to boot and verify the
         // persisted value before starting normal network polling.
         await Task.Delay(7000, token);
-        for (int attempt = 0; attempt < 20; attempt++)
+        for (int attempt = 0; attempt < 30; attempt++)
         {
             token.ThrowIfCancellationRequested();
             if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return false;
@@ -2483,7 +2483,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return active;
             }
 
-            await Task.Delay(1000, token);
+            await Task.Delay(1500, token);
         }
 
         await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);

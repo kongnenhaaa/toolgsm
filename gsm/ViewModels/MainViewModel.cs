@@ -2450,7 +2450,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (string.IsNullOrEmpty(liveCcid)) liveCcid = NormalizeCcid(ccid);
 
             bool ready = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
-                && (string.Equals(storedImei, expectedImei, StringComparison.Ordinal) || string.IsNullOrEmpty(storedImei))
+                && (ImeiManagementService.AreEquivalentImei(storedImei, expectedImei) || string.IsNullOrEmpty(storedImei))
                 && string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase);
             AddLog($"[{port.PortName}] [SAUTO_RESET_VERIFY] attempt={attempt + 1}; slot7={storedImei}; expected={expectedImei}; CCID={liveCcid}; ready={ready.ToString().ToLowerInvariant()}",
                 ready ? "SUCCESS" : "INFO");
@@ -5472,15 +5472,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || !IsPortReadyForOperation(portName))
             return "ERROR: SIM session changed";
 
-        // Gửi lệnh USSD chuẩn không kèm tham số DCS (15) trước để mạng 4G/3G VoLTE phản hồi ngay (< 1s)
         string result = await _modemService.SendCommandAsync(
-            portName, $"AT+CUSD=1,\"{ussdCode}\"", 10000, silent: true, ct: token);
+            portName, $"AT+CUSD=1,\"{ussdCode}\",15", 10000, silent: true, ct: token);
         if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
             || result.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
         {
-            // Thử lại kèm tham số DCS (15) cho các SIM GSM 2G truyền thống
+            // Thử lại không kèm tham số DCS (15) cho mạng 4G VoLTE VinaPhone
             result = await _modemService.SendCommandAsync(
-                portName, $"AT+CUSD=1,\"{ussdCode}\",15", 10000, silent: true, ct: token);
+                portName, $"AT+CUSD=1,\"{ussdCode}\"", 10000, silent: true, ct: token);
         }
         return result;
     }

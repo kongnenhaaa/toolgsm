@@ -2854,7 +2854,7 @@ public class GsmModemService : IGsmModemService
         // CUSD=1 opens an asynchronous network session. CUSD=2 only closes it and
         // must complete immediately on OK instead of waiting for a +CUSD payload.
         if (command.StartsWith("AT+CUSD=1", StringComparison.OrdinalIgnoreCase))
-            timeoutMs = Math.Max(timeoutMs, 12000);
+            timeoutMs = Math.Max(timeoutMs, 10000);
         else if (command.StartsWith("AT+CMGR")) timeoutMs = 25000;
 
         if (!EnsurePortOpen(portName, out var sp) || sp == null)

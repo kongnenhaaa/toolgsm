@@ -366,7 +366,7 @@ public class ImeiManagementService
                 return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.WrongImei };
 
             if (!explicitWriteRequested
-                && string.Equals(canonicalCurrentImei, targetImei, StringComparison.Ordinal))
+                && AreEquivalentImei(canonicalCurrentImei, targetImei))
             {
                 dispatcherInvoke(() => port.Imei = targetImei);
                 return new ImeiProcessResult
@@ -397,7 +397,7 @@ public class ImeiManagementService
                 SimBackupEntry? persisted = getBackupEntry(ccid);
                 if (persisted == null
                     || !TryNormalizeBackupImei(persisted.Imei, out string persistedImei)
-                    || !string.Equals(persistedImei, canonicalCurrentImei, StringComparison.Ordinal))
+                    || !AreEquivalentImei(persistedImei, canonicalCurrentImei))
                 {
                     return new ImeiProcessResult
                     {
@@ -438,7 +438,7 @@ public class ImeiManagementService
             await Task.Delay(500, ct);
             string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true);
             string verifiedImei = ExtractImei(storedAfter);
-            if (!string.Equals(verifiedImei, targetImei, StringComparison.Ordinal))
+            if (!AreEquivalentImei(verifiedImei, targetImei))
             {
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
                 Log($"[{portName}] [IMEI_WRITE_VERIFY_FAILED] read={verifiedImei}; expected={targetImei}", "ERROR");
@@ -538,7 +538,7 @@ public class ImeiManagementService
             await Task.Delay(500, ct);
             string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true, ct);
             string verifiedImei = ExtractImei(storedAfter);
-            if (!string.Equals(verifiedImei, targetImei, StringComparison.Ordinal))
+            if (!AreEquivalentImei(verifiedImei, targetImei))
             {
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true, ct);
                 return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.WrongImei };

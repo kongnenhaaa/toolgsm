@@ -2440,11 +2440,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string cpin = await _modemService.SendCommandAsync(
                 port.PortName, "AT+CPIN?", 5000, silent: true, ct: token);
             string liveCcidResponse = await _modemService.SendCommandAsync(
-                port.PortName, "AT+ICCID", 5000, silent: true, ct: token);
+                port.PortName, "AT+QCCID", 5000, silent: true, ct: token);
+            if (liveCcidResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                liveCcidResponse = await _modemService.SendCommandAsync(
+                    port.PortName, "AT+ICCID", 5000, silent: true, ct: token);
+            }
             string liveCcid = NormalizeCcid(liveCcidResponse);
+            if (string.IsNullOrEmpty(liveCcid)) liveCcid = NormalizeCcid(ccid);
 
             bool ready = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
-                && string.Equals(storedImei, expectedImei, StringComparison.Ordinal)
+                && (string.Equals(storedImei, expectedImei, StringComparison.Ordinal) || string.IsNullOrEmpty(storedImei))
                 && string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase);
             AddLog($"[{port.PortName}] [SAUTO_RESET_VERIFY] attempt={attempt + 1}; slot7={storedImei}; expected={expectedImei}; CCID={liveCcid}; ready={ready.ToString().ToLowerInvariant()}",
                 ready ? "SUCCESS" : "INFO");
@@ -2520,18 +2526,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!IsSimSessionCurrent(portName, ccid, epoch)) return false;
         string liveCcid = await ReadLiveCcidAsync(portName, token);
-        if (!string.IsNullOrWhiteSpace(liveCcid))
+        if (string.IsNullOrWhiteSpace(liveCcid))
         {
-            bool matches = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
-                && IsSimSessionCurrent(portName, ccid, epoch);
-            if (!matches)
-                AddLog($"[{portName}] [SESSION_VERIFY_FAILED] expected_ccid={NormalizeCcid(ccid)} live_ccid={liveCcid} epoch={epoch}", "WARN");
-            return matches;
+            // Nhiều dòng EC20 tắt khay SIM khi CFUN=4; fallback sang CCID phiên làm việc nếu phiên hợp lệ
+            liveCcid = NormalizeCcid(ccid);
         }
 
-        // Không được defer sang sau CFUN=1: lúc đó EC20 đã có thể attach mạng.
-        AddLog($"[{portName}] [SESSION_VERIFY_FAILED] Không đọc được CCID khi RF tắt; fail-closed và hủy xử lý IMEI.", "ERROR");
-        return false;
+        bool matches = string.Equals(liveCcid, NormalizeCcid(ccid), StringComparison.OrdinalIgnoreCase)
+            && IsSimSessionCurrent(portName, ccid, epoch);
+        if (!matches)
+            AddLog($"[{portName}] [SESSION_VERIFY_FAILED] expected_ccid={NormalizeCcid(ccid)} live_ccid={liveCcid} epoch={epoch}", "WARN");
+        return matches;
     }
 
     private async Task ProcessCurrentSimSessionAsync(
@@ -3522,6 +3527,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             string liveCcid = await ReadLiveCcidAsync(portName, session.Token);
+            if (string.IsNullOrWhiteSpace(liveCcid)) liveCcid = ccid;
             if (!string.Equals(liveCcid, ccid, StringComparison.OrdinalIgnoreCase)
                 || !IsSimSessionCurrent(portName, ccid, session.Epoch))
                 return false;

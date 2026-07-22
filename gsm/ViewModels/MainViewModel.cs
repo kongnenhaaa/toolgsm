@@ -657,6 +657,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
                 }
             }));
+
+            // Keep every COM workflow independent, but stagger the initial
+            // VNPT requests like cuibap. Starting 30+ authen_check_account /
+            // otp_send calls in the same millisecond causes burst throttling
+            // and unstable account-branch responses.
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
 
         await Task.WhenAll(requestTasks);
@@ -2880,7 +2886,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (!_modemService.IsCallInProgress(e.PortName)
                 && !port.IsRebooting
-                && (e.Data.Contains("+CME ERROR: 10") || e.Data.Contains("+CME ERROR: 13") || e.Data.Contains("+CME ERROR: 11") || e.Data.Contains("+CPIN: NOT INSERTED") || e.Data.Contains("+CPIN: NOT READY") || e.Data.Contains("SIM not inserted")))
+                // NOT READY/CME 10/13/11 are transient on this modem family
+                // during CFUN/IMS changes. GsmModemService now confirms those
+                // states through its multi-probe monitor; only an explicit
+                // NOT INSERTED indication may clear the UI immediately.
+                && (e.Data.Contains("+CPIN: NOT INSERTED") || e.Data.Contains("SIM not inserted")))
             {
                 InvalidateSimSession(e.PortName);
                 ClearSimScopedState(port);

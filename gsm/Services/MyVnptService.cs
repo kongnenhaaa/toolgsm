@@ -20,6 +20,11 @@ public static class MyVnptService
 {
     private const string ApiRoot = "https://api-myvnpt.vnpt.vn/mapi_v2/services/";
     private const string AuthorizationToken = "Bearer a60bd62fed0cf1076e93af76114f196bd9c5a48155b2bac88afe15c49595414b";
+    // Keep the same client fingerprint as the stable cuibap/pass_myvnpt flow.
+    // Rotating it per COM made VNPT see a burst of unrelated clients.
+    private const string StableDeviceInfo =
+        "a6d10733-aaed-47a5-aa83-2446121b3e4e|a6d10733-aaed-47a5-aa83-2446121b3e4e|unknown|Android||3.3.97.Prd|motog(7)|10|";
+    private const string StableUserAgent = "okhttp/4.7.2";
     private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(60) };
     private static readonly object PasswordLogLock = new();
     // Mọi COM dùng chung một IP/API token nhưng mỗi workflow được phát độc lập,
@@ -35,8 +40,8 @@ public static class MyVnptService
         if (string.IsNullOrEmpty(normalizedPhone))
             throw new InvalidOperationException("Số điện thoại không hợp lệ");
 
-        string deviceInfo = GetRandomDeviceInfo();
-        string userAgent = GetRandomUserAgent();
+        string deviceInfo = StableDeviceInfo;
+        string userAgent = StableUserAgent;
 
         string checkContent = await PostAsync(
             "authen_check_account",
@@ -107,10 +112,43 @@ public static class MyVnptService
             if (string.IsNullOrWhiteSpace(password))
                 return new MyVnptPasswordResult(false, "Mật khẩu không hợp lệ");
 
+            // Re-check the account immediately before consuming the OTP. This
+            // is the stable cuibap flow and avoids using a stale branch after
+            // the SMS has been delayed. If the re-check fails, keep the branch
+            // selected before otp_send instead of guessing from set-pass errors.
+            bool accountExists = session.AccountExists;
+            try
+            {
+                string checkContent = await PostAsync(
+                    "authen_check_account",
+                    new { msisdn = session.Phone },
+                    session.DeviceInfo,
+                    session.UserAgent,
+                    cancellationToken,
+                    addLogCallback);
+                string? checkCode = GetResponseValue(checkContent, "error_code", "errorCode");
+                string checkMessage = GetResponseMessage(checkContent, "");
+                bool refreshedAccountExists = string.Equals(checkCode, "3", StringComparison.Ordinal);
+                addLogCallback?.Invoke(
+                    $"[{portName}] [VNPT_FLOW] Kiểm tra lại tài khoản trước khi đặt pass: code={checkCode}; message={checkMessage}; mode={(refreshedAccountExists ? "authen_miss_password" : "authen_register")}",
+                    "INFO");
+                accountExists = refreshedAccountExists;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                addLogCallback?.Invoke(
+                    $"[{portName}] [VNPT_FLOW] Không kiểm tra lại được tài khoản; dùng nhánh ban đầu: {ex.Message}",
+                    "WARN");
+            }
+
             string hashedPassword = CreateMd5(password).ToUpperInvariant();
 
-            string targetService = session.AccountExists ? "authen_miss_password" : "authen_register";
-            object payload = session.AccountExists
+            string targetService = accountExists ? "authen_miss_password" : "authen_register";
+            object payload = accountExists
                 ? new { msisdn = session.Phone, otp, password = hashedPassword }
                 : new { msisdn = session.Phone, password = hashedPassword, pin = otp };
 
@@ -122,7 +160,7 @@ public static class MyVnptService
                 cancellationToken,
                 addLogCallback);
 
-            string mode = session.AccountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
+            string mode = accountExists ? "Quên mật khẩu" : "Tạo mới tài khoản";
             string respCode = GetResponseValue(responseContent, "error_code", "errorCode") ?? "null";
             string respMsg  = GetResponseMessage(responseContent, "Lỗi đặt pass");
 
@@ -131,7 +169,7 @@ public static class MyVnptService
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {session.Phone} thành công ({mode}).", "SUCCESS");
                 AppendPasswordBackup(session.Phone, password);
                 return new MyVnptPasswordResult(true,
-                    session.AccountExists ? "Đặt lại pass thành công" : "Đăng ký thành công");
+                    accountExists ? "Đặt lại pass thành công" : "Đăng ký thành công");
             }
 
             // Log chi tiết error_code để debug
@@ -280,23 +318,6 @@ public static class MyVnptService
 
     private static string GetResponseMessage(string json, string fallback) =>
         GetResponseValue(json, "message", "error_message", "errorMessage") ?? fallback;
-
-    private static string GetRandomDeviceInfo()
-    {
-        string deviceId = Guid.NewGuid().ToString();
-        string[] models = [
-            $"SM-G{Random.Shared.Next(900, 999)}F",
-            $"SM-A{Random.Shared.Next(10, 99)}5F",
-            $"Pixel {Random.Shared.Next(4, 8)}",
-            $"CPH{Random.Shared.Next(2000, 2500)}",
-            $"Redmi Note {Random.Shared.Next(7, 12)}"
-        ];
-        string model = models[Random.Shared.Next(models.Length)];
-        return $"{deviceId}|{deviceId}|unknown|Android||3.3.97.Prd|{model}|{Random.Shared.Next(9, 14)}|";
-    }
-
-    private static string GetRandomUserAgent() =>
-        $"okhttp/4.{Random.Shared.Next(7, 12)}.{Random.Shared.Next(0, 5)}";
 
     private static string CreateMd5(string input) =>
         Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(input))).ToLowerInvariant();

@@ -150,6 +150,12 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
     private readonly ConcurrentDictionary<string, bool> _simStackDisabledByTool = new();
     private readonly ConcurrentDictionary<string, int> _simRemovalEvidenceCounts = new();
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _simRemovalEvidenceSince = new();
+    // CPIN/QSIMSTAT can report a short-lived absent state while the modem
+    // changes CFUN or the CS/IMS domain. Require both consecutive probes and a
+    // minimum elapsed window before clearing a live SIM from the UI.
+    private const int SimRemovalConfirmationCycles = 6;
+    private static readonly TimeSpan SimRemovalConfirmationWindow = TimeSpan.FromSeconds(5);
     // An offline SIM-stack restart (CFUN=0 -> CFUN=4) can temporarily report
     // CPIN NOT READY / QSIMSTAT=0 while the card is still inserted. During that
     // window, removal monitors must not mistake the transient state for a hot-swap.
@@ -1155,6 +1161,22 @@ public class GsmModemService : IGsmModemService
         !IsCommandFailure(response)
         && Regex.IsMatch(response, @"(?<!\d)89\d{16,20}(?!\d)");
 
+    private void ClearSimRemovalEvidence(string portName)
+    {
+        _simRemovalEvidenceCounts.TryRemove(portName, out _);
+        _simRemovalEvidenceSince.TryRemove(portName, out _);
+    }
+
+    private bool RegisterSimRemovalEvidence(string portName)
+    {
+        DateTimeOffset since = _simRemovalEvidenceSince.GetOrAdd(
+            portName, _ => DateTimeOffset.UtcNow);
+        int evidence = _simRemovalEvidenceCounts.AddOrUpdate(
+            portName, 1, (_, old) => old + 1);
+        return evidence >= SimRemovalConfirmationCycles
+            && DateTimeOffset.UtcNow - since >= SimRemovalConfirmationWindow;
+    }
+
     internal static bool ShouldVerifySimRemoval(
         string cpin,
         bool stackDisabledByTool,
@@ -1584,7 +1606,7 @@ public class GsmModemService : IGsmModemService
 
                 if (isSimLocked)
                 {
-                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                    ClearSimRemovalEvidence(portName);
                     _lastSimState[portName] = false;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}" });
                     continue;
@@ -1592,7 +1614,7 @@ public class GsmModemService : IGsmModemService
 
                 if (isSimPresent && !lastState)
                 {
-                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                    ClearSimRemovalEvidence(portName);
                     // Guard: Nếu InitializeModemAsync đang chạy (trong 20s đầu) hoặc đang handle SIM khác → bỏ qua
                     if (_simInitInProgress.ContainsKey(portName)) continue;
 
@@ -1601,15 +1623,15 @@ public class GsmModemService : IGsmModemService
                 }
                 else if (isSimPresent)
                 {
-                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                    ClearSimRemovalEvidence(portName);
                 }
                 else if (isSimRemoved && lastState)
                 {
-                    // Require three consecutive, identity-confirmed removal cycles before
-                    // clearing CCID/phone/balance and entering the CFUN=4 hot-plug loop.
-                    int evidence = _simRemovalEvidenceCounts.AddOrUpdate(portName, 1, (_, old) => old + 1);
-                    if (evidence < 3) continue;
-                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                    // Require consecutive, identity-confirmed removal cycles over
+                    // a real elapsed window. This filters the transient QSIMSTAT=0
+                    // wave emitted by some GSM boards during RF/IMS changes.
+                    if (!RegisterSimRemovalEvidence(portName)) continue;
+                    ClearSimRemovalEvidence(portName);
                     _lastSimState[portName] = false;
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (Quét nền)!" });
                     _ = SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
@@ -1915,16 +1937,14 @@ public class GsmModemService : IGsmModemService
 
                     if (stillPresent)
                     {
-                        _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                        ClearSimRemovalEvidence(portName);
                     }
                     else if (IsConfirmedSimAbsentDuringPolling(
                         cpin, qsimstat, liveCcid, cfun, stackDisabledByTool))
                     {
-                        int evidence = _simRemovalEvidenceCounts.AddOrUpdate(
-                            portName, 1, (_, old) => old + 1);
-                        if (evidence >= 3)
+                        if (RegisterSimRemovalEvidence(portName))
                         {
-                            _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                            ClearSimRemovalEvidence(portName);
                             _lastSimState[portName] = false;
                             LogMessage?.Invoke(this, new GsmDataEventArgs
                             {
@@ -1939,13 +1959,13 @@ public class GsmModemService : IGsmModemService
                     else
                     {
                         // Evidence must be consecutive. A CFUN transition, timeout, or
-                        // contradictory probe restarts the three-cycle confirmation.
-                        _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                        // contradictory probe restarts the delayed confirmation window.
+                        ClearSimRemovalEvidence(portName);
                     }
                 }
                 else if (cpinReady)
                 {
-                    _simRemovalEvidenceCounts.TryRemove(portName, out _);
+                    ClearSimRemovalEvidence(portName);
                 }
 
                 if (!operatorReported)
@@ -2663,8 +2683,11 @@ public class GsmModemService : IGsmModemService
             }
 
             bool stackDisabledByTool = _simStackDisabledByTool.TryGetValue(portName, out bool stackDisabled) && stackDisabled;
-            bool hasUnsolicitedCpinRemoval = !stackDisabledByTool && !isCpinQueryResponse &&
-                (currentData.Contains("+CPIN: NOT READY") || currentData.Contains("+CPIN: NOT INSERTED"));
+            // NOT READY is a normal transient response on EC20 during CFUN/IMS
+            // changes. Only NOT INSERTED is strong unsolicited removal evidence;
+            // the periodic monitor will independently verify weaker QSIMSTAT=0.
+            bool hasUnsolicitedCpinRemoval = !stackDisabledByTool && !isCpinQueryResponse
+                && currentData.Contains("+CPIN: NOT INSERTED");
             bool hasUnsolicitedQsimRemoval = !stackDisabledByTool && !isQsimQueryResponse && currentData.Contains("+QSIMSTAT: 1,0");
             if (hasUnsolicitedCpinRemoval || hasUnsolicitedQsimRemoval)
             {
@@ -2688,14 +2711,25 @@ public class GsmModemService : IGsmModemService
                     _lastSimState.TryGetValue(portName, out bool wasPresent);
                     if (wasPresent)
                     {
-                        // QSIMSTAT polarity phụ thuộc bo mạch và CPIN có thể NOT READY
-                        // tạm thời khi CS/IMS đổi trạng thái. URC chỉ là bằng chứng đầu;
-                        // global monitor sẽ xác minh thêm QSIMSTAT + CCID qua nhiều vòng.
-                        _simRemovalEvidenceCounts.AddOrUpdate(portName, 1, (_, old) => Math.Max(old, 1));
+                        // QSIMSTAT=0 is only a probe on some GSM boards (and can
+                        // be inverted/transient). Do not spend a confirmation cycle
+                        // on it; the polling monitor will re-read CPIN/QSIMSTAT/CCID.
+                        if (hasUnsolicitedCpinRemoval)
+                            RegisterSimRemovalEvidence(portName);
+                        else
+                        {
+                            // Mark only that a probe needs verification. The
+                            // confirmation counter is advanced by full polling
+                            // cycles, not by every unsolicited URC.
+                            _simRemovalEvidenceSince.TryAdd(portName, DateTimeOffset.UtcNow);
+                            _simRemovalEvidenceCounts.TryAdd(portName, 1);
+                        }
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = portName,
-                            Data = "[SIM_REMOVAL_PENDING] Modem báo mất SIM; đang xác minh lại trước khi đổi trạng thái."
+                            Data = hasUnsolicitedCpinRemoval
+                                ? "[SIM_REMOVAL_PENDING] Modem báo mất SIM; đang xác minh lại trước khi đổi trạng thái."
+                                : "[SIM_REMOVAL_PROBE] QSIMSTAT báo SIM chưa sẵn sàng; giữ dữ liệu và chờ xác minh CCID."
                         });
                     }
                 }
@@ -2847,6 +2881,7 @@ public class GsmModemService : IGsmModemService
         _simMonitorCts.Clear();
         _lastSimState.Clear();
         _simRemovalEvidenceCounts.Clear();
+        _simRemovalEvidenceSince.Clear();
         _rebootRecoveryInProgress.Clear();
         _simInitInProgress.Clear();
         _simInsertInProgress.Clear();
@@ -2919,7 +2954,7 @@ public class GsmModemService : IGsmModemService
                 try { smCts.Cancel(); smCts.Dispose(); } catch {}
             }
             _lastSimState.TryRemove(portName, out _);
-            _simRemovalEvidenceCounts.TryRemove(portName, out _);
+            ClearSimRemovalEvidence(portName);
             _rebootRecoveryInProgress.TryRemove(portName, out _);
             _simInitInProgress.TryRemove(portName, out _);
             _simInsertInProgress.TryRemove(portName, out _);
@@ -2933,7 +2968,7 @@ public class GsmModemService : IGsmModemService
         if (_keepAliveCts.TryRemove(portName, out var keepAlive)) { try { keepAlive.Cancel(); keepAlive.Dispose(); } catch { } }
         if (_simMonitorCts.TryRemove(portName, out var simMonitor)) { try { simMonitor.Cancel(); simMonitor.Dispose(); } catch { } }
         _lastSimState.TryRemove(portName, out _);
-        _simRemovalEvidenceCounts.TryRemove(portName, out _);
+        ClearSimRemovalEvidence(portName);
         _rebootRecoveryInProgress.TryRemove(portName, out _);
         _simInitInProgress.TryRemove(portName, out _);
         _simInsertInProgress.TryRemove(portName, out _);

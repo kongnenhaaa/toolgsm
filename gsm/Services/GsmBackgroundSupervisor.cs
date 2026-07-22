@@ -7,15 +7,10 @@ public sealed class GsmBackgroundSupervisorContext
 {
     public required Func<List<SimPort>> GetPorts { get; init; }
     public required Func<SimPort, bool> IsActive { get; init; }
-    public required Func<bool> IsWatchdogEnabled { get; init; }
     public required Func<int> GetSignalScanIntervalSeconds { get; init; }
     public required Func<string, bool> IsSmsInProgress { get; init; }
-    public required Func<SimPort, string, Task> SendBalanceUssdAsync { get; init; }
     public required Action<SimPort, int, int> SetSignalReading { get; init; }
     public required Action<SimPort> MarkSmsSweep { get; init; }
-    public required Action<SimPort> MarkConnectionTimeout { get; init; }
-    public required Action<string> InvalidateSession { get; init; }
-    public required Func<SimPort, Task> RecoverFaultedPortAsync { get; init; }
     public required Action<string, string> Log { get; init; }
 }
 
@@ -55,10 +50,8 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
             StopCore();
             _cts = CancellationTokenSource.CreateLinkedTokenSource(lifetimeToken);
             CancellationToken token = _cts.Token;
-            _ = RunBalanceLoopAsync(context, token);
             _ = RunSignalLoopAsync(context, token);
             _ = RunSmsSweepLoopAsync(context, token);
-            _ = RunWatchdogLoopAsync(context, token);
         }
     }
 
@@ -68,30 +61,6 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
     }
 
     public void Dispose() => Stop();
-
-    private async Task RunBalanceLoopAsync(GsmBackgroundSupervisorContext context, CancellationToken token)
-    {
-        while (await WaitNextAsync(TimeSpan.FromMinutes(30), token))
-        {
-            var ports = context.GetPorts().Where(context.IsActive).ToList();
-            if (ports.Count == 0) continue;
-            context.Log("[HỆ THỐNG] Tự động kiểm tra số dư định kỳ (30 phút/lần)...", "INFO");
-            try
-            {
-                await BackendConcurrency.ForEachPortAsync(ports, async (port, ct) =>
-                {
-                    if (_modem.IsCallInProgress(port.PortName)) return;
-                    try
-                    {
-                        await context.SendBalanceUssdAsync(port, "Làm mới số dư tự động");
-                    }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-                    catch (Exception ex) { context.Log($"[{port.PortName}] Balance supervisor: {ex.Message}", "ERROR"); }
-                }, token);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
-        }
-    }
 
     private async Task RunSignalLoopAsync(GsmBackgroundSupervisorContext context, CancellationToken token)
     {
@@ -144,39 +113,6 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
                     catch (Exception ex) { context.Log($"[{port.PortName}] SMS sweep: {ex.Message}", "WARN"); }
-                }, token);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
-        }
-    }
-
-    private async Task RunWatchdogLoopAsync(GsmBackgroundSupervisorContext context, CancellationToken token)
-    {
-        while (await WaitNextAsync(TimeSpan.FromSeconds(20), token))
-        {
-            try
-            {
-                await BackendConcurrency.ForEachPortAsync(context.GetPorts(), async (port, ct) =>
-                {
-                    if (_modem.IsCallInProgress(port.PortName)) return;
-                    bool connectionTimedOut = port.Status == SimStatus.Connecting
-                        && DateTime.Now - port.StatusChangedAt > TimeSpan.FromMinutes(1);
-                    if (connectionTimedOut)
-                        context.MarkConnectionTimeout(port);
-
-                    bool needsRecovery = connectionTimedOut
-                        || (context.IsWatchdogEnabled()
-                            && (port.Status == SimStatus.NoResponse
-                                || port.Status == "Offline"
-                                || port.Status == "Error"));
-                    if (!needsRecovery) return;
-
-                    try { await context.RecoverFaultedPortAsync(port); }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-                    catch (Exception ex)
-                    {
-                        context.Log($"[{port.PortName}] Watchdog recovery: {ex.Message}", "ERROR");
-                    }
                 }, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }

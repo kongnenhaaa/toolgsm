@@ -36,7 +36,7 @@ public sealed class ImeiRestoreTests
                 return Task.FromResult(command switch
                 {
                     "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
                     "AT+CFUN=1,1" => "ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)",
                     _ => "OK"
                 });
@@ -46,6 +46,44 @@ public sealed class ImeiRestoreTests
 
         ImeiProcessResult result = await service.ProcessImeiWithoutSimAsync(
             new SimPort { PortName = "COM82", Imei = previousImei },
+            targetImei,
+            _ => true,
+            action => action(),
+            backupCurrentBeforeWrite: true);
+
+        Assert.Equal(ImeiProcessStatus.Applied, result.Status);
+        Assert.True(result.ModemResetRequested);
+        Assert.Equal(targetImei, result.FinalImei);
+    }
+
+    [Fact]
+    public async Task NoSimCreate_LostWriteAckButMatchingReadback_ContinuesAsSuccess()
+    {
+        const string previousImei = "352054261826334";
+        const string targetImei = "355008370781449";
+        string modemImei = previousImei;
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) =>
+            {
+                if (command.StartsWith("AT+EGMR=1,7,", StringComparison.Ordinal))
+                {
+                    modemImei = targetImei;
+                    return Task.FromResult("ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)");
+                }
+
+                return Task.FromResult(command switch
+                {
+                    "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    _ => "OK"
+                });
+            }
+        };
+        var service = new ImeiManagementService(modem);
+
+        ImeiProcessResult result = await service.ProcessImeiWithoutSimAsync(
+            new SimPort { PortName = "COM83", Imei = previousImei },
             targetImei,
             _ => true,
             action => action(),
@@ -115,7 +153,7 @@ public sealed class ImeiRestoreTests
                 return Task.FromResult(command switch
                 {
                     "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
                     _ => "OK"
                 });
             }
@@ -148,11 +186,11 @@ public sealed class ImeiRestoreTests
             "COM40:AT+CFUN=4",
             "COM40:AT+CFUN?",
             $"COM40:AT+EGMR=1,7,\"{canonicalBackupImei}\"",
-            "COM40:AT+EGMR=0,7;",
+            "COM40:AT+EGMR=0,7",
             "COM40:AT+CFUN=1,1"
         ], modem.Commands);
         Assert.Contains($"COM40:AT+EGMR=1,7,\"{canonicalBackupImei}\"", modem.Commands);
-        Assert.Contains("COM40:AT+EGMR=0,7;", modem.Commands);
+        Assert.Contains("COM40:AT+EGMR=0,7", modem.Commands);
         Assert.Contains("COM40:AT+CFUN=1,1", modem.Commands);
         Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CGSN", StringComparison.Ordinal));
         Assert.DoesNotContain(modem.Commands, command => command.Contains("EGMR=1,10", StringComparison.Ordinal));
@@ -171,7 +209,7 @@ public sealed class ImeiRestoreTests
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
                 "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                "AT+EGMR=0,7;" => $"+EGMR: \"{wrongStoredImei}\"\r\nOK",
+                "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{wrongStoredImei}\"\r\nOK",
                 _ => "OK"
             })
         };
@@ -215,7 +253,7 @@ public sealed class ImeiRestoreTests
                 return Task.FromResult(command switch
                 {
                     "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                    "AT+EGMR=0,7;" => $"+EGMR: \"{writtenImei}\"\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{writtenImei}\"\r\nOK",
                     _ => "OK"
                 });
             }
@@ -265,7 +303,7 @@ public sealed class ImeiRestoreTests
                 return Task.FromResult(command switch
                 {
                     "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
                     _ => "OK"
                 });
             }
@@ -311,7 +349,7 @@ public sealed class ImeiRestoreTests
                 return Task.FromResult(command switch
                 {
                     "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
                     _ => "OK"
                 });
             }
@@ -343,7 +381,7 @@ public sealed class ImeiRestoreTests
             "COM9:AT+CFUN?",
             "COM9:AT+EGMR=0,7;",
             $"COM9:AT+EGMR=1,7,\"{targetImei}\"",
-            "COM9:AT+EGMR=0,7;",
+            "COM9:AT+EGMR=0,7",
             "COM9:AT+CFUN=1,1"
         ], modem.Commands);
     }
@@ -358,7 +396,7 @@ public sealed class ImeiRestoreTests
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
                 "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                "AT+EGMR=0,7;" => $"+EGMR: \"{previousImei}\"\r\nOK",
+                "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{previousImei}\"\r\nOK",
                 _ => "OK"
             })
         };
@@ -392,7 +430,7 @@ public sealed class ImeiRestoreTests
                 return Task.FromResult(command switch
                 {
                     "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
                     _ => "OK"
                 });
             }

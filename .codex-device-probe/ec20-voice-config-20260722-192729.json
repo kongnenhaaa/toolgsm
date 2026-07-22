@@ -1,0 +1,1410 @@
+[
+  {
+    "Port": "COM83",
+    "StartedAt": "2026-07-22T19:27:30.9189666+07:00",
+    "FinishedAt": "2026-07-22T19:27:31.7087712+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 21,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM84",
+    "StartedAt": "2026-07-22T19:27:31.0267936+07:00",
+    "FinishedAt": "2026-07-22T19:27:31.7852649+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 35,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM85",
+    "StartedAt": "2026-07-22T19:27:31.1033937+07:00",
+    "FinishedAt": "2026-07-22T19:27:31.861545+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 29,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM86",
+    "StartedAt": "2026-07-22T19:27:31.1809134+07:00",
+    "FinishedAt": "2026-07-22T19:27:31.9442924+07:00",
+    "FirmwareRevision": "EC20CEFAGR08A03M4G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEFAGR08A03M4G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM87",
+    "StartedAt": "2026-07-22T19:27:31.2804195+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.0336503+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM88",
+    "StartedAt": "2026-07-22T19:27:31.3658013+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.1268655+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM89",
+    "StartedAt": "2026-07-22T19:27:31.4551732+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.2185813+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM90",
+    "StartedAt": "2026-07-22T19:27:31.5424526+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.3061913+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM91",
+    "StartedAt": "2026-07-22T19:27:31.621473+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.3852925+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM92",
+    "StartedAt": "2026-07-22T19:27:31.7047042+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.4677924+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM93",
+    "StartedAt": "2026-07-22T19:27:31.8002562+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.5517968+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM94",
+    "StartedAt": "2026-07-22T19:27:31.8899353+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.6407705+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM95",
+    "StartedAt": "2026-07-22T19:27:31.9800365+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.7184798+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 21,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM96",
+    "StartedAt": "2026-07-22T19:27:32.0611371+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.801048+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM97",
+    "StartedAt": "2026-07-22T19:27:32.1433201+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.9011564+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM98",
+    "StartedAt": "2026-07-22T19:27:32.2365407+07:00",
+    "FinishedAt": "2026-07-22T19:27:32.9741399+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 21,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM99",
+    "StartedAt": "2026-07-22T19:27:32.325363+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.0574232+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 21,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM100",
+    "StartedAt": "2026-07-22T19:27:32.4143406+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.185214+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM101",
+    "StartedAt": "2026-07-22T19:27:32.4998452+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.2674998+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM102",
+    "StartedAt": "2026-07-22T19:27:32.5881399+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.3558725+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM103",
+    "StartedAt": "2026-07-22T19:27:32.6641523+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.4490203+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 35,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM104",
+    "StartedAt": "2026-07-22T19:27:32.7479515+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.5336787+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 35,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM105",
+    "StartedAt": "2026-07-22T19:27:32.8298981+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.6198073+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 35,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM106",
+    "StartedAt": "2026-07-22T19:27:32.913878+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.6395933+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM107",
+    "StartedAt": "2026-07-22T19:27:32.9986481+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.7218686+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM108",
+    "StartedAt": "2026-07-22T19:27:33.0799224+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.8074341+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM109",
+    "StartedAt": "2026-07-22T19:27:33.1551866+07:00",
+    "FinishedAt": "2026-07-22T19:27:33.9342717+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM110",
+    "StartedAt": "2026-07-22T19:27:33.2400644+07:00",
+    "FinishedAt": "2026-07-22T19:27:34.0184351+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM111",
+    "StartedAt": "2026-07-22T19:27:33.3268288+07:00",
+    "FinishedAt": "2026-07-22T19:27:34.106115+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM112",
+    "StartedAt": "2026-07-22T19:27:33.420609+07:00",
+    "FinishedAt": "2026-07-22T19:27:34.1910931+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM113",
+    "StartedAt": "2026-07-22T19:27:33.5027382+07:00",
+    "FinishedAt": "2026-07-22T19:27:34.2744593+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      }
+    ]
+  },
+  {
+    "Port": "COM114",
+    "StartedAt": "2026-07-22T19:27:33.5855385+07:00",
+    "FinishedAt": "2026-07-22T19:27:34.3517262+07:00",
+    "FirmwareRevision": "EC20CEFAGR08A03M4G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEFAGR08A03M4G\r\n\r\nOK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCLIP=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT^DSCI=1",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BQTONEDET=1",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "voice-config",
+        "Command": "AT\u002BCRC=1",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      }
+    ]
+  }
+]

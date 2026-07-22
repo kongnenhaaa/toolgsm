@@ -14,12 +14,13 @@
             }
             else
             {
-                var statActive    = Ports.Count(p => p.Status == SimStatus.Active);
-                var statConn      = Ports.Count(p => p.Status == SimStatus.Connecting);
-                var statWaitSim   = Ports.Count(p => p.Status == "Chờ cắm SIM");
-                var statNoResp    = Ports.Count(p => p.Status == SimStatus.NoResponse);
-                var statBlocked   = Ports.Count(p => p.Status == SimStatus.WaitingAccept || p.Status == SimStatus.SecurityBlocked || p.Status == SimStatus.Quarantined);
-                var statTotal     = Ports.Count();
+                var visiblePorts  = VisiblePorts.ToList();
+                var statActive    = visiblePorts.Count(p => p.Status == SimStatus.Active);
+                var statConn      = visiblePorts.Count(p => p.Status == SimStatus.Connecting);
+                var statWaitSim   = visiblePorts.Count(p => p.Status == "Chờ cắm SIM");
+                var statNoResp    = visiblePorts.Count(p => p.Status == SimStatus.NoResponse);
+                var statBlocked   = visiblePorts.Count(p => p.Status == SimStatus.WaitingAccept || p.Status == SimStatus.SecurityBlocked);
+                var statTotal     = visiblePorts.Count;
                 var isDark        = gsm.Services.SettingsService.Current.DarkMode;
                 var titleColor    = isDark ? "color:#E2E8F0; font-weight:600;" : "color:#64748B; font-weight:600;";
 
@@ -71,7 +72,7 @@
                 // khi bấm nút và được báo rõ trong hộp xác nhận/kết quả.
                 var imeiActionCount = SelectedItems.Any()
                     ? SelectedItems.Count
-                    : Ports.Count(CanCreateImei);
+                    : VisiblePorts.Count(CanCreateImei);
             }
             
             <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning" Class="mr-2"
@@ -100,8 +101,9 @@
                        Variant="Variant.Text" Color="Color.Default" OnClick="OpenSettingsDialog">Cấu hình Cột/Cổng</MudButton>
         </MudToolBar>
 
-    <MudTable Items="@VisiblePorts" Hover="true" Dense="true" Elevation="0" Striped="false"
-              MultiSelection="true" @bind-SelectedItems="SelectedItems"
+    <MudTable T="SimPort" Items="@VisiblePorts" Hover="true" Dense="true" Elevation="0" Striped="false"
+              MultiSelection="true" SelectedItems="@SelectedItems"
+              SelectedItemsChanged="OnTableSelectionChanged"
               Class="com-table"
               RowClassFunc="GetRowClass"
               FixedHeader="true" Height="calc(100vh - 280px)"
@@ -142,7 +144,7 @@
                 else if (col.Name == "Status")
                 {
                     <MudTd Style="@($"{_brd} white-space:nowrap; font-size:16px;")">
-                        <StatusBadge Status="@context.Status" />
+                        <StatusBadge Status="@context.StatusDisplay" />
                     </MudTd>
                 }
                 else if (col.Name == "NetworkProvider")
@@ -225,7 +227,7 @@
                 else if (col.Name == "LastMessageContent")
                 {
                     <MudTd Style="@($"white-space:nowrap; font-size:16px; {_brd} {_body}")">
-                        @(context.LastMessageContent ?? "—")
+                        @(string.IsNullOrWhiteSpace(context.LastMessageContent) ? "—" : context.LastMessageContent)
                     </MudTd>
                 }
             }
@@ -289,23 +291,13 @@
 
     bool _bulkImeiAction;
 
-    async Task<List<SimPort>> RefreshPortsForImeiActionAsync()
+    Task<List<SimPort>> GetImeiActionCandidatesAsync()
     {
-        var candidates = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
-        var waitingForSim = candidates.Where(port => (port.Status ?? string.Empty) == "Chờ cắm SIM").ToList();
-        if (waitingForSim.Count > 0)
-        {
-            Snackbar.Add($"Đang quét lại SIM cho {candidates.Count} cổng ({waitingForSim.Count} cổng chờ SIM)...", Severity.Info);
-            await RunAllPortsAsync(waitingForSim, port => ModemService.HandleSimInsertedAsync(port.PortName));
-
-            for (int attempt = 0; attempt < 20; attempt++)
-            {
-                if (waitingForSim.All(port => (port.Status ?? string.Empty) != "Chờ cắm SIM")) break;
-                await Task.Delay(250);
-            }
-        }
-
-        return candidates;
+        // SAuto dùng ngay snapshot COM người dùng đã chọn. Không chèn một lượt
+        // HandleSimInserted (CFUN/CPIN/CCID) trước thao tác IMEI vì lượt probe đó
+        // tranh cổng với vòng no-SIM và làm cả batch phải chờ/timeout.
+        var candidates = SelectedItems.Any() ? SelectedItems.ToList() : VisiblePorts.ToList();
+        return Task.FromResult(candidates);
     }
 
     bool CanCreateImei(SimPort port) =>
@@ -322,8 +314,12 @@
         _bulkImeiAction = true;
         try
         {
-            var candidates = await RefreshPortsForImeiActionAsync();
-            var targets = candidates.Where(CanCreateImei).ToList();
+            var candidates = await GetImeiActionCandidatesAsync();
+            // Khi đã chọn thủ công, SAuto thử đúng toàn bộ COM đã chọn. Không lọc
+            // lại theo status cũ khiến nút báo 32 nhưng thực tế chỉ chạy 4.
+            var targets = SelectedItems.Any()
+                ? candidates
+                : candidates.Where(CanCreateImei).ToList();
             if (targets.Count == 0)
             {
                 Snackbar.Add("Không có cổng modem nào sẵn sàng để tạo IMEI mới.", Severity.Warning);
@@ -365,7 +361,7 @@
         _bulkImeiAction = true;
         try
         {
-            var candidates = await RefreshPortsForImeiActionAsync();
+            var candidates = await GetImeiActionCandidatesAsync();
             var restoreImeis = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var port in candidates.Where(CanCreateImei))
             {
@@ -421,17 +417,21 @@
 
     async Task RefreshSelected()
     {
-        var ports = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
+        var ports = SelectedItems.Any() ? SelectedItems.ToList() : VisiblePorts.ToList();
         Snackbar.Add($"Đang làm mới {ports.Count} cổng...", Severity.Info);
         await Vm.RefreshPortsAsync(ports.Select(p => p.PortName));
         Snackbar.Add($"Đã gửi lệnh làm mới {ports.Count} cổng; trạng thái sẽ cập nhật khi kết nối lại.", Severity.Success);
-        SelectedItems.Clear();
-        _ = SelectedItemsChanged.InvokeAsync(SelectedItems);
+        await OnTableSelectionChanged(new HashSet<SimPort>());
     }
 
     async Task ClearSelectionAsync()
     {
-        SelectedItems.Clear();
+        await OnTableSelectionChanged(new HashSet<SimPort>());
+    }
+
+    private async Task OnTableSelectionChanged(HashSet<SimPort> selectedItems)
+    {
+        SelectedItems = selectedItems ?? new HashSet<SimPort>();
         await SelectedItemsChanged.InvokeAsync(SelectedItems);
     }
 
@@ -474,7 +474,9 @@
     {
         get
         {
-            var hidden = SettingsService.Current.HiddenComPorts ?? new List<string>();
+            var hidden = new HashSet<string>(
+                SettingsService.Current.HiddenComPorts ?? new List<string>(),
+                StringComparer.OrdinalIgnoreCase);
             return Ports.Where(p => !hidden.Contains(p.PortName));
         }
     }
@@ -507,7 +509,9 @@
                     name.Equals("Signal", StringComparison.OrdinalIgnoreCase));
                 savedOrder.Insert(signalIndex >= 0 ? signalIndex + 1 : savedOrder.Count, "LastSignalScan");
             }
-            var hiddenCols = new HashSet<string>(cfg.HiddenColumns ?? new List<string>());
+            var hiddenCols = new HashSet<string>(
+                cfg.HiddenColumns ?? new List<string>(),
+                StringComparer.OrdinalIgnoreCase);
             if (hiddenCols.Remove("NetworkSignal"))
             {
                 hiddenCols.Add("NetworkType");
@@ -542,30 +546,9 @@
 
     private List<ColumnItem> GetDefaultColumns()
     {
-        return new List<ColumnItem>
-        {
-            new() { Name = "Stt", Header = "STT" },
-            new() { Name = "PortName", Header = "Cổng" },
-            new() { Name = "Status", Header = "Trạng thái" },
-            new() { Name = "NetworkProvider", Header = "Nhà mạng" },
-            new() { Name = "NetworkType", Header = "Mạng" },
-            new() { Name = "Signal", Header = "Tín hiệu" },
-            new() { Name = "LastSignalScan", Header = "Quét sóng lúc" },
-            new() { Name = "Balance", Header = "TKC" },
-            new() { Name = "PhoneNumber", Header = "SĐT" },
-            new() { Name = "SimType", Header = "Loại SIM" },
-            new() { Name = "Imei", Header = "IMEI" },
-            new() { Name = "Serial", Header = "CCID" },
-            new() { Name = "ExpiryDate", Header = "HSD" },
-            new() { Name = "SimRegDate", Header = "Ngày ĐK SIM" },
-            new() { Name = "Lock1C", Header = "Khóa 1C" },
-            new() { Name = "Lock2C", Header = "Khóa 2C" },
-            new() { Name = "ForwardedTo", Header = "Chuyển tiếp" },
-            new() { Name = "VnptStatus", Header = "Trạng thái VNPT" },
-            new() { Name = "Otp", Header = "OTP" },
-            new() { Name = "LastSmsSender", Header = "Người gửi SMS" },
-            new() { Name = "LastMessageContent", Header = "Nội dung" }
-        };
+        return ComTableColumnCatalog.Default
+            .Select(column => new ColumnItem { Name = column.Name, Header = column.Header })
+            .ToList();
     }
 
     async Task OpenSettingsDialog()
@@ -623,7 +606,7 @@
             {
                 "Stt"                => (stt++).ToString(),
                 "PortName"           => p.PortName ?? "",
-                "Status"             => p.Status?.ToString() ?? "",
+                "Status"             => p.StatusDisplay ?? "",
                 "NetworkProvider"    => p.NetworkProvider ?? "",
                 "NetworkType"        => p.NetworkType ?? "",
                 "Signal"             => p.SignalDisplay,

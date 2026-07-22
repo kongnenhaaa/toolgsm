@@ -110,17 +110,8 @@ public class AppSettings
     public bool AutoRestoreImei { get; set; } = true;
     public bool BlockUnknown { get; set; } = false;
     public bool AutoAccept { get; set; } = false;
-    public bool Prefer4G { get; set; } = true;
-    public bool EnableVolte { get; set; } = false;
-    public bool AutoRecovery { get; set; } = true;
-    public bool ForceCfun1AfterReboot { get; set; } = false;
-    public int RecoveryThreshold { get; set; } = 12;
-    public int WatchdogSeconds { get; set; } = 50;
     public int SignalScanIntervalSeconds { get; set; } = 15;
     public bool AutoCheckBalanceAfterSms { get; set; } = true;
-    public bool AutoUssdOnNetwork { get; set; } = true;
-    public int UssdRetrySeconds { get; set; } = 35;
-    public int SmsTimeout { get; set; } = 30000;
     public bool TelegramOnCall { get; set; } = true;
     public bool TelegramOnError { get; set; } = true;
     public int BaudRate { get; set; } = 115200;

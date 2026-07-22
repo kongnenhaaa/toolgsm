@@ -1,0 +1,1056 @@
+[
+  {
+    "Port": "COM86",
+    "StartedAt": "2026-07-22T19:04:53.979466+07:00",
+    "FinishedAt": "2026-07-22T19:05:29.4272416+07:00",
+    "FirmwareRevision": "EC20CEFAGR08A03M4G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "AT",
+        "Status": "supported",
+        "ElapsedMs": 49,
+        "Response": "OK"
+      },
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 29,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEFAGR08A03M4G\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMI",
+        "Status": "supported",
+        "ElapsedMs": 35,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMM",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMR",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "EC20CEFAGR08A03M4G\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCLAC",
+        "Status": "timeout",
+        "ElapsedMs": 25015,
+        "Response": "\u0026C\r\n\u0026D\r\n\u0026E\r\n\u0026F\r\n\u0026S\r\n\u0026V\r\n\u0026W\r\nE\r\nI\r\nL\r\nM\r\nQ\r\nV\r\nX\r\nZ\r\nT\r\nP\r\n\\Q\r\n\\S\r\n\\V\r\n%V\r\nD\r\nA\r\nH\r\nO\r\nS0\r\nS2\r\nS3\r\nS4\r\nS5\r\nS6\r\nS7\r\nS8\r\nS9\r\nS10\r\nS11\r\nS12\r\nS30\r\nS103\r\nS104\r\n\u002BFCLASS\r\n\u002BICF\r\n\u002BIFC\r\n\u002BIPR\r\n\u002BGMI\r\n\u002BGMM\r\n\u002BGMR\r\n\u002BGCAP\r\n\u002BGSN\r\n\u002BDR\r\n\u002BDS\r\n\u002BCMEE\r\n\u002BWS46\r\n\u002BPACSP\r\n\u002BCFUN\r\n\u002BCLCC\r\n\u002BCBST\r\n\u002BCRLP\r\n\u002BCV120\r\n\u002BCHSN\r\n\u002BCSSN\r\n\u002BCREG\r\n\u002BCGREG\r\n\u002BCEREG\r\n\u002BCSCS\r\n\u002BCSTA\r\n\u002BCR\r\n\u002BCEER\r\n\u002BCRC\r\n\u002BCGDCONT\r\n\u002BCGDSCONT\r\n\u002BCGTFT\r\n\u002BCGEQREQ\r\n\u002BCGEQMIN\r\n\u002BCGEQOS\r\n\u002BCGCONTRDP\r\n\u002BCGSCONTRDP\r\n\u002BCGTFTRDP\r\n\u002BCGEQOSRDP\r\n\u002BCGQREQ\r\n\u002BCGQMIN\r\n\u002BCGEREP\r\n\u002BCGPADDR\r\n\u002BCGDATA\r\n\u002BCGCLASS\r\n\u002BCGPIAF\r\n\u002BCGSMS\r\n\u002BCSMS\r\n\u002BCMGF\r\n\u002BCSAS\r\n\u002BCRES\r\n\u002BCSCA\r\n\u002BCSMP\r\n\u002BCSDH\r\n\u002BCSCB\r\n\u002BES\r\n\u002BESA\r\n\u002BCMOD\r\n\u002BCEMODE\r\n\u002BCVHU\r\n\u002BCECALL\r\n\u002BQCGEQMIN\r\n\u002BQCGEQOS\r\n\u002BQCGEQREQ\r\n\u002BQCGQMIN\r\n\u002BQCGQREQ\r\n\u002BQCGTFT\r\n\u002BCFUN\r\n$QCPWRDN\r\n\u002BCMUX\r\n\u002BIPR\r\n\u002BQSBFOTA\r\n\u002BQNAND\r\n\u002BQPRTPARA\r\n$LGTMPF\r\n$OM_SVR_INFO\r\n$OM_AUTH_REQ\r\n$OM_C_CSE_REQ\r\n$OM_R_CSE_REQ\r\n$OM_U_CSE_REQ\r\n$OM_D_CSE_REQ\r\n$OM_C_CON_REQ\r\n$OM_R_CON_REQ\r\n$OM_U_CON_REQ\r\n$OM_D_CON_REQ\r\n$OM_C_INS_REQ\r\n$OM_R_INS_REQ\r\n$OM_D_INS_REQ\r\n$OM_C_SUB_REQ\r\n$OM_R_SUB_REQ\r\n$OM_U_SUB_REQ\r\n$OM_D_SUB_REQ\r\n$OM_C_ACP_REQ\r\n$OM_R_ACP_REQ\r\n$OM_U_ACP_REQ\r\n$OM_D_ACP_REQ\r\n$OM_DEV_FWUP_REQ\r\n$OM_DEV_FWUP_START\r\n$OM_DEV_FWUP_FINISH$OM_MODEM_FWUP_REQ\r\n$OM_MODEM_FWUP_STAR\u002BQWSERVER\r\n\u002BQWTOCLIEN\r\n\u002BQWTOCLI\r\n\u002BQWPARAM\r\n\u002BQFCT\r\n\u002BQDATAFWD\r\n\u002BQFTCMD\r\n\u002BQBTPWR\r\n\u002BQBTLEADDR\r\n\u002BQBTNAME\r\n\u002BQBTGATREG\r\n\u002BQBTGATSS\r\n\u002BQBTGATSC\r\n\u002BQBTGATSD\r\n\u002BQBTGATSIND\r\n\u002BQBTGATSNOD\r\n\u002BQBTGATRRSP\r\n\u002BQBTGATWRSP\r\n\u002BQBTGATSENLE\r\n\u002BQBTGATADV\r\n\u002BQBTGATADVDATA\r\n\u002BQBTGATDISC\r\n\u002BQBTGATPER\r\n\u002BQBTGATDBALC\r\n\u002BQBTGATDBDEALC\r\n\u002BQBTGATSA\r\n\u002BQBTGATDA\r\n\u002BQFCT\r\n\u002BQFCT30R\r\n\u002BQFCTTX\r\n\u002BQFCTRX\r\n\u002BQBTFCTTX\r\n\u002BQBTFCTCTX\r\n\u002BQBTFCTRX\r\n\u002BQBTSPPACT\r\n\u002BQBTSPPCON\r\n\u002BQBTSPPDIC\r\n\u002BQBTSPPWRS\r\n\u002BQBTSCAN\r\n\u002BQBTAVACT\r\n\u002BQBTAVREG\r\n\u002BQBTAVCON\r\n\u002BQBTHFGCON\r\n\u002BQMKFS\r\n\u002BQBTDATACFG\r\n\u002BQBTSETCOD\r\n\u002BQBTMAC\r\n\u002BQBTBLESCSET\r\n\u002BQBTLPAIR\r\n\u002BQIIC\r\n\u002BQAUDLOOP\r\n\u002BQDAI\r\n\u002BCMUT\r\n\u002BCLVL\r\n\u002BCRSL\r\n\u002BQSIDET\r\n\u002BQAUDMOD\r\n\u002BQEEC\r\n\u002BQMIC\r\n\u002BQRXGAIN\r\n\u002BQAUDPLAYGAIN\r\n\u002BQAUDRDGAIN\r\n\u002BQAUDRD\r\n\u002BQAUDPLAY\r\n\u002BQPSND\r\n\u002BQAUDSTOP\r\n\u002BQTTS\r\n\u002BQTTSETUP\r\n\u002BQWTTS\r\n\u002BQPCMV\r\n\u002BQTXIIR\r\n\u002BQRXIIR\r\n\u002BQLTONE\r\n\u002BQLDTMF\r\n\u002BQAUDCFG\r\n\u002BQTONEDET\r\n\u002BQWDTMF\r\n\u002BQDTMFDETSET\r\n\u002BQPOWD\r\n$MYPOWEROFF\r\n\u002BCZESLICEN\r\n\u002BQSLIC\r\n\u002BQSLICRINGTEST\r\n\u002BQSCLK\r\n\u002BQCFG\r\n\u002BQADBKEY\r\n\u002BCBC\r\n\u002BQADC\r\n\u002BQADCDET\r\n\u002BQADCTEMP\r\n\u002BQGPSCFG\r\n\u002BQPRINT\r\n\u002BQSDMOUNT\r\n\u002BQSDMODE\r\n\u002BQFASTBOOT\r\n\u002BQPSM\r\n\u002BQPSMCFG\r\n\u002BQLINUXCPU\r\n\u002BQVERSION\r\n\u002BQSUBSYSVER\r\n\u002BQTEMPDBG\r\n\u002BQTEMP\r\n\u002BQTEMPDBGLVL\r\n\u002BQDIAGPORT\r\n\u002BQABOUT\r\n\u002BQLPMCFG\r\n\u002BQSGMIICFG\r\n\u002BQWWAN\r\n\u002BPSOFTSIM\r\n\u002BQLWWANUP\r\n\u002BQLWWANDOWN\r\n\u002BQLWWANSTATUS\r\n\u002BQLWWANURCCFG\r\n\u002BQLWWANCID\r\n\u002BQLPING\r\n\u002BQWIFI\r\n\u002BQWSSID\r\n\u002BQWSSIDHEX\r\n\u002BQWAUTH\r\n\u002BQWMOCH\r\n\u002BQWISO\r\n\u002BQWBCAST\r\n\u002BQWCLICNT\r\n\u002BQWCLIP\r\n\u002BQWCLILST\r\n\u002BQWSTAINFO\r\n\u002BQWCLIRM\r\n\u002BQWSETMAC\r\n\u002BQWRSTD\r\n\u002BQWIFICFG\r\n\u002BQAPRDYIND\r\n\u002BQFOTADL\r\n\u002BQFOTAPKGCFG\r\n\u002BQWDHCP\r\n\u002BQWDNS\r\n\u002BQFIREWALL\r\n\u002BQSECBOOT\r\n\u002BQSOFTSIMCFG\r\n\u002BQFTEST\r\n\u002BQUICKSHUTDOWN\r\n\u002BQALTERNATIVESLEEP\r\n\u002BQCLKOUTCFG\r\n\u002BQSWITCHPIN\r\n\u002BQNETPROXY\r\n\u002BQCUSTCMD\r\n\u002BQESIM\r\n$QCSIMSTAT\r\n$QCPBMPREF\r\n$CREG\r\n$CCLK\r\n$QCCNMI\r\n*CNTI\r\n$QCCLR\r\n$QCDMR\r\n$QCDNSP\r\n$QCDNSS\r\n$QCTER\r\n$QCSIMAPP\r\n$QCPINSTAT\r\n$QCPDPP\r\n$QCPDPLT\r\n$QCPWRDN\r\n$QCDGEN\r\n$QCPDPCFGE\r\n$QCANTE\r\n$QCRPW\r\n$QCSQ\r\n$CSQ\r\n$QCSYSMODE\r\n$QCCTM\r\n$QCBANDPREF\r\n^PREFMODE\r\n^SYSINFO\r\n^SYSCONFIG\r\n^CARDMODE\r\n^DSCI\r\n$QCVOLT\r\n$QCHWREV\r\n$QCBOOTVER\r\n$ECALL\r\n$QCDEFPROF\r\n$QCMRUE\r\n$QCMRUC\r\n$QCAPNE\r\n$QCPDPIMSCFGE\r\n$QCCLAC\r\n^SPN\r\n$QCRMCALL\r\n$QCDRX\r\n$QCRSRP\r\n$QCRSRQ\r\n$QCACQDBC\r\n$QCATMOD\r\n$QCCOPS\r\n^MODE\r\n$QCSIMT\r\n$QCNSP\r\n$QCRCIND\r\n$QCCSGCOPS\r\n$QCPDPCFGEXT\r\n$QCPRFCRT\r\n$QCPRFMOD"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPIN?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BQCCID",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BQCCID: 89840200011834604884\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCIMI",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "452021183460488\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCNUM",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPBS?",
+        "Status": "supported",
+        "ElapsedMs": 35,
+        "Response": "\u002BCPBS: \u0022SM\u0022,0,250\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPBR=?",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BCPBR: (1-250),40,16\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCFUN?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BCFUN: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCSQ",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "\u002BCSQ: 29,99\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCREG?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCREG: 2,1,\u00221817\u0022,\u0022951650B\u0022,7\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCGREG?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BCGREG: 2,1,\u00221817\u0022,\u0022951650B\u0022,7\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCEREG?",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BCEREG: 2,1,\u00221817\u0022,\u0022951650B\u0022,7\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCOPS?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BCOPS: 0,0,\u0022VinaPhone VINAPHONE\u0022,7\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "supported",
+        "ElapsedMs": 21,
+        "Response": "\u002BQNWINFO: \u0022FDD LTE\u0022,\u002245202\u0022,\u0022LTE BAND 3\u0022,1300\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "ussd",
+        "Command": "AT\u002BCUSD?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BCUSD: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "ussd",
+        "Command": "AT\u002BCUSD=?",
+        "Status": "supported",
+        "ElapsedMs": 21,
+        "Response": "\u002BCUSD: (0-2)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCMGF?",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "\u002BCMGF: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCMGF=?",
+        "Status": "supported",
+        "ElapsedMs": 35,
+        "Response": "\u002BCMGF: (0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCPMS?",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BCPMS: \u0022SM\u0022,0,30,\u0022SM\u0022,0,30,\u0022SM\u0022,0,30\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCPMS=?",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BCPMS: (\u0022ME\u0022,\u0022MT\u0022,\u0022SM\u0022,\u0022SR\u0022),(\u0022ME\u0022,\u0022MT\u0022,\u0022SM\u0022,\u0022SR\u0022),(\u0022ME\u0022,\u0022MT\u0022,\u0022SM\u0022,\u0022SR\u0022)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCNMI?",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BCNMI: 1,1,0,0,0\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCNMI=?",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BCNMI: (0-2),(0-3),(0,2),(0-2),(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCS?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSCS: \u0022GSM\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCS=?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCSCS: (\u0022IRA\u0022,\u0022GSM\u0022,\u0022UCS2\u0022)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCA?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCSCA: \u0022\u002B8491020005\u0022,145\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BQCMGR=?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLCC",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "\u002BCLCC: 1,1,0,1,0,\u0022\u0022,128\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLCC=?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "OK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLIP?",
+        "Status": "supported",
+        "ElapsedMs": 1630,
+        "Response": "\u002BCLIP: 0,1\r\n\r\nOK\r\n\r\n\u002BCREG: 1,\u00226624\u0022,\u0022A364045\u0022,2\r\n\r\n\u002BCGREG: 1,\u00226624\u0022,\u0022A364045\u0022,2\r\n\r\n\u002BCEREG: 4"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLIP=?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BCLIP: (0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCOLP?",
+        "Status": "supported",
+        "ElapsedMs": 2194,
+        "Response": "\u002BCOLP: 0,0\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCRC?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BCRC: 0\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCHLD=?",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BCHLD: (0,1,1x,2,2x,3,4)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BVTS=?",
+        "Status": "supported",
+        "ElapsedMs": 21,
+        "Response": "\u002BVTS: (0-9,A-D,*,#),(0-255)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BQVTS=?",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BQVTS: (0-9,A-D,*,#)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCCFC=?",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "\u002BCCFC: (0-5)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCCWA=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCCWA: (0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCEER",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BCEER: 6,258\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCLVL?",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "\u002BCLVL: 3\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCLVL=?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BCLVL: (0-5)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCMUT?",
+        "Status": "supported",
+        "ElapsedMs": 24,
+        "Response": "\u002BCMUT: 0\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQDAI?",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BQDAI: 3,0,0,4,0,0,1,1\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQDAI=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQDAI: (1-12),(0,1),(0,1),(0-5),(0-2),(0,1),(1),(1-16)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDMOD?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BQAUDMOD: 0\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDMOD=?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BQAUDMOD: (0-5)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDRD=?",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BQAUDRD: (0,1),\u0022filename\u0022,(3,13),(0,1,2,3)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDPLAY=?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BQAUDPLAY: \u0022filename\u0022,(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQPSND=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQPSND: (0,1),\u0022filename\u0022,(0,1),(0,1),(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQTONEDET=?",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BQTONEDET: (0,1),(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLST",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLST=?",
+        "Status": "supported",
+        "ElapsedMs": 29,
+        "Response": "OK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLDS",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BQFLDS: 0,0\r\n\r\nOK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFUPL=?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BQFUPL: \u003Cfilename\u003E[,(1-\u003Cfreesize\u003E)[,(1-65535)[,(0,1)]]]\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BCGATT?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCGATT: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BCGDCONT?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGDCONT: 1,\u0022IPV4V6\u0022,\u0022\u0022,\u00220.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0\u0022,0,0,0,0\r\n\u002BCGDCONT: 2,\u0022IPV4V6\u0022,\u0022ims\u0022,\u00220.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0\u0022,0,0,0,0\r\n\u002BCGDCONT: 3,\u0022IPV4V6\u0022,\u0022SOS\u0022,\u00220.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0\u0022,0,0,0,1\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQIACT?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQICSGP=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQICSGP: (1-16),(1-3),\u003CAPN\u003E,\u003Cusername\u003E,\u003Cpassword\u003E,(0-3),(0-1)\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQHTTPCFG=?",
+        "Status": "supported",
+        "ElapsedMs": 60,
+        "Response": "\u002BQHTTPCFG: \u0022contextid\u0022,(1-16)\r\n\u002BQHTTPCFG: \u0022requestheader\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022responseheader\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022sslctxid\u0022,(0-5)\r\n\u002BQHTTPCFG: \u0022contenttype\u0022,(0-5)\r\n\u002BQHTTPCFG: \u0022rspout/auto\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022closed/ind\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022windowsize\u0022,(1-4294967295)\r\n\u002BQHTTPCFG: \u0022closewaittime\u0022,(0-4294967295)\r\n\u002BQHTTPCFG: \u0022auth\u0022,(\u0022username:password\u0022)\r\n\u002BQHTTPCFG: \u0022custom_header\u0022,(\u0022custom_value\u0022)\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQHTTPURL=?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BQHTTPURL: (1-2048),(1-65535)\r\n\r\nOK"
+      },
+      {
+        "Category": "gnss",
+        "Command": "AT\u002BQGPS?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BQGPS: 0\r\n\r\nOK"
+      },
+      {
+        "Category": "gnss",
+        "Command": "AT\u002BQGPSCFG=?",
+        "Status": "supported",
+        "ElapsedMs": 83,
+        "Response": "\u002BQGPSCFG: \u0022outport\u0022,(\u0022none\u0022,\u0022usbnmea\u0022,\u0022uartdebug\u0022)\r\n\u002BQGPSCFG: \u0022nmeasrc\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022gpsnmeatype\u0022,(0-31)\r\n\u002BQGPSCFG: \u0022glonassnmeatype\u0022,(0-7)\r\n\u002BQGPSCFG: \u0022galileonmeatype\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022beidounmeatype\u0022,(0-3)\r\n\u002BQGPSCFG: \u0022gsvextnmeatype\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022gnssconfig\u0022,(0-7)\r\n\u002BQGPSCFG: \u0022odpcontrol\u0022,(0-2)\r\n\u002BQGPSCFG: \u0022dpoenable\u0022,(0-2)\r\n\u002BQGPSCFG: \u0022plane\u0022,(0-2)\r\n\u002BQGPSCFG: \u0022autogps\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022suplver\u0022,(1,2)\r\n\u002BQGPSCFG: \u0022agpsposmode\u0022,(0-4294967295)\r\n\u002BQGPSCFG: \u0022lbsapn\u0022,(0-31),(0-4),\u003Capn\u003E\r\n\u002BQGPSCFG: \u0022agnssprotocol\u0022,(0-255),(0-65535)\r\n\u002BQGPSCFG: \u0022fixfreq\u0022,(1,2,5,10)\r\n\u002BQGPSCFG: \u0022assisdataupdcfg\u0022,(0,1),(0,1),(1,16),(0-3)\r\n\u002BQGPSCFG: \u0022gnssrawdata\u0022,(0-31),(0,1)\r\n\u002BQGPSCFG: \u0022agnssjamming\u0022,(0-4),(2-10),(1-65535)\r\n\u002BQGPSCFG: \u0022agnssjammingurcmode\u0022,(0,1)\r\n\u002BQGPSCFG: \u00221pps\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022xtratimeurccfg\u0022,(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BCCLK?",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "\u002BCCLK: \u002226/07/22,12:05:28\u002B00\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BQLTS=2",
+        "Status": "supported",
+        "ElapsedMs": 36,
+        "Response": "\u002BQLTS: \u00222026/07/22,19:05:29\u002B28,0\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BQCFG=\u0022usbnet\u0022",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022usbnet\u0022,0\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM92",
+    "StartedAt": "2026-07-22T19:05:29.4447499+07:00",
+    "FinishedAt": "2026-07-22T19:06:10.9493841+07:00",
+    "FirmwareRevision": "EC20CEHDLGR08A05M1G",
+    "AdvertisedCommands": [],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "AT",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMI",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMM",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMR",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "EC20CEHDLGR08A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCLAC",
+        "Status": "timeout",
+        "ElapsedMs": 25021,
+        "Response": "\u0026C\r\n\u0026D\r\n\u0026E\r\n\u0026F\r\n\u0026S\r\n\u0026V\r\n\u0026W\r\nE\r\nI\r\nL\r\nM\r\nQ\r\nV\r\nX\r\nZ\r\nT\r\nP\r\n\\Q\r\n\\S\r\n\\V\r\n%V\r\nD\r\nA\r\nH\r\nO\r\nS0\r\nS2\r\nS3\r\nS4\r\nS5\r\nS6\r\nS7\r\nS8\r\nS9\r\nS10\r\nS11\r\nS12\r\nS30\r\nS103\r\nS104\r\n\u002BFCLASS\r\n\u002BICF\r\n\u002BIFC\r\n\u002BIPR\r\n\u002BGMI\r\n\u002BGMM\r\n\u002BGMR\r\n\u002BGCAP\r\n\u002BGSN\r\n\u002BDR\r\n\u002BDS\r\n\u002BCMEE\r\n\u002BWS46\r\n\u002BPACSP\r\n\u002BCFUN\r\n\u002BCLCC\r\n\u002BCBST\r\n\u002BCRLP\r\n\u002BCV120\r\n\u002BCHSN\r\n\u002BCSSN\r\n\u002BCREG\r\n\u002BCGREG\r\n\u002BCEREG\r\n\u002BCSCS\r\n\u002BCSTA\r\n\u002BCR\r\n\u002BCEER\r\n\u002BCRC\r\n\u002BCGDCONT\r\n\u002BCGDSCONT\r\n\u002BCGTFT\r\n\u002BCGEQREQ\r\n\u002BCGEQMIN\r\n\u002BCGEQOS\r\n\u002BCGCONTRDP\r\n\u002BCGSCONTRDP\r\n\u002BCGTFTRDP\r\n\u002BCGEQOSRDP\r\n\u002BCGQREQ\r\n\u002BCGQMIN\r\n\u002BCGEREP\r\n\u002BCGPADDR\r\n\u002BCGDATA\r\n\u002BCGCLASS\r\n\u002BCGPIAF\r\n\u002BCGSMS\r\n\u002BCSMS\r\n\u002BCMGF\r\n\u002BCSAS\r\n\u002BCRES\r\n\u002BCSCA\r\n\u002BCSMP\r\n\u002BCSDH\r\n\u002BCSCB\r\n\u002BES\r\n\u002BESA\r\n\u002BCMOD\r\n\u002BCEMODE\r\n\u002BCVHU\r\n\u002BQCGEQMIN\r\n\u002BQCGEQOS\r\n\u002BQCGEQREQ\r\n\u002BQCGQMIN\r\n\u002BQCGQREQ\r\n\u002BQCGTFT\r\n\u002BCFUN\r\n$QCPWRDN\r\n\u002BCMUX\r\n\u002BIPR\r\n\u002BQNAND\r\n\u002BQPRTPARA\r\n\u002BQFTCMD\r\n\u002BQMKFS\r\n\u002BQBTDATACFG\r\n\u002BQBTSETCOD\r\n\u002BQBTMAC\r\n\u002BQBTBLESCSET\r\n\u002BQBTLPAIR\r\n\u002BQIIC\r\n\u002BQAUDLOOP\r\n\u002BQDAI\r\n\u002BCMUT\r\n\u002BCLVL\r\n\u002BCRSL\r\n\u002BQSIDET\r\n\u002BQAUDMOD\r\n\u002BQEEC\r\n\u002BQMIC\r\n\u002BQRXGAIN\r\n\u002BQAUDPLAYGAIN\r\n\u002BQAUDRDGAIN\r\n\u002BQAUDRD\r\n\u002BQAUDPLAY\r\n\u002BQPSND\r\n\u002BQAUDSTOP\r\n\u002BQTTS\r\n\u002BQTTSETUP\r\n\u002BQWTTS\r\n\u002BQPCMV\r\n\u002BQTXIIR\r\n\u002BQRXIIR\r\n\u002BQLTONE\r\n\u002BQLDTMF\r\n\u002BQAUDCFG\r\n\u002BQTONEDET\r\n\u002BQVOLTEDTMFDET\r\n\u002BQWDTMF\r\n\u002BQDTMFDETSET\r\n\u002BQPOWD\r\n$MYPOWEROFF\r\n\u002BQSLIC\r\n\u002BQSLICRINGTEST\r\n\u002BQSCLK\r\n\u002BQCFG\r\n\u002BQADBKEY\r\n\u002BCBC\r\n\u002BQADC\r\n\u002BQADCDET\r\n\u002BQADCTEMP\r\n\u002BQGPSCFG\r\n\u002BQPRINT\r\n\u002BQSDMOUNT\r\n\u002BQSDMODE\r\n\u002BQFASTBOOT\r\n\u002BQPSM\r\n\u002BQPSMCFG\r\n\u002BQLINUXCPU\r\n\u002BQVERSION\r\n\u002BQSUBSYSVER\r\n\u002BQTEMPDBG\r\n\u002BQTEMP\r\n\u002BQTEMPDBGLVL\r\n\u002BQDIAGPORT\r\n\u002BQABOUT\r\n\u002BQSGMIICFG\r\n\u002BQWWAN\r\n\u002BPSOFTSIM\r\n\u002BQLWWANUP\r\n\u002BQLWWANDOWN\r\n\u002BQLWWANSTATUS\r\n\u002BQLWWANURCCFG\r\n\u002BQLWWANCID\r\n\u002BQLPING\r\n\u002BQAPRDYIND\r\n\u002BQFOTADL\r\n\u002BQFOTAPKGCFG\r\n\u002BQWDHCP\r\n\u002BQWDNS\r\n\u002BQFIREWALL\r\n\u002BQSECBOOT\r\n\u002BQFTEST\r\n\u002BQUICKSHUTDOWN\r\n\u002BQALTERNATIVESLEEP\r\n\u002BQCLKOUTCFG\r\n\u002BQSWITCHPIN\r\n\u002BQNETPROXY\r\n\u002BQCUSTCMD\r\n\u002BQESIM\r\n$QCSIMSTAT\r\n$QCPBMPREF\r\n$CREG\r\n$CCLK\r\n$QCCNMI\r\n*CNTI\r\n$QCCLR\r\n$QCDMR\r\n$QCDNSP\r\n$QCDNSS\r\n$QCTER\r\n$QCSIMAPP\r\n$QCPINSTAT\r\n$QCPDPP\r\n$QCPDPLT\r\n$QCPWRDN\r\n$QCDGEN\r\n$QCPDPCFGE\r\n$QCANTE\r\n$QCRPW\r\n$QCSQ\r\n$CSQ\r\n$QCSYSMODE\r\n$QCCTM\r\n$QCBANDPREF\r\n^PREFMODE\r\n^SYSINFO\r\n^SYSCONFIG\r\n^CARDMODE\r\n^DSCI\r\n$QCVOLT\r\n$QCHWREV\r\n$QCBOOTVER\r\n$QCDEFPROF\r\n$QCMRUE\r\n$QCMRUC\r\n$QCAPNE\r\n$QCPDPIMSCFGE\r\n$QCCLAC\r\n^SPN\r\n$QCRMCALL\r\n$QCDRX\r\n$QCRSRP\r\n$QCRSRQ\r\n$QCACQDBC\r\n$QCATMOD\r\n$QCCOPS\r\n^MODE\r\n$QCSIMT\r\n$QCNSP\r\n$QCRCIND\r\n$QCCSGCOPS\r\n$QCPDPCFGEXT\r\n$QCPRFCRT\r\n$QCPRFMOD\r\n\r\n\r\n\u002BCGREG: 1,\u00221817\u0022,\u00229516521\u0022,7\r\n\r\n\u002BCEREG: 1,\u00221817\u0022,\u00229516521\u0022,7"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPIN?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BQCCID",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BQCCID: 89840200011834605402\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCIMI",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "452021183460540\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCNUM",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "OK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPBS?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BCPBS: \u0022SM\u0022,0,250\r\n\r\nOK"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPBR=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCPBR: (1-250),40,16\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCFUN?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCSQ",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BCSQ: 31,99\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCREG?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCGREG?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCGREG: 2,1,\u00221817\u0022,\u00229516521\u0022,7\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCEREG?",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BCEREG: 2,1,\u00221817\u0022,\u00229516521\u0022,7\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCOPS?",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BCOPS: 0,0,\u0022VinaPhone VINAPHONE\u0022,7\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BQNWINFO: \u0022FDD LTE\u0022,\u002245202\u0022,\u0022LTE BAND 3\u0022,1875\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "ussd",
+        "Command": "AT\u002BCUSD?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCUSD: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "ussd",
+        "Command": "AT\u002BCUSD=?",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BCUSD: (0-2)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCMGF?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCMGF: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCMGF=?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BCMGF: (0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCPMS?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "\u002BCPMS: \u0022SM\u0022,0,30,\u0022SM\u0022,0,30,\u0022SM\u0022,0,30\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCPMS=?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCPMS: (\u0022ME\u0022,\u0022MT\u0022,\u0022SM\u0022,\u0022SR\u0022),(\u0022ME\u0022,\u0022MT\u0022,\u0022SM\u0022,\u0022SR\u0022),(\u0022ME\u0022,\u0022MT\u0022,\u0022SM\u0022,\u0022SR\u0022)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCNMI?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCNMI: 1,1,0,0,0\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCNMI=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCNMI: (0-2),(0-3),(0,2),(0-2),(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCS?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSCS: \u0022GSM\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCS=?",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "\u002BCSCS: (\u0022IRA\u0022,\u0022GSM\u0022,\u0022UCS2\u0022)\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCA?",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BCSCA: \u0022\u002B8491020005\u0022,145\r\n\r\nOK"
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BQCMGR=?",
+        "Status": "supported",
+        "ElapsedMs": 28,
+        "Response": "OK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLCC",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BCLCC: 1,1,0,1,0,\u0022\u0022,128\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLCC=?",
+        "Status": "supported",
+        "ElapsedMs": 29,
+        "Response": "OK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLIP?",
+        "Status": "timeout",
+        "ElapsedMs": 5016,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLIP=?",
+        "Status": "rejected-or-unsupported",
+        "ElapsedMs": 22,
+        "Response": "ERROR"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCOLP?",
+        "Status": "timeout",
+        "ElapsedMs": 5018,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCRC?",
+        "Status": "rejected-or-unsupported",
+        "ElapsedMs": 22,
+        "Response": "ERROR"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCHLD=?",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "\u002BCHLD: (0,1,1x,2,2x,3,4)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BVTS=?",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "\u002BVTS: (0-9,A-D,*,#),(0-255)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BQVTS=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQVTS: (0-9,A-D,*,#)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCCFC=?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BCCFC: (0-5)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCCWA=?",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BCCWA: (0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCEER",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCEER: 6,258\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCLVL?",
+        "Status": "supported",
+        "ElapsedMs": 25,
+        "Response": "\u002BCLVL: 3\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCLVL=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCLVL: (0-5)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCMUT?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BCMUT: 0\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQDAI?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQDAI: 3,0,0,4,0,0,1,1\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQDAI=?",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "\u002BQDAI: (1-12),(0,1),(0,1),(0-5),(0-2),(0,1),(1),(1-16)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDMOD?",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BQAUDMOD: 0\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDMOD=?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BQAUDMOD: (0-5)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDRD=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQAUDRD: (0,1),\u0022filename\u0022,(3,13),(0,1,2,3)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDPLAY=?",
+        "Status": "supported",
+        "ElapsedMs": 26,
+        "Response": "\u002BQAUDPLAY: \u0022filename\u0022,(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQPSND=?",
+        "Status": "supported",
+        "ElapsedMs": 27,
+        "Response": "\u002BQPSND: (0,1),\u0022filename\u0022,(0,1),(0,1),(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQTONEDET=?",
+        "Status": "supported",
+        "ElapsedMs": 20,
+        "Response": "\u002BQTONEDET: (0,1),(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLST",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "OK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLST=?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "OK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLDS",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BQFLDS: 0,0\r\n\r\nOK"
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFUPL=?",
+        "Status": "supported",
+        "ElapsedMs": 33,
+        "Response": "\u002BQFUPL: \u003Cfilename\u003E[,(1-\u003Cfreesize\u003E)[,(1-65535)[,(0,1)]]]\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BCGATT?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGATT: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BCGDCONT?",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BCGDCONT: 1,\u0022IP\u0022,\u0022\u0022,\u00220.0.0.0\u0022,0,0,0,0\r\n\u002BCGDCONT: 2,\u0022IPV4V6\u0022,\u0022ims\u0022,\u00220.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0\u0022,0,0,0,0\r\n\u002BCGDCONT: 3,\u0022IPV4V6\u0022,\u0022SOS\u0022,\u00220.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0\u0022,0,0,0,1\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQIACT?",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQICSGP=?",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQICSGP: (1-16),(1-3),\u003CAPN\u003E,\u003Cusername\u003E,\u003Cpassword\u003E,(0-3),(0-1)\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQHTTPCFG=?",
+        "Status": "supported",
+        "ElapsedMs": 67,
+        "Response": "\u002BQHTTPCFG: \u0022contextid\u0022,(1-16)\r\n\u002BQHTTPCFG: \u0022requestheader\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022responseheader\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022sslctxid\u0022,(0-5)\r\n\u002BQHTTPCFG: \u0022contenttype\u0022,(0-5)\r\n\u002BQHTTPCFG: \u0022rspout/auto\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022closed/ind\u0022,(0,1)\r\n\u002BQHTTPCFG: \u0022windowsize\u0022,(1-4294967295)\r\n\u002BQHTTPCFG: \u0022closewaittime\u0022,(0-4294967295)\r\n\u002BQHTTPCFG: \u0022auth\u0022,(\u0022username:password\u0022)\r\n\u002BQHTTPCFG: \u0022custom_header\u0022,(\u0022custom_value\u0022)\r\n\r\nOK"
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQHTTPURL=?",
+        "Status": "supported",
+        "ElapsedMs": 34,
+        "Response": "\u002BQHTTPURL: (1-2048),(1-65535)\r\n\r\nOK"
+      },
+      {
+        "Category": "gnss",
+        "Command": "AT\u002BQGPS?",
+        "Status": "supported",
+        "ElapsedMs": 29,
+        "Response": "\u002BQGPS: 0\r\n\r\nOK"
+      },
+      {
+        "Category": "gnss",
+        "Command": "AT\u002BQGPSCFG=?",
+        "Status": "supported",
+        "ElapsedMs": 90,
+        "Response": "\u002BQGPSCFG: \u0022outport\u0022,(\u0022none\u0022,\u0022usbnmea\u0022,\u0022uartdebug\u0022)\r\n\u002BQGPSCFG: \u0022nmeasrc\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022gpsnmeatype\u0022,(0-31)\r\n\u002BQGPSCFG: \u0022glonassnmeatype\u0022,(0-7)\r\n\u002BQGPSCFG: \u0022galileonmeatype\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022beidounmeatype\u0022,(0-3)\r\n\u002BQGPSCFG: \u0022gsvextnmeatype\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022gnssconfig\u0022,(0-7)\r\n\u002BQGPSCFG: \u0022odpcontrol\u0022,(0-2)\r\n\u002BQGPSCFG: \u0022dpoenable\u0022,(0-2)\r\n\u002BQGPSCFG: \u0022plane\u0022,(0-2)\r\n\u002BQGPSCFG: \u0022autogps\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022suplver\u0022,(1,2)\r\n\u002BQGPSCFG: \u0022agpsposmode\u0022,(0-4294967295)\r\n\u002BQGPSCFG: \u0022lbsapn\u0022,(0-31),(0-4),\u003Capn\u003E\r\n\u002BQGPSCFG: \u0022agnssprotocol\u0022,(0-255),(0-65535)\r\n\u002BQGPSCFG: \u0022fixfreq\u0022,(1,2,5,10)\r\n\u002BQGPSCFG: \u0022assisdataupdcfg\u0022,(0,1),(0,1),(1,16),(0-3)\r\n\u002BQGPSCFG: \u0022gnssrawdata\u0022,(0-31),(0,1)\r\n\u002BQGPSCFG: \u0022agnssjamming\u0022,(0-4),(2-10),(1-65535)\r\n\u002BQGPSCFG: \u0022agnssjammingurcmode\u0022,(0,1)\r\n\u002BQGPSCFG: \u00221pps\u0022,(0,1)\r\n\u002BQGPSCFG: \u0022xtratimeurccfg\u0022,(0,1)\r\n\r\nOK"
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BCCLK?",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "\u002BCCLK: \u002226/07/22,12:06:10\u002B00\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BQLTS=2",
+        "Status": "supported",
+        "ElapsedMs": 22,
+        "Response": "\u002BQLTS: \u00222026/07/22,19:06:10\u002B28,0\u0022\r\n\r\nOK"
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BQCFG=\u0022usbnet\u0022",
+        "Status": "supported",
+        "ElapsedMs": 23,
+        "Response": "\u002BQCFG: \u0022usbnet\u0022,0\r\n\r\nOK"
+      }
+    ]
+  }
+]

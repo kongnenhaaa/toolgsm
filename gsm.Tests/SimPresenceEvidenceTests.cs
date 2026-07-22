@@ -14,6 +14,7 @@ public sealed class SimPresenceEvidenceTests
             SimType = "VINA690",
             PhoneNumber = "0912345678",
             Balance = "10000",
+            SautoStatus = "USSDOK",
             LastSignalScanAt = new DateTime(2026, 7, 22, 14, 5, 9)
         };
 
@@ -22,6 +23,8 @@ public sealed class SimPresenceEvidenceTests
         Assert.Empty(port.SimType);
         Assert.Empty(port.PhoneNumber);
         Assert.Empty(port.Balance);
+        Assert.Empty(port.SautoStatus);
+        Assert.Equal(port.Status, port.StatusDisplay);
         Assert.Null(port.LastSignalScanAt);
         Assert.Empty(port.LastSignalScanDisplay);
     }
@@ -61,6 +64,19 @@ public sealed class SimPresenceEvidenceTests
     public void ReadableCcid_IsStrongEvidenceThatSimIsStillPresent(string response, bool expected)
     {
         Assert.Equal(expected, GsmModemService.HasReadableCcid(response));
+    }
+
+    [Fact]
+    public void Successful111_DisplaysUssdOkWithoutChangingOperationalActiveState()
+    {
+        var port = new SimPort { Status = SimStatus.Active, SautoStatus = "USSDOK" };
+
+        Assert.Equal(SimStatus.Active, port.Status);
+        Assert.Equal("USSDOK", port.StatusDisplay);
+
+        port.Status = SimStatus.Connecting;
+        Assert.Empty(port.SautoStatus);
+        Assert.Equal(SimStatus.Connecting, port.StatusDisplay);
     }
 
     [Theory]

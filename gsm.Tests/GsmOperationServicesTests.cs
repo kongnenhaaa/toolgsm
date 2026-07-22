@@ -449,6 +449,21 @@ public sealed class GsmOperationServicesTests
     public void Sms_PayloadTimeout_WaitsAtLeastNinetySeconds(int requested, int expected) =>
         Assert.Equal(expected, GsmModemService.GetSmsPayloadTimeoutMs(requested));
 
+    [Theory]
+    [InlineData("OK")]
+    [InlineData("AT\r\r\nOK\r\n")]
+    public void Sms_RecoveryProbe_AcceptsOnlyCleanAtResponses(string response) =>
+        Assert.True(GsmModemService.IsCleanSmsRecoveryProbe(response));
+
+    [Theory]
+    [InlineData("+CMGS: 27\r\nOK\r\n")]
+    [InlineData("ERROR")]
+    [InlineData("+CMS ERROR: 500")]
+    [InlineData("ERROR\r\nOK\r\n")]
+    [InlineData("ERROR: Timeout configuring SMS with AT")]
+    public void Sms_RecoveryProbe_RejectsLateOrFailedResponses(string response) =>
+        Assert.False(GsmModemService.IsCleanSmsRecoveryProbe(response));
+
     [Fact]
     public async Task Sms_CallerCancelsWhileWaitingForSameComLock_DoesNotSendSecondMessage()
     {

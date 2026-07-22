@@ -34,10 +34,13 @@ public sealed class PortCooldownGateTests
     public async Task WaitAsync_ObservesCooldownExtendedByAnotherFailure()
     {
         var gate = new PortCooldownGate();
-        gate.Start("COM90", TimeSpan.FromMilliseconds(35));
+        // Khoảng 35 ms dễ hết hạn trước khi continuation chạy khi toàn bộ suite
+        // đang build/test song song. Dùng biên đủ lớn để test đúng hành vi extend,
+        // không phụ thuộc lịch ThreadPool của máy chạy test.
+        gate.Start("COM90", TimeSpan.FromMilliseconds(200));
         Task wait = gate.WaitAsync("COM90");
-        await Task.Delay(15);
-        gate.Start("COM90", TimeSpan.FromMilliseconds(55));
+        await Task.Delay(20);
+        gate.Start("COM90", TimeSpan.FromMilliseconds(350));
 
         await wait;
 

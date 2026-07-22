@@ -154,7 +154,9 @@
         orderedTemplates.AddRange(allColTemplates);
 
         // Đọc cấu hình các cột bị ẩn
-        var hiddenCols = new HashSet<string>(cfg.HiddenColumns ?? new List<string>());
+        var hiddenCols = new HashSet<string>(
+            cfg.HiddenColumns ?? new List<string>(),
+            StringComparer.OrdinalIgnoreCase);
         if (hiddenCols.Remove("NetworkSignal"))
         {
             hiddenCols.Add("NetworkType");
@@ -226,26 +228,13 @@
 
     private List<ColumnItem> GetDefaultColumns()
     {
-        return new List<ColumnItem>
-        {
-            new() { Name = "PortName", Header = "Cổng" },
-            new() { Name = "Status", Header = "Trạng thái" },
-            new() { Name = "NetworkProvider", Header = "Nhà mạng" },
-            new() { Name = "NetworkType", Header = "Mạng" },
-            new() { Name = "Signal", Header = "Tín hiệu" },
-            new() { Name = "LastSignalScan", Header = "Quét sóng lúc" },
-            new() { Name = "Balance", Header = "TKC" },
-            new() { Name = "PhoneNumber", Header = "SĐT" },
-            new() { Name = "Imei", Header = "IMEI" },
-            new() { Name = "Serial", Header = "CCID" },
-            new() { Name = "ExpiryDate", Header = "HSD" },
-            new() { Name = "SimRegDate", Header = "Ngày ĐK SIM" },
-            new() { Name = "Lock1C", Header = "Khóa 1C" },
-            new() { Name = "Lock2C", Header = "Khóa 2C" },
-            new() { Name = "VnptStatus", Header = "Trạng thái VNPT" },
-            new() { Name = "Otp", Header = "OTP" },
-            new() { Name = "LastMessageContent", Header = "Nội dung" }
-        };
+        return ComTableColumnCatalog.Default
+            .Select(column => new ColumnItem
+            {
+                Name = column.Name,
+                Header = column.Header
+            })
+            .ToList();
     }
 
     public class ColumnItem

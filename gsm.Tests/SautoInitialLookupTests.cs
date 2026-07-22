@@ -15,9 +15,12 @@ public sealed class SautoInitialLookupTests
     [InlineData("", "3G", 20, SimStatus.Active, false)]
     [InlineData("VinaPhone", "", 20, SimStatus.Active, false)]
     [InlineData("VinaPhone", "3G", 0, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "3G", 99, SimStatus.Active, false)]
+    // EC20 commonly returns CSQ=99 during the first seconds even though COPS has
+    // already registered. SAuto starts USSD from COPS; it does not wait a full
+    // signal-scan interval for CSQ to become measurable.
+    [InlineData("VinaPhone", "3G", 99, SimStatus.Active, true)]
     [InlineData("VinaPhone", "3G", 20, SimStatus.WaitingAccept, false)]
-    public void Initial111_RunsOnlyAfterVinaPhone3gAndSignal(
+    public void Initial111_RunsAfterVinaPhoneCopsRegistration(
         string provider, string networkType, int rssi, string status, bool expected)
     {
         var port = new SimPort
@@ -30,15 +33,6 @@ public sealed class SautoInitialLookupTests
 
         Assert.Equal(expected, MainViewModel.IsVinaNetworkReadyForInitialLookup(port));
     }
-
-    [Theory]
-    [InlineData("+CREG: 0,1\r\nOK", true)]
-    [InlineData("+CREG: 2,5,\"1234\",\"5678\"\r\nOK", true)]
-    [InlineData("+CREG: 0,2\r\nOK", false)]
-    [InlineData("+CREG: 0,0\r\nOK", false)]
-    [InlineData("ERROR", false)]
-    public void CregResponse_RequiresHomeOrRoamingCsRegistration(string response, bool expected) =>
-        Assert.Equal(expected, MainViewModel.IsCsRegisteredResponse(response));
 
     [Theory]
     [InlineData("0", "2G")]
@@ -88,6 +82,23 @@ public sealed class SautoInitialLookupTests
         Assert.Equal("0915496792", MainViewModel.ExtractPhoneNumberFromUssd(response));
         Assert.Equal("23/06/2026", MainViewModel.ExtractSimRegDateFromUssd(response));
     }
+
+    [Theory]
+    [InlineData("+CUSD: 1,\"TB:0912345678\",15", "", "", "", "", true)]
+    [InlineData("ERROR: Timeout", "", "+CUSD: 1,\"TB:0912345678\",15", "", "", true)]
+    [InlineData("ERROR: Timeout", "old", "new", "0911111111", "0911111111", true)]
+    [InlineData("ERROR: Timeout", "old", "old", "", "0912345678", true)]
+    [InlineData("ERROR: Timeout", "old", "old", "0912345678", "0912345678", false)]
+    [InlineData("ERROR: Timeout", "", "", "", "", false)]
+    public void Sauto111Retry_StopsOnlyForFreshResponseFromCurrentAttempt(
+        string commandResult,
+        string previousUssd,
+        string currentUssd,
+        string previousPhone,
+        string currentPhone,
+        bool expected) =>
+        Assert.Equal(expected, MainViewModel.HasFreshSautoUssdResponse(
+            commandResult, previousUssd, currentUssd, previousPhone, currentPhone));
 
     [Theory]
     [InlineData("354434778044431", "354434778044431", true)]

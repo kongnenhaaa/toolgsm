@@ -80,11 +80,24 @@ public partial class SimPort : ObservableObject
         {
             if (SetProperty(ref _status, value))
             {
+                if (!string.IsNullOrEmpty(SautoStatus))
+                    SautoStatus = string.Empty;
                 StatusChangedAt = DateTime.Now;
+                OnPropertyChanged(nameof(StatusDisplay));
             }
         }
     }
     public DateTime StatusChangedAt { get; set; } = DateTime.Now;
+
+    [ObservableProperty]
+    private string _sautoStatus = string.Empty;
+
+    public string StatusDisplay => string.IsNullOrWhiteSpace(SautoStatus)
+        ? Status
+        : SautoStatus;
+
+    partial void OnSautoStatusChanged(string value) =>
+        OnPropertyChanged(nameof(StatusDisplay));
 
     [ObservableProperty]
     private string _lastCommandResult = string.Empty;

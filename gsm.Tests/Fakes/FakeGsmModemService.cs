@@ -63,6 +63,9 @@ public sealed class FakeGsmModemService : IGsmModemService
         CancellationToken ct = default) =>
         CallHandler?.Invoke(portName, phoneNumber, ct) ?? Task.FromResult(true);
 
+    public Task ConfigureVoiceFeaturesAsync(string portName, CancellationToken ct = default) =>
+        Task.CompletedTask;
+
     public bool IsCallInProgress(string portName) => CallInProgress;
     public QuectelModemProfile? GetModemProfile(string portName) => ModemProfile;
 

@@ -74,6 +74,10 @@
     {
         <MudAlert Severity="Severity.Info" Dense="true" Class="mt-1">
             Đang gửi yêu cầu OTP qua API MyVNPT... Hệ thống sẽ tự động đặt mật khẩu khi nhận được SMS OTP.
+            @if (!string.IsNullOrWhiteSpace(Vm.VnptSummaryText))
+            {
+                <br /><b>@Vm.VnptSummaryText</b>
+            }
         </MudAlert>
     }
 </MudPaper>

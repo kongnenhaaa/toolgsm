@@ -503,18 +503,23 @@ public class ImeiManagementService
             }
 
             string write = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000, silent: true);
-            if (!CommandSucceeded(write))
-                return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = "Ghi IMEI slot 7 thất bại" };
+            bool writeAcknowledged = CommandSucceeded(write);
 
             await Task.Delay(500, ct);
-            string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true);
+            string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
             string verifiedImei = ExtractImei(storedAfter);
             if (!AreEquivalentImei(verifiedImei, targetImei))
             {
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
                 Log($"[{portName}] [IMEI_WRITE_VERIFY_FAILED] read={verifiedImei}; expected={targetImei}", "ERROR");
-                return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.WrongImei };
+                return new ImeiProcessResult
+                {
+                    Status = ImeiProcessStatus.SecurityBlocked,
+                    ErrorMessage = writeAcknowledged ? SecurityErrors.WrongImei : "Ghi IMEI slot 7 thất bại"
+                };
             }
+            if (!writeAcknowledged)
+                Log($"[{portName}] [IMEI_WRITE_ACK_LOST] Không nhận OK nhưng slot 7 đã khớp; tiếp tục như SAuto.", "WARN");
 
             if (!await SessionIsValidAsync())
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi sau khi ghi IMEI" };
@@ -605,17 +610,22 @@ public class ImeiManagementService
 
             Log($"[{portName}] [IMEI_TARGET_NO_SIM] current={currentImei}; target={targetImei}; backup={backupCurrentBeforeWrite}");
             string write = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000, silent: true, ct);
-            if (!CommandSucceeded(write))
-                return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = "Ghi IMEI slot 7 thất bại" };
+            bool writeAcknowledged = CommandSucceeded(write);
 
             await Task.Delay(500, ct);
-            string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true, ct);
+            string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true, ct);
             string verifiedImei = ExtractImei(storedAfter);
             if (!AreEquivalentImei(verifiedImei, targetImei))
             {
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true, ct);
-                return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.WrongImei };
+                return new ImeiProcessResult
+                {
+                    Status = ImeiProcessStatus.SecurityBlocked,
+                    ErrorMessage = writeAcknowledged ? SecurityErrors.WrongImei : "Ghi IMEI slot 7 thất bại"
+                };
             }
+            if (!writeAcknowledged)
+                Log($"[{portName}] [IMEI_WRITE_ACK_LOST] Không nhận OK nhưng slot 7 đã khớp; tiếp tục như SAuto.", "WARN");
 
             await Task.Delay(100, ct);
             dispatcherInvoke(() =>

@@ -48,36 +48,12 @@
                     Mạng & Tín hiệu
                 </MudText>
 
-                <MudSwitch T="bool" @bind-Value="_prefer4G"
-                           Label="Ưu tiên 4G → 3G → 2G (nwscanseq=030201)"
-                           Color="Color.Primary" Class="mb-2" />
-                <MudSwitch T="bool" @bind-Value="_enableVolte"
-                           Label="Bật VoLTE / IMS"
-                           Color="Color.Primary" Class="mb-2" />
-                <MudSwitch T="bool" @bind-Value="_autoRecovery"
-                           Label="Tự recovery khi mất sóng"
-                           Color="Color.Primary" Class="mb-2" />
-                <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B; display:block;">
-                    Recovery giữ nguyên phiên SIM, cấu hình lại mạng và xác minh trước khi trở lại Active.
-                </MudText>
-                <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
-                    <MudNumericField T="int" @bind-Value="_signalScanIntervalSeconds"
-                                     Label="Quét sóng mỗi (giây)"
-                                     Min="5" Max="300" Step="5"
-                                     Variant="Variant.Outlined" Margin="Margin.Dense"
-                                     Style="max-width:200px;"
-                                     HelperText="Áp dụng cho AT+CSQ và kiểm tra rút SIM" />
-                    <MudNumericField T="int" @bind-Value="_recoveryThreshold"
-                                     Label="Ngưỡng recovery (lần poll)"
-                                     Min="5" Max="30"
-                                     Variant="Variant.Outlined" Margin="Margin.Dense"
-                                     Style="max-width:200px;" />
-                    <MudNumericField T="int" @bind-Value="_watchdogSeconds"
-                                     Label="Watchdog force CFUN (giây)"
-                                     Min="20" Max="120"
-                                     Variant="Variant.Outlined" Margin="Margin.Dense"
-                                     Style="max-width:200px;" />
-                </MudStack>
+                <MudNumericField T="int" @bind-Value="_signalScanIntervalSeconds"
+                                 Label="Quét sóng mỗi (giây)"
+                                 Min="5" Max="300" Step="5"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense"
+                                 Style="max-width:200px;"
+                                 HelperText="Áp dụng cho AT+CSQ và kiểm tra rút SIM" />
             </MudPaper>
 
             <!-- SMS & USSD -->
@@ -93,21 +69,6 @@
                 <MudSwitch T="bool" @bind-Value="_autoCheckBalanceAfterSms"
                            Label="Tự check TKC sau khi gửi SMS"
                            Color="Color.Primary" Class="mb-2" />
-                <MudSwitch T="bool" @bind-Value="_autoUssdOnNetwork"
-                           Label="Tự USSD *101# khi có nhà mạng"
-                           Color="Color.Primary" Class="mb-3" />
-                <MudStack Row="true" Spacing="2">
-                    <MudNumericField T="int" @bind-Value="_ussdRetrySeconds"
-                                     Label="Retry USSD sau (giây)"
-                                     Min="15" Max="90"
-                                     Variant="Variant.Outlined" Margin="Margin.Dense"
-                                     Style="max-width:180px;" />
-                    <MudNumericField T="int" @bind-Value="_smsTimeout"
-                                     Label="Timeout SMS (ms)"
-                                     Min="10000" Max="60000" Step="1000"
-                                     Variant="Variant.Outlined" Margin="Margin.Dense"
-                                     Style="max-width:180px;" />
-                </MudStack>
             </MudPaper>
 
             <!-- WHITELIST / BLACKLIST -->
@@ -381,19 +342,11 @@
 
 @code {
     // ========== MẠNG & TÍN HIỆU ==========
-    private bool _prefer4G = true;
-    private bool _enableVolte = false;
-    private bool _autoRecovery = true;
-    private int _recoveryThreshold = 12;
-    private int _watchdogSeconds = 50;
     private int _signalScanIntervalSeconds = 15;
 
     // ========== SMS & USSD ==========
     private bool _receiveAllSms = true;
     private bool _autoCheckBalanceAfterSms = true;
-    private bool _autoUssdOnNetwork = true;
-    private int _ussdRetrySeconds = 35;
-    private int _smsTimeout = 30000;
 
     // ========== WHITELIST / BLACKLIST ==========
     private bool _enableSenderBlacklist = false;
@@ -464,18 +417,10 @@
             var cfg = gsm.Services.SettingsService.Current;
             if (cfg == null) return;
 
-            _prefer4G = cfg.Prefer4G;
-            _enableVolte = cfg.EnableVolte;
-            _autoRecovery = cfg.AutoRecovery;
-            _recoveryThreshold = cfg.RecoveryThreshold;
-            _watchdogSeconds = cfg.WatchdogSeconds;
             _signalScanIntervalSeconds = cfg.SignalScanIntervalSeconds;
 
             _receiveAllSms = cfg.ReceiveAllSms;
             _autoCheckBalanceAfterSms = cfg.AutoCheckBalanceAfterSms;
-            _autoUssdOnNetwork = cfg.AutoUssdOnNetwork;
-            _ussdRetrySeconds = cfg.UssdRetrySeconds;
-            _smsTimeout = cfg.SmsTimeout;
 
             _enableSenderBlacklist = cfg.EnableSenderBlacklist;
             _senderBlacklist = cfg.SenderBlacklist ?? "";
@@ -528,19 +473,9 @@
     {
         try
         {
-            if (_recoveryThreshold is < 5 or > 30 || _watchdogSeconds is < 20 or > 120)
-            {
-                Snackbar.Add("Thông số recovery/watchdog nằm ngoài khoảng hợp lệ.", Severity.Warning);
-                return;
-            }
             if (_signalScanIntervalSeconds is < 5 or > 300)
             {
                 Snackbar.Add("Chu kỳ quét sóng phải nằm trong khoảng 5–300 giây.", Severity.Warning);
-                return;
-            }
-            if (_smsTimeout is < 10000 or > 60000 || _ussdRetrySeconds is < 15 or > 90)
-            {
-                Snackbar.Add("Thông số timeout SMS/USSD nằm ngoài khoảng hợp lệ.", Severity.Warning);
                 return;
             }
             if (_enableAutoCallForwarding && string.IsNullOrWhiteSpace(_forwardPhoneNumber))
@@ -551,20 +486,10 @@
 
             var cfg = gsm.Services.SettingsService.Current;
 
-            cfg.Prefer4G = _prefer4G;
-            cfg.EnableVolte = _enableVolte;
-            cfg.AutoRecovery = _autoRecovery;
-            // Luôn tắt cờ legacy: lifecycle GSM hiện tại chỉ CFUN qua recovery có xác minh phiên SIM.
-            cfg.ForceCfun1AfterReboot = false;
-            cfg.RecoveryThreshold = _recoveryThreshold;
-            cfg.WatchdogSeconds = _watchdogSeconds;
             cfg.SignalScanIntervalSeconds = _signalScanIntervalSeconds;
 
             cfg.ReceiveAllSms = _receiveAllSms;
             cfg.AutoCheckBalanceAfterSms = _autoCheckBalanceAfterSms;
-            cfg.AutoUssdOnNetwork = _autoUssdOnNetwork;
-            cfg.UssdRetrySeconds = _ussdRetrySeconds;
-            cfg.SmsTimeout = _smsTimeout;
 
             cfg.EnableSenderBlacklist = _enableSenderBlacklist;
             cfg.SenderBlacklist = _senderBlacklist.Trim();
@@ -627,18 +552,10 @@
 
     void ResetDefault()
     {
-        _prefer4G = true;
-        _enableVolte = false;
-        _autoRecovery = true;
-        _recoveryThreshold = 12;
-        _watchdogSeconds = 50;
         _signalScanIntervalSeconds = 15;
 
         _receiveAllSms = true;
         _autoCheckBalanceAfterSms = true;
-        _autoUssdOnNetwork = true;
-        _ussdRetrySeconds = 35;
-        _smsTimeout = 30000;
 
         _enableSenderBlacklist = false;
         _senderBlacklist = "";

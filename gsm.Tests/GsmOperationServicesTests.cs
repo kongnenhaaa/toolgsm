@@ -400,6 +400,49 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
+    public async Task Sms_PromptTimeout_AbortsAndRetriesBeforeAnyPayloadCouldBeDuplicated()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM118", CcidA);
+        int attempts = 0;
+        var modem = new FakeGsmModemService
+        {
+            SmsHandler = (_, _, _) => Task.FromResult(
+                Interlocked.Increment(ref attempts) == 1
+                    ? "ERROR: Timeout waiting for > prompt"
+                    : "+CMGS: 1\r\nOK")
+        };
+        var delay = new ImmediateGsmOperationDelay();
+        using var sms = new GsmSmsService(modem, sessions, delay);
+
+        string result = await sms.SendAsync("COM118", "0912345678", "test");
+
+        Assert.Contains("thành công", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, attempts);
+        Assert.Equal(2, modem.SmsRequests.Count);
+        Assert.Equal(TimeSpan.FromSeconds(2), Assert.Single(delay.Delays));
+    }
+
+    [Fact]
+    public async Task Sms_PayloadTimeout_IsNotRetriedBecauseNetworkMayHaveAcceptedMessage()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM119", CcidA);
+        var modem = new FakeGsmModemService
+        {
+            SmsHandler = (_, _, _) => Task.FromResult("ERROR: Timeout sending SMS payload")
+        };
+        var delay = new ImmediateGsmOperationDelay();
+        using var sms = new GsmSmsService(modem, sessions, delay);
+
+        string result = await sms.SendAsync("COM119", "0912345678", "test");
+
+        Assert.Contains("Timeout sending SMS payload", result);
+        Assert.Single(modem.SmsRequests);
+        Assert.Empty(delay.Delays);
+    }
+
+    [Fact]
     public async Task Sms_CallerCancelsWhileWaitingForSameComLock_DoesNotSendSecondMessage()
     {
         using var sessions = new PortSessionRegistry();

@@ -7,10 +7,17 @@ using System.Text.RegularExpressions;
 namespace gsm.Services;
 
 public sealed record SmsConcatInfo(int Reference, int Total, int Sequence);
-public sealed record DecodedSmsBody(string Content, SmsConcatInfo? Concatenation, bool WasHex = false, string? Sender = null);
+public sealed record DecodedSmsBody(
+    string Content,
+    SmsConcatInfo? Concatenation,
+    bool WasHex = false,
+    string? Sender = null,
+    bool RecoveredMislabelledUcs2 = false);
 
 public static class SmsBodyDecoder
 {
+    private static readonly UnicodeEncoding StrictBigEndianUnicode = new(true, false, true);
+
     public static DecodedSmsBody Decode(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return new(string.Empty, null);
@@ -145,12 +152,24 @@ public static class SmsBodyDecoder
             {
                 int headerSeptets = (headerBytes * 8 + 6) / 7;
                 int textSeptets = Math.Max(0, userDataLength - headerSeptets);
-                
-                // Heuristic: If userDataLength equals the actual byte length and is > 8, 
-                // it's mathematically impossible to be packed GSM-7 (where bytes = ceil(septets * 7/8)). 
-                // It must be unpacked ASCII (network bug).
+
+                // Some Vietnamese carrier/EC20 combinations store UTF-16BE user data while
+                // incorrectly declaring DCS=0 (GSM 7-bit). Decoding those bytes as septets
+                // produces the characteristic "@...@..." corruption and changes a 67-char
+                // UCS2 segment into 153 fake GSM characters. Detect the strong UTF-16BE byte
+                // structure before trusting the incorrect DCS so multipart sizing also stays
+                // correct. A strict structural check keeps valid packed GSM-7 on this branch.
+                if (TryDecodeMislabelledUcs2(userData, headerBytes, out string recoveredUcs2))
+                {
+                    decoded = new(recoveredUcs2, concat, true, sender, true);
+                    return true;
+                }
+
+                // If userDataLength equals the actual byte length and is > 8, it is
+                // mathematically impossible to be packed GSM-7. Some firmware returns
+                // unpacked ASCII while retaining a GSM-7 DCS.
                 bool isUnpackedAscii = userDataLength == userData.Length && userDataLength > 8;
-                
+
                 if (isUnpackedAscii)
                 {
                     int byteCount = Math.Min(userDataLength - headerBytes, userData.Length - headerBytes);
@@ -174,6 +193,94 @@ public static class SmsBodyDecoder
             return !string.IsNullOrWhiteSpace(decoded.Content);
         }
         catch { return false; }
+    }
+
+    private static bool TryDecodeMislabelledUcs2(
+        ReadOnlySpan<byte> userData,
+        int headerBytes,
+        out string content)
+    {
+        content = string.Empty;
+        if (headerBytes < 0 || headerBytes >= userData.Length) return false;
+
+        // Firmware variants put the alignment zero either before the UTF-16BE text
+        // (most often after a seven-byte UDH) or after the payload. Evaluate both
+        // layouts, but only accept a candidate with a strong Unicode byte structure.
+        Span<int> offsets = stackalloc int[3];
+        Span<int> byteCounts = stackalloc int[3];
+        int candidateCount = 0;
+        int remaining = userData.Length - headerBytes;
+        if ((remaining & 1) == 0)
+        {
+            offsets[candidateCount] = headerBytes;
+            byteCounts[candidateCount++] = remaining;
+        }
+        else
+        {
+            if (remaining > 1 && userData[^1] == 0)
+            {
+                offsets[candidateCount] = headerBytes;
+                byteCounts[candidateCount++] = remaining - 1;
+            }
+            if (remaining > 1 && userData[headerBytes] == 0)
+            {
+                offsets[candidateCount] = headerBytes + 1;
+                byteCounts[candidateCount++] = remaining - 1;
+            }
+        }
+
+        string? best = null;
+        int bestScore = -1;
+        for (int candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
+        {
+            int offset = offsets[candidateIndex];
+            int byteCount = byteCounts[candidateIndex];
+            if (byteCount < 8 || (byteCount & 1) != 0) continue;
+
+            ReadOnlySpan<byte> bytes = userData.Slice(offset, byteCount);
+            int codeUnits = byteCount / 2;
+            int structuredHighBytes = 0;
+            for (int i = 0; i < byteCount; i += 2)
+            {
+                // Basic Latin, Latin-1/Extended-A and Vietnamese precomposed code
+                // points occupy these high-byte pages in UTF-16BE.
+                if (bytes[i] is 0x00 or 0x01 or 0x1E)
+                    structuredHighBytes++;
+            }
+
+            // Requiring this pattern across most pairs avoids mistaking arbitrary
+            // packed GSM data for Unicode merely because one byte happens to be zero.
+            if (structuredHighBytes < 4 || structuredHighBytes * 100 < codeUnits * 70)
+                continue;
+
+            string candidate;
+            try { candidate = StrictBigEndianUnicode.GetString(bytes).TrimEnd('\0'); }
+            catch (DecoderFallbackException) { continue; }
+            if (string.IsNullOrWhiteSpace(candidate) || candidate.IndexOf('\0') >= 0)
+                continue;
+
+            int acceptable = 0;
+            int invalidControls = 0;
+            foreach (char c in candidate)
+            {
+                if (char.IsControl(c) && c is not '\r' and not '\n' and not '\t')
+                    invalidControls++;
+                else
+                    acceptable++;
+            }
+            if (invalidControls > 0 || acceptable * 100 < candidate.Length * 95)
+                continue;
+
+            if (structuredHighBytes > bestScore)
+            {
+                bestScore = structuredHighBytes;
+                best = candidate;
+            }
+        }
+
+        if (best == null) return false;
+        content = best;
+        return true;
     }
 
     private static string DecodeSemiOctets(ReadOnlySpan<byte> bytes, int digits, bool international)

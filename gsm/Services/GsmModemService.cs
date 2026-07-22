@@ -379,6 +379,12 @@ public class GsmModemService : IGsmModemService
         string sender = ParseSenderFromCmgr(smsContent);
         if (sender == "Unknown" && !string.IsNullOrWhiteSpace(decoded.Sender))
             sender = DecodeSmsSender(decoded.Sender);
+        if (decoded.RecoveredMislabelledUcs2)
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = port,
+                Data = $"[SMS_ENCODING_RECOVERED] sender={sender} index={msgIndex} chars={decoded.Content.Length}; payload UCS2 gắn nhầm DCS GSM-7 đã được khôi phục."
+            });
         string? fullContent = TryAssembleMultipartExact(port, sender, decoded, msgIndex, smsContent, out var indicesToDelete);
         if (fullContent == null)
         {
@@ -2653,7 +2659,7 @@ public class GsmModemService : IGsmModemService
             else
             {
                 // Chỉ xóa bộ đệm khi thiết bị nhả rác có chữ OK/ERROR chuẩn
-                var match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?)");
+                var match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?|>\s*)");
                 if (match.Success)
                 {
                     buffer.Remove(0, match.Index + match.Length);
@@ -3064,6 +3070,12 @@ public class GsmModemService : IGsmModemService
         return chunks;
     }
 
+    private static bool IsSmsSetupFailure(string response) =>
+        response.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)
+        || Regex.IsMatch(response, @"(?:^|\r?\n)ERROR(?:\r?\n|$)", RegexOptions.IgnoreCase)
+        || response.Contains("+CMS ERROR:", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("+CME ERROR:", StringComparison.OrdinalIgnoreCase);
+
     private async Task<string> SendSmsPartAsync(
         string portName,
         string phoneNumber,
@@ -3082,16 +3094,23 @@ public class GsmModemService : IGsmModemService
 
         TaskCompletionSource<string>? tcs = null;
 
-        async Task SendInnerAsync(string cmd, CancellationToken token = default)
+        async Task<string> SendInnerAsync(string cmd, CancellationToken token = default)
         {
             token.ThrowIfCancellationRequested();
             var innerTcs = new TaskCompletionSource<string>(cmd, TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!_commandTcs.TryAdd(portName, innerTcs)) return;
+            if (!_commandTcs.TryAdd(portName, innerTcs))
+                return "ERROR: Another command is already in progress";
             try
             {
                 sp.Write(cmd + "\r");
-                await Task.WhenAny(innerTcs.Task, Task.Delay(2000, token));
+                Task completed = await Task.WhenAny(innerTcs.Task, Task.Delay(5000, token));
                 token.ThrowIfCancellationRequested();
+                if (completed != innerTcs.Task)
+                {
+                    innerTcs.TrySetCanceled();
+                    return $"ERROR: Timeout configuring SMS with {cmd}";
+                }
+                return await innerTcs.Task;
             }
             finally
             {
@@ -3105,17 +3124,22 @@ public class GsmModemService : IGsmModemService
             ct.ThrowIfCancellationRequested();
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> AT+CMGS=\"{phoneNumber}\"" });
 
-            await SendInnerAsync("AT+CMGF=1", ct);
+            string setupResponse = await SendInnerAsync("AT+CMGF=1", ct);
+            if (IsSmsSetupFailure(setupResponse)) return setupResponse;
             
             if (isGsm)
             {
-                await SendInnerAsync("AT+CSMP=17,167,0,0", ct);
-                await SendInnerAsync("AT+CSCS=\"GSM\"", ct);
+                setupResponse = await SendInnerAsync("AT+CSMP=17,167,0,0", ct);
+                if (IsSmsSetupFailure(setupResponse)) return setupResponse;
+                setupResponse = await SendInnerAsync("AT+CSCS=\"GSM\"", ct);
+                if (IsSmsSetupFailure(setupResponse)) return setupResponse;
             }
             else
             {
-                await SendInnerAsync("AT+CSMP=17,167,0,8", ct);
-                await SendInnerAsync("AT+CSCS=\"UCS2\"", ct);
+                setupResponse = await SendInnerAsync("AT+CSMP=17,167,0,8", ct);
+                if (IsSmsSetupFailure(setupResponse)) return setupResponse;
+                setupResponse = await SendInnerAsync("AT+CSCS=\"UCS2\"", ct);
+                if (IsSmsSetupFailure(setupResponse)) return setupResponse;
             }
 
             tcs = new TaskCompletionSource<string>("AT+CMGS", TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3126,12 +3150,18 @@ public class GsmModemService : IGsmModemService
 
             sp.Write($"AT+CMGS=\"{phoneNumber}\"\r");
 
-            var timeoutTask = Task.Delay(5000, ct);
+            int promptTimeoutMs = Math.Clamp(timeoutMs / 3, 5000, 10000);
+            var timeoutTask = Task.Delay(promptTimeoutMs, ct);
             var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
             if (completedTask == timeoutTask)
             {
                 ct.ThrowIfCancellationRequested();
                 tcs.TrySetCanceled();
+                // Abort text-entry mode before the outer SMS service retries. Without
+                // ESC, a late prompt makes the next AT command part of the SMS body and
+                // leaves the modem stuck until the following cooldown.
+                try { if (sp.IsOpen) sp.Write("\x1B"); } catch { }
+                await Task.Delay(200, ct);
                 return "ERROR: Timeout waiting for > prompt";
             }
 

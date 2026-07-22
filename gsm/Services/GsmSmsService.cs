@@ -134,7 +134,11 @@ public sealed class GsmSmsService : IGsmSmsService
 
     private static bool ShouldRetry(string response) =>
         response.Contains("Another command", StringComparison.OrdinalIgnoreCase)
-        || response.Contains("waiting for lock", StringComparison.OrdinalIgnoreCase);
+        || response.Contains("waiting for lock", StringComparison.OrdinalIgnoreCase)
+        // No payload has been written yet, so retrying this timeout cannot create
+        // duplicate SMS. Payload/final-response timeouts are intentionally not retried.
+        || response.Contains("Timeout waiting for > prompt", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("Timeout configuring SMS", StringComparison.OrdinalIgnoreCase);
 
     private const string SessionChangedError = "ERROR: SIM session changed during SMS operation";
 }

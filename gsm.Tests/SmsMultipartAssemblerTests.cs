@@ -20,6 +20,116 @@ public class SmsMultipartAssemblerTests
         Assert.NotEqual("Unknown", result.Sender);
     }
 
+    [Fact]
+    public void Ucs2PayloadMislabelledAsGsm7_IsRecoveredWithoutAtSignCorruption()
+    {
+        const string prefix = "Thuê bao 84836522379 của Quý khách đã bị NGỪNG CUNG CẤP DỊCH";
+        string expected = prefix.PadRight(67, '!');
+        string pdu = BuildMislabelledUcs2DeliverPdu(expected);
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(pdu);
+
+        Assert.Equal(expected, result.Content);
+        Assert.Equal(67, result.Content.Length);
+        Assert.True(result.RecoveredMislabelledUcs2);
+        Assert.DoesNotContain("@¡@", result.Content);
+    }
+
+    [Fact]
+    public void ShortFinalUcs2SegmentMislabelledAsGsm7_KeepsItsRealLength()
+    {
+        const string expected = "Quý khách vui lòng liên hệ 18001091 để được hỗ trợ.";
+        string pdu = BuildMislabelledUcs2DeliverPdu(expected);
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(pdu);
+
+        Assert.Equal(expected, result.Content);
+        Assert.True(result.Content.Length < 67);
+        Assert.True(result.RecoveredMislabelledUcs2);
+    }
+
+    [Fact]
+    public void MislabelledUcs2WithTrailingAlignmentByte_DoesNotLoseTheLastCharacter()
+    {
+        const string expected = "Thuê bao 84836522379 của Quý khách đã bị NGỪNG CUNG CẤP DỊCH";
+        string pdu = BuildMislabelledUcs2DeliverPdu(expected, appendAlignmentByte: true);
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(pdu);
+
+        Assert.Equal(expected, result.Content);
+        Assert.EndsWith("DỊCH", result.Content);
+        Assert.True(result.RecoveredMislabelledUcs2);
+    }
+
+    [Fact]
+    public void RecoveredMislabelledUcs2Segments_CompleteImplicitMultipartAssembly()
+    {
+        string firstText = "Thông báo dịch vụ dành cho thuê bao 84836522379".PadRight(67, '.');
+        const string finalText = " Quý khách vui lòng liên hệ 18001091.";
+        DecodedSmsBody first = SmsBodyDecoder.Decode(BuildMislabelledUcs2DeliverPdu(firstText));
+        DecodedSmsBody final = SmsBodyDecoder.Decode(BuildMislabelledUcs2DeliverPdu(finalText));
+        var assembler = new SmsImplicitMultipartAssembler();
+
+        SmsAssemblyResult waiting = assembler.Add("COM118", "565656", first.Content, "7");
+        SmsAssemblyResult complete = assembler.Add("COM118", "565656", final.Content, "8");
+
+        Assert.Equal(SmsAssemblyStatus.Waiting, waiting.Status);
+        Assert.Equal(SmsAssemblyStatus.Completed, complete.Status);
+        Assert.Equal(firstText + finalText, complete.Content);
+        Assert.Equal(new[] { "7", "8" }, complete.MessageIndices);
+    }
+
+    [Fact]
+    public void MultipartLengthsObservedInJuly22Logs_AreJoinedWithoutCutting()
+    {
+        int[][] loggedShapes =
+        [
+            [67, 7],       // COM116 / 57494952 -> 74 chars
+            [67, 67, 33],  // COM116, COM117 / VinaPhone -> 167 chars
+            [153, 53],     // COM119 / 565656 -> 206 chars
+            [153, 10]      // COM126, COM152 / 565656 -> 163 chars
+        ];
+
+        for (int caseIndex = 0; caseIndex < loggedShapes.Length; caseIndex++)
+        {
+            var assembler = new SmsImplicitMultipartAssembler();
+            string expected = string.Empty;
+            SmsAssemblyResult? result = null;
+            for (int partIndex = 0; partIndex < loggedShapes[caseIndex].Length; partIndex++)
+            {
+                string part = new((char)('A' + partIndex), loggedShapes[caseIndex][partIndex]);
+                expected += part;
+                result = assembler.Add($"COM-LOG-{caseIndex}", "LOG-SENDER", part, partIndex.ToString());
+                if (partIndex < loggedShapes[caseIndex].Length - 1)
+                {
+                    Assert.Equal(SmsAssemblyStatus.Waiting, result.Status);
+                    Assert.Null(result.Content);
+                }
+            }
+
+            Assert.NotNull(result);
+            Assert.Equal(SmsAssemblyStatus.Completed, result.Status);
+            Assert.Equal(expected, result.Content);
+            Assert.Equal(loggedShapes[caseIndex].Sum(), result.Content!.Length);
+        }
+    }
+
+    [Fact]
+    public void IncompleteCom118SequenceFromJuly22Logs_IsNeverEmittedAsPartialText()
+    {
+        var assembler = new SmsImplicitMultipartAssembler();
+
+        foreach (int index in Enumerable.Range(2, 6))
+        {
+            SmsAssemblyResult result = assembler.Add(
+                "COM118", "565656", new string((char)('A' + index), 153), index.ToString());
+
+            Assert.Equal(SmsAssemblyStatus.Waiting, result.Status);
+            Assert.Null(result.Content);
+            Assert.Empty(result.MessageIndices);
+        }
+    }
+
     [Theory]
     [InlineData("+CTZE: \"+28\",0,\"2026/07/17,10:32:46\" 069148192050444006D0381C0E000062707171236482A0050003B602015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D566B69CED4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C")]
     [InlineData("+CTZE: \"+28\",0,\"2026/07/17,10:32:46\"\r\n069148192050444006D0381C0E000062707171236482A0050003B602015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D566B69CED4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C")]
@@ -302,5 +412,29 @@ public class SmsMultipartAssemblerTests
     {
         byte[] text = Encoding.BigEndianUnicode.GetBytes(content);
         return SmsBodyDecoder.Decode(Convert.ToHexString(udh.Concat(text).ToArray()));
+    }
+
+    private static string BuildMislabelledUcs2DeliverPdu(string content, bool appendAlignmentByte = false)
+    {
+        byte[] text = Encoding.BigEndianUnicode.GetBytes(content);
+        byte[] payload = appendAlignmentByte ? text.Append((byte)0).ToArray() : text;
+        Assert.InRange(payload.Length, 2, 223);
+
+        // SMS-DELIVER with DCS=0 but UTF-16BE payload. The faulty carrier writes UDL
+        // as the number of septets that occupy the same bytes, which turns 134 bytes
+        // (67 UCS2 chars) into 153 apparent GSM-7 characters in a naive decoder.
+        var pdu = new List<byte>
+        {
+            0x00,                         // no SMSC address
+            0x00,                         // SMS-DELIVER, no UDH
+            0x0A, 0x91,                   // 10-digit international sender
+            0x48, 0x09, 0x21, 0x43, 0x65,
+            0x00,                         // PID
+            0x00,                         // incorrect DCS: GSM 7-bit
+            0x62, 0x70, 0x72, 0x20, 0x10, 0x10, 0x00,
+            (byte)(payload.Length * 8 / 7)
+        };
+        pdu.AddRange(payload);
+        return Convert.ToHexString(pdu.ToArray());
     }
 }

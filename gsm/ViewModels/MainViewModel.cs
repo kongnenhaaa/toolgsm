@@ -253,7 +253,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public event Action<string, string>? OtpReceivedEvent;
 
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private readonly ConcurrentDictionary<string, DateTime> _portCooldownUntilUtc = new();
+    private readonly PortCooldownGate _portCooldown = new();
 
     // Fix #3: Dùng static Random để tránh lỗi seed trùng khi gọi liên tiếp nhanh
     private static readonly Random _rng = new Random();
@@ -1077,7 +1077,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public int SmsReceivedCount => SmsMessages.Count;
     public int SmsFailedCount => Ports.Sum(p => p.SmsErrorCount);
     public int TimeoutTotalCount => Ports.Sum(p => p.TimeoutCount);
-    public int CooldownPortCount => _portCooldownUntilUtc.Count(kv => kv.Value > DateTime.UtcNow);
+    public int CooldownPortCount => _portCooldown.ActiveCount;
     public string TopProblemPort => Ports
         .OrderByDescending(p => p.TimeoutCount + p.SmsErrorCount + p.ReconnectCount)
         .Select(p => $"{p.PortName} ({p.TimeoutCount + p.SmsErrorCount + p.ReconnectCount})")
@@ -5806,22 +5806,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool IsPortCoolingDown(string portName, out TimeSpan remaining)
-    {
-        remaining = TimeSpan.Zero;
-        if (!_portCooldownUntilUtc.TryGetValue(portName, out var untilUtc)) return false;
-
-        remaining = untilUtc - DateTime.UtcNow;
-        if (remaining <= TimeSpan.Zero)
-        {
-            _portCooldownUntilUtc.TryRemove(portName, out _);
-            remaining = TimeSpan.Zero;
-            return false;
-        }
-
-        return true;
-    }
-
     private void MaybeCooldownPort(string portName, string result)
     {
         if (!ShouldCooldown(result)) return;
@@ -5830,7 +5814,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ? TimeSpan.FromMinutes(2)
             : TimeSpan.FromSeconds(45);
 
-        _portCooldownUntilUtc[portName] = DateTime.UtcNow.Add(cooldown);
+        _portCooldown.Start(portName, cooldown);
     }
 
     private static bool ShouldCooldown(string result)
@@ -6439,10 +6423,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!IsPortReadyForOperation(portName))
             return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi";
-        if (IsPortCoolingDown(portName, out var remaining))
-            return $"ERROR: Port cooling down for {remaining.TotalSeconds:0}s";
+        if (!_portSessions.TryGet(portName, out PortSessionLease session))
+            return "ERROR: Port has no current SIM session";
 
-        string result = await _smsService.SendAsync(portName, phoneNumber, content, ct);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, session.Token);
+        try
+        {
+            bool loggedWait = false;
+            await _portCooldown.WaitAsync(portName, remaining =>
+            {
+                if (loggedWait) return;
+                loggedWait = true;
+                AddLog(
+                    $"[{portName}] Cổng đang nghỉ sau lỗi trước; tự chờ {Math.Ceiling(remaining.TotalSeconds):0}s rồi gửi SMS.",
+                    "INFO");
+            }, linkedCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return _portSessions.IsCurrent(session.PortName, session.Ccid, session.Epoch)
+                ? "ERROR: SMS operation cancelled while waiting for port cooldown"
+                : "ERROR: SIM session changed while waiting for port cooldown";
+        }
+
+        if (!_portSessions.IsCurrent(session.PortName, session.Ccid, session.Epoch)
+            || !IsPortReadyForOperation(portName))
+            return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi trong lúc chờ";
+
+        string result = await _smsService.SendAsync(portName, phoneNumber, content, linkedCts.Token);
         if (result.Contains("thành công", StringComparison.OrdinalIgnoreCase)
             || result.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase))
         {

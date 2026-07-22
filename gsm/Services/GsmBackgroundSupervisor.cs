@@ -10,7 +10,7 @@ public sealed class GsmBackgroundSupervisorContext
     public required Func<bool> IsWatchdogEnabled { get; init; }
     public required Func<string, bool> IsSmsInProgress { get; init; }
     public required Func<SimPort, string, Task> SendBalanceUssdAsync { get; init; }
-    public required Action<SimPort, int> SetSignalStrength { get; init; }
+    public required Action<SimPort, int, int> SetSignalReading { get; init; }
     public required Action<SimPort> MarkSmsSweep { get; init; }
     public required Action<SimPort> MarkConnectionTimeout { get; init; }
     public required Action<string> InvalidateSession { get; init; }
@@ -109,7 +109,8 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
                         if (!_sessions.IsCurrent(port.PortName, session.Ccid, session.Epoch)) return;
                         var match = Regex.Match(response, @"\+CSQ:\s*(\d+)");
                         if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
-                            context.SetSignalStrength(port, csq >= 99 ? 0 : (int)(csq / 31d * 100));
+                            context.SetSignalReading(port, csq, csq >= 99 ? 0 : (int)Math.Round(
+                                csq / 31d * 100d, MidpointRounding.AwayFromZero));
                     }
                     catch (Exception ex) { context.Log($"[{port.PortName}] Signal supervisor: {ex.Message}", "WARN"); }
                 }, token);

@@ -219,6 +219,11 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private int _signalRssi = 99; // Raw +CSQ RSSI: 0..31, 99 = unknown
 
+    [ObservableProperty]
+    private DateTime? _lastSignalScanAt;
+
+    public string LastSignalScanDisplay => LastSignalScanAt?.ToString("HH:mm:ss") ?? string.Empty;
+
     public string SignalDisplay => SignalRssi switch
     {
         99 => string.Empty,
@@ -229,6 +234,7 @@ public partial class SimPort : ObservableObject
     };
 
     partial void OnSignalRssiChanged(int value) => OnPropertyChanged(nameof(SignalDisplay));
+    partial void OnLastSignalScanAtChanged(DateTime? value) => OnPropertyChanged(nameof(LastSignalScanDisplay));
 
     [ObservableProperty]
     private string _networkType = string.Empty;

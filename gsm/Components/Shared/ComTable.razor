@@ -156,6 +156,12 @@
                         : context.SignalRssi is >= 1 and < 15 ? "color:#DC2626;" : _body;
                     <MudTd Style="@($"{_brd} {signalColor} white-space:nowrap; font-size:16px; font-weight:600;")">@RenderLoadingOrValue(context, context.SignalDisplay)</MudTd>
                 }
+                else if (col.Name == "LastSignalScan")
+                {
+                    <MudTd Style="@($"{_brd} {_body} white-space:nowrap; font-size:16px; font-variant-numeric:tabular-nums;")">
+                        @(string.IsNullOrWhiteSpace(context.LastSignalScanDisplay) ? "—" : context.LastSignalScanDisplay)
+                    </MudTd>
+                }
                 else if (col.Name == "Balance")
                 {
                     <MudTd Style="@($"color:#22C55E; font-weight:600; {_brd} white-space:nowrap; font-size:16px;")">
@@ -490,11 +496,19 @@
                 savedOrder.Insert(insertIndex, "NetworkType");
                 savedOrder.Insert(insertIndex + 1, "Signal");
             }
+            if (savedOrder.Count > 0
+                && !savedOrder.Contains("LastSignalScan", StringComparer.OrdinalIgnoreCase))
+            {
+                int signalIndex = savedOrder.FindIndex(name =>
+                    name.Equals("Signal", StringComparison.OrdinalIgnoreCase));
+                savedOrder.Insert(signalIndex >= 0 ? signalIndex + 1 : savedOrder.Count, "LastSignalScan");
+            }
             var hiddenCols = new HashSet<string>(cfg.HiddenColumns ?? new List<string>());
             if (hiddenCols.Remove("NetworkSignal"))
             {
                 hiddenCols.Add("NetworkType");
                 hiddenCols.Add("Signal");
+                hiddenCols.Add("LastSignalScan");
             }
 
             var defaultCols = GetDefaultColumns();
@@ -532,6 +546,7 @@
             new() { Name = "NetworkProvider", Header = "Nhà mạng" },
             new() { Name = "NetworkType", Header = "Mạng" },
             new() { Name = "Signal", Header = "Tín hiệu" },
+            new() { Name = "LastSignalScan", Header = "Quét sóng lúc" },
             new() { Name = "Balance", Header = "TKC" },
             new() { Name = "PhoneNumber", Header = "SĐT" },
             new() { Name = "SimType", Header = "Loại SIM" },
@@ -608,6 +623,7 @@
                 "NetworkProvider"    => p.NetworkProvider ?? "",
                 "NetworkType"        => p.NetworkType ?? "",
                 "Signal"             => p.SignalDisplay,
+                "LastSignalScan"     => p.LastSignalScanDisplay,
                 "Balance"            => FormatBalanceValue(p.Balance),
                 "PhoneNumber"        => p.PhoneNumber ?? "",
                 "SimType"            => p.SimType ?? "",

@@ -379,6 +379,34 @@ public class SmsMultipartAssemblerTests
     }
 
     [Fact]
+    public void RejectedDeliveryCanForgetCompletionAndRetryFromDurableParts()
+    {
+        var a = new SmsMultipartAssembler();
+        var first = new SmsConcatInfo(23, 2, 1);
+        var second = new SmsConcatInfo(23, 2, 2);
+        a.Add("COM8\u001f8984", "ZALO", first, "one", "0");
+        Assert.Equal(SmsAssemblyStatus.Completed,
+            a.Add("COM8\u001f8984", "ZALO", second, "two", "1").Status);
+
+        a.ForgetMessage("COM8\u001f8984", "ZALO", second);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            a.Add("COM8\u001f8984", "ZALO", first, "one", string.Empty).Status);
+        Assert.Equal("onetwo",
+            a.Add("COM8\u001f8984", "ZALO", second, "two", "1").Content);
+    }
+
+    [Fact]
+    public void SmsDeliveryRequiresExplicitConsumerAcknowledgement()
+    {
+        var delivery = new GsmDataEventArgs();
+
+        Assert.False(delivery.DeliveryAccepted);
+        delivery.DeliveryAccepted = true;
+        Assert.True(delivery.DeliveryAccepted);
+    }
+
+    [Fact]
     public void Ec20WithoutUdh_HoldsFullSizedPartsUntilShortFinalPartArrives()
     {
         var a = new SmsImplicitMultipartAssembler();

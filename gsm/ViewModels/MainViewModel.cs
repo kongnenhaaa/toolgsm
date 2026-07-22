@@ -1347,7 +1347,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 string code = GetUssdCodeForProvider(port.NetworkProvider);
                 await SendUssdThrottledAsync(port.PortName, code, reason, maxAttempts: 1);
             },
-            SetSignalStrength = (port, value) => Application.Current.Dispatcher.Invoke(() => port.SignalStrength = value),
+            SetSignalReading = (port, rssi, percent) => Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.SignalRssi = rssi;
+                port.SignalStrength = percent;
+                port.LastSignalScanAt = DateTime.Now;
+            }),
             MarkSmsSweep = port => Application.Current.Dispatcher.Invoke(() =>
                 port.LastSweepTime = DateTime.Now.ToString("HH:mm:ss")),
             MarkConnectionTimeout = port => Application.Current.Dispatcher.Invoke(() =>
@@ -2466,6 +2471,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         port.SignalRssi = rssi;
                         port.SignalStrength = percent;
+                        port.LastSignalScanAt = DateTime.Now;
                     });
                 }
                 await _modemService.SendCommandAsync(port.PortName, "AT+COPS?", 5000, silent: true, ct: token);
@@ -2771,7 +2777,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static void ClearSimScopedState(SimPort port)
+    internal static void ClearSimScopedState(SimPort port)
     {
         // Chỉ giữ thông tin vật lý của COM (PortName/HardwareName/STT và bộ đếm health).
         // Mọi dữ liệu dưới đây thuộc SIM cũ và tuyệt đối không được hiển thị sau khi rút/thay SIM.
@@ -2788,6 +2794,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.CreatedAt = string.Empty;
         port.UpdatedAt = string.Empty;
         port.SimRegDate = string.Empty;
+        port.SimType = string.Empty;
         port.Lock1C = string.Empty;
         port.Lock2C = string.Empty;
         port.ForwardedTo = string.Empty;
@@ -3005,6 +3012,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     port.SignalRssi = rssi;
                     port.SignalStrength = percent;
+                    port.LastSignalScanAt = DateTime.Now;
                     TryStartVinaInitialLookup(port);
                 }
             }
@@ -4023,6 +4031,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.LastMessageContent = cleanContent;
                     port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
                 }
+
+                // Acknowledge only after the local inbox and COM state own the decoded
+                // message. GsmModemService keeps the SIM record when this remains false.
+                e.DeliveryAccepted = true;
                 
                 if (extractedOtp != "N/A")
                 {

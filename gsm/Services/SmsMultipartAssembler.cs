@@ -543,6 +543,20 @@ public sealed class SmsMultipartAssembler
         }
     }
 
+    public void ForgetMessage(string port, string sender, SmsConcatInfo concat)
+    {
+        if (!_ports.TryGetValue(port, out PortState? state)) return;
+        lock (state.Gate)
+        {
+            state.Buffers.Remove($"{sender}\u001f{concat.Reference}\u001f{concat.Total}");
+            string identity = $"\u001f{sender}\u001f{concat.Reference}\u001f{concat.Total}\u001f";
+            foreach (string key in state.ProcessedIndices.Keys
+                         .Where(key => key.Contains(identity, StringComparison.Ordinal))
+                         .ToArray())
+                state.ProcessedIndices.Remove(key);
+        }
+    }
+
     public int RemoveExpired(DateTimeOffset? now = null)
     {
         DateTimeOffset timestamp = now ?? DateTimeOffset.UtcNow;

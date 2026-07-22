@@ -5,7 +5,7 @@ namespace gsm.Tests;
 public sealed class SautoInitializationSequenceTests
 {
     [Fact]
-    public void InitializationCommandOrder_MatchesCapturedNoSimTrace()
+    public void InitializationCommandOrder_PreservesStoredSms()
     {
         string[] expected =
         [
@@ -21,9 +21,7 @@ public sealed class SautoInitializationSequenceTests
             "AT+QURCCFG=\"urcport\",\"uart1\"",
             "AT+CMGF=1",
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
-            "AT+CMGD=1,4",
             "AT+CPMS=\"ME\",\"ME\",\"ME\"",
-            "AT+CMGD=1,4",
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
             "AT+CPMS?",
             "AT+CNMI=1,1,0,0,0",
@@ -32,5 +30,7 @@ public sealed class SautoInitializationSequenceTests
         ];
 
         Assert.Equal(expected, GsmModemService.SautoInitializationCommandOrder);
+        Assert.DoesNotContain(GsmModemService.SautoInitializationCommandOrder,
+            command => command.StartsWith("AT+CMGD=", StringComparison.OrdinalIgnoreCase));
     }
 }

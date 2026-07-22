@@ -132,6 +132,13 @@
             savedOrder.Insert(insertIndex, "NetworkType");
             savedOrder.Insert(insertIndex + 1, "Signal");
         }
+        if (savedOrder.Count > 0
+            && !savedOrder.Contains("LastSignalScan", StringComparer.OrdinalIgnoreCase))
+        {
+            int signalIndex = savedOrder.FindIndex(name =>
+                name.Equals("Signal", StringComparison.OrdinalIgnoreCase));
+            savedOrder.Insert(signalIndex >= 0 ? signalIndex + 1 : savedOrder.Count, "LastSignalScan");
+        }
         var orderedTemplates = new List<ColumnItem>();
 
         foreach (var colName in savedOrder)
@@ -152,6 +159,7 @@
         {
             hiddenCols.Add("NetworkType");
             hiddenCols.Add("Signal");
+            hiddenCols.Add("LastSignalScan");
         }
         foreach (var col in orderedTemplates)
         {
@@ -225,6 +233,7 @@
             new() { Name = "NetworkProvider", Header = "Nhà mạng" },
             new() { Name = "NetworkType", Header = "Mạng" },
             new() { Name = "Signal", Header = "Tín hiệu" },
+            new() { Name = "LastSignalScan", Header = "Quét sóng lúc" },
             new() { Name = "Balance", Header = "TKC" },
             new() { Name = "PhoneNumber", Header = "SĐT" },
             new() { Name = "Imei", Header = "IMEI" },

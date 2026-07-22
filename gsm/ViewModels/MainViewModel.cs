@@ -315,7 +315,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly object _imeiCacheLock = new();
     private readonly ConcurrentDictionary<string, string> _imeiTargetReservations =
         new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, string> _pendingNoSimImeiActivations =
+    // IMEI được ghi khi chưa có SIM không được tự chấp nhận SIM cắm vào sau đó.
+    // Cờ này chỉ buộc lần cắm SIM kế tiếp đi qua trạng thái Chặn SIM/thao tác thủ công.
+    private readonly ConcurrentDictionary<string, string> _portsRequiringSimAcceptAfterNoSimImei =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _deferredDetectedCcids =
         new(StringComparer.OrdinalIgnoreCase);
@@ -3354,10 +3356,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
 
                     var detectedSession = StartSimSession(e.PortName, ccid);
-                    bool hasPendingNoSimActivation = _pendingNoSimImeiActivations.TryRemove(
-                        e.PortName, out string? pendingImei);
+                    bool requiresAcceptAfterNoSimImei = _portsRequiringSimAcceptAfterNoSimImei.TryRemove(
+                        e.PortName, out string? noSimImei);
 
-                    if (!hasPendingNoSimActivation
+                    if (!requiresAcceptAfterNoSimImei
                         && _verifiedImeiByCcid.TryGetValue(ccid, out string? verifiedImei))
                     {
                         port.Status = SimStatus.Connecting;
@@ -3383,18 +3385,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     EndPortInitialization(e.PortName, initializationLease);
                     UpdateDashboard();
 
-                    if (hasPendingNoSimActivation)
+                    if (requiresAcceptAfterNoSimImei)
                     {
-                        _ = Task.Run(async () =>
-                        {
-                            AddLog($"[{e.PortName}] [IMEI_PENDING_ACTIVATE] SIM vừa được nhận; tự hoàn tất với IMEI {pendingImei}.", "INFO");
-                            bool activated = await PaintImeiForCurrentSimAsync(
-                                e.PortName,
-                                pendingImei!,
-                                overwriteBackupWithCurrentImei: false);
-                            AddLog($"[{e.PortName}] [IMEI_PENDING_ACTIVATE_RESULT] success={activated.ToString().ToLowerInvariant()}",
-                                activated ? "SUCCESS" : "ERROR");
-                        });
+                        AddLog(
+                            $"[{e.PortName}] [IMEI_NO_SIM_AWAIT_ACCEPT] Đã cắm SIM sau khi tạo IMEI {noSimImei}; giữ Chặn SIM, không tự Accept/Active.",
+                            "INFO");
                     }
                 }
                 else
@@ -7655,7 +7650,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (!TryBeginPortInitialization(portName, out Guid initializationLease)) return false;
         IDisposable backgroundLease = _modemService.SuspendPortBackgroundOperations(portName);
         bool resumeHotplugAfterOperation = false;
-        _pendingNoSimImeiActivations[portName] = target;
+        _portsRequiringSimAcceptAfterNoSimImei[portName] = target;
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
         cts.CancelAfter(TimeSpan.FromMinutes(2));
@@ -7684,7 +7679,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (result.Status != Services.ImeiProcessStatus.Applied)
             {
-                _pendingNoSimImeiActivations.TryRemove(portName, out _);
+                _portsRequiringSimAcceptAfterNoSimImei.TryRemove(portName, out _);
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
@@ -7699,19 +7694,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             bool completed = await CompleteNoSimImeiResetAsync(port, result.FinalImei, cts.Token);
             if (!completed)
-                _pendingNoSimImeiActivations.TryRemove(portName, out _);
+                _portsRequiringSimAcceptAfterNoSimImei.TryRemove(portName, out _);
             resumeHotplugAfterOperation = completed;
             return completed;
         }
         catch (OperationCanceledException)
         {
-            _pendingNoSimImeiActivations.TryRemove(portName, out _);
+            _portsRequiringSimAcceptAfterNoSimImei.TryRemove(portName, out _);
             await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
             return false;
         }
         catch
         {
-            _pendingNoSimImeiActivations.TryRemove(portName, out _);
+            _portsRequiringSimAcceptAfterNoSimImei.TryRemove(portName, out _);
             throw;
         }
         finally

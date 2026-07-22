@@ -442,6 +442,13 @@ public sealed class GsmOperationServicesTests
         Assert.Empty(delay.Delays);
     }
 
+    [Theory]
+    [InlineData(30_000, 90_000)]
+    [InlineData(90_000, 90_000)]
+    [InlineData(120_000, 120_000)]
+    public void Sms_PayloadTimeout_WaitsAtLeastNinetySeconds(int requested, int expected) =>
+        Assert.Equal(expected, GsmModemService.GetSmsPayloadTimeoutMs(requested));
+
     [Fact]
     public async Task Sms_CallerCancelsWhileWaitingForSameComLock_DoesNotSendSecondMessage()
     {

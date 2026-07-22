@@ -3072,6 +3072,10 @@ public class GsmModemService : IGsmModemService
     private const int MaxGsmChunkBodyLength = 150;
     private const int MaxUcs2PartLength = 70;
     private const int MaxUcs2ChunkBodyLength = 60;
+    private const int MinimumSmsPayloadTimeoutMs = 90_000;
+
+    internal static int GetSmsPayloadTimeoutMs(int requestedTimeoutMs) =>
+        Math.Max(requestedTimeoutMs, MinimumSmsPayloadTimeoutMs);
 
     public async Task<string> SendSmsAsync(
         string portName,
@@ -3265,7 +3269,9 @@ public class GsmModemService : IGsmModemService
                 sp.Write(hexMessage + "\x1A");
             }
 
-            timeoutTask = Task.Delay(timeoutMs, ct);
+            // Sau Ctrl+Z, nhà mạng/modem có thể cần lâu mới trả +CMGS/OK. Chờ tối thiểu
+            // 90 giây; nếu vẫn quá hạn thì không retry vì SMS có thể đã được nhận.
+            timeoutTask = Task.Delay(GetSmsPayloadTimeoutMs(timeoutMs), ct);
             completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
             if (completedTask == timeoutTask)
             {

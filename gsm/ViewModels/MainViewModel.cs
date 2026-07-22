@@ -5297,7 +5297,57 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        string recoveryKey = $"{port.PortName}|{NormalizeCcid(ccid)}";
+        if (_ussdVoiceRecoveryTasks.TryGetValue(recoveryKey, out Task<bool>? recovery)
+            && !recovery.IsCompleted)
+        {
+            return;
+        }
+
         _ = Task.Run(() => RunInitialBalanceLookupAsync(port, ccid, epoch, token), token);
+    }
+
+    private async Task<bool> WaitForCsRegistrationBeforeInitialLookupAsync(
+        SimPort port, string ccid, long epoch, CancellationToken token)
+    {
+        const int maxProbes = 15;
+        for (int probe = 1; probe <= maxProbes; probe++)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!IsSimSessionCurrent(port.PortName, ccid, epoch)
+                || !IsVinaNetworkReadyForInitialLookup(port))
+            {
+                return false;
+            }
+
+            string recoveryKey = $"{port.PortName}|{NormalizeCcid(ccid)}";
+            if (_ussdVoiceRecoveryTasks.TryGetValue(recoveryKey, out Task<bool>? recovery)
+                && !recovery.IsCompleted)
+            {
+                return false;
+            }
+
+            string creg = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CREG?", 5000, silent: true, ct: token);
+            if (IsCsRegisteredResponse(creg)) return true;
+
+            if (probe == 1)
+            {
+                AddLog($"[{port.PortName}] [USSD_WAIT_CS] Đã có sóng nhưng chưa đăng ký mạng thoại; chưa gửi *111#.", "WARN");
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    port.IsBalanceLoading = false;
+                    port.LastMessageContent = "[USSD][CHỜ MẠNG] Đang chờ đăng ký mạng thoại trước khi gửi *111#...";
+                    port.Sender = "USSD";
+                });
+            }
+
+            if (probe < maxProbes)
+                await Task.Delay(2000, token);
+        }
+
+        AddLog($"[{port.PortName}] [USSD_WAIT_CS] Chưa đăng ký được mạng thoại; hoãn *111# đến chu kỳ quét sóng tiếp theo.", "WARN");
+        return false;
     }
 
     private async Task RunInitialBalanceLookupAsync(
@@ -5311,16 +5361,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // chuỗi *111# song song khi ReloadPortSafelyAsync vừa dựng phiên mới.
         string recoveryRetryKey = $"{port.PortName}|{NormalizeCcid(ccid)}";
         if (_ussdRecoveryRetryOwners.ContainsKey(recoveryRetryKey)) return;
+        if (_ussdVoiceRecoveryTasks.TryGetValue(recoveryRetryKey, out Task<bool>? activeRecovery)
+            && !activeRecovery.IsCompleted)
+        {
+            return;
+        }
 
         string lookupKey = $"{port.PortName}|{NormalizeCcid(ccid)}|{epoch}";
         if (_initialAccountLookupCompleted.ContainsKey(lookupKey)) return;
         if (!_initialBalanceLookupOwners.TryAdd(lookupKey, 0)) return;
 
-        AddLog($"[{port.PortName}] [VINA_NETWORK_READY] VinaPhone; {port.NetworkType}; CSQ={port.SignalRssi}. Chạy tuần tự *111# → *101#.", "SUCCESS");
-
-        await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
+        bool ussdStarted = false;
         try
         {
+            if (!await WaitForCsRegistrationBeforeInitialLookupAsync(port, ccid, epoch, token))
+                return;
+
+            ussdStarted = true;
+            AddLog($"[{port.PortName}] [VINA_NETWORK_READY] VinaPhone; {port.NetworkType}; CSQ={port.SignalRssi}; CREG=1/5. Chạy tuần tự *111# → *101#.", "SUCCESS");
+            await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
+
             int round = 0;
             string currentStage = string.Empty;
             // Khi true: *111# đã thất bại hoàn toàn → bỏ qua identity, chạy thẳng *101#
@@ -5363,9 +5423,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 if (result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Ép WCDMA (3G) ngay lập tức nếu USSD bị lỗi/timeout thay vì đợi hết 3 vòng (giống SAuto)
-                    AddLog($"[{port.PortName}] [USSD_FAST_RECOVERY] Lệnh USSD báo lỗi ({result}); kích hoạt ép sóng CS/3G lập tức.", "WARN");
-                    await EnsureUssdVoiceDomainAsync(port.PortName, token, force: true);
+                    // Một lần *111# chỉ trả OK/không có +CUSD không có nghĩa là đã mất CS.
+                    // Xác minh CREG trước để tránh reboot modem đang đăng ký mạng thoại bình thường.
+                    string cregAfterFailure = await _modemService.SendCommandAsync(
+                        port.PortName, "AT+CREG?", 5000, silent: true, ct: token);
+                    bool voiceReady = IsCsRegisteredResponse(cregAfterFailure);
+                    if (voiceReady)
+                    {
+                        AddLog($"[{port.PortName}] [USSD_RETRY_WITH_CS] {ussdCode} chưa có +CUSD nhưng CREG vẫn đăng ký; giữ nguyên modem và thử lại.", "WARN");
+                    }
+                    else
+                    {
+                        AddLog($"[{port.PortName}] [USSD_FAST_RECOVERY] Lệnh USSD báo lỗi và CREG đã mất ({result}); kích hoạt phục hồi CS/3G.", "WARN");
+                        voiceReady = await EnsureUssdVoiceDomainAsync(port.PortName, token, force: true);
+                    }
+
+                    if (!voiceReady)
+                    {
+                        AddLog($"[{port.PortName}] [USSD_CS_UNAVAILABLE] Chưa đăng ký được mạng thoại; dừng chuỗi hiện tại và sẽ thử lại khi sóng ổn định.", "ERROR");
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            port.IsBalanceLoading = false;
+                            port.LastMessageContent = "[USSD][CHỜ MẠNG] Chưa có mạng thoại; sẽ tự thử lại khi sóng ổn định";
+                            port.LastError = "Chưa đăng ký được mạng thoại (CREG)";
+                            port.Sender = "USSD";
+                        });
+                        break;
+                    }
                 }
 
                 if (needsIdentity && port.LastUssdResult != null && port.LastUssdResult.Contains("UNKNOWN APPLICATION", StringComparison.OrdinalIgnoreCase))
@@ -5454,7 +5538,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (IsSimSessionCurrent(port.PortName, ccid, epoch))
             {
                 await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = false);
-                _ = Restore4GAfterInitialUssdAsync(port.PortName, _lifetimeCts.Token);
+                if (ussdStarted)
+                    _ = Restore4GAfterInitialUssdAsync(port.PortName, _lifetimeCts.Token);
             }
         }
     }
@@ -7635,8 +7720,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     internal static bool IsVinaNetworkReadyForInitialLookup(SimPort port) =>
         port.Status == SimStatus.Active
-        && (string.IsNullOrWhiteSpace(port.NetworkProvider)
-            || string.Equals(port.NetworkProvider, "VinaPhone", StringComparison.OrdinalIgnoreCase));
+        && string.Equals(port.NetworkProvider, "VinaPhone", StringComparison.OrdinalIgnoreCase)
+        && !string.IsNullOrWhiteSpace(port.NetworkType)
+        && port.SignalRssi is >= 0 and <= 31;
+
+    internal static bool IsCsRegisteredResponse(string? response) =>
+        Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+CREG:\s*\d+\s*,\s*[15]\b",
+            RegexOptions.IgnoreCase);
 
     internal static string ExtractPhoneNumberFromUssd(string? content)
     {

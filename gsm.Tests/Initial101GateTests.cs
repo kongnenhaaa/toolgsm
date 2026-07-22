@@ -7,26 +7,38 @@ namespace gsm.Tests;
 public sealed class SautoInitialLookupTests
 {
     [Theory]
-    [InlineData("VinaPhone", "2G", 55, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "3G", 55, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "4G", 55, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "5G", 55, SimStatus.Active, true)]
-    [InlineData("Viettel", "3G", 55, SimStatus.Active, false)]
+    [InlineData("VinaPhone", "2G", 20, SimStatus.Active, true)]
+    [InlineData("VinaPhone", "3G", 20, SimStatus.Active, true)]
+    [InlineData("VinaPhone", "4G", 20, SimStatus.Active, true)]
+    [InlineData("VinaPhone", "5G", 20, SimStatus.Active, true)]
+    [InlineData("Viettel", "3G", 20, SimStatus.Active, false)]
+    [InlineData("", "3G", 20, SimStatus.Active, false)]
+    [InlineData("VinaPhone", "", 20, SimStatus.Active, false)]
     [InlineData("VinaPhone", "3G", 0, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "3G", 55, SimStatus.WaitingAccept, false)]
+    [InlineData("VinaPhone", "3G", 99, SimStatus.Active, false)]
+    [InlineData("VinaPhone", "3G", 20, SimStatus.WaitingAccept, false)]
     public void Initial111_RunsOnlyAfterVinaPhone3gAndSignal(
-        string provider, string networkType, int signal, string status, bool expected)
+        string provider, string networkType, int rssi, string status, bool expected)
     {
         var port = new SimPort
         {
             NetworkProvider = provider,
             NetworkType = networkType,
-            SignalStrength = signal,
+            SignalRssi = rssi,
             Status = status
         };
 
         Assert.Equal(expected, MainViewModel.IsVinaNetworkReadyForInitialLookup(port));
     }
+
+    [Theory]
+    [InlineData("+CREG: 0,1\r\nOK", true)]
+    [InlineData("+CREG: 2,5,\"1234\",\"5678\"\r\nOK", true)]
+    [InlineData("+CREG: 0,2\r\nOK", false)]
+    [InlineData("+CREG: 0,0\r\nOK", false)]
+    [InlineData("ERROR", false)]
+    public void CregResponse_RequiresHomeOrRoamingCsRegistration(string response, bool expected) =>
+        Assert.Equal(expected, MainViewModel.IsCsRegisteredResponse(response));
 
     [Theory]
     [InlineData("0", "2G")]

@@ -5447,8 +5447,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _initialBalanceLookupOwners.TryRemove(lookupKey, out _);
             if (IsSimSessionCurrent(port.PortName, ccid, epoch))
+            {
                 await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = false);
+                _ = Restore4GAfterInitialUssdAsync(port.PortName, _lifetimeCts.Token);
+            }
         }
+    }
+
+    private async Task Restore4GAfterInitialUssdAsync(string portName, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(1000, token);
+            var profile = _modemService.GetModemProfile(portName);
+            if (profile?.IsQuectel == true)
+            {
+                await _modemService.SendCommandAsync(portName, "AT+QCFG=\"nwscanseq\",030201,1", 5000, silent: true, ct: token);
+                await _modemService.SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 5000, silent: true, ct: token);
+                if (AppSettings.EnableVolte)
+                    await _modemService.SendCommandAsync(portName, "AT+QCFG=\"ims\",1", 5000, silent: true, ct: token);
+                AddLog($"[{portName}] [RESTORE_4G_VOLTE] Đã khôi phục chế độ ưu tiên sóng 4G/VoLTE sau khi chạy USSD.", "SUCCESS");
+            }
+        }
+        catch { }
     }
 
     private async Task<string> SendSautoInitial111Async(

@@ -5333,7 +5333,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (probe == 1)
             {
-                AddLog($"[{port.PortName}] [USSD_WAIT_CS] Đã có sóng nhưng chưa đăng ký mạng thoại; chưa gửi *111#.", "WARN");
+                string cregLog = creg.Replace('\r', ' ').Replace('\n', ' ').Trim();
+                AddLog($"[{port.PortName}] [USSD_WAIT_CS] Đã có sóng nhưng chưa đăng ký mạng thoại; chưa gửi *111#. CREG={cregLog}", "WARN");
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     port.IsBalanceLoading = false;
@@ -5346,7 +5347,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 await Task.Delay(2000, token);
         }
 
-        AddLog($"[{port.PortName}] [USSD_WAIT_CS] Chưa đăng ký được mạng thoại; hoãn *111# đến chu kỳ quét sóng tiếp theo.", "WARN");
+        AddLog($"[{port.PortName}] [USSD_WAIT_CS] Chưa đăng ký được mạng thoại sau {maxProbes} lần kiểm tra; chuyển sang phục hồi CS/3G.", "WARN");
         return false;
     }
 
@@ -5375,7 +5376,63 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             if (!await WaitForCsRegistrationBeforeInitialLookupAsync(port, ccid, epoch, token))
-                return;
+            {
+                if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
+
+                AddLog($"[{port.PortName}] [USSD_INITIAL_CS_RECOVERY] Hết thời gian chờ CREG; tự phục hồi mạng thoại trước khi chạy *111#.", "WARN");
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    port.IsBalanceLoading = false;
+                    port.LastMessageContent = "[USSD][PHỤC HỒI MẠNG] Đang đăng ký lại mạng thoại/3G trước khi gửi *111#...";
+                    port.Sender = "USSD";
+                });
+
+                // Recovery có thể reload COM và tạo epoch mới, vì vậy phải chờ bằng token vòng đời
+                // thay vì token phiên SIM cũ (token đó sẽ bị hủy đúng lúc reload).
+                bool recovered = await EnsureUssdVoiceDomainAsync(
+                    port.PortName, _lifetimeCts.Token, force: true);
+
+                bool sameSim = TryGetCurrentSimSession(
+                        port.PortName, out string liveCcid, out _, out _)
+                    && string.Equals(
+                        NormalizeCcid(liveCcid), NormalizeCcid(ccid),
+                        StringComparison.OrdinalIgnoreCase);
+                if (!sameSim) return;
+
+                if (!recovered)
+                {
+                    AddLog($"[{port.PortName}] [USSD_INITIAL_CS_FAILED] Phục hồi xong nhưng CREG vẫn chưa đăng ký; dừng chờ *111#.", "ERROR");
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        port.IsBalanceLoading = false;
+                        port.LastMessageContent = "[USSD][LỖI MẠNG] Chưa đăng ký được mạng thoại; dùng Phục hồi sóng hoặc kiểm tra SIM/ăng-ten";
+                        port.LastError = "Phục hồi mạng thoại thất bại (CREG chưa đăng ký)";
+                        port.Sender = "USSD";
+                    });
+                    return;
+                }
+
+                // Nếu recovery đã reload cổng thì tác vụ cũ không được chạy tiếp. Khởi động lookup
+                // trên epoch mới ngay, không phải chờ đến chu kỳ quét sóng kế tiếp.
+                if (!IsSimSessionCurrent(port.PortName, ccid, epoch))
+                {
+                    TryStartVinaInitialLookup(port);
+                    return;
+                }
+
+                // Recovery không reload khi AUTO đã lấy lại CS. Xác minh một lần nữa rồi mới gửi.
+                if (!await WaitForCsRegistrationBeforeInitialLookupAsync(port, ccid, epoch, token))
+                {
+                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    {
+                        port.IsBalanceLoading = false;
+                        port.LastMessageContent = "[USSD][LỖI MẠNG] Mạng thoại vừa phục hồi lại bị mất; chưa gửi *111#";
+                        port.LastError = "CREG không ổn định sau phục hồi";
+                        port.Sender = "USSD";
+                    });
+                    return;
+                }
+            }
 
             ussdStarted = true;
             AddLog($"[{port.PortName}] [VINA_NETWORK_READY] VinaPhone; {port.NetworkType}; CSQ={port.SignalRssi}; CREG=1/5. Chạy tuần tự *111# → *101#.", "SUCCESS");

@@ -2386,13 +2386,21 @@ public class GsmModemService : IGsmModemService
             string pendingRegistrationCommand = _commandTcs.TryGetValue(portName, out var pendingRegistrationTcs)
                 ? pendingRegistrationTcs.Task.AsyncState as string ?? string.Empty
                 : string.Empty;
-            var regMatches = Regex.Matches(currentData, @"\+(C(?:G|E)?REG):\s*([0-9])(?:[^\r\n]*)");
+            var regMatches = Regex.Matches(
+                currentData,
+                @"\+(C(?:G|E)?REG):\s*(?<first>[0-9])(?:\s*,\s*(?<second>[0-9]))?(?:[^\r\n]*)");
             if (regMatches.Count > 0)
             {
                 foreach (Match match in regMatches)
                 {
                     string regType = match.Groups[1].Value;
-                    string stat = match.Groups[2].Value;
+                    bool isRequestedResponse = pendingRegistrationCommand.Equals(
+                        $"AT+{regType}?", StringComparison.OrdinalIgnoreCase);
+                    // Query: +CREG: <n>,<stat>; URC: +CREG: <stat>[,...]. Trước đây luôn lấy
+                    // chữ số đầu nên có thể báo nhầm <n>=1 là "đã đăng ký CS".
+                    string stat = isRequestedResponse && match.Groups["second"].Success
+                        ? match.Groups["second"].Value
+                        : match.Groups["first"].Value;
                     if (stat == "1" || stat == "5")
                     {
                         string netName = regType switch
@@ -2403,8 +2411,6 @@ public class GsmModemService : IGsmModemService
                         };
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_REG] Đã đăng ký mạng {netName}" });
                     }
-                    bool isRequestedResponse = pendingRegistrationCommand.Equals(
-                        $"AT+{regType}?", StringComparison.OrdinalIgnoreCase);
                     if (!isRequestedResponse)
                         buffer.Replace(match.Value, "");
                 }

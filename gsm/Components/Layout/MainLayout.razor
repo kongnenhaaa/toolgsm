@@ -50,12 +50,24 @@
 
     <MudMainContent Class="app-main-content">
         <div class="page-enter">
-            @Body
+            @if (ChildContent is not null)
+            {
+                @ChildContent
+            }
+            else
+            {
+                @Body
+            }
         </div>
     </MudMainContent>
 </MudLayout>
 
 @code {
+    // Khi MainLayout được dùng như layout của Router, nội dung đi qua Body.
+    // PersistentPageHost mount trực tiếp từ App.razor nên Blazor truyền
+    // ChildContent; hỗ trợ cả hai để đổi tab không dispose các trang đang chạy.
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
     private sealed record NavItem(string Key, string Route, string Label, string Icon);
 
     private readonly NavItem[] _navItems =

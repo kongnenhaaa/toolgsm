@@ -19,6 +19,8 @@ public sealed class OtpExtractionTests
     [InlineData("123456 is your security code", "123456")]
     [InlineData("419955", "419955")]
     [InlineData("(Zalo) Day la ma xac thuc OTP cho SDT (***7003): 419955", "419955")]
+    [InlineData("Mã WhatsApp của bạn: 825-024 Đừng cho ai biết mã này", "825024")]
+    [InlineData("Your WhatsApp code: 825–024", "825024")]
     public void RealOtpFormats_AreStillExtracted(string content, string expected)
     {
         Assert.Equal(expected, GsmModemService.ExtractOtp(content));

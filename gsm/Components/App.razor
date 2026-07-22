@@ -4,17 +4,12 @@
 <MudDialogProvider FullWidth="true" MaxWidth="MaxWidth.Small" />
 <MudSnackbarProvider />
 
-<Router AppAssembly="@typeof(App).Assembly">
-    <Found Context="routeData">
-        <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
-        <FocusOnNavigate RouteData="@routeData" Selector="h1" />
-    </Found>
-    <NotFound>
-        <LayoutView Layout="@typeof(MainLayout)">
-            <MudText Typo="Typo.h5" Class="mt-8 text-center">Không tìm thấy trang</MudText>
-        </LayoutView>
-    </NotFound>
-</Router>
-
-@code {
-}
+<!--
+    Giữ toàn bộ các trang được mount trong suốt vòng đời ứng dụng. Route chỉ
+    quyết định trang nào nhìn thấy; không dispose trang khi người dùng đổi tab.
+    Nhờ đó các tác vụ USSD/SMS/Call/EZ/MyVNPT tiếp tục chạy và state cục bộ
+    (kết quả, hàng đợi, lịch sử) vẫn còn khi quay lại tab.
+-->
+<MainLayout>
+    <PersistentPageHost />
+</MainLayout>

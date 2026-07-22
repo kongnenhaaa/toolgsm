@@ -1369,7 +1369,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
             p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
     }
 
-    private void RecordPortError(string portName, string error)
+    /// <summary>
+    /// Updates the operation result shown in the dashboard status column.
+    /// The modem state (Active/Chặn SIM/...) remains in <see cref="SimPort.Status"/>;
+    /// this short-lived label reports the last USSD, SMS or Call operation.
+    /// </summary>
+    public void SetOperationStatus(string portName, string operation, bool success)
+    {
+        string normalizedOperation = operation?.Trim() ?? string.Empty;
+        string? status = normalizedOperation.ToUpperInvariant() switch
+        {
+            "USSD" => success ? "USSD OK" : "USSD Fail",
+            "SMS" => success ? "SMS OK" : "SMS Fail",
+            "CALL" => success ? "Call OK" : "Call Fail",
+            _ => null
+        };
+        if (status == null) return;
+
+        var dispatcher = Application.Current?.Dispatcher;
+        void Update()
+        {
+            var port = Ports.FirstOrDefault(p =>
+                p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+            if (port == null) return;
+            port.SetOperationStatus(normalizedOperation, success);
+        }
+
+        if (dispatcher == null || dispatcher.CheckAccess()) Update();
+        else _ = dispatcher.InvokeAsync(Update);
+    }
+
+    private static bool IsOperationFailureResult(string? result)
+    {
+        return string.IsNullOrWhiteSpace(result)
+            || result.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("Lỗi", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("thất bại", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("failed", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("FAIL", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RecordPortError(string portName, string error, string? operation = null)
     {
         var dispatcher = Application.Current?.Dispatcher;
         void Update()
@@ -1396,6 +1437,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 port.SmsErrorCount++;
             }
+            if (!string.IsNullOrWhiteSpace(operation))
+            {
+                port.SetOperationStatus(operation, false);
+            }
             UpdateDashboard();
         }
 
@@ -1414,6 +1459,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             port.LastSmsSentAt = DateTime.Now.ToString("HH:mm:ss");
             port.LastError = string.Empty;
+            port.SetOperationStatus("SMS", true);
             UpdateDashboard();
         }
 
@@ -1960,6 +2006,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void InvalidateSimSession(string portName)
     {
+        // Một phiên SIM mới phải chạy đủ *111# và *101# trước khi bật
+        // giám sát rút SIM nhanh. Không để cờ của phiên cũ lọt sang SIM mới.
+        _modemService.SetSimRemovalWatchEnabled(portName, false);
         _portSessions.Invalidate(portName);
         _initializingPorts.TryRemove(portName, out _);
         string prefix = portName + "|";
@@ -2650,6 +2699,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Mọi dữ liệu dưới đây thuộc SIM cũ và tuyệt đối không được hiển thị sau khi rút/thay SIM.
         port.IsRebooting = false;
         port.SautoStatus = string.Empty;
+        port.UssdStatus = string.Empty;
+        port.SmsStatus = string.Empty;
+        port.CallStatus = string.Empty;
         port.PhoneNumber = string.Empty;
         port.NetworkProvider = string.Empty;
         port.NetworkType = string.Empty;
@@ -4394,7 +4446,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _ = _notifyService.SendTelegramAsync(clipCfg.TelegramBotToken, clipCfg.TelegramChatId, callText);
             }
 
-            AddLog($"[{e.PortName}] Chỉ thông báo cuộc gọi đến; tool không tự động bắt máy.", "INFO");
+            // GsmModemService owns the ATA + QAUDRD workflow for voice-capable
+            // profiles. This event is only a notification hook; the old message
+            // claimed that auto-answer was disabled even while the modem service
+            // had already answered and started recording.
+            var profile = _modemService.GetModemProfile(e.PortName);
+            bool autoAnswerSupported = profile?.Supports(ModemCapability.VoiceCall) == true
+                && profile.Supports(ModemCapability.AudioRecord);
+            AddLog(autoAnswerSupported
+                ? $"[{e.PortName}] Đã nhận cuộc gọi; đang tự động nghe máy và ghi âm."
+                : $"[{e.PortName}] Chỉ thông báo cuộc gọi đến; modem chưa hỗ trợ tự động nghe máy/ghi âm.", "INFO");
         });
     }
 
@@ -5021,7 +5082,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var port = Ports.FirstOrDefault(p => p.PortName == portName);
         if (port == null) return "ERROR: Cổng không tìm thấy";
         if (!IsPortReadyForOperation(portName))
+        {
+            SetOperationStatus(portName, "USSD", false);
             return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi";
+        }
 
         // Hiển thị trạng thái đang gửi lên cột Nội dung ngay lập tức
         Application.Current.Dispatcher.Invoke(() =>
@@ -5047,8 +5111,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         await Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            bool failed = result.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
-                || result.Contains("Timeout", StringComparison.OrdinalIgnoreCase);
+            bool failed = IsOperationFailureResult(result);
             port.LastUssdResult = result;
             if (failed)
             {
@@ -5062,6 +5125,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             port.Sender = "USSD";
             port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
         });
+        SetOperationStatus(portName, "USSD", !IsOperationFailureResult(result));
         return result;
     }
 
@@ -5126,8 +5190,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (subscriberOk && balanceOk)
             {
                 _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
-                await Application.Current.Dispatcher.InvokeAsync(() => port.SautoStatus = "USSDOK");
-                AddLog($"[{port.PortName}] [USSDOK] Đã nhận đủ phản hồi *111# và TKC từ *101#.", "SUCCESS");
+                _modemService.SetSimRemovalWatchEnabled(port.PortName, true);
+                SetOperationStatus(port.PortName, "USSD", true);
+                AddLog($"[{port.PortName}] [USSD OK] Đã nhận đủ phản hồi *111# và TKC từ *101#.", "SUCCESS");
             }
             else if (IsSimSessionCurrent(port.PortName, ccid, epoch)
                 && port.Status == SimStatus.Active)
@@ -5510,7 +5575,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // USSD cancelled do session thay đổi (hot-swap SIM) hoặc shutdown — không phải lỗi thật
             bool isCancelledNotError = result.Contains("USSD operation cancelled", StringComparison.OrdinalIgnoreCase)
                 || result.Contains("SIM session changed", StringComparison.OrdinalIgnoreCase);
-            RecordPortError(portName, result);
+            RecordPortError(portName, result, "USSD");
             MaybeCooldownPort(portName, result);
             if (logResult)
             {
@@ -6133,7 +6198,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         else
         {
-            RecordPortError(portName, result);
+            RecordPortError(portName, result, "SMS");
             AddLog($"[{portName}] [WEB_SMS_FAILED] {result}", "ERROR");
         }
         return result;
@@ -6146,9 +6211,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         CancellationToken ct)
     {
         if (!IsPortReadyForOperation(portName))
+        {
+            RecordPortError(portName, "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi", "SMS");
             return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi";
+        }
         if (!_portSessions.TryGet(portName, out PortSessionLease session))
+        {
+            RecordPortError(portName, "ERROR: Port has no current SIM session", "SMS");
             return "ERROR: Port has no current SIM session";
+        }
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, session.Token);
         try
@@ -6165,14 +6236,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
-            return _portSessions.IsCurrent(session.PortName, session.Ccid, session.Epoch)
+            string cancelledResult = _portSessions.IsCurrent(session.PortName, session.Ccid, session.Epoch)
                 ? "ERROR: SMS operation cancelled while waiting for port cooldown"
                 : "ERROR: SIM session changed while waiting for port cooldown";
+            RecordPortError(portName, cancelledResult, "SMS");
+            return cancelledResult;
         }
 
         if (!_portSessions.IsCurrent(session.PortName, session.Ccid, session.Epoch)
             || !IsPortReadyForOperation(portName))
+        {
+            RecordPortError(portName, "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi trong lúc chờ", "SMS");
             return "ERROR: Cổng không còn Active hoặc phiên SIM đã thay đổi trong lúc chờ";
+        }
 
         string result = await _smsService.SendAsync(portName, phoneNumber, content, linkedCts.Token);
         if (result.Contains("thành công", StringComparison.OrdinalIgnoreCase)
@@ -6191,7 +6267,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         else
         {
-            RecordPortError(portName, result);
+            RecordPortError(portName, result, "SMS");
             MaybeCooldownPort(portName, result);
             AddLog($"[{portName}] Gửi SMS thất bại: {result}", "ERROR");
         }
@@ -6328,7 +6404,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (!IsPortReadyForOperation(port)
             || !TryGetCurrentSimSession(port, out var callCcid, out var callEpoch, out var simToken))
+        {
+            SetOperationStatus(port, "Call", false);
             return false;
+        }
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, simToken);
         var operationToken = linkedCts.Token;
@@ -6353,9 +6432,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 record,
                 operationToken);
 
-            return result
+            bool completed = result
                 && IsSimSessionCurrent(port, callCcid, callEpoch)
                 && IsPortReadyForOperation(port);
+            SetOperationStatus(port, "Call", completed);
+            return completed;
+        }
+        catch
+        {
+            SetOperationStatus(port, "Call", false);
+            throw;
         }
         finally
         {
@@ -6654,9 +6740,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         string result = await _smsService.SendAsync(
                             sourcePort, phone, content, _lifetimeCts.Token);
                         var port = GetPortsSnapshot().FirstOrDefault(p => p.PortName == sourcePort);
-                        if (!result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                        if (!IsOperationFailureResult(result))
                         {
                             AddLog($"[BULK SMS] [{sourcePort}] → {phone}: OK", "SUCCESS");
+                            SetOperationStatus(sourcePort, "SMS", true);
                             if (port != null)
                                 Application.Current.Dispatcher.Invoke(() =>
                                 {
@@ -6668,6 +6755,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         else
                         {
                             AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {result}", "ERROR");
+                            SetOperationStatus(sourcePort, "SMS", false);
                             if (port != null)
                                 Application.Current.Dispatcher.Invoke(() =>
                                 {
@@ -6680,6 +6768,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     catch (Exception ex)
                     {
                         AddLog($"[BULK SMS] [{sourcePort}] → {phone}: FAIL — {ex.Message}", "ERROR");
+                        SetOperationStatus(sourcePort, "SMS", false);
                         Interlocked.Increment(ref failed);
                     }
 
@@ -8351,10 +8440,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.UpdateDisplayResult(cmdType);
             }
 
-            bool commandFailed = finalResult.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
-                || finalResult.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
-                || finalResult.Contains("Lỗi", StringComparison.OrdinalIgnoreCase)
-                || finalResult.Contains("thất bại", StringComparison.OrdinalIgnoreCase);
+            bool commandFailed = IsOperationFailureResult(finalResult);
+            if (cmdType.Equals("USSD", StringComparison.OrdinalIgnoreCase)
+                || cmdType.Equals("SMS", StringComparison.OrdinalIgnoreCase)
+                || cmdType.Equals("Call", StringComparison.OrdinalIgnoreCase))
+            {
+                // A command-panel USSD is complete asynchronously via +CUSD. Do not
+                // turn the temporary "waiting for network" state into a false green
+                // result; the direct USSD pipeline and initial *111#/*101# flow set
+                // USSD OK when their actual response is available.
+                bool waitingForUssd = cmdType.Equals("USSD", StringComparison.OrdinalIgnoreCase)
+                    && finalResult.Contains("Đang chờ", StringComparison.OrdinalIgnoreCase);
+                if (!waitingForUssd)
+                    SetOperationStatus(portName, cmdType, !commandFailed);
+                else if (commandFailed)
+                    SetOperationStatus(portName, cmdType, false);
+            }
             Application.Current.Dispatcher.Invoke(() =>
             {
                 item.Result = finalResult;
@@ -8370,6 +8471,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 item.Error = ex.Message;
                 item.Result = ex.Message;
                 var failedPort = Ports.FirstOrDefault(p => p.PortName == portName);
+                if (item.Type.Equals("USSD", StringComparison.OrdinalIgnoreCase)
+                    || item.Type.Equals("SMS", StringComparison.OrdinalIgnoreCase)
+                    || item.Type.Equals("Call", StringComparison.OrdinalIgnoreCase))
+                {
+                    SetOperationStatus(portName, item.Type, false);
+                }
                 if (failedPort != null && string.Equals(item.Type, "USSD", StringComparison.OrdinalIgnoreCase))
                 {
                     failedPort.LastUssdResult = "ERROR: " + ex.Message;

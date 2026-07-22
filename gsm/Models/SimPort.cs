@@ -82,6 +82,9 @@ public partial class SimPort : ObservableObject
             {
                 if (!string.IsNullOrEmpty(SautoStatus))
                     SautoStatus = string.Empty;
+                UssdStatus = string.Empty;
+                SmsStatus = string.Empty;
+                CallStatus = string.Empty;
                 StatusChangedAt = DateTime.Now;
                 OnPropertyChanged(nameof(StatusDisplay));
             }
@@ -92,9 +95,67 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _sautoStatus = string.Empty;
 
+    // Kết quả thao tác được giữ riêng theo từng tab. SautoStatus vẫn được
+    // duy trì như trạng thái tổng hợp tương thích với màn hình Home/cache cũ.
+    [ObservableProperty]
+    private string _ussdStatus = string.Empty;
+
+    [ObservableProperty]
+    private string _smsStatus = string.Empty;
+
+    [ObservableProperty]
+    private string _callStatus = string.Empty;
+
     public string StatusDisplay => string.IsNullOrWhiteSpace(SautoStatus)
         ? Status
         : SautoStatus;
+
+    public string GetOperationStatus(string? operation)
+    {
+        string op = operation?.Trim().ToUpperInvariant() ?? string.Empty;
+        string value = op switch
+        {
+            "USSD" => UssdStatus,
+            "SMS" => SmsStatus,
+            "CALL" => CallStatus,
+            _ => string.Empty
+        };
+        if (!string.IsNullOrWhiteSpace(value)) return value;
+
+        // Legacy rows may only have SautoStatus. Reuse it only when it belongs
+        // to the requested operation; never leak SMS/Call state into USSD (or
+        // another operation tab).
+        bool legacyMatches = op switch
+        {
+            "USSD" => SautoStatus is "USSDOK" or "USSD OK" or "USSD Fail",
+            "SMS" => SautoStatus is "SMS OK" or "SMS Fail",
+            "CALL" => SautoStatus is "Call OK" or "Call Fail",
+            _ => false
+        };
+        return legacyMatches
+            ? (SautoStatus == "USSDOK" ? "USSD OK" : SautoStatus)
+            : Status;
+    }
+
+    public void SetOperationStatus(string operation, bool success)
+    {
+        string status = operation.Trim().ToUpperInvariant() switch
+        {
+            "USSD" => success ? "USSD OK" : "USSD Fail",
+            "SMS" => success ? "SMS OK" : "SMS Fail",
+            "CALL" => success ? "Call OK" : "Call Fail",
+            _ => string.Empty
+        };
+        if (string.IsNullOrWhiteSpace(status)) return;
+
+        switch (operation.Trim().ToUpperInvariant())
+        {
+            case "USSD": UssdStatus = status; break;
+            case "SMS": SmsStatus = status; break;
+            case "CALL": CallStatus = status; break;
+        }
+        SautoStatus = status;
+    }
 
     partial void OnSautoStatusChanged(string value) =>
         OnPropertyChanged(nameof(StatusDisplay));

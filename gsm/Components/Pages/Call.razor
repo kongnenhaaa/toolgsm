@@ -89,7 +89,7 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" Operation="Call" @bind-SelectedItems="_selectedPorts" />
     </MudTabPanel>
 
     <!-- TAB 2: LỊCH SỬ CUỘC GỌI -->

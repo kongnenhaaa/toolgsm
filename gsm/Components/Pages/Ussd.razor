@@ -62,7 +62,7 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" Operation="USSD" @bind-SelectedItems="_selectedPorts" />
     </MudTabPanel>
 
     <!-- TAB 2: TIN NHẮN TỚI -->
@@ -513,6 +513,14 @@
                 success = !IsCommandFailure(verify)
                     && System.Text.RegularExpressions.Regex.IsMatch(
                         verify, $@"nwscanmode\""\s*,\s*{nwscanmode}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (success)
+                {
+                    // Đổi RAT làm modem đăng ký mạng lại. Khởi động lại vòng
+                    // polling để phát ngay CSQ/COPS mới thay vì chờ chu kỳ nền
+                    // tiếp theo (trước đây cột Tín hiệu bị giữ dấu '-').
+                    ModemService.StartPollingNetwork(port);
+                    _ = RefreshSignalAfterNetworkChangeAsync(port);
+                }
                 message = success
                     ? $"Đã chuyển sang {_scanMode}; modem xác nhận {verify.Trim()}"
                     : $"Không xác minh được chế độ {_scanMode}: {verify.Trim()}";
@@ -538,6 +546,52 @@
         int ok = results.Count(x => x);
         Snackbar.Add($"Chuyển {_scanMode} xong: {ok} thành công, {results.Length - ok} lỗi",
             ok == results.Length ? Severity.Success : Severity.Warning);
+    }
+
+    async Task<bool> RefreshSignalAfterNetworkChangeAsync(string portName)
+    {
+        // CSQ có thể trả 99 trong vài giây đầu khi RF đang đăng ký lại. Thử
+        // hữu hạn để UI nhận giá trị mới mà không giữ task mạng vô thời hạn.
+        for (int attempt = 0; attempt < 8 && !_pageCts.IsCancellationRequested; attempt++)
+        {
+            try
+            {
+                await Task.Delay(attempt == 0 ? 800 : 1500, _pageCts.Token);
+                if (!Vm.IsPortReadyForOperation(portName)) return false;
+
+                string response = await ModemService.SendCommandAsync(
+                    portName, "AT+CSQ", 5000, silent: true, ct: _pageCts.Token);
+                if (!gsm.ViewModels.MainViewModel.TryParseCsqResponse(response, out int rssi, out int percent))
+                    continue;
+
+                var port = Ports.FirstOrDefault(p =>
+                    p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                if (port == null) return false;
+
+                if (rssi != 99)
+                {
+                    await InvokeAsync(() =>
+                    {
+                        port.SignalRssi = rssi;
+                        port.SignalStrength = percent;
+                        port.LastSignalScanAt = DateTime.Now;
+                        StateHasChanged();
+                    });
+                    return true;
+                }
+            }
+            catch (OperationCanceledException) when (_pageCts.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Vm.AddLog($"[{portName}] [NETWORK_SIGNAL_REFRESH] {ex.Message}", "WARN");
+            }
+        }
+
+        Vm.AddLog($"[{portName}] [NETWORK_SIGNAL_WAIT] Đã chuyển chế độ mạng nhưng CSQ vẫn chưa có giá trị.", "INFO");
+        return false;
     }
 
     // ========== 5. KHÔI PHỤC SÓNG ==========

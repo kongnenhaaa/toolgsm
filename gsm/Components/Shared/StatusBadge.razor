@@ -7,7 +7,16 @@
         gsm.Models.SimStatus.Connecting      => ("Đang xử lý", "status-connecting", true),
         gsm.Models.SimStatus.ImeiError       => ("Lỗi IMEI", "status-error", false),
         gsm.Models.SimStatus.NoResponse      => ("Mất phản hồi", "status-error", false),
-        "USSDOK"                            => ("USSDOK", "status-active", false),
+        // Operation results are shown in the same status column as the modem state.
+        // Keep the old compact value as an alias so cached/legacy rows are rendered
+        // with the new user-facing label as well.
+        "USSDOK"                            => ("USSD OK", "status-active", false),
+        "USSD OK"                           => ("USSD OK", "status-active", false),
+        "SMS OK"                            => ("SMS OK", "status-active", false),
+        "Call OK"                           => ("Call OK", "status-active", false),
+        "USSD Fail"                         => ("USSD Fail", "status-error", false),
+        "SMS Fail"                          => ("SMS Fail", "status-error", false),
+        "Call Fail"                         => ("Call Fail", "status-error", false),
         "Chờ cắm SIM"                        => ("Chờ SIM", "status-idle", false),
         _                                    => (string.IsNullOrWhiteSpace(Status) ? "Chưa xác định" : Status, "status-idle", false)
     };

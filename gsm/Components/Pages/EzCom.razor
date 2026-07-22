@@ -30,11 +30,11 @@
         </MudSelect>
 
         <MudNumericField @bind-Value="_delayMs"
-                         Label="Delay (ms)"
-                         Min="300" Max="5000"
+                         Label="Lệch khởi động (ms)"
+                         Min="0" Max="5000"
                          Variant="Variant.Outlined" Margin="Margin.Dense"
                          Style="width:110px;"
-                         HelperText="giữa mỗi cổng" />
+                         HelperText="0 = chạy đồng thời tất cả COM" />
 
         @if (!_isRegistering)
         {
@@ -90,7 +90,7 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" Operation="SMS" @bind-SelectedItems="_selectedPorts" />
     </MudTabPanel>
 
     <!-- TAB 2: KẾT QUẢ ĐĂNG KÝ -->
@@ -154,7 +154,7 @@
     private string _ezCommand = "DK EZ";
     private string _ezNumber = "888";
     private string _sendMode = "selected";
-    private int _delayMs = 800;
+    private int _delayMs = 0;
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
 
@@ -182,15 +182,24 @@
     List<string> GetTargetPorts()
     {
         if (_sendMode == "all")
-            return ActivePorts.Select(p => p.PortName).ToList();
-        if (_selectedPorts.Any())
-            return _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
-        return ActivePorts.Select(p => p.PortName).ToList();
+            return ActivePorts.Select(p => p.PortName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        // "Cổng đã chọn" phải tôn trọng đúng selection; không tự mở rộng
+        // thành toàn bộ Active khi người dùng chưa tick cổng nào.
+        return _selectedPorts
+            .Where(p => p.Status == SimStatus.Active)
+            .Select(p => p.PortName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     // ========== 2. ĐĂNG KÝ EZ COM ==========
     async Task RegisterEzCom()
     {
+        if (_isRegistering)
+            return;
+
         if (string.IsNullOrWhiteSpace(_ezCommand) || string.IsNullOrWhiteSpace(_ezNumber))
         {
             Snackbar.Add("Nhập lệnh và số nhận (VD: DK EZ → 888)", Severity.Warning);
@@ -213,101 +222,141 @@
         }
 
         _isRegistering = true;
-        _cts = new CancellationTokenSource();
+        _cts?.Cancel();
+        _cts?.Dispose();
+        var runCts = new CancellationTokenSource();
+        _cts = runCts;
+        CancellationToken runToken = runCts.Token;
         _progressPercent = 0;
         int okCount = 0, failCount = 0;
+        int completedCount = 0;
 
         Snackbar.Add($"Đang đăng ký EZ COM trên {targets.Count} cổng...", Severity.Info);
         _subTab = 1; // Chuyển sang tab kết quả
 
-        for (int i = 0; i < targets.Count; i++)
+        async Task ProcessPortAsync(string port, int index)
         {
-            if (_cts.Token.IsCancellationRequested) break;
+            // Mỗi COM có một task độc lập. Delay chỉ làm lệch thời điểm bắt đầu,
+            // không biến toàn bộ batch trở lại thành vòng tuần tự.
+            if (index > 0 && _delayMs > 0)
+                await Task.Delay(TimeSpan.FromMilliseconds((long)_delayMs * index), runToken);
+            runToken.ThrowIfCancellationRequested();
 
-            string port = targets[i];
             string rawResponse = "";
             bool success = false;
-
-            _progressText = $"[{i + 1}/{targets.Count}] {port} → Đang gửi...";
-            _progressPercent = ((i + 1) * 100.0) / targets.Count;
-            StateHasChanged();
+            bool started = false;
 
             try
             {
                 if (!Vm.IsPortReadyForOperation(port))
                 {
                     rawResponse = "Cổng không còn Active hoặc SIM đã thay đổi";
-                    failCount++;
-                    throw new OperationCanceledException(rawResponse);
-                }
-                // Gửi SMS: lệnh đăng ký tới số dịch vụ
-                rawResponse = await Vm.QueueSmsAsync(port, _ezNumber.Trim(), _ezCommand.Trim(), _cts.Token);
-
-                if (rawResponse != null && (rawResponse.Contains("ERROR") || rawResponse.Contains("TIMEOUT")))
-                {
-                    failCount++;
-                    Snackbar.Add($"[{port}] Lỗi: {rawResponse.Trim()}", Severity.Error);
                 }
                 else
                 {
-                    success = true;
-                    okCount++;
-                    Snackbar.Add($"[{port}] ✓ Đã gửi đăng ký EZ COM", Severity.Success);
+                    started = true;
+                    // Gửi SMS trên task riêng của COM này. SendSmsViaServiceAsync
+                    // vẫn khóa tuần tự trong cùng COM nhưng không khóa COM khác.
+                    rawResponse = await Vm.QueueSmsAsync(
+                        port, _ezNumber.Trim(), _ezCommand.Trim(), runToken);
+                    success = !IsSmsFailure(rawResponse);
                 }
             }
-            catch (OperationCanceledException ex)
+            catch (OperationCanceledException)
             {
-                rawResponse = ex.Message;
+                if (!runToken.IsCancellationRequested)
+                    rawResponse = "Đã dừng cổng";
+                else
+                    return;
             }
             catch (Exception ex)
             {
                 rawResponse = ex.Message;
-                failCount++;
-                Snackbar.Add($"[{port}] Lỗi: {ex.Message}", Severity.Error);
             }
 
-            // Lấy SĐT của cổng nếu có
-            string phone = Ports.FirstOrDefault(p => p.PortName == port)?.PhoneNumber ?? "—";
+            if (success) Interlocked.Increment(ref okCount);
+            else if (started || !string.IsNullOrWhiteSpace(rawResponse))
+                Interlocked.Increment(ref failCount);
 
-            _ezResults.Insert(0, new EzResultItem
+            int completed = Interlocked.Increment(ref completedCount);
+            string response = string.IsNullOrWhiteSpace(rawResponse)
+                ? (success ? "Đã gửi SMS" : "Lỗi không xác định")
+                : rawResponse.Trim();
+            string phone = Vm.GetPortsSnapshot()
+                .FirstOrDefault(p => p.PortName.Equals(port, StringComparison.OrdinalIgnoreCase))?.PhoneNumber ?? "—";
+
+            await InvokeAsync(() =>
             {
-                Time = DateTime.Now,
-                Port = port,
-                Phone = phone,
-                Command = _ezCommand.Trim(),
-                Number = _ezNumber.Trim(),
-                Success = success,
-                Response = string.IsNullOrEmpty(rawResponse)
-                    ? (success ? "Đã gửi SMS" : "Lỗi không xác định")
-                    : rawResponse.Trim()
+                _ezResults.Insert(0, new EzResultItem
+                {
+                    Time = DateTime.Now,
+                    Port = port,
+                    Phone = phone,
+                    Command = _ezCommand.Trim(),
+                    Number = _ezNumber.Trim(),
+                    Success = success,
+                    Response = response
+                });
+
+                if (_ezResults.Count > 300)
+                    _ezResults.RemoveRange(300, _ezResults.Count - 300);
+
+                _progressText = $"Đã xử lý {completed}/{targets.Count} cổng | {port}";
+                _progressPercent = completed * 100.0 / targets.Count;
+                if (success)
+                    Snackbar.Add($"[{port}] ✓ Đã gửi đăng ký EZ COM", Severity.Success);
+                else
+                    Snackbar.Add($"[{port}] Lỗi: {response}", Severity.Error);
+                StateHasChanged();
             });
-
-            if (_ezResults.Count > 300)
-                _ezResults.RemoveRange(300, _ezResults.Count - 300);
-
-            StateHasChanged();
-
-            // Delay an toàn giữa các cổng (có CancellationToken)
-            try { await Task.Delay(_delayMs, _cts.Token); }
-            catch (TaskCanceledException) { break; }
         }
 
-        _isRegistering = false;
-        _progressText = "";
-        _progressPercent = 0;
+        try
+        {
+            // Chạy song song giữa các COM; thứ tự kết quả phụ thuộc vào thời điểm
+            // modem phản hồi, không phụ thuộc thứ tự danh sách.
+            await Task.WhenAll(targets.Select((port, index) => ProcessPortAsync(port, index)));
+        }
+        catch (OperationCanceledException)
+        {
+            // StopRegister chủ động hủy batch; các task chưa bắt đầu sẽ tự thoát.
+        }
+        finally
+        {
+            _isRegistering = false;
+            _progressText = runToken.IsCancellationRequested ? "Đã dừng" : "";
+            _progressPercent = 0;
+            if (ReferenceEquals(_cts, runCts))
+            {
+                _cts = null;
+                runCts.Dispose();
+            }
+        }
 
-        Snackbar.Add($"Hoàn tất EZ COM: {okCount} thành công, {failCount} lỗi",
-            failCount == 0 ? Severity.Success : Severity.Warning);
+        Snackbar.Add(runToken.IsCancellationRequested
+            ? $"Đã dừng EZ COM: {okCount} thành công, {failCount} lỗi"
+            : $"Hoàn tất EZ COM: {okCount} thành công, {failCount} lỗi",
+            failCount == 0 && !runToken.IsCancellationRequested ? Severity.Success : Severity.Warning);
         StateHasChanged();
     }
+
+    static bool IsSmsFailure(string? response) =>
+        string.IsNullOrWhiteSpace(response)
+        || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("Lỗi", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("thất bại", StringComparison.OrdinalIgnoreCase)
+        || response.Contains("failed", StringComparison.OrdinalIgnoreCase);
 
     // ========== 3. DỪNG ==========
     void StopRegister()
     {
         _cts?.Cancel();
-        _isRegistering = false;
-        _progressText = "Đã dừng";
-        Snackbar.Add("Đã dừng đăng ký", Severity.Normal);
+        // Giữ nút ở trạng thái đang chạy cho đến khi Task.WhenAll kết thúc;
+        // nếu đổi ngay sang "Đăng ký", người dùng có thể khởi động batch mới
+        // trong lúc các task cũ vẫn đang thoát.
+        _progressText = "Đang dừng...";
+        Snackbar.Add("Đang dừng đăng ký...", Severity.Normal);
     }
 
     // ========== 4. XÓA KẾT QUẢ ==========

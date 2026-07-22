@@ -1,0 +1,74 @@
+@using gsm.Components.Pages
+@inject NavigationManager Nav
+@implements IDisposable
+
+<div class="persistent-page-host">
+    <div class="persistent-page" style="@PageStyle("ussd")" aria-hidden="@(!IsActive("ussd"))">
+        <Ussd />
+    </div>
+    <div class="persistent-page" style="@PageStyle("sms")" aria-hidden="@(!IsActive("sms"))">
+        <Sms />
+    </div>
+    <div class="persistent-page" style="@PageStyle("call")" aria-hidden="@(!IsActive("call"))">
+        <Call />
+    </div>
+    <div class="persistent-page" style="@PageStyle("imei")" aria-hidden="@(!IsActive("imei"))">
+        <ImeiManager />
+    </div>
+    <div class="persistent-page" style="@PageStyle("ezcom")" aria-hidden="@(!IsActive("ezcom"))">
+        <EzCom />
+    </div>
+    <div class="persistent-page" style="@PageStyle("vnptpass")" aria-hidden="@(!IsActive("vnptpass"))">
+        <VnptPass />
+    </div>
+    <div class="persistent-page" style="@PageStyle("logs")" aria-hidden="@(!IsActive("logs"))">
+        <Logs />
+    </div>
+    <div class="persistent-page" style="@PageStyle("settings")" aria-hidden="@(!IsActive("settings"))">
+        <Settings />
+    </div>
+</div>
+
+@code {
+    private string _activeRoute = "ussd";
+
+    protected override void OnInitialized()
+    {
+        SyncRoute();
+        Nav.LocationChanged += OnLocationChanged;
+    }
+
+    private bool IsActive(string route) =>
+        string.Equals(_activeRoute, route, StringComparison.OrdinalIgnoreCase);
+
+    private string PageStyle(string route) =>
+        IsActive(route) ? "display:block;" : "display:none;";
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        SyncRoute();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void SyncRoute()
+    {
+        var path = Nav.ToBaseRelativePath(Nav.Uri)
+            .Split('?', '#')[0]
+            .Trim('/')
+            .ToLowerInvariant();
+        _activeRoute = path switch
+        {
+            "" or "ussd" => "ussd",
+            "vnpt-pass" => "vnptpass",
+            "sms" => "sms",
+            "call" => "call",
+            "imei" => "imei",
+            "ezcom" => "ezcom",
+            "logs" => "logs",
+            "settings" => "settings",
+            _ => "ussd"
+        };
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

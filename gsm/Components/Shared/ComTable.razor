@@ -144,7 +144,7 @@
                 else if (col.Name == "Status")
                 {
                     <MudTd Style="@($"{_brd} white-space:nowrap; font-size:16px;")">
-                        <StatusBadge Status="@context.StatusDisplay" />
+                        <StatusBadge Status="@context.GetOperationStatus(Operation)" />
                     </MudTd>
                 }
                 else if (col.Name == "NetworkProvider")
@@ -248,6 +248,11 @@
 @code {
     [Parameter]
     public IEnumerable<SimPort> Ports { get; set; } = Enumerable.Empty<SimPort>();
+
+    // Optional operation scope for the Status column. When set, a tab only
+    // renders its own USSD/SMS/Call result and never leaks another tab's result.
+    [Parameter]
+    public string Operation { get; set; } = string.Empty;
 
     [Parameter]
     public HashSet<SimPort> SelectedItems { get; set; } = new();
@@ -606,7 +611,7 @@
             {
                 "Stt"                => (stt++).ToString(),
                 "PortName"           => p.PortName ?? "",
-                "Status"             => p.StatusDisplay ?? "",
+                "Status"             => p.GetOperationStatus(Operation) ?? "",
                 "NetworkProvider"    => p.NetworkProvider ?? "",
                 "NetworkType"        => p.NetworkType ?? "",
                 "Signal"             => p.SignalDisplay,

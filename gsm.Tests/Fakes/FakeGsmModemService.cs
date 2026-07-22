@@ -73,6 +73,7 @@ public sealed class FakeGsmModemService : IGsmModemService
     public Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile) => Task.FromResult("OK");
     public Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile) => Task.FromResult(true);
     public void StartPollingNetwork(string portName) { }
+    public void SetSimRemovalWatchEnabled(string portName, bool enabled) { }
     public List<string> GetAvailablePorts() => ["COM1", "COM2"];
     public string ConnectAll(int baudRate = 115200) => "OK";
     public void Disconnect(string portName) { }

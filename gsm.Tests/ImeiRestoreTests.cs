@@ -7,6 +7,56 @@ namespace gsm.Tests;
 public sealed class ImeiRestoreTests
 {
     [Theory]
+    [InlineData("OK", true)]
+    [InlineData("ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)", true)]
+    [InlineData("ERROR: Port disconnected", true)]
+    [InlineData("ERROR", false)]
+    [InlineData("ERROR: Port not open", false)]
+    [InlineData("ERROR: Timeout waiting for lock", false)]
+    public void ResetResponse_DistinguishesRebootFromRealRejection(
+        string response,
+        bool expected)
+    {
+        Assert.Equal(expected, ImeiManagementService.IsResetAcceptedOrRebooting(response));
+    }
+
+    [Fact]
+    public async Task NoSimCreate_ResetTimeoutAfterVerifiedWrite_ContinuesAsReboot()
+    {
+        const string previousImei = "352054261826334";
+        const string targetImei = "355008370781449";
+        string modemImei = previousImei;
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) =>
+            {
+                if (command.StartsWith("AT+EGMR=1,7,", StringComparison.Ordinal))
+                    modemImei = targetImei;
+
+                return Task.FromResult(command switch
+                {
+                    "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                    "AT+EGMR=0,7;" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    "AT+CFUN=1,1" => "ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)",
+                    _ => "OK"
+                });
+            }
+        };
+        var service = new ImeiManagementService(modem);
+
+        ImeiProcessResult result = await service.ProcessImeiWithoutSimAsync(
+            new SimPort { PortName = "COM82", Imei = previousImei },
+            targetImei,
+            _ => true,
+            action => action(),
+            backupCurrentBeforeWrite: true);
+
+        Assert.Equal(ImeiProcessStatus.Applied, result.Status);
+        Assert.True(result.ModemResetRequested);
+        Assert.Equal(targetImei, result.FinalImei);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task MissingBackup_WaitsForAccept_EvenWhenPortIsRebooting(bool isRebooting)

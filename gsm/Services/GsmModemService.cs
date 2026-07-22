@@ -30,6 +30,7 @@ public interface IGsmModemService
     string ConnectAll(int baudRate = 115200);
     void Disconnect(string portName);
     void DisconnectAll();
+    IDisposable SuspendPortBackgroundOperations(string portName);
     void StartHotplugWaitLoop(string portName);
     Task HandleSimInsertedAsync(string portName);
     Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default);
@@ -120,6 +121,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _pollingCts = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _keepAliveCts = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _simMonitorCts = new();
+    private readonly ConcurrentDictionary<string, byte> _suspendedBackgroundPorts =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
     private readonly ConcurrentDictionary<string, bool> _simStackDisabledByTool = new();
     private readonly ConcurrentDictionary<string, int> _simRemovalEvidenceCounts = new();
@@ -140,6 +143,38 @@ public class GsmModemService : IGsmModemService
 
     public QuectelModemProfile? GetModemProfile(string portName) =>
         _modemProfiles.TryGetValue(portName, out var profile) ? profile : null;
+
+    public IDisposable SuspendPortBackgroundOperations(string portName)
+    {
+        bool ownsLease = _suspendedBackgroundPorts.TryAdd(portName, 0);
+        if (ownsLease)
+        {
+            CancelLoop(_pollingCts, portName);
+            CancelLoop(_keepAliveCts, portName);
+            CancelLoop(_simMonitorCts, portName);
+        }
+
+        return new BackgroundOperationLease(() =>
+        {
+            if (ownsLease)
+                _suspendedBackgroundPorts.TryRemove(portName, out _);
+        });
+
+        static void CancelLoop(
+            ConcurrentDictionary<string, CancellationTokenSource> loops,
+            string name)
+        {
+            if (!loops.TryRemove(name, out var cts)) return;
+            try { cts.Cancel(); cts.Dispose(); } catch { }
+        }
+    }
+
+    private sealed class BackgroundOperationLease(Action release) : IDisposable
+    {
+        private Action? _release = release;
+
+        public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
+    }
 
     // ===================== SMS DECODE + MULTIPART =====================
     private const string OtpKeywordPattern =
@@ -1355,6 +1390,8 @@ public class GsmModemService : IGsmModemService
 
     public void StartGlobalSimMonitor(string portName)
     {
+        if (_suspendedBackgroundPorts.ContainsKey(portName)) return;
+
         CancellationToken token;
         lock (_simMonitorCts)
         {
@@ -1375,6 +1412,7 @@ public class GsmModemService : IGsmModemService
             while (!token.IsCancellationRequested)
             {
                 try { await Task.Delay(5000, token); } catch { break; } // Quét mỗi 5 giây
+                if (_suspendedBackgroundPorts.ContainsKey(portName)) continue;
                 if (!_serialPorts.ContainsKey(portName)) break;
                 if (IsCallInProgress(portName)) continue;
                 if (_rebootRecoveryInProgress.ContainsKey(portName)) continue;
@@ -1472,6 +1510,8 @@ public class GsmModemService : IGsmModemService
 
     public void StartHotplugWaitLoop(string portName)
     {
+        if (_suspendedBackgroundPorts.ContainsKey(portName)) return;
+
         if (_keepAliveCts.TryRemove(portName, out var oldKeepAlive))
         {
             try { oldKeepAlive.Cancel(); oldKeepAlive.Dispose(); } catch { }
@@ -1792,6 +1832,8 @@ public class GsmModemService : IGsmModemService
 
     public void StartPollingNetwork(string portName)
     {
+        if (_suspendedBackgroundPorts.ContainsKey(portName)) return;
+
         CancellationToken token;
         lock (_pollingCts)
         {
@@ -1858,7 +1900,12 @@ public class GsmModemService : IGsmModemService
             {
                 try
                 {
-                    await Task.Delay(500, token);
+                    await Task.Delay(
+                        operatorReported
+                            ? GsmBackgroundSupervisor.GetSignalScanInterval(
+                                SettingsService.Current.SignalScanIntervalSeconds)
+                            : TimeSpan.FromMilliseconds(500),
+                        token);
                 }
                 catch (TaskCanceledException)
                 {
@@ -1932,10 +1979,13 @@ public class GsmModemService : IGsmModemService
                     _simRemovalEvidenceCounts.TryRemove(portName, out _);
                 }
 
-                await Task.Delay(100, token);
-                string csqStr = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true, ct: token);
-                if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
+                if (!operatorReported)
+                {
+                    await Task.Delay(100, token);
+                    string csqStr = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true, ct: token);
+                    if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
+                }
 
                 cycles++;
                 if (cycles % 5 != 0) continue;

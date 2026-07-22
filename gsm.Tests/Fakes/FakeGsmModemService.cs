@@ -75,6 +75,7 @@ public sealed class FakeGsmModemService : IGsmModemService
     public string ConnectAll(int baudRate = 115200) => "OK";
     public void Disconnect(string portName) { }
     public void DisconnectAll() { }
+    public IDisposable SuspendPortBackgroundOperations(string portName) => new NoopDisposable();
     public void StartHotplugWaitLoop(string portName) { }
     public Task HandleSimInsertedAsync(string portName) => Task.CompletedTask;
     public Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
@@ -106,6 +107,11 @@ public sealed class FakeGsmModemService : IGsmModemService
         _ when command.StartsWith("AT+CUSD=1", StringComparison.Ordinal) => "+CUSD: 0,\"10000 VND\",15\r\nOK",
         _ => "OK"
     };
+
+    private sealed class NoopDisposable : IDisposable
+    {
+        public void Dispose() { }
+    }
 }
 
 public sealed class ImmediateGsmOperationDelay : IGsmOperationDelay

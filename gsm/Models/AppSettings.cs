@@ -125,6 +125,7 @@ public class AppSettings
     public bool ForceCfun1AfterReboot { get; set; } = false;
     public int RecoveryThreshold { get; set; } = 12;
     public int WatchdogSeconds { get; set; } = 50;
+    public int SignalScanIntervalSeconds { get; set; } = 15;
     public bool AutoCheckBalanceAfterSms { get; set; } = true;
     public bool AutoUssdOnNetwork { get; set; } = true;
     public int UssdRetrySeconds { get; set; } = 35;

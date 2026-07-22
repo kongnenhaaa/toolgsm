@@ -66,21 +66,25 @@
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>
             @{
-                var pendingList = SelectedItems.Any() ? SelectedItems.ToList() : Ports.ToList();
-                var pendingCount = pendingList.Count(IsImeiActionPending);
+                // Khi người dùng đã chọn COM, số trên nút phải phản ánh đúng số COM
+                // đang chọn. Việc kiểm tra trạng thái/khả năng thao tác diễn ra sau
+                // khi bấm nút và được báo rõ trong hộp xác nhận/kết quả.
+                var imeiActionCount = SelectedItems.Any()
+                    ? SelectedItems.Count
+                    : Ports.Count(CanCreateImei);
             }
             
             <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning" Class="mr-2"
                        StartIcon="@Icons.Material.Filled.Brush"
                        OnClick="CreateNewImeiSelected"
                        Disabled="@_bulkImeiAction">
-                @(_bulkImeiAction ? "Đang xử lý..." : pendingCount > 0 ? $"TẠO IMEI MỚI ({pendingCount})" : "TẠO IMEI MỚI")
+                @(_bulkImeiAction ? "Đang xử lý..." : imeiActionCount > 0 ? $"TẠO IMEI MỚI ({imeiActionCount})" : "TẠO IMEI MỚI")
             </MudButton>
             <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="mr-2"
                        StartIcon="@Icons.Material.Filled.Restore"
                        OnClick="RestoreImeiSelected"
                        Disabled="@_bulkImeiAction">
-                @(pendingCount > 0 ? $"KHÔI PHỤC IMEI ({pendingCount})" : "KHÔI PHỤC IMEI")
+                @(imeiActionCount > 0 ? $"KHÔI PHỤC IMEI ({imeiActionCount})" : "KHÔI PHỤC IMEI")
             </MudButton>
 
                   <MudSpacer />

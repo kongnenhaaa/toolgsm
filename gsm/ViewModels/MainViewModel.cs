@@ -29,6 +29,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IGsmUssdService _ussdService;
     private readonly IGsmCallService _callService;
     private readonly IGsmBackgroundSupervisor _backgroundSupervisor;
+    private GsmBackgroundSupervisorContext? _backgroundSupervisorContext;
     private readonly Services.ImeiManagementService _imeiManagementService;
     private readonly SpeechToTextService _speechToTextService;
     private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
@@ -1336,11 +1337,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ProxyManager = new ProxyManagerService();
         ProxyManager.Start();
 
-        _backgroundSupervisor.Start(new GsmBackgroundSupervisorContext
+        _backgroundSupervisorContext = new GsmBackgroundSupervisorContext
         {
             GetPorts = GetPortsSnapshot,
             IsActive = IsActive,
             IsWatchdogEnabled = () => IsWatchdogEnabled,
+            GetSignalScanIntervalSeconds = () =>
+                Math.Clamp(SettingsService.Current.SignalScanIntervalSeconds, 5, 300),
             IsSmsInProgress = portName => _smsService.IsInProgress(portName),
             SendBalanceUssdAsync = async (port, reason) =>
             {
@@ -1365,7 +1368,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             InvalidateSession = InvalidateSimSession,
             RecoverFaultedPortAsync = AutoRecoverFaultedPortAsync,
             Log = AddLog
-        }, _lifetimeCts.Token);
+        };
+        _backgroundSupervisor.Start(_backgroundSupervisorContext, _lifetimeCts.Token);
     }
 
     private void UpdateSmsReceiverPhone(string portName, string newPhoneNumber)
@@ -2802,6 +2806,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.CallCount = 0;
         port.SignalStrength = 0;
         port.SignalRssi = 99;
+        port.LastSignalScanAt = null;
         port.Otp = string.Empty;
         port.Sender = string.Empty;
         port.LastMessageContent = string.Empty;
@@ -6097,6 +6102,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var saved = SettingsService.Current;
         if (saved != null) AppSettings = saved;
 
+        // Restart the timers so a newly saved signal interval takes effect now,
+        // instead of waiting for the previous interval to expire.
+        if (_backgroundSupervisorContext != null)
+            _backgroundSupervisor.Start(_backgroundSupervisorContext, _lifetimeCts.Token);
+
         if (AppSettings != null && AppSettings.EnableAutoCallForwarding && !string.IsNullOrWhiteSpace(AppSettings.ForwardPhoneNumber))
         {
             AddLog("[Settings] Đang áp dụng chuyển hướng cuộc gọi...", "INFO");
@@ -7501,6 +7511,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (port == null || target.Length != 15 || !string.IsNullOrWhiteSpace(NormalizeCcid(port.Serial)))
             return false;
         if (!TryBeginPortInitialization(portName, out Guid initializationLease)) return false;
+        IDisposable backgroundLease = _modemService.SuspendPortBackgroundOperations(portName);
+        bool resumeHotplugAfterOperation = false;
         _pendingNoSimImeiActivations[portName] = target;
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
@@ -7546,6 +7558,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             bool completed = await CompleteNoSimImeiResetAsync(port, result.FinalImei, cts.Token);
             if (!completed)
                 _pendingNoSimImeiActivations.TryRemove(portName, out _);
+            resumeHotplugAfterOperation = completed;
             return completed;
         }
         catch (OperationCanceledException)
@@ -7562,6 +7575,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             EndPortInitialization(portName, initializationLease);
+            backgroundLease.Dispose();
+            if (resumeHotplugAfterOperation)
+                _modemService.StartHotplugWaitLoop(portName);
         }
     }
 
@@ -7602,7 +7618,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
             });
-            _modemService.StartHotplugWaitLoop(portName);
             return true;
         }
 

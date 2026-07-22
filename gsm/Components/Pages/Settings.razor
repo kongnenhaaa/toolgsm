@@ -60,7 +60,13 @@
                 <MudText Typo="Typo.caption" Class="mb-3 ml-10" Style="color:#64748B; display:block;">
                     Recovery giữ nguyên phiên SIM, cấu hình lại mạng và xác minh trước khi trở lại Active.
                 </MudText>
-                <MudStack Row="true" Spacing="2">
+                <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudNumericField T="int" @bind-Value="_signalScanIntervalSeconds"
+                                     Label="Quét sóng mỗi (giây)"
+                                     Min="5" Max="300" Step="5"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     Style="max-width:200px;"
+                                     HelperText="Áp dụng cho AT+CSQ và kiểm tra rút SIM" />
                     <MudNumericField T="int" @bind-Value="_recoveryThreshold"
                                      Label="Ngưỡng recovery (lần poll)"
                                      Min="5" Max="30"
@@ -380,6 +386,7 @@
     private bool _autoRecovery = true;
     private int _recoveryThreshold = 12;
     private int _watchdogSeconds = 50;
+    private int _signalScanIntervalSeconds = 15;
 
     // ========== SMS & USSD ==========
     private bool _receiveAllSms = true;
@@ -462,6 +469,7 @@
             _autoRecovery = cfg.AutoRecovery;
             _recoveryThreshold = cfg.RecoveryThreshold;
             _watchdogSeconds = cfg.WatchdogSeconds;
+            _signalScanIntervalSeconds = cfg.SignalScanIntervalSeconds;
 
             _receiveAllSms = cfg.ReceiveAllSms;
             _autoCheckBalanceAfterSms = cfg.AutoCheckBalanceAfterSms;
@@ -525,6 +533,11 @@
                 Snackbar.Add("Thông số recovery/watchdog nằm ngoài khoảng hợp lệ.", Severity.Warning);
                 return;
             }
+            if (_signalScanIntervalSeconds is < 5 or > 300)
+            {
+                Snackbar.Add("Chu kỳ quét sóng phải nằm trong khoảng 5–300 giây.", Severity.Warning);
+                return;
+            }
             if (_smsTimeout is < 10000 or > 60000 || _ussdRetrySeconds is < 15 or > 90)
             {
                 Snackbar.Add("Thông số timeout SMS/USSD nằm ngoài khoảng hợp lệ.", Severity.Warning);
@@ -545,6 +558,7 @@
             cfg.ForceCfun1AfterReboot = false;
             cfg.RecoveryThreshold = _recoveryThreshold;
             cfg.WatchdogSeconds = _watchdogSeconds;
+            cfg.SignalScanIntervalSeconds = _signalScanIntervalSeconds;
 
             cfg.ReceiveAllSms = _receiveAllSms;
             cfg.AutoCheckBalanceAfterSms = _autoCheckBalanceAfterSms;
@@ -618,6 +632,7 @@
         _autoRecovery = true;
         _recoveryThreshold = 12;
         _watchdogSeconds = 50;
+        _signalScanIntervalSeconds = 15;
 
         _receiveAllSms = true;
         _autoCheckBalanceAfterSms = true;

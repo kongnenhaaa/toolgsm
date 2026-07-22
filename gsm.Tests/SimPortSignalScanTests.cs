@@ -4,6 +4,17 @@ namespace gsm.Tests;
 
 public class SimPortSignalScanTests
 {
+    [Theory]
+    [InlineData(1, 5)]
+    [InlineData(15, 15)]
+    [InlineData(600, 300)]
+    public void SignalScanInterval_IsClampedToSafeRange(int configured, int expected)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expected),
+            gsm.Services.GsmBackgroundSupervisor.GetSignalScanInterval(configured));
+    }
+
     [Fact]
     public void LastSignalScanAt_FormatsTimeAndNotifiesDisplay()
     {

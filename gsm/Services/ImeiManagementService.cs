@@ -193,6 +193,27 @@ public class ImeiManagementService
         _logAction?.Invoke(message, level);
     }
 
+    internal static bool IsResetAcceptedOrRebooting(string? response)
+    {
+        if (string.IsNullOrWhiteSpace(response)) return false;
+        if (response.Contains("OK", StringComparison.OrdinalIgnoreCase)
+            && !response.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // EC20 may reset its USB serial endpoint before returning the final OK.
+        // These responses are produced only after SendCommandAsync wrote CFUN=1,1;
+        // the reconnect/readback phase remains responsible for proving success.
+        return response.Contains("Timeout (Thiết bị không phản hồi OK/ERROR)", StringComparison.OrdinalIgnoreCase)
+            || response.Contains("Port disconnected", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ResetResponseLostDuringReboot(string? response) =>
+        !string.IsNullOrWhiteSpace(response)
+        && !response.Contains("OK", StringComparison.OrdinalIgnoreCase)
+        && IsResetAcceptedOrRebooting(response);
+
     public static bool IsValidImei(string? imei)
     {
         string clean = NormalizeImeiValue(imei);
@@ -505,8 +526,10 @@ public class ImeiManagementService
                 port.IsRebooting = true;
             });
             string reset = await _modemService.SendCommandAsync(portName, "AT+CFUN=1,1", 10000, silent: true);
-            if (reset.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            if (!IsResetAcceptedOrRebooting(reset))
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Modem từ chối CFUN=1,1 sau khi ghi IMEI" };
+            if (ResetResponseLostDuringReboot(reset))
+                Log($"[{portName}] [IMEI_RESET_IN_PROGRESS] CFUN=1,1 đã được gửi; COM ngắt/timeout trước OK, chuyển sang xác minh sau reconnect.", "WARN");
 
             Log($"[{portName}] [IMEI_WRITE_OK] slot7={targetImei}; modem reset requested", "SUCCESS");
             return new ImeiProcessResult
@@ -601,8 +624,10 @@ public class ImeiManagementService
                 port.IsRebooting = true;
             });
             string reset = await _modemService.SendCommandAsync(portName, "AT+CFUN=1,1", 10000, silent: true, ct);
-            if (reset.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            if (!IsResetAcceptedOrRebooting(reset))
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Modem từ chối CFUN=1,1 sau khi ghi IMEI" };
+            if (ResetResponseLostDuringReboot(reset))
+                Log($"[{portName}] [IMEI_RESET_IN_PROGRESS] CFUN=1,1 đã được gửi; COM ngắt/timeout trước OK, chuyển sang xác minh sau reconnect.", "WARN");
 
             Log($"[{portName}] [IMEI_WRITE_NO_SIM_OK] previous={currentImei}; slot7={targetImei}; modem reset requested", "SUCCESS");
             return new ImeiProcessResult

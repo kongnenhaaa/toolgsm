@@ -8,6 +8,7 @@ public sealed class GsmBackgroundSupervisorContext
     public required Func<List<SimPort>> GetPorts { get; init; }
     public required Func<SimPort, bool> IsActive { get; init; }
     public required Func<bool> IsWatchdogEnabled { get; init; }
+    public required Func<int> GetSignalScanIntervalSeconds { get; init; }
     public required Func<string, bool> IsSmsInProgress { get; init; }
     public required Func<SimPort, string, Task> SendBalanceUssdAsync { get; init; }
     public required Action<SimPort, int, int> SetSignalReading { get; init; }
@@ -94,7 +95,8 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
 
     private async Task RunSignalLoopAsync(GsmBackgroundSupervisorContext context, CancellationToken token)
     {
-        while (await WaitNextAsync(TimeSpan.FromSeconds(15), token))
+        while (await WaitNextAsync(GetSignalScanInterval(
+            context.GetSignalScanIntervalSeconds()), token))
         {
             try
             {
@@ -118,6 +120,9 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
             catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
         }
     }
+
+    internal static TimeSpan GetSignalScanInterval(int seconds) =>
+        TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 300));
 
     private async Task RunSmsSweepLoopAsync(GsmBackgroundSupervisorContext context, CancellationToken token)
     {

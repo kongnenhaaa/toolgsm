@@ -7,13 +7,14 @@ namespace gsm.Tests;
 public sealed class SimPresenceEvidenceTests
 {
     [Fact]
-    public void RemovedSim_ClearsSimTypeFromUiState()
+    public void RemovedSim_ClearsSimTypeAndLastSignalScanFromUiState()
     {
         var port = new SimPort
         {
             SimType = "VINA690",
             PhoneNumber = "0912345678",
-            Balance = "10000"
+            Balance = "10000",
+            LastSignalScanAt = new DateTime(2026, 7, 22, 14, 5, 9)
         };
 
         MainViewModel.ClearSimScopedState(port);
@@ -21,6 +22,8 @@ public sealed class SimPresenceEvidenceTests
         Assert.Empty(port.SimType);
         Assert.Empty(port.PhoneNumber);
         Assert.Empty(port.Balance);
+        Assert.Null(port.LastSignalScanAt);
+        Assert.Empty(port.LastSignalScanDisplay);
     }
 
     [Theory]

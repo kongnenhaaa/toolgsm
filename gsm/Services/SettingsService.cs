@@ -62,6 +62,8 @@ public static class SettingsService
         settings.FirebaseDbUrl = FirebaseService.DatabaseUrl;
         settings.FirebaseAuthToken = "";
         settings.WriteOtpToFirebase = true;
+        settings.SignalScanIntervalSeconds = Math.Clamp(
+            settings.SignalScanIntervalSeconds, 5, 300);
         if (string.IsNullOrWhiteSpace(settings.MachineId))
             settings.MachineId = Environment.MachineName;
         return settings;

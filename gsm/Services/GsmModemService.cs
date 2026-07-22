@@ -50,7 +50,6 @@ public interface IGsmModemService
     event EventHandler<GsmDataEventArgs> DtmfReceived;
     
     event EventHandler<gsm.Models.IncomingCallSession> IncomingCallRinging;
-    event EventHandler<gsm.Models.IncomingCallSession> IncomingCallAnswered;
     event EventHandler<gsm.Models.IncomingCallSession> IncomingCallEnded;
 }
 
@@ -103,7 +102,6 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, SerialPort> _serialPorts = new();
     private readonly ConcurrentDictionary<string, gsm.Models.IncomingCallSession> _incomingCalls = new();
     private readonly ConcurrentDictionary<string, byte> _incomingCallNotifications = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _incomingAnswerOperations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new();
     private readonly ConcurrentDictionary<string, StringBuilder> _portBuffers = new();
     private readonly ConcurrentDictionary<string, object> _portBufferLocks = new(StringComparer.OrdinalIgnoreCase);
@@ -608,7 +606,6 @@ public class GsmModemService : IGsmModemService
     public event EventHandler<GsmDataEventArgs>? DtmfReceived;
 
     public event EventHandler<gsm.Models.IncomingCallSession>? IncomingCallRinging;
-    public event EventHandler<gsm.Models.IncomingCallSession>? IncomingCallAnswered;
     public event EventHandler<gsm.Models.IncomingCallSession>? IncomingCallEnded;
 
     public List<string> GetAvailablePorts()
@@ -2804,7 +2801,6 @@ public class GsmModemService : IGsmModemService
         _isDownloading.Clear();
         _incomingCalls.Clear();
         _incomingCallNotifications.Clear();
-        _incomingAnswerOperations.Clear();
         foreach (var signal in _outgoingCallEndSignals.Values)
             signal.TrySetResult("Port disconnected");
         _outgoingCallEndSignals.Clear();
@@ -2817,7 +2813,6 @@ public class GsmModemService : IGsmModemService
     {
         _incomingCalls.TryRemove(portName, out _);
         _incomingCallNotifications.TryRemove(portName, out _);
-        _incomingAnswerOperations.TryRemove(portName, out _);
         if (_outgoingCallEndSignals.TryRemove(portName, out var callEndSignal))
             callEndSignal.TrySetResult("Port disconnected");
         if (_smsReadQueues.TryRemove(portName, out var smsQueue)) smsQueue.Writer.TryComplete();
@@ -3772,310 +3767,18 @@ public class GsmModemService : IGsmModemService
             });
         }
 
-        var cfg = gsm.Services.SettingsService.Current;
-        if (cfg?.AutoAnswerIncoming == true && session.AnsweredAt == null)
-        {
-            _ = AnswerAndRecordAsync(portName);
-        }
-        else
-        {
-            IncomingCallRinging?.Invoke(this, session);
-        }
-    }
-
-    public async Task AnswerAndRecordAsync(string portName)
-    {
-        if (!_incomingAnswerOperations.TryAdd(portName, 0))
-            return;
-
-        if (!_incomingCalls.TryGetValue(portName, out var session))
-        {
-            session = new gsm.Models.IncomingCallSession { Port = portName, Caller = "Unknown", RingAt = DateTime.Now };
-            _incomingCalls[portName] = session;
-        }
-
-        try
-        {
-            // 1. Nhấc máy
-            var ata = await SendCommandAsync(portName, "ATA", 8000);
-            if (ata.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"ATA fail: {ata}" });
-                return;
-            }
-
-            session.AnsweredAt = DateTime.Now;
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đã nhấc máy từ {session.Caller}" });
-
-            var cfg = gsm.Services.SettingsService.Current;
-            if (cfg?.RecordIncoming == true
-                && GetModemProfile(portName)?.Supports(ModemCapability.AudioRecord) == true)
-            {
-                // 2. Bắt đầu ghi âm (Quectel)
-                string remoteName = $"in_{DateTime.Now:HHmmss}.wav";
-                session.Recording = true;
-
-                // Xóa file cũ
-                await SendCommandAsync(portName, $"AT+QFDEL=\"{remoteName}\"", 2000, silent: true);
-
-                var rec = await SendCommandAsync(portName, $"AT+QAUDRD=1,\"{remoteName}\",1", 5000);
-                if (rec.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
-                {
-                    rec = await SendCommandAsync(portName, $"AT+QAUDRD=1,\"{remoteName}\"", 5000);
-                }
-
-                session.LocalWavPath = remoteName; // tạm giữ tên remote
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đang ghi âm → {remoteName} | {rec}" });
-            }
-
-            IncomingCallAnswered?.Invoke(this, session);
-        }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"AnswerAndRecord lỗi: {ex.Message}" });
-        }
-        finally
-        {
-            _incomingAnswerOperations.TryRemove(portName, out _);
-        }
+        IncomingCallRinging?.Invoke(this, session);
     }
 
     async Task OnIncomingCallEnded(string portName)
     {
         _incomingCallNotifications.TryRemove(portName, out _);
-        _incomingAnswerOperations.TryRemove(portName, out _);
         if (!_incomingCalls.TryRemove(portName, out var session))
             return;
 
         session.EndedAt = DateTime.Now;
-
-        try
-        {
-            // 1. Dập (phòng hờ)
-            await SendCommandAsync(portName, "ATH", 3000, silent: true);
-
-            var cfg = gsm.Services.SettingsService.Current;
-
-            // 2. Dừng ghi âm
-            if (session.Recording)
-            {
-                await SendCommandAsync(portName, "AT+QAUDRD=0", 5000);
-                session.Recording = false;
-            }
-
-            string remoteName = session.LocalWavPath ?? "";
-            if (string.IsNullOrEmpty(remoteName) || cfg?.RecordIncoming != true)
-            {
-                IncomingCallEnded?.Invoke(this, session);
-                return;
-            }
-
-            // 3. Tải file về PC
-            string localDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                "ToolGSM_Recordings");
-            Directory.CreateDirectory(localDir);
-
-            string localPath = Path.Combine(localDir,
-                $"{portName}_{session.Caller.Replace("+", "")}_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
-
-            bool ok = await DownloadBinaryFileFromModemAsync(portName, remoteName, localPath);
-            if (ok)
-            {
-                session.LocalWavPath = localPath;
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Đã tải ghi âm → {localPath}" });
-
-                // 4. Xóa file trên modem
-                await SendCommandAsync(portName, $"AT+QFDEL=\"{remoteName}\"", 3000, silent: true);
-
-                // 5. STT
-                if (cfg?.SttIncoming == true)
-                {
-                    await ProcessRecordingSttAsync(session);
-                }
-                else
-                {
-                    IncomingCallEnded?.Invoke(this, session);
-                }
-            }
-            else
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Tải ghi âm thất bại" });
-                IncomingCallEnded?.Invoke(this, session);
-            }
-        }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"OnIncomingCallEnded lỗi: {ex.Message}" });
-            IncomingCallEnded?.Invoke(this, session);
-        }
-    }
-
-    async Task<bool> DownloadBinaryFileFromModemAsync(string portName, string remoteName, string localPath)
-    {
-        try
-        {
-            // Lấy kích thước file để download
-            var sizeResp = await SendCommandAsync(portName, $"AT+QFLST=\"{remoteName}\"", 5000);
-            long expectedSize = 0;
-            var match = Regex.Match(sizeResp, @"\+QFLST:\s*""[^""]+"",(\d+)");
-            if (match.Success)
-            {
-                expectedSize = long.Parse(match.Groups[1].Value);
-            }
-
-            _isDownloading[portName] = true;
-            try
-            {
-                if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return false;
-
-                // Send QFDWL command rawly
-                string cmd = $"AT+QFDWL=\"{remoteName}\"\r";
-                byte[] cmdBytes = Encoding.ASCII.GetBytes(cmd);
-                await sp.BaseStream.WriteAsync(cmdBytes, 0, cmdBytes.Length);
-
-                // Read until CONNECT
-                long startTicks = DateTime.UtcNow.Ticks;
-                string header = "";
-                while (TimeSpan.FromTicks(DateTime.UtcNow.Ticks - startTicks).TotalSeconds < 10)
-                {
-                    if (sp.BytesToRead > 0)
-                    {
-                        byte[] buf = new byte[sp.BytesToRead];
-                        int r = await sp.BaseStream.ReadAsync(buf, 0, buf.Length);
-                        header += Encoding.ASCII.GetString(buf, 0, r);
-                        if (header.Contains("CONNECT")) break;
-                        if (header.Contains("ERROR")) return false;
-                    }
-                    await Task.Delay(50);
-                }
-
-                if (!header.Contains("CONNECT")) return false;
-
-                using var fs = new FileStream(localPath, FileMode.Create, FileAccess.Write);
-                long totalRead = 0;
-                startTicks = DateTime.UtcNow.Ticks;
-                
-                while (TimeSpan.FromTicks(DateTime.UtcNow.Ticks - startTicks).TotalSeconds < 60)
-                {
-                    if (sp.BytesToRead > 0)
-                    {
-                        byte[] buf = new byte[sp.BytesToRead];
-                        int r = await sp.BaseStream.ReadAsync(buf, 0, buf.Length);
-                        if (r > 0)
-                        {
-                            await fs.WriteAsync(buf, 0, r);
-                            totalRead += r;
-                            startTicks = DateTime.UtcNow.Ticks; // reset timeout
-                        }
-                    }
-                    else
-                    {
-                        await Task.Delay(50);
-                    }
-                    
-                    // Stop condition
-                    if (expectedSize > 0 && totalRead >= expectedSize) break;
-                    // Otherwise rely on timeout
-                }
-                
-                return File.Exists(localPath) && new FileInfo(localPath).Length > 100;
-            }
-            finally
-            {
-                _isDownloading[portName] = false;
-            }
-        }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"DownloadFile lỗi: {ex.Message}" });
-            return false;
-        }
-    }
-
-    async Task ProcessRecordingSttAsync(gsm.Models.IncomingCallSession session)
-    {
-        if (string.IsNullOrEmpty(session.LocalWavPath) || !File.Exists(session.LocalWavPath))
-        {
-            IncomingCallEnded?.Invoke(this, session);
-            return;
-        }
-
-        try
-        {
-            var cfg = gsm.Services.SettingsService.Current;
-            string text = "";
-
-            if (cfg?.SttEngine == "whisper" && !string.IsNullOrWhiteSpace(cfg.WhisperApiUrl))
-            {
-                text = await RecognizeWhisperHttp(session.LocalWavPath, cfg.WhisperApiUrl);
-            }
-            else
-            {
-                text = await Task.Run(() => RecognizeWindows(session.LocalWavPath));
-            }
-
-            session.Transcript = text ?? "";
-            session.Otp = ExtractOtp(session.Transcript);
-
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = session.Port, Data = $"STT: {session.Transcript} | OTP={session.Otp ?? "—"}" });
-        }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = session.Port, Data = $"STT lỗi: {ex.Message}" });
-        }
-        finally
-        {
-            IncomingCallEnded?.Invoke(this, session);
-        }
-    }
-
-    string RecognizeWindows(string wavPath)
-    {
-        try
-        {
-            using var recognizer = new System.Speech.Recognition.SpeechRecognitionEngine(new System.Globalization.CultureInfo("vi-VN"));
-            recognizer.LoadGrammar(new System.Speech.Recognition.DictationGrammar());
-            recognizer.SetInputToWaveFile(wavPath);
-            var result = recognizer.Recognize();
-            return result?.Text ?? "";
-        }
-        catch
-        {
-            try
-            {
-                using var en = new System.Speech.Recognition.SpeechRecognitionEngine(new System.Globalization.CultureInfo("en-US"));
-                en.LoadGrammar(new System.Speech.Recognition.DictationGrammar());
-                en.SetInputToWaveFile(wavPath);
-                var result = en.Recognize();
-                return result?.Text ?? "";
-            }
-            catch { return ""; }
-        }
-    }
-
-    async Task<string> RecognizeWhisperHttp(string wavPath, string apiUrl)
-    {
-        try
-        {
-            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(3) };
-            using var form = new System.Net.Http.MultipartFormDataContent();
-            var bytes = await File.ReadAllBytesAsync(wavPath);
-            form.Add(new System.Net.Http.ByteArrayContent(bytes), "file", Path.GetFileName(wavPath));
-            form.Add(new System.Net.Http.StringContent("vi"), "language");
-            form.Add(new System.Net.Http.StringContent("json"), "response_format");
-
-            var resp = await http.PostAsync(apiUrl, form);
-            var json = await resp.Content.ReadAsStringAsync();
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("text", out var t))
-                return t.GetString() ?? "";
-            return json;
-        }
-        catch
-        {
-            return "";
-        }
+        await Task.CompletedTask;
+        IncomingCallEnded?.Invoke(this, session);
     }
 }
 

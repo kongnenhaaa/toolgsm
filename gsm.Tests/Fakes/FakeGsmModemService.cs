@@ -23,7 +23,6 @@ public sealed class FakeGsmModemService : IGsmModemService
     public event EventHandler<GsmDataEventArgs>? CallEnded;
     public event EventHandler<GsmDataEventArgs>? DtmfReceived;
     public event EventHandler<IncomingCallSession>? IncomingCallRinging;
-    public event EventHandler<IncomingCallSession>? IncomingCallAnswered;
     public event EventHandler<IncomingCallSession>? IncomingCallEnded;
 
     public async Task<string> SendCommandAsync(
@@ -94,7 +93,6 @@ public sealed class FakeGsmModemService : IGsmModemService
     public void RaiseCallEnded(string portName) => CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName });
     public void RaiseDtmf(string portName, string data) => DtmfReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = data });
     public void RaiseRinging(IncomingCallSession session) => IncomingCallRinging?.Invoke(this, session);
-    public void RaiseAnswered(IncomingCallSession session) => IncomingCallAnswered?.Invoke(this, session);
     public void RaiseIncomingEnded(IncomingCallSession session) => IncomingCallEnded?.Invoke(this, session);
 
     private static string DefaultResponse(string command) => command switch

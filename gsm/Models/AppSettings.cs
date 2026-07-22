@@ -44,15 +44,6 @@ public class AppSettings
     public string FirebaseAuthToken { get; set; } = "";
     public bool WriteOtpToFirebase { get; set; } = true;
 
-    // Tự động bắt máy và Ghi âm STT
-    public bool EnableAutoAnswer { get => AutoAnswerIncoming; set => AutoAnswerIncoming = value; }
-    public bool AutoAnswerIncoming { get; set; } = true;
-    public bool RecordIncoming { get; set; } = true;
-    public bool SttIncoming { get; set; } = true;
-    public string SttEngine { get; set; } = "whisper";    // whisper | windows
-    public string WhisperApiUrl { get; set; } = "http://127.0.0.1:8080/inference";
-
-
     // Tự động Watchdog (Khởi động lại modem khi lỗi)
     public bool EnableAutoWatchdog { get; set; } = true;
 

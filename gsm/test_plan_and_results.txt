@@ -14,7 +14,7 @@
 - Trạng thái kiểm thử: ĐẠT (PASS)
   + 32/32 cổng mở thành công.
   + 27/32 cổng online, lấy thành công SĐT & Số dư qua USSD staggered queue.
-  + Kiểm tra dọn dẹp flash UFS, Vosk STT, HTTP Proxy multi-IP, Telegram, Webhook đều đạt.
+  + Kiểm tra dọn dẹp flash UFS, HTTP Proxy multi-IP, Telegram, Webhook đều đạt.
 
 ================================================================================
           LẦN KIỂM THỬ 2: THIẾT BỊ GSM BOX 28 CỔNG (Thiết bị mới cắm)

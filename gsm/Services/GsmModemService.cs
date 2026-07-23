@@ -146,6 +146,9 @@ public class GsmModemService : IGsmModemService
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _pollingCts = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _keepAliveCts = new();
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _portHealthCts = new();
+    private readonly ConcurrentDictionary<string, byte> _portHealthRecoveryOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _portHealthFailureCounts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _simMonitorCts = new();
     private readonly ConcurrentDictionary<string, int> _suspendedBackgroundPorts =
         new(StringComparer.OrdinalIgnoreCase);
@@ -356,6 +359,7 @@ public class GsmModemService : IGsmModemService
         Path.Combine(AppBootstrap.DataDir, "sms_multipart_journal.json"));
     private readonly ConcurrentDictionary<string, DateTime> _deliveredStoredSms = new();
     private readonly ConcurrentDictionary<string, Channel<string>> _smsReadQueues = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSweepLocks = new(StringComparer.OrdinalIgnoreCase);
     // Value 1 = one read is queued/running; value 2 = the same SIM index was
     // announced again while it was busy and must be read once more. EC20 can
     // recycle an index immediately after CMGD, so silently dropping the second
@@ -1012,6 +1016,7 @@ public class GsmModemService : IGsmModemService
                         
                         // Khởi động luồng giám sát SIM nền tảng toàn cầu (Global SIM Monitor) đảm bảo theo dõi 100% thời gian thực
                         StartGlobalSimMonitor(p);
+                        StartPortHealthSupervisor(p);
                         
                         newlyOpenedPorts.Add(p);
                     }
@@ -1045,6 +1050,116 @@ public class GsmModemService : IGsmModemService
         if (newlyOpenedPorts.Count > 0) result += $"Mới: {string.Join(", ", newlyOpenedPorts)}. ";
         if (failedPorts.Count > 0) result += $"Lỗi: {string.Join(", ", failedPorts)}.";
         return string.IsNullOrWhiteSpace(result) ? "Không có cổng mới cần kết nối" : result.Trim();
+    }
+
+    private void StartPortHealthSupervisor(string portName)
+    {
+        if (_portHealthCts.TryRemove(portName, out var oldCts))
+        {
+            try { oldCts.Cancel(); oldCts.Dispose(); } catch { }
+        }
+
+        var healthCts = new CancellationTokenSource();
+        _portHealthCts[portName] = healthCts;
+        CancellationToken token = healthCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            int consecutiveFailures = 0;
+            try
+            {
+                // Let the SAuto initialization sequence own the port first.
+                await Task.Delay(TimeSpan.FromSeconds(20), token);
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), token);
+                    if (token.IsCancellationRequested) break;
+
+                    if (_suspendedBackgroundPorts.ContainsKey(portName)
+                        || IsCallInProgress(portName)
+                        || _commandTcs.ContainsKey(portName))
+                    {
+                        continue;
+                    }
+
+                    bool healthy = _serialPorts.TryGetValue(portName, out var serialPort)
+                        && serialPort.IsOpen;
+                    if (healthy)
+                    {
+                        string probe = await SendCommandAsync(
+                            portName, "AT", 3000, silent: true, ct: token);
+                        healthy = probe.Contains("OK", StringComparison.OrdinalIgnoreCase)
+                            && !probe.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
+                            && !probe.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    if (healthy)
+                    {
+                        consecutiveFailures = 0;
+                        _portHealthFailureCounts.TryRemove(portName, out _);
+                        continue;
+                    }
+
+                    consecutiveFailures++;
+                    _portHealthFailureCounts[portName] = consecutiveFailures;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[PORT_HEALTH] Không nhận phản hồi AT ({consecutiveFailures}/2); đang theo dõi để tự mở lại COM."
+                    });
+
+                    if (consecutiveFailures < 2
+                        || !_portHealthRecoveryOwners.TryAdd(portName, 0))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = "[PORT_HEALTH_RECOVERY] COM không phản hồi 2 chu kỳ; đóng/mở lại riêng cổng và khởi tạo lại SIM."
+                        });
+                        Disconnect(portName);
+                        PortDisconnected?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = "COM không phản hồi; hệ thống đang tự kết nối lại."
+                        });
+                        // Disconnect cancels this supervisor's token by design;
+                        // use an uncancelled handoff delay so the reconnect still
+                        // runs after the old handle has been removed.
+                        await Task.Delay(1500);
+                        ConnectAll(115200);
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex)
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[PORT_HEALTH_RECOVERY_FAILED] {ex.Message}"
+                        });
+                    }
+                    finally
+                    {
+                        _portHealthRecoveryOwners.TryRemove(portName, out _);
+                    }
+                    break;
+                }
+            }
+            catch (OperationCanceledException) { }
+            finally
+            {
+                if (_portHealthCts.TryGetValue(portName, out var current)
+                    && ReferenceEquals(current, healthCts))
+                {
+                    _portHealthCts.TryRemove(portName, out _);
+                }
+                healthCts.Dispose();
+            }
+        }, token);
     }
 
     private async Task InitializeOpenedPortsAsync(IReadOnlyCollection<string> portNames)
@@ -2039,7 +2154,7 @@ public class GsmModemService : IGsmModemService
                 try
                 {
                     await Task.Delay(
-                        firstSweep ? TimeSpan.FromSeconds(60) : TimeSpan.FromSeconds(30),
+                        firstSweep ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(15),
                         token);
                     firstSweep = false;
                     if (!token.IsCancellationRequested && !IsCallInProgress(portName))
@@ -2142,13 +2257,13 @@ public class GsmModemService : IGsmModemService
                     ClearSimRemovalEvidence(portName);
                 }
 
-                if (!operatorReported)
-                {
-                    await Task.Delay(100, token);
-                    string csqStr = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true, ct: token);
-                    if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
-                }
+                // Keep CSQ live even after COPS has succeeded. Previously CSQ was
+                // queried only during initial registration, so a port could lose
+                // RF while the UI kept showing the last healthy signal forever.
+                await Task.Delay(100, token);
+                string csqStr = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true, ct: token);
+                if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
 
                 cycles++;
                 if (cycles % 5 != 0) continue;
@@ -2166,7 +2281,20 @@ public class GsmModemService : IGsmModemService
                     continue;
                 }
 
-                if (operatorReported) continue;
+                if (operatorReported)
+                {
+                    // COPS disappeared after a previously healthy registration.
+                    // Re-enter the recovery path instead of silently continuing
+                    // with stale network/UI data.
+                    operatorReported = false;
+                    waitingNoticeCount++;
+                    cycles = 149;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = "[NETWORK_LOST] COPS biến mất sau khi đang hoạt động; bắt đầu khôi phục đăng ký mạng."
+                    });
+                }
 
                 // Nếu modem có CSQ nhưng không tự hoàn tất COPS, khởi động lại
                 // auto-selection giống SAuto. Không dùng COPS=2/CFUN vì có thể
@@ -3034,6 +3162,7 @@ public class GsmModemService : IGsmModemService
     {
         foreach (var cts in _pollingCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
         foreach (var cts in _keepAliveCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
+        foreach (var cts in _portHealthCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
         foreach (var cts in _simMonitorCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
         foreach (var cts in _simRemovalConfirmationCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
         foreach (var cts in _portLifetimeCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
@@ -3060,6 +3189,9 @@ public class GsmModemService : IGsmModemService
         _modemProfiles.Clear();
         _pollingCts.Clear();
         _keepAliveCts.Clear();
+        _portHealthCts.Clear();
+        _portHealthRecoveryOwners.Clear();
+        _portHealthFailureCounts.Clear();
         _simMonitorCts.Clear();
         _simRemovalConfirmationCts.Clear();
         _simRemovalWatchEnabled.Clear();
@@ -3080,6 +3212,7 @@ public class GsmModemService : IGsmModemService
         foreach (Channel<string> queue in _smsReadQueues.Values) queue.Writer.TryComplete();
         _smsReadQueues.Clear();
         _queuedSmsIndices.Clear();
+        _smsSweepLocks.Clear();
     }
 
     public void Disconnect(string portName)
@@ -3100,6 +3233,12 @@ public class GsmModemService : IGsmModemService
         {
             try { lifetimeCts.Cancel(); lifetimeCts.Dispose(); } catch { }
         }
+        if (_portHealthCts.TryRemove(portName, out var healthCts))
+        {
+            try { healthCts.Cancel(); healthCts.Dispose(); } catch { }
+        }
+        _portHealthRecoveryOwners.TryRemove(portName, out _);
+        _portHealthFailureCounts.TryRemove(portName, out _);
         if (_serialPorts.TryGetValue(portName, out var sp))
         {
             try
@@ -3150,6 +3289,7 @@ public class GsmModemService : IGsmModemService
         // Dọn cancellation state kể cả khi kết nối bị lỗi giữa chừng trước lúc tạo semaphore.
         if (_pollingCts.TryRemove(portName, out var polling)) { try { polling.Cancel(); polling.Dispose(); } catch { } }
         if (_keepAliveCts.TryRemove(portName, out var keepAlive)) { try { keepAlive.Cancel(); keepAlive.Dispose(); } catch { } }
+        if (_portHealthCts.TryRemove(portName, out var health)) { try { health.Cancel(); health.Dispose(); } catch { } }
         if (_simMonitorCts.TryRemove(portName, out var simMonitor)) { try { simMonitor.Cancel(); simMonitor.Dispose(); } catch { } }
         _simRemovalWatchEnabled.TryRemove(portName, out _);
         CancelSimRemovalConfirmation(portName);
@@ -3158,6 +3298,11 @@ public class GsmModemService : IGsmModemService
         _rebootRecoveryInProgress.TryRemove(portName, out _);
         _simInitInProgress.TryRemove(portName, out _);
         _simInsertInProgress.TryRemove(portName, out _);
+        if (_smsSweepLocks.TryRemove(portName, out _))
+        {
+            // Do not dispose here: a sweep already holding this lock may still
+            // execute its finally/Release after the COM is disconnected.
+        }
     }
 
     private bool EnsurePortOpen(string portName, out SerialPort? sp)
@@ -3674,12 +3819,37 @@ public class GsmModemService : IGsmModemService
     public async Task SweepUnreadSmsAsync(string portName)
     {
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return;
-        
-        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đang quét tin nhắn tồn đọng (Sweep)..." });
-        // ALL is intentional: CMGR marks a multipart segment REC READ before the remaining
-        // segments arrive. Scanning only REC UNREAD loses that segment after restart.
-        string command = GetModemProfile(portName)?.IsQuectel == true ? "AT+CMGL=4" : "AT+CMGL=\"ALL\"";
-        await SendCommandAsync(portName, command, 25000, silent: true);
+        if (_suspendedBackgroundPorts.ContainsKey(portName)
+            || IsCallInProgress(portName)
+            || _commandTcs.ContainsKey(portName))
+        {
+            return;
+        }
+
+        SemaphoreSlim sweepLock = _smsSweepLocks.GetOrAdd(portName, static _ => new SemaphoreSlim(1, 1));
+        if (!await sweepLock.WaitAsync(0)) return;
+
+        try
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đang quét tin nhắn tồn đọng (Sweep)..." });
+
+            // Re-assert receive mode on every recovery sweep. SMS sending and some
+            // EC20 firmware revisions can leave CMGF/CNMI/URC routing changed; without
+            // this, the SIM stores the message but no +CMTI reaches the application.
+            await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true);
+            await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 5000, silent: true);
+            if (GetModemProfile(portName)?.IsQuectel == true)
+                await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true);
+
+            // ALL is intentional: CMGR marks a multipart segment REC READ before the remaining
+            // segments arrive. Scanning only REC UNREAD loses that segment after restart.
+            string command = GetModemProfile(portName)?.IsQuectel == true ? "AT+CMGL=4" : "AT+CMGL=\"ALL\"";
+            await SendCommandAsync(portName, command, 25000, silent: true);
+        }
+        finally
+        {
+            sweepLock.Release();
+        }
     }
 
     private void SignalOutgoingCallEnded(string portName, string reason)

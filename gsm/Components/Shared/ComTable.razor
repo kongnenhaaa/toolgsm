@@ -176,7 +176,7 @@
                 else if (col.Name == "LastSignalScan")
                 {
                     <MudTd Style="@($"{_brd} {_body} white-space:nowrap; font-size:16px; font-variant-numeric:tabular-nums;")">
-                        @(string.IsNullOrWhiteSpace(context.LastSignalScanDisplay) ? "—" : context.LastSignalScanDisplay)
+                        @RenderLoadingOrValue(context, context.LastSignalScanDisplay)
                     </MudTd>
                 }
                 else if (col.Name == "Balance")
@@ -187,11 +187,11 @@
                 }
                 else if (col.Name == "PhoneNumber")
                 {
-                    <MudTd Style="@($"{_brd} {_body} white-space:nowrap; mso-number-format:'\\@'; font-size:16px;")">@RenderLoadingOrValue(context, context.PhoneNumber)</MudTd>
+                    <MudTd Style="@($"{_brd} {_body} white-space:nowrap; mso-number-format:'\\@'; font-size:16px;")">@RenderLoadingOrValue(context, context.PhoneNumber, forceLoading: context.IsBalanceLoading)</MudTd>
                 }
                 else if (col.Name == "SimType")
                 {
-                    <MudTd Style="@($"font-size:16px; font-weight:600; color:var(--mud-palette-info); {_brd} {_body} white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.SimType) ? "-" : context.SimType)</MudTd>
+                    <MudTd Style="@($"font-size:16px; font-weight:600; color:var(--mud-palette-info); {_brd} {_body} white-space:nowrap;")">@RenderLoadingOrValue(context, context.SimType, forceLoading: context.IsBalanceLoading)</MudTd>
                 }
                 else if (col.Name == "Imei")
                 {
@@ -207,15 +207,15 @@
                 }
                 else if (col.Name == "SimRegDate")
                 {
-                    <MudTd Style="@($"font-size:16px; {_brd} {_body} white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.SimRegDate) ? "—" : context.SimRegDate)</MudTd>
+                    <MudTd Style="@($"font-size:16px; {_brd} {_body} white-space:nowrap;")">@RenderLoadingOrValue(context, context.SimRegDate, forceLoading: context.IsBalanceLoading)</MudTd>
                 }
                 else if (col.Name == "Lock1C")
                 {
-                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.Lock1C) ? "—" : context.Lock1C)</MudTd>
+                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@RenderLoadingOrValue(context, context.Lock1C, forceLoading: context.IsBalanceLoading)</MudTd>
                 }
                 else if (col.Name == "Lock2C")
                 {
-                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@(string.IsNullOrWhiteSpace(context.Lock2C) ? "—" : context.Lock2C)</MudTd>
+                    <MudTd Style="@($"font-size:16px; {_brd} color:#F87171; white-space:nowrap;")">@RenderLoadingOrValue(context, context.Lock2C, forceLoading: context.IsBalanceLoading)</MudTd>
                 }
                 else if (col.Name == "ForwardedTo")
                 {

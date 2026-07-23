@@ -2903,10 +2903,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (e.Data.StartsWith("[NETWORK_WAITING]") && !_modemService.IsCallInProgress(e.PortName))
             {
-                // Modem và phiên SIM vẫn hoạt động; chỉ chưa có COPS. Không đổi
-                // Active thành NoResponse và không reset RF, để cổng tự bắt sóng.
+                // CSQ only proves that the modem sees radio energy. Until COPS
+                // returns a registered operator, do not show the port as Active:
+                // Active is the network-ready state used to start the live USSD
+                // lookup. Keeping the port Connecting also makes the table render
+                // a pending indicator instead of Active + dashes.
+                if (TryGetCurrentSimSession(e.PortName, out _, out _, out _)
+                    && port.Status == SimStatus.Active)
+                {
+                    port.Status = SimStatus.Connecting;
+                }
                 port.LastError = "Đang chờ đăng ký nhà mạng (không reset RF)";
                 port.SignalStrength = 0;
+                UpdateDashboard();
             }
             else if (e.Data.StartsWith("[NETWORK_RECOVERY]") && !_modemService.IsCallInProgress(e.PortName))
             {
@@ -2923,7 +2932,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 bool simInitialized = TryGetCurrentSimSession(e.PortName, out _, out _, out _)
                     && !string.IsNullOrWhiteSpace(port.Serial)
                     && !string.IsNullOrWhiteSpace(port.Imei);
-                port.Status = simInitialized ? SimStatus.Active : SimStatus.NoResponse;
+                // The SIM/IMEI can be valid while registration is still pending;
+                // keep the row in the connecting state until a real COPS result.
+                port.Status = simInitialized ? SimStatus.Connecting : SimStatus.NoResponse;
                 port.LastError = simInitialized
                     ? "SIM đã sẵn sàng nhưng chưa đăng ký được nhà mạng"
                     : "Không đăng ký được mạng";
@@ -2978,6 +2989,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.NetworkProvider = provider;
                 if (typeMatch.Success)
                     port.NetworkType = typeMatch.Groups[1].Value.Trim();
+                // The fallback response is a valid network registration result.
+                // Promote a port that was waiting for COPS back to Active before
+                // starting the initial live lookup.
+                if (port.Status == SimStatus.Connecting
+                    && TryGetCurrentSimSession(e.PortName, out _, out _, out _))
+                {
+                    port.Status = SimStatus.Active;
+                    port.LastError = string.Empty;
+                }
                 TryStartVinaInitialLookup(port);
             }
             else if (e.Data.Contains("+CUSD:"))
@@ -3153,11 +3173,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     // Mọi tác vụ hậu đăng ký mạng phải thuộc đúng phiên CCID hiện tại.
                     // Khi rút/đổi SIM, token bị hủy và không lệnh USSD/chuyển tiếp nào được chạy tiếp.
-                    if (!TryGetCurrentSimSession(port.PortName, out var activeCcid, out var activeEpoch, out var activeToken)
-                        || port.Status != SimStatus.Active)
+                    if (!TryGetCurrentSimSession(port.PortName, out var activeCcid, out var activeEpoch, out var activeToken))
                     {
                         return;
                     }
+
+                    // COPS is the point at which radio registration is complete.
+                    // A port may have been downgraded to Connecting while waiting
+                    // for COPS; promote it here so *111#/*101# can start normally.
+                    if (port.Status == SimStatus.Connecting)
+                    {
+                        port.Status = SimStatus.Active;
+                        port.LastError = string.Empty;
+                        UpdateDashboard();
+                    }
+                    if (port.Status != SimStatus.Active) return;
 
                     _ = Task.Run(async () => 
                     {

@@ -2195,7 +2195,9 @@ public class GsmModemService : IGsmModemService
                 if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
                 if (IsCallInProgress(portName)) continue;
 
-                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true, ct: token);
+                // CPIN is a guard, not the network critical path. Keep its
+                // timeout bounded so a slow reboot cannot postpone COPS/USSD.
+                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 3000, silent: true, ct: token);
                 if (cpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
                     || cpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase))
                 {
@@ -2257,16 +2259,21 @@ public class GsmModemService : IGsmModemService
                     ClearSimRemovalEvidence(portName);
                 }
 
-                // Keep CSQ live even after COPS has succeeded. Previously CSQ was
-                // queried only during initial registration, so a port could lose
-                // RF while the UI kept showing the last healthy signal forever.
-                await Task.Delay(100, token);
-                string csqStr = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true, ct: token);
-                if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
-
                 cycles++;
-                if (cycles % 5 != 0) continue;
+                // While registration is pending, query COPS every pass so a COM
+                // does not sit in a 50-second blind gap. Once COPS succeeds,
+                // keep the lighter five-cycle cadence for health monitoring.
+                if (operatorReported && cycles % 5 != 0)
+                {
+                    // CSQ is a health/UI probe; do not let it delay the first
+                    // post-IMEI COPS query or the first *111# activation.
+                    await Task.Delay(100, token);
+                    string liveCsq = await SendCommandAsync(
+                        portName, "AT+CSQ", 2000, silent: true, ct: token);
+                    if (liveCsq.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
+                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = liveCsq.Trim() });
+                    continue;
+                }
 
                 string copsStr = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true, ct: token);
                 if (TryParseCopsResponse(copsStr, out _, out string act))
@@ -2281,6 +2288,14 @@ public class GsmModemService : IGsmModemService
                     continue;
                 }
 
+                // Only probe CSQ after a COPS miss. A slow CSQ response must not
+                // postpone the first network registration/USSD attempt.
+                await Task.Delay(100, token);
+                string csqStr = await SendCommandAsync(
+                    portName, "AT+CSQ", 2000, silent: true, ct: token);
+                if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
+
                 if (operatorReported)
                 {
                     // COPS disappeared after a previously healthy registration.
@@ -2288,7 +2303,9 @@ public class GsmModemService : IGsmModemService
                     // with stale network/UI data.
                     operatorReported = false;
                     waitingNoticeCount++;
-                    cycles = 149;
+                    // Re-enter the per-port recovery probe quickly after a
+                    // previously healthy registration disappears.
+                    cycles = 29;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
@@ -2299,7 +2316,8 @@ public class GsmModemService : IGsmModemService
                 // Nếu modem có CSQ nhưng không tự hoàn tất COPS, khởi động lại
                 // auto-selection giống SAuto. Không dùng COPS=2/CFUN vì có thể
                 // làm rơi phiên thoại hoặc nạp lại danh tính trong lúc chạy.
-                if (cycles == 150)
+                // Re-arm auto-selection early on COMs that have CSQ but no COPS.
+                if (cycles == 30)
                 {
                     waitingNoticeCount++;
                     string creg = await SendCommandAsync(
@@ -2332,9 +2350,9 @@ public class GsmModemService : IGsmModemService
                     cycles = 0;
                     continue;
                 }
-                // Nếu vẫn chưa đăng ký sau một chu kỳ nữa, tiếp tục để vòng lặp
-                // tự kiểm tra và phát lại COPS=0 ở mốc 75 giây kế tiếp.
-                else if (cycles >= 300)
+                // Nếu vẫn chưa đăng ký sau nhiều chu kỳ, tiếp tục để vòng lặp
+                // tự kiểm tra trạng thái modem ở mốc kế tiếp.
+                else if (cycles >= 60)
                 {
                     cycles = 0;
                     waitingNoticeCount++;
@@ -3090,22 +3108,30 @@ public class GsmModemService : IGsmModemService
                     if (tcs.Task.AsyncState is string cmd
                         && cmd.StartsWith("AT+CUSD=1", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Đợi USSD từ tổng đài. Nếu chỉ mới có OK/phản hồi trung gian mà chưa có +CUSD: và chưa có lỗi, thoát ra tiếp tục đợi
-                        if (!currentData.Contains("+CUSD:") && 
-                            !currentData.Contains("ERROR") && 
-                            !currentData.Contains("+CME ERROR") && 
+                        // CUSD=1 is asynchronous: OK only acknowledges that the
+                        // modem accepted the request. Release the per-COM command
+                        // lock at that point; a later +CUSD is handled below as an
+                        // unsolicited event and still reaches MainViewModel.
+                        bool ackOnlyCompleted = false;
+                        if (!currentData.Contains("+CUSD:") &&
+                            !currentData.Contains("ERROR") &&
+                            !currentData.Contains("+CME ERROR") &&
                             !currentData.Contains("+CMS ERROR"))
                         {
-                            return; // Tiếp tục chờ phản hồi từ nhà mạng
+                            int ackEndIndex = match.Index + match.Length;
+                            tcs.TrySetResult(currentData.Substring(0, ackEndIndex));
+                            buffer.Remove(0, ackEndIndex);
+                            currentData = buffer.ToString();
+                            ackOnlyCompleted = true;
                         }
 
                         // VNSKY có lỗi gửi "+CME ERROR: 100" trước "+CUSD:"
-                        if (currentData.Contains("+CME ERROR: 100"))
+                        if (!ackOnlyCompleted && currentData.Contains("+CME ERROR: 100"))
                         {
                             buffer.Replace("+CME ERROR: 100", ""); 
                             currentData = buffer.ToString();
                         }
-                        else
+                        else if (!ackOnlyCompleted)
                         {
                             int endIndex = match.Index + match.Length;
                             tcs.TrySetResult(currentData.Substring(0, endIndex));
@@ -3350,7 +3376,12 @@ public class GsmModemService : IGsmModemService
         // CUSD=1 opens an asynchronous network session. CUSD=2 only closes it and
         // must complete immediately on OK instead of waiting for a +CUSD payload.
         if (command.StartsWith("AT+CUSD=1", StringComparison.OrdinalIgnoreCase))
+        {
+            // CUSD is asynchronous. HandleDataReceivedCore releases the command
+            // on the transport ACK (OK); a later +CUSD is consumed as an URC, so
+            // a silent network request cannot hold this COM's UART for 45 seconds.
             timeoutMs = Math.Max(timeoutMs, 10000);
+        }
         else if (command.StartsWith("AT+CMGR")) timeoutMs = 25000;
 
         if (!EnsurePortOpen(portName, out var sp) || sp == null)

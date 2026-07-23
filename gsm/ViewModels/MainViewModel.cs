@@ -2246,8 +2246,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 && port.Status == SimStatus.Active;
             if (activationSucceeded)
             {
-                await _modemService.ConfigureVoiceFeaturesAsync(port.PortName, token);
                 _modemService.StartPollingNetwork(port.PortName);
+                // Voice URCs are optional setup. Defer them until the modem has
+                // had a chance to attach so CLIP/DSCI/QTONEDET cannot contend
+                // with the first COPS/USSD pass or an immediate IMEI action.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(2000, token);
+                        if (IsSimSessionCurrent(port.PortName, ccid, epoch)
+                            && port.Status == SimStatus.Active)
+                        {
+                            await _modemService.ConfigureVoiceFeaturesAsync(port.PortName, token);
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex)
+                    {
+                        AddLog($"[{port.PortName}] [IMEI_RESUME_VOICE] {ex.Message}", "INFO");
+                    }
+                }, token);
             }
             return activationSucceeded;
         }
@@ -2273,23 +2292,84 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SautoResetFailureKind FailureKind);
 
     private async Task<SautoResetResult> CompleteSautoResetAsync(
-        SimPort port, string ccid, string expectedImei, long epoch, CancellationToken token)
+        SimPort port, string ccid, string expectedImei, long epoch, CancellationToken token,
+        Action? releaseBackgroundOperations = null)
     {
-        // SAuto has already issued CFUN=1,1 after an exact slot-7 readback. Do not
-        // send another CFUN transition here; wait for EC20 to boot and verify the
-        // persisted value before starting normal network polling.
-        // Trace SAuto để EC20 khởi động lại khoảng 10 giây sau CFUN=1,1 rồi mới
-        // bắt đầu probe. Không chen CFUN khác vào cửa sổ boot này.
-        await Task.Delay(10000, token);
+        // CFUN=1,1 was already issued after slot 7 readback. Probe readiness
+        // immediately instead of sleeping a blind 10 seconds, and let the normal
+        // network loop take over as soon as the UART starts answering again.
+        // The IMEI was read back before CFUN=1,1. Only give the reboot a short
+        // grace window here; network polling is allowed to finish the attach.
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
         bool sawIdentityMismatch = false;
-        for (int attempt = 0; attempt < 30; attempt++)
+        bool identityVerifiedAfterReset = false;
+        bool modemResponded = false;
+        int attempt = 0;
+
+        async Task<SautoResetResult> ActivateAsync(string phase)
+        {
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
+                port.IsRebooting = false;
+                port.Imei = expectedImei;
+                port.Serial = NormalizeCcid(ccid);
+                MarkPortActiveAfterInit(port.PortName);
+            });
+
+            bool active = IsSimSessionCurrent(port.PortName, ccid, epoch)
+                && port.Status == SimStatus.Active;
+            if (active)
+            {
+                // The IMEI write was already read back successfully before CFUN=1,1.
+                // Release this COM as soon as the modem is usable; do not keep the
+                // whole bank behind the foreground IMEI lease while waiting for
+                // optional voice setup or the first COPS result.
+                releaseBackgroundOperations?.Invoke();
+                _modemService.StartPollingNetwork(port.PortName);
+                AddLog($"[{port.PortName}] [IMEI_RESUME_NETWORK] phase={phase}; RF thả tự do, bắt đầu dò COPS/USSD.", "SUCCESS");
+
+                // Voice URCs are not part of the IMEI/network critical path. Run
+                // their best-effort setup after the first registration window so
+                // CLIP/DSCI cannot delay COPS or *111#/*101# on this COM.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(2000, token);
+                        if (IsSimSessionCurrent(port.PortName, ccid, epoch)
+                            && port.Status == SimStatus.Active)
+                        {
+                            await _modemService.ConfigureVoiceFeaturesAsync(port.PortName, token);
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex)
+                    {
+                        AddLog($"[{port.PortName}] [IMEI_RESUME_VOICE] {ex.Message}", "INFO");
+                    }
+                }, token);
+            }
+
+            return new SautoResetResult(active, active
+                ? SautoResetFailureKind.None
+                : SautoResetFailureKind.TransientSimNotReady);
+        }
+
+        while (DateTime.UtcNow < deadline)
         {
             token.ThrowIfCancellationRequested();
             if (!IsSimSessionCurrent(port.PortName, ccid, epoch))
                 return new SautoResetResult(false, SautoResetFailureKind.SessionChanged);
 
+            attempt++;
             string cpin = await _modemService.SendCommandAsync(
-                port.PortName, "AT+CPIN?", 5000, silent: true, ct: token);
+                port.PortName, "AT+CPIN?", 3000, silent: true, ct: token);
+            bool cpinCommandFailed = cpin.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || cpin.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
+                || cpin.Contains("not open", StringComparison.OrdinalIgnoreCase);
+            if (!cpinCommandFailed && !string.IsNullOrWhiteSpace(cpin)) modemResponded = true;
+
             if (cpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase))
             {
                 InvalidateSimSession(port.PortName);
@@ -2302,53 +2382,83 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 });
                 return new SautoResetResult(false, SautoResetFailureKind.SimRemoved);
             }
-            string storedResponse = await _modemService.SendCommandAsync(
-                port.PortName, "AT+EGMR=0,7;", 8000, silent: true, ct: token);
-            string storedImei = Regex.Match(storedResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
-            if (!string.IsNullOrWhiteSpace(storedImei)
-                && !ImeiManagementService.AreEquivalentImei(storedImei, expectedImei))
+
+            bool cpinReady = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
+            string storedImei = string.Empty;
+            // Slot 7 is useful for mismatch detection, but reading it on every
+            // boot probe adds several seconds on EC20 firmware that is still
+            // opening the NV/SIM stack. Read it when CPIN is ready and periodically
+            // while the modem is coming back.
+            if (cpinReady || attempt % 4 == 0)
             {
-                sawIdentityMismatch = true;
+                string storedResponse = await _modemService.SendCommandAsync(
+                    port.PortName, "AT+EGMR=0,7;", 4000, silent: true, ct: token);
+                storedImei = Regex.Match(storedResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
+                identityVerifiedAfterReset = ImeiManagementService.AreEquivalentImei(
+                    storedImei, expectedImei);
+                if (!string.IsNullOrWhiteSpace(storedImei)
+                    && !identityVerifiedAfterReset)
+                {
+                    sawIdentityMismatch = true;
+                }
             }
 
-            bool ready = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
-                && (ImeiManagementService.AreEquivalentImei(storedImei, expectedImei) || string.IsNullOrEmpty(storedImei))
+            bool ready = cpinReady
+                && identityVerifiedAfterReset
                 && IsSimSessionCurrent(port.PortName, ccid, epoch);
-            AddLog($"[{port.PortName}] [SAUTO_RESET_VERIFY] attempt={attempt + 1}; CPIN={cpin.Trim()}; slot7={storedImei}; expected={expectedImei}; ready={ready.ToString().ToLowerInvariant()}",
+            AddLog($"[{port.PortName}] [SAUTO_RESET_VERIFY] attempt={attempt}; CPIN={cpin.Trim()}; slot7={storedImei}; expected={expectedImei}; ready={ready.ToString().ToLowerInvariant()}",
                 ready ? "SUCCESS" : "INFO");
 
-            if (ready)
-            {
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
-                    port.IsRebooting = false;
-                    port.Imei = expectedImei;
-                    port.Serial = NormalizeCcid(ccid);
-                    MarkPortActiveAfterInit(port.PortName);
-                });
-                bool active = IsSimSessionCurrent(port.PortName, ccid, epoch)
-                    && port.Status == SimStatus.Active;
-                // StartPollingNetwork phát đúng nhịp CPIN -> CSQ -> COPS của SAuto.
-                // Không phát CSQ/COPS thủ công ở đây vì sẽ tạo một lượt thừa.
-                if (active)
-                {
-                    await _modemService.ConfigureVoiceFeaturesAsync(port.PortName, token);
-                    _modemService.StartPollingNetwork(port.PortName);
-                }
-                return new SautoResetResult(active, active
-                    ? SautoResetFailureKind.None
-                    : SautoResetFailureKind.TransientSimNotReady);
-            }
+            if (ready) return await ActivateAsync("verified");
 
-            await Task.Delay(1500, token);
+            // CPIN: NOT READY/OK is a normal post-reset transient, not a reason
+            // to hold this COM behind the IMEI lease. The write was already
+            // verified before reboot, so let the per-port polling loop wait for
+            // CPIN/COPS while USSD recovery proceeds as soon as registration is
+            // reported.
+            if (modemResponded
+                && attempt >= 2
+                && !sawIdentityMismatch
+                && identityVerifiedAfterReset
+                && !cpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
+                && !cpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase)
+                && !cpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase))
+            {
+                AddLog($"[{port.PortName}] [IMEI_VERIFY_DEFERRED] CPIN còn chuyển trạng thái ({cpin.Trim()}); nhả COM cho polling mạng.", "INFO");
+                return await ActivateAsync("deferred");
+            }
+            await Task.Delay(500, token);
         }
 
-        await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
-        return new SautoResetResult(false,
-            sawIdentityMismatch
-                ? SautoResetFailureKind.IdentityMismatch
-                : SautoResetFailureKind.TransientSimNotReady);
+        if (sawIdentityMismatch)
+        {
+            // A confirmed mismatch is different from a slow reboot: keep RF off
+            // for that explicit failure, but never turn it off for a transient
+            // CPIN/USB timeout.
+            await _modemService.SendCommandAsync(port.PortName, "AT+CFUN=4", 5000, silent: true);
+            return new SautoResetResult(false, SautoResetFailureKind.IdentityMismatch);
+        }
+
+        if (modemResponded
+            && identityVerifiedAfterReset
+            && IsSimSessionCurrent(port.PortName, ccid, epoch))
+        {
+            AddLog($"[{port.PortName}] [IMEI_VERIFY_DEFERRED] Modem đã phản hồi nhưng CPIN/slot 7 còn chậm; nhả RF và để polling tự hoàn tất.", "WARN");
+            return await ActivateAsync("deferred");
+        }
+
+        // Never leave RF enabled with an unverified post-reset identity. The
+        // target was written correctly before reboot, but a modem that fails to
+        // expose slot 7 after reboot must remain offline until the recovery pass
+        // can verify the new IMEI again.
+        if (!identityVerifiedAfterReset && IsSimSessionCurrent(port.PortName, ccid, epoch))
+        {
+            AddLog($"[{port.PortName}] [IMEI_VERIFY_HOLD] Chưa đọc lại được slot 7 sau reboot; giữ RF tắt để không lộ IMEI cũ.", "WARN");
+            await _modemService.SendCommandAsync(
+                port.PortName, "AT+CFUN=4", 5000, silent: true);
+        }
+
+        return new SautoResetResult(false, SautoResetFailureKind.TransientSimNotReady);
     }
 
     private void ScheduleImeiVerificationRecovery(
@@ -2440,7 +2550,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task ProcessCurrentSimSessionAsync(
         SimPort port, string ccid, bool forceAccept, long epoch, CancellationToken token,
         Guid initializationLease, string? explicitTargetImei = null,
-        bool overwriteBackupWithCurrentImei = false)
+        bool overwriteBackupWithCurrentImei = false,
+        Action? releaseBackgroundOperations = null)
     {
         string portName = port.PortName;
         using var initializationCts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -2530,7 +2641,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (result.ModemResetRequested)
                 {
                     SautoResetResult resetResult = await CompleteSautoResetAsync(
-                        port, ccid, result.FinalImei, epoch, initializationToken);
+                        port, ccid, result.FinalImei, epoch, initializationToken,
+                        releaseBackgroundOperations);
                     active = resetResult.Active;
                     resetFailure = resetResult.FailureKind;
                 }
@@ -2987,6 +3099,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 string provider = ResolveNetworkProviderFromCcid(port.Serial);
                 if (!string.IsNullOrWhiteSpace(provider))
                     port.NetworkProvider = provider;
+                // Some EC20 firmware returns a valid registered operator
+                // without the optional access-technology field. COPS is
+                // still sufficient to start the SAuto lookup; keep a neutral
+                // network label so the missing ACT does not strand this COM.
+                if (string.IsNullOrWhiteSpace(port.NetworkType))
+                    port.NetworkType = "Mạng";
                 if (typeMatch.Success)
                     port.NetworkType = typeMatch.Groups[1].Value.Trim();
                 // The fallback response is a valid network registration result.
@@ -3166,6 +3284,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
 
                     port.NetworkProvider = provider;
+                    // Some EC20 firmware omits the optional ACT field in +COPS.
+                    // The operator response still proves registration, so keep a
+                    // neutral type instead of leaving SAuto waiting forever for
+                    // a separate [NETWORK_TYPE] event that will never arrive.
+                    if (string.IsNullOrWhiteSpace(port.NetworkType))
+                        port.NetworkType = "Mạng";
                     // COPS chỉ chứng minh modem thấy mạng, không chứng minh CCID/IMEI của
                     // phiên hiện tại đã được xác minh. Chỉ state machine mới được set Active.
 
@@ -3527,7 +3651,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             await ProcessCurrentSimSessionAsync(
                 port, ccid, forceAccept: true, session.Epoch, session.Token,
                 initializationLease, explicitTargetImei: target,
-                overwriteBackupWithCurrentImei: overwriteBackupWithCurrentImei);
+                overwriteBackupWithCurrentImei: overwriteBackupWithCurrentImei,
+                releaseBackgroundOperations: backgroundLease.Dispose);
 
             return IsSimSessionCurrent(portName, ccid, session.Epoch)
                 && port.Status == SimStatus.Active
@@ -3571,6 +3696,64 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return (string.Empty, string.Empty);
     }
 
+    private async Task<bool> ResumeVerifiedNetworkAsync(
+        SimPort port,
+        string ccid,
+        string verifiedImei,
+        long epoch,
+        CancellationToken token)
+    {
+        string portName = port.PortName;
+        if (!IsSimSessionCurrent(portName, ccid, epoch)) return false;
+
+        // The SIM/IMEI was already verified in CFUN=4. Do not replay the long
+        // offline initialization sequence here; simply release full functionality
+        // and let the normal COPS/CSQ loop finish registration on its own COM.
+        string radioOn = await _modemService.SendCommandAsync(
+            portName, "AT+CFUN=1", 15000, silent: true, ct: token);
+        bool hardFailure = radioOn.Contains("+CME ERROR", StringComparison.OrdinalIgnoreCase)
+            || radioOn.Contains("+CMS ERROR", StringComparison.OrdinalIgnoreCase)
+            || (radioOn.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                && !radioOn.Contains("Timeout", StringComparison.OrdinalIgnoreCase));
+        if (hardFailure) return false;
+
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
+            port.Imei = verifiedImei;
+            port.Serial = NormalizeCcid(ccid);
+            port.IsRebooting = false;
+            MarkPortActiveAfterInit(portName);
+        });
+
+        bool active = IsSimSessionCurrent(portName, ccid, epoch)
+            && port.Status == SimStatus.Active;
+        if (active)
+        {
+            _modemService.StartPollingNetwork(portName);
+            AddLog($"[{portName}] [IMEI_RESUME_NETWORK] Đã bật CFUN=1; để COPS/USSD tự hoàn tất, không chờ thêm chuỗi offline.", "SUCCESS");
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(2000, token);
+                    if (IsSimSessionCurrent(portName, ccid, epoch)
+                        && port.Status == SimStatus.Active)
+                    {
+                        await _modemService.ConfigureVoiceFeaturesAsync(portName, token);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    AddLog($"[{portName}] [IMEI_RESUME_VOICE] {ex.Message}", "INFO");
+                }
+            }, token);
+        }
+
+        return active;
+    }
+
     private async Task ResumeVerifiedImeiSessionAsync(
         SimPort port,
         string ccid,
@@ -3581,6 +3764,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         bool persistAssignment)
     {
         string portName = port.PortName;
+        bool identityMismatchDetected = false;
         try
         {
             if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
@@ -3593,8 +3777,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string storedImei = Regex.Match(
                 storedResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
             if (!IsVerifiedImeiResumeMatch(storedImei, verifiedImei))
+            {
+                identityMismatchDetected = true;
                 throw new InvalidOperationException(
                     $"IMEI sau refresh không khớp giá trị đã xác minh ({storedImei} != {verifiedImei})");
+            }
 
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
@@ -3605,7 +3792,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 UpdateDashboard();
             });
 
-            bool active = await CompletePortInitializationAsync(
+            bool active = await ResumeVerifiedNetworkAsync(
                 port, ccid, verifiedImei, epoch, token);
             if (active)
             {
@@ -3635,13 +3822,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             AddLog($"[{portName}] [IMEI_SESSION_RESUME_FAILED] {ex.Message}", "ERROR");
             if (IsSimSessionCurrent(portName, ccid, epoch))
             {
-                await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                if (identityMismatchDetected)
+                    await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                else
+                    _modemService.StartPollingNetwork(portName);
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
-                    port.Status = SimStatus.SecurityBlocked;
+                    port.Status = identityMismatchDetected
+                        ? SimStatus.SecurityBlocked
+                        : SimStatus.Connecting;
                     port.LastError = ex.Message;
-                    port.DeviceName = "Chặn SIM – IMEI sau refresh chưa được xác minh";
+                    port.DeviceName = identityMismatchDetected
+                        ? "Chặn SIM – IMEI sau refresh chưa được xác minh"
+                        : "Đang chờ mạng sau khi tạo IMEI...";
                     UpdateDashboard();
                 });
             }
@@ -5158,9 +5352,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Luồng tự động sau khi COPS đã đăng ký mạng: lấy thông tin thuê bao bằng *111#,
-    /// sau đó lấy TKC bằng *101#. Mỗi bước chỉ thử lại một lần sau 30 giây và không
-    /// chèn CREG/IMS recovery hoặc reset modem vào giữa chuỗi.
+    /// Luồng tự động sau khi COPS đã đăng ký mạng: chỉ lấy thông tin thuê bao
+    /// bằng *111#. *101# là truy vấn TKC riêng, được gửi khi người dùng bấm
+    /// kiểm tra số dư; nó không được phép làm chậm quá trình SIM vừa đăng ký.
     /// </summary>
     private async Task RunInitialBalanceLookupAsync(
         SimPort port, string ccid, long epoch, CancellationToken token)
@@ -5176,11 +5370,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IDisposable? backgroundLease = null;
         try
         {
-            // Khóa các vòng CPIN/COPS/CMGL nền trong suốt phiên 111 -> 101 của
-            // đúng COM này. Nếu không, một lệnh quét có thể chen vào giữa
-            // CUSD=2 và CUSD=1 khi 32 cổng cùng chạy.
+            // Khóa các vòng CPIN/COPS/CMGL nền trong suốt phiên *111# của đúng
+            // COM này. Nếu không, một lệnh quét có thể chen vào giữa CUSD=2 và
+            // CUSD=1 khi nhiều cổng cùng chạy.
             backgroundLease = _modemService.SuspendPortBackgroundOperations(port.PortName);
-            AddLog($"[{port.PortName}] [SAUTO_NETWORK_READY] COPS đã đăng ký {port.NetworkProvider}; chạy *111# → *101#.", "SUCCESS");
+            AddLog($"[{port.PortName}] [SAUTO_NETWORK_READY] COPS đã đăng ký {port.NetworkProvider}; tự động chạy *111#; *101# chỉ chạy thủ công.", "SUCCESS");
             await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
 
             bool subscriberOk = _initialSubscriberLookupCompleted.ContainsKey(lookupKey);
@@ -5193,22 +5387,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _initialSubscriberLookupCompleted.TryAdd(lookupKey, 0);
             }
 
-            bool balanceOk = false;
-            if (IsSimSessionCurrent(port.PortName, ccid, epoch)
-                && port.Status == SimStatus.Active
-                && IsPortReadyForOperation(port.PortName))
+            if (subscriberOk)
             {
-                balanceOk = await RunSautoInitialUssdStageAsync(
-                    port, ccid, epoch, token,
-                    "*101#", SautoInitial101CommandOrder, requireBalance: true);
-            }
-
-            if (subscriberOk && balanceOk)
-            {
+                // Giữ tên key cũ để không phá cơ chế dọn session hiện tại: từ
+                // đây nó chỉ đánh dấu lượt khởi tạo tự động (*111#) đã xong.
+                // TKC không còn nằm trong đường khởi động và chỉ chạy thủ công.
                 _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
                 _modemService.SetSimRemovalWatchEnabled(port.PortName, true);
                 SetOperationStatus(port.PortName, "USSD", true);
-                AddLog($"[{port.PortName}] [USSD OK] Đã nhận đủ phản hồi *111# và TKC từ *101#.", "SUCCESS");
+                AddLog($"[{port.PortName}] [USSD_111_OK] Đã nhận *111#; bỏ qua *101# tự động, chờ thao tác kiểm tra TKC.", "SUCCESS");
             }
             else if (IsSimSessionCurrent(port.PortName, ccid, epoch)
                 && port.Status == SimStatus.Active)
@@ -5219,7 +5406,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            AddLog($"[{port.PortName}] Luồng *111#/*101# tự động lỗi: {ex.Message}", "WARN");
+            AddLog($"[{port.PortName}] Luồng *111# tự động lỗi: {ex.Message}", "WARN");
         }
         finally
         {
@@ -5239,14 +5426,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // Không dùng token của tác vụ khởi tạo/IMEI cũ: một số firmware
                 // EC20 hủy token đó sau reboot dù PortSession hiện tại vẫn hợp lệ,
-                // làm COM thiếu 101 không bao giờ được đưa lại vào hàng đợi.
+                // làm COM thiếu 111 không bao giờ được đưa lại vào hàng đợi.
                 await Task.Delay(TimeSpan.FromSeconds(30), _lifetimeCts.Token);
                 if (IsSimSessionCurrent(port.PortName, ccid, epoch)
                     && port.Status == SimStatus.Active
                     && !_initialAccountLookupCompleted.ContainsKey(
                         $"{port.PortName}|{NormalizeCcid(ccid)}|{epoch}"))
                 {
-                    AddLog($"[{port.PortName}] [USSD_REQUEUE] Chưa đủ dữ liệu; đưa COM trở lại hàng đợi 111/101.", "WARN");
+                    AddLog($"[{port.PortName}] [USSD_REQUEUE] *111# chưa đủ dữ liệu; đưa COM trở lại hàng đợi tự động.", "WARN");
                     TryStartVinaInitialLookup(port);
                 }
             }
@@ -5285,17 +5472,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.IsBalanceLoading = true;
             });
 
-            // Some EC20 sessions accept *111# but leave the asynchronous USSD
-            // context stuck before *101# (COM92 reproduced this reliably). The
-            // SAuto recovery is a per-COM radio cycle, not a global reset: close
-            // the USSD context, CFUN=4 -> CFUN=1, wait for registration, then retry
-            // the exact direct *101# command. Only if that recovery cannot register
-            // do we fall back to the interactive *111# menu.
+            // Some EC20 sessions accept *111# but delay the asynchronous USSD
+            // context before *101#. Keep retry local to this COM: do not toggle
+            // CFUN in the middle of the SAuto lookup because that drops a healthy
+            // registration and makes the next COPS/USSD pass race the reboot.
             if (requireBalance && attempt == 2)
             {
-                bool radioRecovered = await RecoverUssdSessionAsync(port, ccid, epoch, token);
-                if (!radioRecovered
-                    && await TryVinaMenuBalanceFallbackAsync(port, ccid, epoch, token))
+                AddLog($"[{port.PortName}] [USSD_RETRY_PASSIVE] Giữ radio hiện tại; thử lại *101# rồi mới dùng menu *111# nếu cần.", "INFO");
+                if (await TryVinaMenuBalanceFallbackAsync(port, ccid, epoch, token))
                 {
                     AddLog($"[{port.PortName}] [USSD_101_MENU_RECOVERED] Đã lấy TKC qua mục 1 của *111# sau khi *101# không phản hồi.", "SUCCESS");
                     return true;
@@ -5519,7 +5703,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // Giữ đường tự động tối giản: chỉ CUSD=2, chờ settle rồi gửi mã cần chạy.
         string cancel = await _modemService.SendCommandAsync(
-            portName, commands[0], 5000, silent: true, ct: token);
+            portName, commands[0], 2000, silent: true, ct: token);
         if (cancel.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
         {
             // EC20 can omit the final OK while closing an already-dead USSD session.
@@ -5544,9 +5728,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             string result = await SendUssdThrottledAsync(
                 port.PortName, ussdCode, reason, maxAttempts: maxAttempts, logResult: logResult);
-            // Chờ ngắn cho +CUSD bất đồng bộ; quá hạn UI sẽ hiện dấu —.
+            // CUSD đã được hoàn tất ở transport và MainViewModel đã nhận URC;
+            // chỉ giữ một cửa sổ ngắn để parser cập nhật TKC, không treo UI 10s.
             if (!result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
-                await Task.Delay(10000, _lifetimeCts.Token);
+                await Task.Delay(1200, _lifetimeCts.Token);
             return result;
         }
         catch (OperationCanceledException)

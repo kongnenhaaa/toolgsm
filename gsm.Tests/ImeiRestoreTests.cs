@@ -187,6 +187,8 @@ public sealed class ImeiRestoreTests
             "COM40:AT+CFUN?",
             $"COM40:AT+EGMR=1,7,\"{canonicalBackupImei}\"",
             "COM40:AT+EGMR=0,7",
+            "COM40:AT+CFUN?",
+            "COM40:AT+CPMS?",
             "COM40:AT+CFUN=1,1"
         ], modem.Commands);
         Assert.Contains($"COM40:AT+EGMR=1,7,\"{canonicalBackupImei}\"", modem.Commands);
@@ -382,6 +384,8 @@ public sealed class ImeiRestoreTests
             "COM9:AT+EGMR=0,7;",
             $"COM9:AT+EGMR=1,7,\"{targetImei}\"",
             "COM9:AT+EGMR=0,7",
+            "COM9:AT+CFUN?",
+            "COM9:AT+CPMS?",
             "COM9:AT+CFUN=1,1"
         ], modem.Commands);
     }

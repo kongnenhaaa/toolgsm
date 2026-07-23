@@ -518,6 +518,10 @@ public class ImeiManagementService
                     ErrorMessage = writeAcknowledged ? SecurityErrors.WrongImei : "Ghi IMEI slot 7 thất bại"
                 };
             }
+            // SAuto checks modem state and SMS storage after the slot-7 read-back.
+            // These probes are read-only; do not delete live SMS here.
+            await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
+            await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true);
             if (!writeAcknowledged)
                 Log($"[{portName}] [IMEI_WRITE_ACK_LOST] Không nhận OK nhưng slot 7 đã khớp; tiếp tục như SAuto.", "WARN");
 
@@ -615,6 +619,10 @@ public class ImeiManagementService
             await Task.Delay(500, ct);
             string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true, ct);
             string verifiedImei = ExtractImei(storedAfter);
+            // Match SAuto's post-write restore probes. They are informational
+            // only; CMGD is intentionally not issued in this path.
+            await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct);
+            await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, ct);
             if (!AreEquivalentImei(verifiedImei, targetImei))
             {
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true, ct);

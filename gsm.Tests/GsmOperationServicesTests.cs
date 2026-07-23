@@ -76,6 +76,41 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
+    public async Task Ussd_BareOkThenLateCusd_IsReportedAsSuccess()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM81", CcidA);
+        var modem = new FakeGsmModemService();
+        modem.CommandHandler = async (port, command) =>
+        {
+            if (command.StartsWith("AT+CUSD=1", StringComparison.Ordinal))
+            {
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(50);
+                    modem.RaiseLog(port, "+CUSD: 0,\"4321 VND\",15");
+                });
+                return "OK";
+            }
+
+            return command switch
+            {
+                "AT+CPIN?" => "+CPIN: READY\r\nOK",
+                "AT+CREG?" => "+CREG: 0,1\r\nOK",
+                "AT+CSQ" => "+CSQ: 20,99\r\nOK",
+                _ => "OK"
+            };
+        };
+        using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+
+        string result = await ussd.SendAsync("COM81", "*101#", 1);
+
+        Assert.Contains("4321 VND", result);
+        Assert.DoesNotContain("Modem accepted USSD", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Ussd_BareOk_RetriesSameStableUcs2FlowUntilCusdArrives()
     {
         using var sessions = new PortSessionRegistry();

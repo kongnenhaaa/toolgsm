@@ -13,6 +13,8 @@ public interface IGsmUssdService : IDisposable
 public sealed class GsmUssdService : IGsmUssdService
 {
     private static readonly TimeSpan PerPortInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan FirstAttemptResponseWindow = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan FinalAttemptResponseWindow = TimeSpan.FromSeconds(20);
 
     private readonly IGsmModemService _modem;
     private readonly IPortSessionRegistry _sessions;
@@ -68,22 +70,23 @@ public sealed class GsmUssdService : IGsmUssdService
                 else
                 {
                     if (!IsCurrent(session)) return SessionChangedError;
+                    IDisposable? backgroundLease = null;
                     try
                     {
                         if (!IsCurrent(session)) return SessionChangedError;
+                        backgroundLease = _modem.SuspendPortBackgroundOperations(portName);
                         // Chuỗi tương thích SAuto: PDU mode + UCS2 charset + Hex encoded USSD
                         await CommandAsync(session, "AT+CMGF=0", 5000, token);
                         await CommandAsync(session, "AT+CSCS=\"UCS2\"", 5000, token);
-                        result = await _modem.SendCommandAsync(
-                            portName, $"AT+CUSD=1,\"{EncodeUcs2(ussdCode)}\"", ct: token);
+                        result = await SendAndAwaitUssdResponseAsync(
+                            session,
+                            $"AT+CUSD=1,\"{EncodeUcs2(ussdCode)}\"",
+                            attempt,
+                            maxAttempts,
+                            token);
 
                         // Một số SIM/firmware chỉ trả OK sau khi nhận lệnh nhưng tổng đài
                         // không mở phiên USSD. Không được coi OK trần là thành công.
-                        if (!result.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase)
-                            && !result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
-                        {
-                            result = $"ERROR: Modem accepted USSD but network returned no +CUSD (attempt {attempt})";
-                        }
                         await _delay.WaitAsync(TimeSpan.FromSeconds(1.0), token);
                     }
                     finally
@@ -97,6 +100,7 @@ public sealed class GsmUssdService : IGsmUssdService
                             try { await _modem.SendCommandAsync(portName, "AT+CREG=2", 5000, true); }
                             catch { /* Polling COPS vẫn tiếp tục hoạt động. */ }
                         }
+                        backgroundLease?.Dispose();
                     }
                 }
 
@@ -123,6 +127,55 @@ public sealed class GsmUssdService : IGsmUssdService
         foreach (var semaphore in _portLocks.Values) semaphore.Dispose();
         _portLocks.Clear();
         _ussdSupported.Clear();
+    }
+
+    private async Task<string> SendAndAwaitUssdResponseAsync(
+        PortSessionLease session,
+        string command,
+        int attempt,
+        int maxAttempts,
+        CancellationToken token)
+    {
+        var responseTcs = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnModemLog(object? sender, GsmDataEventArgs e)
+        {
+            if (!e.PortName.Equals(session.PortName, StringComparison.OrdinalIgnoreCase)
+                || !e.Data.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            responseTcs.TrySetResult(e.Data);
+        }
+
+        _modem.LogMessage += OnModemLog;
+        try
+        {
+            string acknowledgement = await _modem.SendCommandAsync(
+                session.PortName, command, 10000, silent: true, ct: token);
+
+            if (acknowledgement.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase)
+                || acknowledgement.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                return acknowledgement;
+
+            TimeSpan responseWindow = attempt >= maxAttempts
+                ? FinalAttemptResponseWindow
+                : FirstAttemptResponseWindow;
+            using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            waitCts.CancelAfter(responseWindow);
+            try
+            {
+                return await responseTcs.Task.WaitAsync(waitCts.Token);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                return $"ERROR: USSD response timeout after ACK (no +CUSD within {responseWindow.TotalSeconds:0}s; attempt {attempt})";
+            }
+        }
+        finally
+        {
+            _modem.LogMessage -= OnModemLog;
+        }
     }
 
     private async Task ThrottleAsync(string portName, CancellationToken token)

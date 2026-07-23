@@ -27,8 +27,8 @@ public interface IGsmModemService
     Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile);
     void StartPollingNetwork(string portName);
     /// <summary>
-    /// Bật/tắt xác nhận rút SIM nhanh. Chỉ bật sau khi luồng khởi tạo đã lấy
-    /// thành công cả *111# và *101# cho đúng phiên SIM.
+    /// Bật/tắt xác nhận rút SIM nhanh. Cờ được bật ngay khi CCID của phiên hiện
+    /// tại đã được xác nhận, kể cả khi SIM còn đang chờ thao tác IMEI.
     /// </summary>
     void SetSimRemovalWatchEnabled(string portName, bool enabled);
     List<string> GetAvailablePorts();
@@ -2168,8 +2168,9 @@ public class GsmModemService : IGsmModemService
 
                 if (operatorReported) continue;
 
-                // Chỉ quan sát COPS. Không phát COPS=0/COPS=2 và không ép 2G/3G/4G;
-                // EC20 tự đăng ký sau CFUN=1,1 giống luồng đã capture từ SAuto.
+                // Nếu modem có CSQ nhưng không tự hoàn tất COPS, khởi động lại
+                // auto-selection giống SAuto. Không dùng COPS=2/CFUN vì có thể
+                // làm rơi phiên thoại hoặc nạp lại danh tính trong lúc chạy.
                 if (cycles == 150)
                 {
                     waitingNoticeCount++;
@@ -2193,14 +2194,18 @@ public class GsmModemService : IGsmModemService
                         continue;
                     }
 
+                    string copsAuto = await SendCommandAsync(
+                        portName, "AT+COPS=0", 15000, silent: true, ct: token);
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = $"[NETWORK_REOPEN_REQUIRED] Có CSQ nhưng COPS chưa trả nhà mạng sau chu kỳ chờ (lần {waitingNoticeCount}); mở lại riêng cổng nối tiếp."
+                        Data = $"[NETWORK_RECOVERY] Có CSQ nhưng COPS chưa trả nhà mạng; đã kích hoạt lại auto-select (lần {waitingNoticeCount}): {copsAuto.Trim()}"
                     });
-                    break;
+                    cycles = 0;
+                    continue;
                 }
-                // Sau ~5 phút vẫn chỉ báo trạng thái; không thay đổi lựa chọn nhà mạng.
+                // Nếu vẫn chưa đăng ký sau một chu kỳ nữa, tiếp tục để vòng lặp
+                // tự kiểm tra và phát lại COPS=0 ở mốc 75 giây kế tiếp.
                 else if (cycles >= 300)
                 {
                     cycles = 0;
@@ -2208,7 +2213,7 @@ public class GsmModemService : IGsmModemService
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = $"[NETWORK_WAITING] Vẫn chưa có COPS sau ~5 phút (lần {waitingNoticeCount}); chỉ tiếp tục theo dõi, không COPS=2/COPS=0."
+                        Data = $"[NETWORK_WAITING] Vẫn chưa có COPS sau nhiều chu kỳ (lần {waitingNoticeCount}); tiếp tục theo dõi."
                     });
                 }
                 else if (cycles % 75 == 0)

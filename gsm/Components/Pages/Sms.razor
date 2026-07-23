@@ -65,7 +65,9 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" Operation="SMS" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" Operation="SMS" @bind-SelectedItems="_selectedPorts"
+                  OnDeleteSmsStorage="ClearSelectedSimStorage"
+                  IsDeletingSmsStorage="_isClearingSimSms" />
     </MudTabPanel>
 
     <!-- TAB 2: TIN NHẮN TỚI -->
@@ -297,6 +299,7 @@
     private HashSet<SimPort> _selectedPorts = new();
     private int _smsSubTab = 0;
     private bool _isSending = false;
+    private bool _isClearingSimSms = false;
     private CancellationTokenSource? _sendCts;
 
     // Mẫu tin nhắn
@@ -316,6 +319,10 @@
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
     private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
     private List<SimPort> FilteredPorts => Ports;
+    private List<SimPort> SelectedActivePorts => _selectedPorts
+        .Where(p => p.Status == SimStatus.Active && !string.IsNullOrWhiteSpace(p.PortName))
+        .DistinctBy(p => p.PortName, StringComparer.OrdinalIgnoreCase)
+        .ToList();
 
     private IEnumerable<SmsMessage> IncomingSms =>
         (Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>())
@@ -337,7 +344,18 @@
 
     protected override void OnInitialized()
     {
+        Vm.SmsMessages.CollectionChanged += OnSmsMessagesChanged;
         _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+    }
+
+    private void OnSmsMessagesChanged(
+        object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        // ObservableCollection is updated by the WPF dispatcher, but Blazor does
+        // not observe it automatically. Render as soon as an SMS is inserted so
+        // the inbox does not have to wait for the 1.5-second fallback timer.
+        _ = InvokeAsync(StateHasChanged);
     }
 
     // ========== HELPERS ==========
@@ -830,6 +848,62 @@
     }
 
     // ========== 10. COPY / DELETE ==========
+    async Task ClearSelectedSimStorage()
+    {
+        if (_isClearingSimSms) return;
+
+        List<SimPort> targets = SelectedActivePorts;
+        if (targets.Count == 0)
+        {
+            Snackbar.Add("Hãy chọn ít nhất một cổng Active.", Severity.Warning);
+            return;
+        }
+
+        string portNames = string.Join(", ", targets.Select(p => p.PortName));
+        bool? confirmed = await DialogService.ShowMessageBox(
+            "Xóa toàn bộ SMS trong SIM?",
+            $"Sẽ xóa vĩnh viễn tất cả tin nhắn đang lưu trong {targets.Count} SIM ({portNames}). " +
+            "Lịch sử đã nhận trên ứng dụng vẫn được giữ nguyên. Thao tác này không thể hoàn tác.",
+            yesText: "Xóa trong SIM",
+            cancelText: "Hủy");
+        if (confirmed != true) return;
+
+        _isClearingSimSms = true;
+        try
+        {
+            var results = await Task.WhenAll(targets.Select(async port =>
+            {
+                try
+                {
+                    string response = await ModemService.SendCommandAsync(
+                        port.PortName, "AT+CMGD=1,4", timeoutMs: 10000, silent: true);
+                    bool success = !response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                        && response.Contains("OK", StringComparison.OrdinalIgnoreCase);
+                    Vm.AddLog(
+                        $"[{port.PortName}] {(success ? "Đã xóa toàn bộ SMS trong SIM." : $"Xóa SMS trong SIM thất bại: {response}")}",
+                        success ? "SUCCESS" : "ERROR");
+                    return (port.PortName, Success: success);
+                }
+                catch (Exception ex)
+                {
+                    Vm.AddLog($"[{port.PortName}] Xóa SMS trong SIM lỗi: {ex.Message}", "ERROR");
+                    return (port.PortName, Success: false);
+                }
+            }));
+
+            int successCount = results.Count(x => x.Success);
+            int failedCount = results.Length - successCount;
+            if (failedCount == 0)
+                Snackbar.Add($"Đã giải phóng bộ nhớ SMS trên {successCount}/{results.Length} SIM.", Severity.Success);
+            else
+                Snackbar.Add($"Đã xóa trên {successCount}/{results.Length} SIM; {failedCount} cổng thất bại. Xem tab Log để biết chi tiết.", Severity.Warning);
+        }
+        finally
+        {
+            _isClearingSimSms = false;
+        }
+    }
+
     async Task CopyText(string? text)
     {
         if (string.IsNullOrEmpty(text)) return;
@@ -863,6 +937,7 @@
 
     public void Dispose()
     {
+        Vm.SmsMessages.CollectionChanged -= OnSmsMessagesChanged;
         _timer?.Dispose();
         _sendCts?.Cancel();
         _sendCts?.Dispose();

@@ -1,5 +1,6 @@
 @{
-    var (text, cssClass, busy) = Status switch
+    string normalizedStatus = gsm.Models.SimPort.NormalizeOperationStatus(Status);
+    var (text, cssClass, busy) = normalizedStatus switch
     {
         gsm.Models.SimStatus.Active          => ("Active", "status-active", false),
         gsm.Models.SimStatus.WaitingAccept   => ("Chặn SIM", "status-blocked", false),
@@ -18,7 +19,7 @@
         "SMS Fail"                          => ("SMS Fail", "status-error", false),
         "Call Fail"                         => ("Call Fail", "status-error", false),
         "Chờ cắm SIM"                        => ("Chờ SIM", "status-idle", false),
-        _                                    => (string.IsNullOrWhiteSpace(Status) ? "Chưa xác định" : Status, "status-idle", false)
+        _                                    => (string.IsNullOrWhiteSpace(normalizedStatus) ? "Chưa xác định" : normalizedStatus, "status-idle", false)
     };
 }
 

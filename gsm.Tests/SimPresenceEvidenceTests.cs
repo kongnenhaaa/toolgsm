@@ -72,7 +72,7 @@ public sealed class SimPresenceEvidenceTests
         var port = new SimPort { Status = SimStatus.Active, SautoStatus = "USSDOK" };
 
         Assert.Equal(SimStatus.Active, port.Status);
-        Assert.Equal("USSDOK", port.StatusDisplay);
+        Assert.Equal("USSD OK", port.StatusDisplay);
 
         port.Status = SimStatus.Connecting;
         Assert.Empty(port.SautoStatus);

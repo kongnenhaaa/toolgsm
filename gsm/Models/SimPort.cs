@@ -108,7 +108,15 @@ public partial class SimPort : ObservableObject
 
     public string StatusDisplay => string.IsNullOrWhiteSpace(SautoStatus)
         ? Status
-        : SautoStatus;
+        : NormalizeOperationStatus(SautoStatus);
+
+    internal static string NormalizeOperationStatus(string? value)
+    {
+        string status = value?.Trim() ?? string.Empty;
+        return status.Equals("USSDOK", StringComparison.OrdinalIgnoreCase)
+            ? "USSD OK"
+            : status;
+    }
 
     public string GetOperationStatus(string? operation)
     {
@@ -120,7 +128,7 @@ public partial class SimPort : ObservableObject
             "CALL" => CallStatus,
             _ => string.Empty
         };
-        if (!string.IsNullOrWhiteSpace(value)) return value;
+        if (!string.IsNullOrWhiteSpace(value)) return NormalizeOperationStatus(value);
 
         // Legacy rows may only have SautoStatus. Reuse it only when it belongs
         // to the requested operation; never leak SMS/Call state into USSD (or
@@ -132,9 +140,7 @@ public partial class SimPort : ObservableObject
             "CALL" => SautoStatus is "Call OK" or "Call Fail",
             _ => false
         };
-        return legacyMatches
-            ? (SautoStatus == "USSDOK" ? "USSD OK" : SautoStatus)
-            : Status;
+        return legacyMatches ? NormalizeOperationStatus(SautoStatus) : Status;
     }
 
     public void SetOperationStatus(string operation, bool success)

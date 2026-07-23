@@ -192,6 +192,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     // Đánh dấu cổng nào đang có SMS được gửi để USSD tự nhường đường (tránh tranh Semaphore)
     public ConcurrentDictionary<string, bool> SmsInProgressPorts => _smsService.InProgressPorts;
 
+    // Give an incoming SMS/OTP time to be read before the optional balance USSD
+    // that follows a successful outbound SMS takes the same modem channel.
+    private static readonly TimeSpan AutoBalanceAfterSmsDelay = TimeSpan.FromMinutes(1);
+
     // Đánh dấu cổng nào đang trong quá trình khởi tạo SIM/IMEI để tránh khởi tạo song song
     // Lease riêng cho từng lần khởi tạo. Dùng bool khiến tác vụ cũ bị hủy có thể để
     // lại khóa vĩnh viễn hoặc xóa nhầm khóa của phiên SIM mới.
@@ -2006,8 +2010,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void InvalidateSimSession(string portName)
     {
-        // Một phiên SIM mới phải chạy đủ *111# và *101# trước khi bật
-        // giám sát rút SIM nhanh. Không để cờ của phiên cũ lọt sang SIM mới.
+        // Tắt cờ của phiên cũ khi SIM bị mất/thay; cờ sẽ được bật lại ngay khi
+        // pipeline đọc được CCID của SIM mới (kể cả SIM đang chờ thao tác IMEI).
         _modemService.SetSimRemovalWatchEnabled(portName, false);
         _portSessions.Invalidate(portName);
         _initializingPorts.TryRemove(portName, out _);
@@ -3145,20 +3149,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // COPS chỉ chứng minh modem thấy mạng, không chứng minh CCID/IMEI của
                     // phiên hiện tại đã được xác minh. Chỉ state machine mới được set Active.
 
-                    // Chỉ hiển thị SĐT & TKC sau khi đã hiện Nhà mạng thành công
-                    string? cachedPhone = null;
-                    if (!string.IsNullOrEmpty(port.Serial))
-                    {
-                        _simCache.TryGetValue(port.Serial, out cachedPhone);
-                    }
-
-                    if (!string.IsNullOrEmpty(cachedPhone))
-                    {
-                        port.PhoneNumber = cachedPhone;
-                        UpdateSmsReceiverPhone(port.PortName, cachedPhone);
-                        AddLog($"[{port.PortName}] Đã hiển thị SĐT từ cache: {cachedPhone}", "SUCCESS");
-                    }
-
                     string networkUpper = port.NetworkProvider.ToUpperInvariant();
 
                     // Mọi tác vụ hậu đăng ký mạng phải thuộc đúng phiên CCID hiện tại.
@@ -3265,6 +3255,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     string ccid = NormalizeCcid(match.Groups[1].Value);
 
+                    // Bắt đầu theo dõi rút SIM ngay khi đã xác nhận CCID. Không
+                    // chờ *111#/*101# vì SIM mới có thể đang ở trạng thái
+                    // SecurityBlocked/WaitingAccept; tháo SIM trong trạng thái
+                    // đó vẫn phải xóa CCID và kết thúc phiên SIM cũ.
+                    _modemService.SetSimRemovalWatchEnabled(e.PortName, true);
+
                     // Chống trùng lặp: CNUM thường rỗng trên SIM mới, vì vậy chỉ cần
                     // cùng CCID và đã Active là đủ để bỏ qua event CCID lặp.
                     if (string.Equals(NormalizeCcid(port.Serial), ccid, StringComparison.OrdinalIgnoreCase)
@@ -3291,15 +3287,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
 
                     port.Serial = ccid;
-                    if (_simCache.TryGetValue(ccid, out var cachedPhone))
-                    {
-                        AddLog($"[{e.PortName}] Tìm thấy SĐT trong cache: {cachedPhone} (chờ đăng ký mạng)", "SUCCESS");
-                    }
-
-                    if (_imeiCache.TryGetValue(ccid, out var entry) && entry != null)
-                    {
-                        ApplyBackupMetadata(port, entry);
-                    }
 
                     var detectedSession = StartSimSession(e.PortName, ccid);
                     bool hasPendingNoSimImei = _pendingNoSimImeiByPort.TryRemove(
@@ -3400,9 +3387,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
                 }
             }
-            else if (e.Data == "[STATUS_NO_RESPONSE]")
+            // Service có thể đính kèm nguyên nhân sau mã sự kiện, ví dụ:
+            // "[STATUS_NO_RESPONSE] Không xác nhận được CFUN=4...".
+            // Bắt theo prefix để cổng không bị treo mãi ở trạng thái Connecting.
+            else if (e.Data.StartsWith("[STATUS_NO_RESPONSE]", StringComparison.OrdinalIgnoreCase))
             {
                 port.Status = SimStatus.NoResponse;
+                port.DeviceName = "Modem không phản hồi";
+                port.LastError = e.Data["[STATUS_NO_RESPONSE]".Length..].Trim();
                 port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
                 UpdateDashboard();
             }
@@ -4724,12 +4716,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string ccid = NormalizeCcid(port.Serial);
             if (!_imeiCache.TryGetValue(ccid, out var entry) || entry == null) continue;
 
-            ApplyBackupMetadata(port, entry);
-            if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
-            {
-                UpdateSmsReceiverPhone(port.PortName, entry.PhoneNumber);
-                _simCache[ccid] = entry.PhoneNumber;
-            }
             applied++;
         }
 
@@ -6191,9 +6177,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(3000);
+                    await Task.Delay(AutoBalanceAfterSmsDelay, _lifetimeCts.Token);
                     await CheckBalanceForPortAsync(portName);
-                });
+                }, _lifetimeCts.Token);
             }
         }
         else
@@ -6260,9 +6246,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(3000);
+                    await Task.Delay(AutoBalanceAfterSmsDelay, _lifetimeCts.Token);
                     await CheckBalanceForPortAsync(portName);
-                });
+                }, _lifetimeCts.Token);
             }
         }
         else
@@ -7747,20 +7733,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         entry.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         if (string.IsNullOrWhiteSpace(entry.CreatedAt))
             entry.CreatedAt = entry.UpdatedAt;
-    }
-
-    private static void ApplyBackupMetadata(SimPort port, SimBackupEntry entry)
-    {
-        // Khi khởi động: chỉ khôi phục SĐT từ backup (CCID → SĐT).
-        // Các trường động (Balance, NetworkProvider, ExpiryDate, Lock, SimRegDate...)
-        // sẽ được fetch mới khi tool đang chạy (USSD/AT+COPS/SMS) và
-        // tự lưu ngược vào file backup qua UpdateImeiCacheEntry.
-        if (!string.IsNullOrWhiteSpace(entry.PhoneNumber))
-            port.PhoneNumber = entry.PhoneNumber;
-
-        // CreatedAt là metadata tĩnh, không thay đổi — giữ lại.
-        if (!string.IsNullOrWhiteSpace(entry.CreatedAt))
-            port.CreatedAt = entry.CreatedAt;
     }
 
     public void RemoveImeiCacheEntry(string ccid)

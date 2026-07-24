@@ -298,6 +298,10 @@ public class GsmModemService : IGsmModemService
         @"^\s*(?<code>\d{4,8})\s*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex VnptEcontractOtpRegex = new(
+        @"(?:vnpt|econtract|e-contract|ma\s+otp|otp|ky\s+hop\s+dong)[^\d]{0,160}(?<code>\d{6})(?!\d)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     public static string? ExtractOtp(string? content)
     {
         if (string.IsNullOrWhiteSpace(content)) return null;
@@ -315,6 +319,10 @@ public class GsmModemService : IGsmModemService
         if (match.Success) return match.Groups["code"].Value;
 
         match = OtpBeforeKeywordRegex.Match(text);
+        if (match.Success) return match.Groups["code"].Value;
+
+        string repaired = TextEncodingNormalizer.RepairMojibake(text);
+        match = VnptEcontractOtpRegex.Match(repaired);
         if (match.Success) return match.Groups["code"].Value;
 
         // Một SMS chỉ chứa duy nhất dãy số vẫn là định dạng OTP hợp lệ phổ biến.
@@ -403,6 +411,19 @@ public class GsmModemService : IGsmModemService
         if (string.IsNullOrWhiteSpace(response) || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)) return false;
         if (requiredHeader != null && !response.Contains(requiredHeader, StringComparison.OrdinalIgnoreCase)) return false;
         if (!Regex.IsMatch(response, @"(?:^|\r?\n)OK\s*$", RegexOptions.IgnoreCase)) return false;
+        return !string.IsNullOrWhiteSpace(SmsBodyDecoder.Decode(response).Content);
+    }
+
+    // Some EC20 firmware sends the complete +CMGR/+QCMGR body but drops the
+    // trailing OK while another URC is interleaved.  The body is still safe to
+    // decode; rejecting it here made a valid SMS wait forever in the SIM store.
+    internal static bool HasUsableStoredSmsBody(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response)
+            || response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+            || !Regex.IsMatch(response, @"(?:\+CMGR:|\+QCMGR:)", RegexOptions.IgnoreCase))
+            return false;
+
         return !string.IsNullOrWhiteSpace(SmsBodyDecoder.Decode(response).Content);
     }
 
@@ -549,10 +570,33 @@ public class GsmModemService : IGsmModemService
             await Task.Delay(750);
         }
 
+        if (!success && HasUsableStoredSmsBody(smsContent))
+        {
+            // Do not discard a decoded body merely because the modem omitted
+            // the final OK terminator. The UI will own it before CMGD runs.
+            success = true;
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = port,
+                Data = $"[SMS_READ_RECOVERED] index={msgIndex} body đọc được dù thiếu terminator; chuyển thẳng lên UI."
+            });
+        }
+
         if (!success)
         {
+            /*
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[SMS_QUEUE] Index {msgIndex} chưa trả đủ header/body/OK sau 3 lần; giữ SMS và sẽ quét lại." });
-            _ = Task.Run(async () => { await Task.Delay(2000); await SweepUnreadSmsAsync(port); });
+            */
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = port,
+                Data = $"[SMS_RETRY_PENDING] index={msgIndex}; giữ nguyên SMS trên SIM, sẽ đọc lại."
+            });
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(5000);
+                if (_serialPorts.ContainsKey(port)) QueueStoredSmsRead(port, msgIndex);
+            });
             return;
         }
 
@@ -599,6 +643,11 @@ public class GsmModemService : IGsmModemService
             Sender = sender,
             Otp = ExtractOtp(fullContent) ?? string.Empty
         };
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = port,
+            Data = $"[SMS_DELIVERY] sender={sender} index={msgIndex} chars={fullContent.Length} otp={delivery.Otp}"
+        });
         try
         {
             SmsReceived?.Invoke(this, delivery);
@@ -608,6 +657,14 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[SMS_QUEUE] Không phát được SMS index {msgIndex}; giữ nguyên trên SIM: {ex.Message}" });
             return;
         }
+
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = port,
+            Data = delivery.DeliveryAccepted
+                ? $"[SMS_UI_DELIVERY_ACCEPTED] index={msgIndex} chars={delivery.Data.Length}"
+                : $"[SMS_UI_DELIVERY_PENDING] index={msgIndex} chars={delivery.Data.Length}"
+        });
 
         if (!delivery.DeliveryAccepted)
         {
@@ -2859,7 +2916,7 @@ public class GsmModemService : IGsmModemService
             {
                 var directMatches = Regex.Matches(
                     currentData,
-                    @"\+CMT:[^\r\n]*(?:\r?\n)([^\r\n]+)(?:\r?\n|$)",
+                    @"\+CMT:[^\r\n]*(?:\r?\n)[\s\S]*?(?=\r?\n(?:OK|ERROR)\b|\r?\n\+CMT(?:I)?\s*:|$)",
                     RegexOptions.IgnoreCase);
                 foreach (Match direct in directMatches)
                 {
@@ -2880,6 +2937,11 @@ public class GsmModemService : IGsmModemService
 
                     if (!string.IsNullOrWhiteSpace(completeDirect))
                     {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[SMS_DELIVERY] direct sender={senderDirect} chars={completeDirect.Length} otp={ExtractOtp(completeDirect) ?? string.Empty}"
+                        });
                         SmsReceived?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = portName,

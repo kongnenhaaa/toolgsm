@@ -3890,6 +3890,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 string senderPhone = "UNKNOWN";
                 string extractedOtp = "N/A";
                 string cleanContent = TextEncodingNormalizer.RepairMojibake(e.Data);
+                bool inboxRecorded = false;
 
                 // Nếu quá trình đọc tin nhắn gặp lỗi (VD: Lỗi Timeout Semaphore do đang kẹt gửi SMS)
                 if (cleanContent.StartsWith("ERROR:"))
@@ -3902,7 +3903,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (!string.IsNullOrEmpty(e.Sender))
                 {
                     senderPhone = e.Sender;
-                    extractedOtp = string.IsNullOrEmpty(e.Otp) ? "N/A" : e.Otp;
+                    extractedOtp = string.IsNullOrWhiteSpace(e.Otp)
+                        ? (gsm.Services.GsmModemService.ExtractOtp(cleanContent) ?? "N/A")
+                        : e.Otp;
                     // cleanContent đã là nội dung text sạch (fullContent)
                 }
                 else
@@ -3925,6 +3928,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     cleanContent = cleanContent.Replace("\r", " ").Replace("\n", " ").Trim();
                     cleanContent = Regex.Replace(cleanContent, @"\s+", " ");
                     extractedOtp = gsm.Services.GsmModemService.ExtractOtp(cleanContent) ?? "N/A";
+                }
+
+                // Record the decoded SMS before optional balance/Firebase/
+                // Telegram actions. Those actions must never hide a real SMS.
+                if (!string.IsNullOrWhiteSpace(cleanContent))
+                {
+                    SmsMessages.Insert(0, new SmsMessage
+                    {
+                        PortName = e.PortName,
+                        ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
+                        Content = cleanContent,
+                        Sender = senderPhone,
+                        Otp = extractedOtp,
+                        ReceiverPhone = port?.PhoneNumber ?? "",
+                        NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
+                        Status = port?.Status ?? SimStatus.Connecting,
+                        CallCount = "0",
+                        ForwardContent = string.Empty
+                    });
+                    inboxRecorded = true;
+                    e.DeliveryAccepted = true;
+                    AddLog($"[{e.PortName}] [SMS_UI_RECEIVED] sender={senderPhone} chars={cleanContent.Length} otp={extractedOtp}", "INFO");
                 }
 
                 if (port != null)
@@ -4214,8 +4239,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (extractedOtp != "N/A")
                     OtpReceivedEvent?.Invoke(e.PortName, extractedOtp);
 
-                // 4. Đưa lên UI (Cập nhật Tab SMS)
-                SmsMessages.Insert(0, new SmsMessage
+                // 4. Đưa lên UI (Cập nhật Tab SMS). The early path above has
+                // already recorded decoded messages; keep this as a fallback.
+                if (!inboxRecorded && !string.IsNullOrWhiteSpace(cleanContent))
+                    SmsMessages.Insert(0, new SmsMessage
                 {
                     PortName = e.PortName,
                     ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
@@ -4243,7 +4270,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 // Acknowledge only after the local inbox and COM state own the decoded
                 // message. GsmModemService keeps the SIM record when this remains false.
-                e.DeliveryAccepted = true;
+                if (inboxRecorded || !string.IsNullOrWhiteSpace(cleanContent))
+                    e.DeliveryAccepted = true;
                 
                 if (extractedOtp != "N/A")
                 {

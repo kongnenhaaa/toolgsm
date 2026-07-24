@@ -22,9 +22,7 @@ public sealed class SautoInitializationSequenceTests
             "AT+QURCCFG=\"urcport\",\"uart1\"",
             "AT+CMGF=1",
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
-            "AT+CMGD=1,4",
             "AT+CPMS=\"ME\",\"ME\",\"ME\"",
-            "AT+CMGD=1,4",
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
             "AT+CPMS?",
             "AT+CNMI=1,1,0,0,0",
@@ -34,8 +32,8 @@ public sealed class SautoInitializationSequenceTests
         ];
 
         Assert.Equal(expected, GsmModemService.SautoInitializationCommandOrder);
-        Assert.Equal(2, GsmModemService.SautoInitializationCommandOrder.Count(
-            command => command.Equals("AT+CMGD=1,4", StringComparison.OrdinalIgnoreCase)));
+        Assert.DoesNotContain(GsmModemService.SautoInitializationCommandOrder, command =>
+            command.Equals("AT+CMGD=1,4", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

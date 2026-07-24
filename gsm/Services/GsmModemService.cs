@@ -114,9 +114,7 @@ public class GsmModemService : IGsmModemService
         "AT+QURCCFG=\"urcport\",\"uart1\"",
         "AT+CMGF=1",
         "AT+CPMS=\"SM\",\"SM\",\"SM\"",
-        "AT+CMGD=1,4",
         "AT+CPMS=\"ME\",\"ME\",\"ME\"",
-        "AT+CMGD=1,4",
         "AT+CPMS=\"SM\",\"SM\",\"SM\"",
         "AT+CPMS?",
         "AT+CNMI=1,1,0,0,0",
@@ -374,6 +372,15 @@ public class GsmModemService : IGsmModemService
     // notification can postpone a new SMS until the recovery sweep.
     private readonly ConcurrentDictionary<string, int> _queuedSmsIndices = new();
 
+    private void TrimDeliveredStoredSms()
+    {
+        DateTime now = DateTime.UtcNow;
+        foreach (var item in _deliveredStoredSms
+                     .Where(x => now - x.Value > TimeSpan.FromMinutes(10))
+                     .ToArray())
+            _deliveredStoredSms.TryRemove(item.Key, out _);
+    }
+
     private async Task<string> ReadStoredSmsAsync(string port, string msgIndex)
     {
         // Quectel EC20/EC2x exposes uid, segment and total through QCMGR in text mode.
@@ -385,10 +392,14 @@ public class GsmModemService : IGsmModemService
             GetModemProfile(port), msgIndex);
         foreach (string command in commands)
         {
-            string response = await SendCommandAsync(port, command, 25000, silent: true);
+            // A valid SMS body must not be discarded only because the modem
+            // omitted the trailing OK terminator.
+            string response = await SendCommandAsync(port, command, 8000, silent: true);
             if (command.StartsWith("AT+QCMGR=", StringComparison.OrdinalIgnoreCase))
             {
-                if (IsCompleteStoredSmsResponse(response, "+QCMGR:")) return response;
+                if (IsCompleteStoredSmsResponse(response, "+QCMGR:")
+                    || HasUsableStoredSmsBody(response))
+                    return response;
                 continue;
             }
             if (command.Equals("AT+CMGF=0", StringComparison.OrdinalIgnoreCase))
@@ -450,12 +461,10 @@ public class GsmModemService : IGsmModemService
                 return null;
             }
 
-            DateTime now = DateTime.UtcNow;
-            foreach (var item in _deliveredStoredSms.Where(x => now - x.Value > TimeSpan.FromMinutes(10)).ToArray())
-                _deliveredStoredSms.TryRemove(item.Key, out _);
+            TrimDeliveredStoredSms();
             string deliveryKey = $"{port}\u001f{msgIndex}\u001f{rawStoredSms}";
-            // Mark only after the consumer accepts the SMS and CMGD succeeds.
-            // A failed UI dispatch must be retried by the next recovery sweep.
+            // Mark only after the consumer accepts the SMS. The original record
+            // remains on the SIM; a failed UI dispatch is retried by the sweep.
             if (_deliveredStoredSms.ContainsKey(deliveryKey)) return null;
             if (!string.IsNullOrWhiteSpace(msgIndex)) indicesToDelete.Add(msgIndex);
             return decoded.Content;
@@ -561,19 +570,14 @@ public class GsmModemService : IGsmModemService
 
     private async Task ProcessStoredSmsAsync(string port, string msgIndex)
     {
-        string smsContent = string.Empty;
-        bool success = false;
-        for (int attempt = 1; attempt <= 3; attempt++)
-        {
-            smsContent = await ReadStoredSmsAsync(port, msgIndex);
-            if (IsCompleteStoredSmsResponse(smsContent)) { success = true; break; }
-            await Task.Delay(750);
-        }
+        string smsContent = await ReadStoredSmsAsync(port, msgIndex);
+        bool completeResponse = IsCompleteStoredSmsResponse(smsContent);
+        bool success = completeResponse || HasUsableStoredSmsBody(smsContent);
 
-        if (!success && HasUsableStoredSmsBody(smsContent))
+        if (success && !completeResponse)
         {
             // Do not discard a decoded body merely because the modem omitted
-            // the final OK terminator. The UI will own it before CMGD runs.
+            // the final OK terminator. Send it straight to the UI.
             success = true;
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
@@ -590,12 +594,7 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = port,
-                Data = $"[SMS_RETRY_PENDING] index={msgIndex}; giữ nguyên SMS trên SIM, sẽ đọc lại."
-            });
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000);
-                if (_serialPorts.ContainsKey(port)) QueueStoredSmsRead(port, msgIndex);
+                Data = $"[SMS_WAITING_MODEM] index={msgIndex}; giữ nguyên SMS trên SIM, không retry trì hoãn."
             });
             return;
         }
@@ -619,15 +618,30 @@ public class GsmModemService : IGsmModemService
         string? fullContent = TryAssembleMultipartExact(port, sender, decoded, msgIndex, smsContent, out var indicesToDelete);
         if (fullContent == null)
         {
+            /* Automatic CMGD is disabled: retain every SMS part on the SIM. */
+            /*
             foreach (string bufferedIndex in indicesToDelete.Distinct(StringComparer.Ordinal))
             {
                 string deleteResponse = await SendCommandAsync(port, $"AT+CMGD={bufferedIndex},0", 5000, silent: true);
                 if (deleteResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[MULTIPART] Đã giữ phần {bufferedIndex} trong RAM nhưng chưa giải phóng được ô SIM; sweep sẽ thử lại." });
             }
+            */
             if (decoded.Concatenation != null)
                 LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[MULTIPART] sender={sender} ref={decoded.Concatenation.Reference} seq={decoded.Concatenation.Sequence}/{decoded.Concatenation.Total} index={msgIndex} chars={decoded.Content.Length}; đang chờ đủ phần." });
             return;
+        }
+
+        // SMS records stay on the SIM by design. Remember a completed multipart
+        // group so the periodic sweep cannot deliver the same assembled message
+        // again when it sees the retained segments.
+        string? multipartDeliveryKey = null;
+        if (decoded.Concatenation != null)
+        {
+            TrimDeliveredStoredSms();
+            multipartDeliveryKey = $"{port}\u001fmultipart\u001f{sender}\u001f{decoded.Concatenation.Reference}\u001f{decoded.Concatenation.Total}\u001f{fullContent}";
+            if (_deliveredStoredSms.ContainsKey(multipartDeliveryKey))
+                return;
         }
 
         if (decoded.Concatenation != null)
@@ -695,12 +709,11 @@ public class GsmModemService : IGsmModemService
             }
         }
 
-        // SmsReceived handlers synchronously take ownership of the decoded
-        // content before returning. Delete immediately afterwards so a small
-        // EC20 SIM store cannot fill while the UI is busy. Only this service is
-        // allowed to issue CMGD for received messages; consumers must never
-        // delete the same recyclable index a second time.
-        foreach (string index in indicesToDelete)
+        // UI has synchronously taken ownership of the decoded content. Keep the
+        // original SMS on the SIM so no modem read/delete race can lose a message.
+        // Only an explicit user clear action may issue CMGD.
+        /*
+        foreach (string index in Array.Empty<string>())
         {
             string deleteResponse = await SendCommandAsync(port, $"AT+CMGD={index},0", 5000, silent: true);
             if (deleteResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
@@ -709,6 +722,11 @@ public class GsmModemService : IGsmModemService
                 && decoded.Concatenation == null)
                 _deliveredStoredSms[$"{port}\u001f{index}\u001f{smsContent}"] = DateTime.UtcNow;
         }
+        */
+        foreach (string index in indicesToDelete)
+            _deliveredStoredSms[$"{port}\u001f{index}\u001f{smsContent}"] = DateTime.UtcNow;
+        if (multipartDeliveryKey != null)
+            _deliveredStoredSms[multipartDeliveryKey] = DateTime.UtcNow;
 
     }
 
@@ -745,11 +763,13 @@ public class GsmModemService : IGsmModemService
                         LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = timedOut.Port, Data = $"[MULTIPART] Ghép nối tin dài từ {timedOut.Sender} quá hạn, tự động xuất phần đã nhận." });
                         
                         // Xóa các phần tin nhắn cũ trên SIM
-                        foreach (var idx in timedOut.MsgIndices)
+                        /*
+                        foreach (var idx in Array.Empty<string>())
                         {
                             _ = SendCommandAsync(timedOut.Port, $"AT+CMGD={idx}", 3000, silent: true);
                         }
 
+                        */
                         SmsReceived?.Invoke(this, new GsmDataEventArgs 
                         { 
                             PortName = timedOut.Port, 
@@ -1669,10 +1689,8 @@ public class GsmModemService : IGsmModemService
         await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true, ct: ct);
         await Task.Delay(150, ct);
         await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, ct: ct);
-        await SendCommandAsync(portName, "AT+CMGD=1,4", 5000, silent: true, ct: ct);
         await Task.Delay(200, ct);
         await SendCommandAsync(portName, "AT+CPMS=\"ME\",\"ME\",\"ME\"", 5000, silent: true, ct: ct);
-        await SendCommandAsync(portName, "AT+CMGD=1,4", 5000, silent: true, ct: ct);
         await Task.Delay(200, ct);
         await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, ct: ct);
         await SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, ct: ct);
@@ -3444,7 +3462,9 @@ public class GsmModemService : IGsmModemService
             // a silent network request cannot hold this COM's UART for 45 seconds.
             timeoutMs = Math.Max(timeoutMs, 10000);
         }
-        else if (command.StartsWith("AT+CMGR")) timeoutMs = 25000;
+        else if (command.StartsWith("AT+CMGR", StringComparison.OrdinalIgnoreCase)
+                 || command.StartsWith("AT+QCMGR", StringComparison.OrdinalIgnoreCase))
+            timeoutMs = Math.Max(timeoutMs, 8000);
 
         if (!EnsurePortOpen(portName, out var sp) || sp == null)
         {

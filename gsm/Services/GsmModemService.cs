@@ -1499,7 +1499,16 @@ public class GsmModemService : IGsmModemService
             portName, 1, static (_, current) => current + 1);
         if (attempt > MaxNetworkSimRecoveryAttemptsWithManualOperator)
         {
+            // Reset counter để chu kỳ tiếp theo được bắt đầu lại từ đầu.
+            // Nếu không reset, counter mãi > max → hàm return false ngay lập tức
+            // mỗi khi COPS trả CME 13 → COM kẹt vĩnh viễn dù modem vẫn có CSQ.
+            _networkSimRecoveryAttempts.TryRemove(portName, out _);
             _networkSimRecoveryOwners.TryRemove(portName, out _);
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[NETWORK_SIM_RECOVERY_RESET] Đã dùng hết {MaxNetworkSimRecoveryAttemptsWithManualOperator} lần; reset counter để thử chu kỳ mới."
+            });
             return false;
         }
 

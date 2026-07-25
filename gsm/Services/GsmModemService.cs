@@ -629,6 +629,43 @@ public class GsmModemService : IGsmModemService
         });
     }
 
+    private async Task DeleteStoredSmsIndicesAsync(
+        string port,
+        IEnumerable<string> indices,
+        string reason)
+    {
+        foreach (string index in indices
+                     .Where(index => Regex.IsMatch(index, @"^\d+$"))
+                     .Distinct(StringComparer.Ordinal))
+        {
+            string response = await SendCommandAsync(
+                port,
+                $"AT+CMGD={index},0",
+                5000,
+                silent: true);
+
+            if (response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || response.Contains("+CMS ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                // Do not retry by index later: the modem may recycle that slot for
+                // a newer SMS. A failed delete is safer left for the next explicit
+                // sweep/cleanup than risking deletion of a different message.
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = port,
+                    Data = $"[SMS_SIM_CLEANUP_FAILED] index={index} reason={reason}; giữ nguyên SMS: {response.Trim()}"
+                });
+                continue;
+            }
+
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = port,
+                Data = $"[SMS_SIM_CLEANUP] index={index} reason={reason}; đã giải phóng bộ nhớ SIM."
+            });
+        }
+    }
+
     private async Task<bool> ProcessStoredSmsAsync(string port, string msgIndex)
     {
         string smsContent = await ReadStoredSmsAsync(port, msgIndex);
@@ -686,7 +723,18 @@ public class GsmModemService : IGsmModemService
         string? fullContent = TryAssembleMultipartExact(port, sender, decoded, msgIndex, smsContent, out var indicesToDelete);
         if (fullContent == null)
         {
-            /* Automatic CMGD is disabled: retain every SMS part on the SIM. */
+            // Exact multipart parts have already been persisted to the durable
+            // journal. Release each consumed SIM slot while waiting for the final
+            // segment so a full SIM cannot block later +CMTI notifications.
+            if (decoded.Concatenation != null && indicesToDelete.Count > 0)
+            {
+                await DeleteStoredSmsIndicesAsync(
+                    port,
+                    indicesToDelete,
+                    $"multipart {decoded.Concatenation.Reference} part {decoded.Concatenation.Sequence}/{decoded.Concatenation.Total}");
+            }
+
+            /* Legacy deletion block retained for reference; safe cleanup is performed above. */
             /*
             foreach (string bufferedIndex in indicesToDelete.Distinct(StringComparer.Ordinal))
             {
@@ -779,9 +827,8 @@ public class GsmModemService : IGsmModemService
             }
         }
 
-        // UI has synchronously taken ownership of the decoded content. Keep the
-        // original SMS on the SIM so no modem read/delete race can lose a message.
-        // Only an explicit user clear action may issue CMGD.
+        // UI has synchronously taken ownership of the decoded content. Safe
+        // cleanup below frees the acknowledged SIM slots only after delivery.
         /*
         foreach (string index in Array.Empty<string>())
         {
@@ -793,6 +840,18 @@ public class GsmModemService : IGsmModemService
                 _deliveredStoredSms[$"{port}\u001f{index}\u001f{smsContent}"] = DateTime.UtcNow;
         }
         */
+        // The UI has synchronously acknowledged the complete SMS. Delete only
+        // after that acknowledgement so old records cannot fill SIM storage and
+        // suppress a future +CMTI. A failed delete is left untouched and is never
+        // retried blindly by index because the modem can recycle the slot.
+        if (indicesToDelete.Count > 0)
+        {
+            await DeleteStoredSmsIndicesAsync(
+                port,
+                indicesToDelete,
+                decoded.Concatenation != null ? "multipart delivered" : "SMS delivered");
+        }
+
         foreach (string index in indicesToDelete)
             _deliveredStoredSms[$"{port}\u001f{index}\u001f{sender}\u001f{decoded.Content}"] = DateTime.UtcNow;
         if (multipartDeliveryKey != null)
@@ -2925,6 +2984,8 @@ public class GsmModemService : IGsmModemService
                 }
                 
                 // Sweep bù (quét tin nhắn kẹt định kỳ)
+                await SweepUnreadSmsAsync(portName);
+                /*
                 string cmglCommand = GetModemProfile(portName)?.IsQuectel == true ? "AT+CMGL=4" : "AT+CMGL=\"ALL\"";
                 string cmgl = await SendCommandAsync(portName, cmglCommand, 25000, silent: true);
                 if (!string.IsNullOrWhiteSpace(cmgl) && !cmgl.Contains("ERROR") && cmgl.Contains("+CMGL:"))
@@ -2935,6 +2996,7 @@ public class GsmModemService : IGsmModemService
                     // CMGL response here a second time bypassed that assembler and produced duplicate,
                     // cut SMS entries in the UI/Telegram pipeline.
                 }
+                */
             }
         }, token);
     }
@@ -4470,8 +4532,42 @@ public class GsmModemService : IGsmModemService
 
             // ALL is intentional: CMGR marks a multipart segment REC READ before the remaining
             // segments arrive. Scanning only REC UNREAD loses that segment after restart.
-            string command = GetModemProfile(portName)?.IsQuectel == true ? "AT+CMGL=4" : "AT+CMGL=\"ALL\"";
-            await SendCommandAsync(portName, command, 25000, silent: true);
+            //
+            // CMGF=1 above selects text mode for every modem.  Quectel's numeric
+            // `AT+CMGL=4` form is PDU-mode syntax; using it here while still in text
+            // mode made the recovery sweep return no records, so SMS stayed on the
+            // SIM until a modem/app restart happened to flush the state.  Keep the
+            // command consistent with the selected mode for all profiles.
+            const string command = "AT+CMGL=\"ALL\"";
+            string sweepResponse = await SendCommandAsync(portName, command, 25000, silent: true);
+            if (IsCommandFailure(sweepResponse)
+                && GetModemProfile(portName)?.IsQuectel == true)
+            {
+                // A few EC20 firmware banks reject the text-mode list command
+                // after a previous PDU operation. Fall back once to PDU mode;
+                // HandleDataReceived can route the returned PDU records through
+                // the same QCMGR/CMGR decoder without dropping them.
+                string pduMode = await SendCommandAsync(portName, "AT+CMGF=0", 5000, silent: true);
+                if (!IsCommandFailure(pduMode))
+                {
+                    const string pduCommand = "AT+CMGL=4";
+                    sweepResponse = await SendCommandAsync(portName, pduCommand, 25000, silent: true);
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[SMS_SWEEP_PDU_FALLBACK] {pduCommand}: {sweepResponse.Trim()}"
+                    });
+                }
+            }
+            if (sweepResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || sweepResponse.Contains("+CMS ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_SWEEP_FAILED] {command}: {sweepResponse.Trim()}"
+                });
+            }
         }
         finally
         {

@@ -3176,7 +3176,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // The fallback response is a valid network registration result.
                 // Promote a port that was waiting for COPS back to Active before
                 // starting the initial live lookup.
+                // A late COPS/fallback URC can arrive while the foreground IMEI
+                // lease is still writing/rebooting the modem.  It only proves
+                // that the radio saw an operator; it must not promote the row
+                // to Active before the IMEI pipeline has verified slot 7 and
+                // explicitly calls MarkPortActiveAfterInit.
                 if (port.Status == SimStatus.Connecting
+                    && !_initializingPorts.ContainsKey(e.PortName)
                     && TryGetCurrentSimSession(e.PortName, out _, out _, out _))
                 {
                     port.Status = SimStatus.Active;
@@ -3371,7 +3377,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // COPS is the point at which radio registration is complete.
                     // A port may have been downgraded to Connecting while waiting
                     // for COPS; promote it here so *111#/*101# can start normally.
-                    if (port.Status == SimStatus.Connecting)
+                    // Do not let a stale COPS response race a Create/Restore
+                    // IMEI operation and make the UI look online before the
+                    // new identity has been verified after reboot.
+                    if (port.Status == SimStatus.Connecting
+                        && !_initializingPorts.ContainsKey(e.PortName))
                     {
                         port.Status = SimStatus.Active;
                         port.LastError = string.Empty;

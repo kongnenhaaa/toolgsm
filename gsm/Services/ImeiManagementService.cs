@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using gsm.Models;
 
@@ -26,6 +27,8 @@ public class ImeiProcessResult
 
 public class ImeiManagementService
 {
+    private static readonly TimeSpan ImeiOperationTimeout = TimeSpan.FromMinutes(2);
+
     public static readonly string[] FakeTacs = new[] {
         // --- SAMSUNG FLAGSHIPS & A-SERIES (Ưu tiên hàng đầu - Bắt sóng 4G/VoLTE cực nhanh) ---
         "35414838", // Samsung Galaxy S24 Ultra
@@ -342,6 +345,9 @@ public class ImeiManagementService
         bool overwriteBackupWithCurrentImei = false)
     {
         string portName = port.PortName;
+        using var operationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        operationCts.CancelAfter(ImeiOperationTimeout);
+        ct = operationCts.Token;
         try
         {
             async Task<bool> SessionIsValidAsync()
@@ -366,7 +372,12 @@ public class ImeiManagementService
             if (!await SessionIsValidAsync())
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi trong lúc xử lý" };
 
-            SimBackupEntry? cachedEntry = getBackupEntry(ccid);
+            string explicitImei = NormalizeImei(explicitTargetImei);
+            bool explicitWriteRequested = IsValidImei(explicitImei);
+            bool createNewRequest = explicitWriteRequested && overwriteBackupWithCurrentImei;
+            // Create-New is intentionally independent of XLSX. Only Restore
+            // reads the backup mapping to choose/verify its target.
+            SimBackupEntry? cachedEntry = createNewRequest ? null : getBackupEntry(ccid);
             string canonicalBackupImei = string.Empty;
             bool hasValidBackup = cachedEntry != null
                 && TryNormalizeBackupImei(cachedEntry.Imei, out canonicalBackupImei);
@@ -390,8 +401,6 @@ public class ImeiManagementService
 
             string targetImei = string.Empty;
             string targetSource = string.Empty;
-            string explicitImei = NormalizeImei(explicitTargetImei);
-            bool explicitWriteRequested = IsValidImei(explicitImei);
             if (explicitWriteRequested)
             {
                 if (imeiAlreadyAssigned?.Invoke(explicitImei) == true)
@@ -451,8 +460,10 @@ public class ImeiManagementService
             if (!await SessionIsValidAsync())
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM đã thay đổi trước khi ghi IMEI" };
 
-            // Persist the original value before the first write. The cache callback is
-            // first-write-wins, so a generated IMEI can never replace this XLSX value.
+            // Persist the original value before the first write when possible. A
+            // Create-New request must not depend on Excel: the target explicitly
+            // supplied by the UI is authoritative, while Restore still validates
+            // its existing backup before writing.
             if ((overwriteBackupWithCurrentImei || !hasValidBackup) && currentImeiValid)
             {
                 var originalEntry = new SimBackupEntry
@@ -464,11 +475,22 @@ public class ImeiManagementService
                     SourceFile = "imei_backup.xlsx",
                     SimRegDate = port.SimRegDate
                 };
-                saveBackupEntry(originalEntry);
-                SimBackupEntry? persisted = getBackupEntry(ccid);
-                if (persisted == null
-                    || !TryNormalizeBackupImei(persisted.Imei, out string persistedImei)
-                    || !AreEquivalentImei(persistedImei, canonicalCurrentImei))
+                bool saved = false;
+                try
+                {
+                    saveBackupEntry(originalEntry);
+                    saved = true;
+                }
+                catch (Exception ex) when (createNewRequest)
+                {
+                    Log($"[{portName}] [IMEI_BACKUP_BEST_EFFORT] Bỏ qua lỗi lưu Excel khi tạo IMEI mới: {ex.Message}", "WARN");
+                }
+
+                SimBackupEntry? persisted = saved ? getBackupEntry(ccid) : null;
+                bool backupMatches = persisted != null
+                    && TryNormalizeBackupImei(persisted.Imei, out string persistedImei)
+                    && AreEquivalentImei(persistedImei, canonicalCurrentImei);
+                if (!createNewRequest && !backupMatches)
                 {
                     return new ImeiProcessResult
                     {
@@ -476,7 +498,8 @@ public class ImeiManagementService
                         ErrorMessage = "Không xác nhận được IMEI gốc trong imei_backup.xlsx; đã hủy ghi"
                     };
                 }
-                Log($"[{portName}] [IMEI_BACKUP_SAVED] CCID={ccid}; previous={canonicalCurrentImei}; overwrite={overwriteBackupWithCurrentImei}; file=imei_backup.xlsx", "SUCCESS");
+                Log($"[{portName}] [IMEI_BACKUP_SAVED] CCID={ccid}; previous={canonicalCurrentImei}; overwrite={overwriteBackupWithCurrentImei}; file=imei_backup.xlsx; verified={backupMatches}",
+                    backupMatches ? "SUCCESS" : "WARN");
             }
 
             Log($"[{portName}] [IMEI_TARGET] source={targetSource}; CCID={ccid}; target={targetImei}");
@@ -487,9 +510,9 @@ public class ImeiManagementService
             bool radioOff = false;
             for (int attempt = 0; attempt < 3; attempt++)
             {
-                string cfun4 = await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true);
+                string cfun4 = await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct: ct);
                 await Task.Delay(200, ct);
-                string cfunState = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
+                string cfunState = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
                 if (System.Text.RegularExpressions.Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 {
                     radioOff = true;
@@ -499,29 +522,33 @@ public class ImeiManagementService
 
             if (!radioOff)
             {
-                return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOffFailed };
+                return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = SecurityErrors.RadioOffFailed };
             }
 
-            string write = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000, silent: true);
+            string write = await _modemService.SendCommandAsync(portName, $"AT+EGMR=1,7,\"{targetImei}\"", 30000, silent: true, ct: ct);
             bool writeAcknowledged = CommandSucceeded(write);
 
             await Task.Delay(500, ct);
-            string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true);
+            string storedAfter = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7", 10000, silent: true, ct: ct);
             string verifiedImei = ExtractImei(storedAfter);
             if (!AreEquivalentImei(verifiedImei, targetImei))
             {
-                await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true, ct: ct);
                 Log($"[{portName}] [IMEI_WRITE_VERIFY_FAILED] read={verifiedImei}; expected={targetImei}", "ERROR");
                 return new ImeiProcessResult
                 {
-                    Status = ImeiProcessStatus.SecurityBlocked,
-                    ErrorMessage = writeAcknowledged ? SecurityErrors.WrongImei : "Ghi IMEI slot 7 thất bại"
+                    Status = writeAcknowledged && IsValidImei(verifiedImei)
+                        ? ImeiProcessStatus.SecurityBlocked
+                        : ImeiProcessStatus.Error,
+                    ErrorMessage = writeAcknowledged && IsValidImei(verifiedImei)
+                        ? SecurityErrors.WrongImei
+                        : "Không xác nhận được IMEI slot 7 sau khi ghi"
                 };
             }
             // SAuto checks modem state and SMS storage after the slot-7 read-back.
             // These probes are read-only; do not delete live SMS here.
-            await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true);
-            await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true);
+            await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
+            await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, ct: ct);
             if (!writeAcknowledged)
                 Log($"[{portName}] [IMEI_WRITE_ACK_LOST] Không nhận OK nhưng slot 7 đã khớp; tiếp tục như SAuto.", "WARN");
 
@@ -534,7 +561,7 @@ public class ImeiManagementService
                 port.Imei = targetImei;
                 port.IsRebooting = true;
             });
-            string reset = await _modemService.SendCommandAsync(portName, "AT+CFUN=1,1", 10000, silent: true);
+            string reset = await _modemService.SendCommandAsync(portName, "AT+CFUN=1,1", 10000, silent: true, ct: ct);
             if (!IsResetAcceptedOrRebooting(reset))
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Modem từ chối CFUN=1,1 sau khi ghi IMEI" };
             if (ResetResponseLostDuringReboot(reset))
@@ -574,6 +601,9 @@ public class ImeiManagementService
     {
         string portName = port.PortName;
         string targetImei = NormalizeImei(explicitTargetImei);
+        using var operationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        operationCts.CancelAfter(ImeiOperationTimeout);
+        ct = operationCts.Token;
 
         static string ExtractImei(string? response) => string.IsNullOrWhiteSpace(response)
             ? string.Empty
@@ -595,21 +625,29 @@ public class ImeiManagementService
             if (!CommandSucceeded(cfun4)
                 || !System.Text.RegularExpressions.Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             {
-                return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.RadioOffFailed };
+                return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = SecurityErrors.RadioOffFailed };
             }
 
             string currentResponse = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true, ct);
             string currentImei = ExtractImei(currentResponse);
             if (!IsValidImei(currentImei))
-                return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = "Không đọc được IMEI hiện tại trước khi ghi" };
+                return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Không đọc được IMEI hiện tại trước khi ghi" };
 
-            if (backupCurrentBeforeWrite && (savePreviousImei == null || !savePreviousImei(currentImei)))
+            bool backupSaved = false;
+            if (backupCurrentBeforeWrite && savePreviousImei != null)
             {
-                return new ImeiProcessResult
+                try
                 {
-                    Status = ImeiProcessStatus.SecurityBlocked,
-                    ErrorMessage = "Không lưu/xác minh được IMEI hiện tại trong imei_backup.xlsx; đã hủy ghi"
-                };
+                    backupSaved = savePreviousImei(currentImei);
+                }
+                catch (Exception ex)
+                {
+                    Log($"[{portName}] [IMEI_BACKUP_BEST_EFFORT] Bỏ qua lỗi lưu Excel khi tạo IMEI mới: {ex.Message}", "WARN");
+                }
+            }
+            if (backupCurrentBeforeWrite && !backupSaved)
+            {
+                Log($"[{portName}] [IMEI_BACKUP_BEST_EFFORT] Không lưu được IMEI gốc; vẫn tiếp tục ghi mục tiêu mới {targetImei}.", "WARN");
             }
 
             Log($"[{portName}] [IMEI_TARGET_NO_SIM] current={currentImei}; target={targetImei}; backup={backupCurrentBeforeWrite}");
@@ -628,8 +666,12 @@ public class ImeiManagementService
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true, ct);
                 return new ImeiProcessResult
                 {
-                    Status = ImeiProcessStatus.SecurityBlocked,
-                    ErrorMessage = writeAcknowledged ? SecurityErrors.WrongImei : "Ghi IMEI slot 7 thất bại"
+                    Status = writeAcknowledged && IsValidImei(verifiedImei)
+                        ? ImeiProcessStatus.SecurityBlocked
+                        : ImeiProcessStatus.Error,
+                    ErrorMessage = writeAcknowledged && IsValidImei(verifiedImei)
+                        ? SecurityErrors.WrongImei
+                        : "Không xác nhận được IMEI slot 7 sau khi ghi"
                 };
             }
             if (!writeAcknowledged)

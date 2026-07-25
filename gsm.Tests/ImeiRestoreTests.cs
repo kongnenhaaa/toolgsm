@@ -6,6 +6,64 @@ namespace gsm.Tests;
 
 public sealed class ImeiRestoreTests
 {
+    [Fact]
+    public async Task Create_RadioOffTimeout_IsRecoverableErrorNotSecurityBlock()
+    {
+        const string ccid = "89840200011750541177";
+        const string currentImei = "867702058238604";
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) => Task.FromResult(
+                command == "AT+CFUN?" ? "ERROR: Timeout" : "ERROR: Timeout")
+        };
+        var service = new ImeiManagementService(modem);
+
+        ImeiProcessResult result = await service.ProcessImeiAsync(
+            new SimPort { PortName = "COM84", Serial = ccid, Imei = currentImei },
+            ccid,
+            currentImei,
+            new AppSettings { EnableImeiRestore = true, EnableNewSimIntakeMode = true },
+            _ => new SimBackupEntry { Ccid = ccid, Imei = "355008370781449" },
+            _ => { },
+            action => action(),
+            forceAccept: true,
+            validateIdentityAsync: () => Task.FromResult(true));
+
+        Assert.Equal(ImeiProcessStatus.Error, result.Status);
+        Assert.Equal(SecurityErrors.RadioOffFailed, result.ErrorMessage);
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+EGMR=1,7", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task NoSim_ReadbackTimeout_IsRecoverableErrorNotSecurityBlock()
+    {
+        const string currentImei = "352054261826334";
+        const string targetImei = "355008370781449";
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) => Task.FromResult(command switch
+            {
+                "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                "AT+EGMR=0,7;" => $"+EGMR: \"{currentImei}\"\r\nOK",
+                "AT+EGMR=0,7" => "ERROR: Timeout",
+                _ when command.StartsWith("AT+EGMR=1,7,", StringComparison.Ordinal) => "ERROR: Timeout",
+                _ => "OK"
+            })
+        };
+        var service = new ImeiManagementService(modem);
+
+        ImeiProcessResult result = await service.ProcessImeiWithoutSimAsync(
+            new SimPort { PortName = "COM85", Imei = currentImei },
+            targetImei,
+            _ => true,
+            action => action(),
+            backupCurrentBeforeWrite: true);
+
+        Assert.Equal(ImeiProcessStatus.Error, result.Status);
+        Assert.DoesNotContain("WrongImei", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CFUN=1,1", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("OK", true)]
     [InlineData("ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)", true)]
@@ -391,18 +449,24 @@ public sealed class ImeiRestoreTests
     }
 
     [Fact]
-    public async Task NoSimCreate_DoesNotWriteWhenBackupCannotBeSaved()
+    public async Task NoSimCreate_WritesEvenWhenBackupCannotBeSaved()
     {
         const string previousImei = "352054261826334";
         const string targetImei = "355008370781449";
+        string modemImei = previousImei;
         var modem = new FakeGsmModemService
         {
-            CommandHandler = (_, command) => Task.FromResult(command switch
+            CommandHandler = (_, command) =>
             {
-                "AT+CFUN?" => "+CFUN: 4\r\nOK",
-                "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{previousImei}\"\r\nOK",
-                _ => "OK"
-            })
+                if (command.StartsWith("AT+EGMR=1,7,", StringComparison.Ordinal))
+                    modemImei = targetImei;
+                return Task.FromResult(command switch
+                {
+                    "AT+CFUN?" => "+CFUN: 4\r\nOK",
+                    "AT+EGMR=0,7;" or "AT+EGMR=0,7" => $"+EGMR: \"{modemImei}\"\r\nOK",
+                    _ => "OK"
+                });
+            }
         };
         var service = new ImeiManagementService(modem);
 
@@ -413,9 +477,9 @@ public sealed class ImeiRestoreTests
             action => action(),
             backupCurrentBeforeWrite: true);
 
-        Assert.Equal(ImeiProcessStatus.SecurityBlocked, result.Status);
-        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+EGMR=1,7", StringComparison.Ordinal));
-        Assert.DoesNotContain(modem.Commands, command => command.Contains("AT+CFUN=1,1", StringComparison.Ordinal));
+        Assert.Equal(ImeiProcessStatus.Applied, result.Status);
+        Assert.Contains(modem.Commands, command => command.Contains($"AT+EGMR=1,7,\"{targetImei}\"", StringComparison.Ordinal));
+        Assert.Contains(modem.Commands, command => command.Contains("AT+CFUN=1,1", StringComparison.Ordinal));
     }
 
     [Fact]

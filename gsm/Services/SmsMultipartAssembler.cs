@@ -28,8 +28,20 @@ public static class SmsBodyDecoder
                         !x.TrimStart().StartsWith("+QCMGR:", StringComparison.OrdinalIgnoreCase) &&
                         !x.TrimStart().StartsWith("+CMT:", StringComparison.OrdinalIgnoreCase))
             .Where(x => !Regex.IsMatch(x.Trim(), @"^AT\+Q?CMGR\s*=", RegexOptions.IgnoreCase))
-            .Where(x => !x.Trim().Equals("OK", StringComparison.OrdinalIgnoreCase) && !x.Trim().Equals("ERROR", StringComparison.OrdinalIgnoreCase))
             .ToArray();
+
+        // Remove only the final modem terminator. Filtering every line equal to
+        // "OK"/"ERROR" loses legitimate short SMS whose entire body is one of
+        // those words (and was especially visible with short direct messages).
+        // Keeping an earlier equal line preserves a body such as "OK" followed
+        // by the transport's trailing OK.
+        if (lines.Length > 1
+            && Regex.IsMatch(raw, @"\+(?:Q?CMGR|CMT):", RegexOptions.IgnoreCase)
+            && (lines[^1].Trim().Equals("OK", StringComparison.OrdinalIgnoreCase)
+                || lines[^1].Trim().Equals("ERROR", StringComparison.OrdinalIgnoreCase)))
+        {
+            lines = lines[..^1];
+        }
         if (lines.Length == 0) return new(string.Empty, null);
 
         string hex = string.Concat(lines.Select(x => x.Trim()));

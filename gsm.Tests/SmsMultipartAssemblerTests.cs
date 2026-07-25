@@ -176,6 +176,14 @@ public class SmsMultipartAssemblerTests
     }
 
     [Fact]
+    public void ShortSmsBodyEqualToOk_IsNotDiscardedAsTransportTerminator()
+    {
+        const string raw = "+CMGR: \"REC UNREAD\",\"505751\"\r\nOK\r\nOK\r\n";
+
+        Assert.Equal("OK", SmsBodyDecoder.Decode(raw).Content);
+    }
+
+    [Fact]
     public void ExactMultipart_AllowsSimIndexReuseForANewMessage()
     {
         var assembler = new SmsMultipartAssembler();

@@ -38,16 +38,11 @@ namespace gsm.Services
             }
         }
         public const string DatabaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
-        private static readonly HashSet<string> BlockedMachineIds = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "DESKTOP-O8GDDKR"
-        };
         public static string MachineId => SanitizeFirebaseKey(
             string.IsNullOrWhiteSpace(SettingsService.Current.MachineId)
                 ? Environment.MachineName
                 : SettingsService.Current.MachineId);
         private static string _machineId => MachineId;
-        private static bool IsBlockedMachine => BlockedMachineIds.Contains(_machineId);
 
         private static string SanitizeFirebaseKey(string value) => value.Trim()
             .Replace(".", "_").Replace("$", "").Replace("#", "")
@@ -121,11 +116,6 @@ namespace gsm.Services
         public void Start()
         {
             if (_listenTask != null || _syncTask != null) return;
-            if (IsBlockedMachine)
-            {
-                _vm.AddLog($"[FIREBASE] Đã chặn machineId={_machineId}; không đồng bộ web và không nhận command.", "WARN");
-                return;
-            }
 
             // Xóa sạch trạng thái web_states của máy này khi bật toolgsm lên để hiển thị đầy đủ hết
             _ = Task.Run(async () =>
@@ -249,7 +239,7 @@ namespace gsm.Services
 
         private async Task SyncPortsAsync(CancellationToken ct)
         {
-            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
+            if (!SettingsService.Current.EnableWebNotification) return;
             try
             {
                 // Dữ liệu cần thiết cho Web
@@ -297,7 +287,6 @@ namespace gsm.Services
 
         private async Task ListenForCommandsAsync(CancellationToken ct)
         {
-            if (IsBlockedMachine) return;
             while (!ct.IsCancellationRequested)
             {
                 try
@@ -988,14 +977,14 @@ namespace gsm.Services
 
             try
             {
-                // Đổi charset sang GSM để gửi text ASCII (tránh lỗi ZALO không phải Hex UCS2)
-                // Charset và khóa COM được quản lý tập trung bởi GsmSmsService.
-                await _vm.ModemService.SendCommandAsync(portId, "AT+CSMP=17,167,0,0", 10000, true); // Sửa lỗi 305 Invalid text mode parameter
-
                 string result = "";
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
-                    result = await _vm.QueueSmsFromWebAsync(portId, recipient, content);
+                    // Dùng đúng pipeline gửi thủ công: kiểm tra session SIM hiện tại,
+                    // chờ cooldown của cổng và để GsmSmsService khóa/configure modem.
+                    // Trước đây web tự gửi AT+CSMP rồi gọi thẳng _smsService, có thể
+                    // chạy giữa lúc cổng đang chuyển trạng thái và báo sent giả.
+                    result = await _vm.QueueSmsAsync(portId, recipient, content);
 
                     // KHÔNG RETRY nếu lỗi Timeout để tránh gửi trùng SMS (anti-duplicate SMS)
                     // Chỉ retry khi chắc chắn lỗi là do cổng bận (Lock / Another command)
@@ -1158,7 +1147,6 @@ namespace gsm.Services
 
         private async Task PollQueuedCommandsAsync(CancellationToken ct)
         {
-            if (IsBlockedMachine) return;
             try
             {
                 using var response = await _restClient.GetAsync($"{_databaseUrl}commands.json", ct);
@@ -1212,7 +1200,7 @@ namespace gsm.Services
 
         public static async Task SendSuccessToWebAsync(string portId)
         {
-            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
+            if (!SettingsService.Current.EnableWebNotification) return;
             try
             {
                 using var client = new HttpClient();
@@ -1236,7 +1224,7 @@ namespace gsm.Services
 
         public static async Task SendErrorToWebAsync(string portId, string errorMsg)
         {
-            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
+            if (!SettingsService.Current.EnableWebNotification) return;
             try
             {
                 using var client = new HttpClient();
@@ -1258,7 +1246,7 @@ namespace gsm.Services
 
         public static async Task ClearWebStateAsync(string portId)
         {
-            if (!SettingsService.Current.EnableWebNotification || IsBlockedMachine) return;
+            if (!SettingsService.Current.EnableWebNotification) return;
             try
             {
                 using var client = new HttpClient();

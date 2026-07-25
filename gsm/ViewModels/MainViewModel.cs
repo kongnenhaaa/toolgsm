@@ -207,6 +207,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, byte> _imeiVerificationRecoveryOwners = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, int> _imeiVerificationRecoveryAttempts = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxImeiVerificationRecoveryAttempts = 2;
+    private readonly ConcurrentDictionary<string, byte> _imeiMismatchRepairOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, int> _imeiMismatchRepairAttempts = new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxImeiMismatchRepairAttempts = 2;
+    private static readonly TimeSpan ImeiInitializationTimeout = TimeSpan.FromMinutes(3);
     // Accepted IMEI for the current application lifetime. A manual COM refresh must
     // verify and resume this assignment instead of returning the same SIM to the
     // action-required state and allowing a second generated IMEI.
@@ -2498,6 +2502,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }, _lifetimeCts.Token);
     }
 
+    private async Task RecoverImeiComAfterFailureAsync(
+        SimPort port,
+        string ccid,
+        long epoch,
+        string errorMessage,
+        bool scheduleRefresh = true)
+    {
+        string portName = port.PortName;
+
+        // A failed IMEI write may have left the modem in CFUN=4.  Force the
+        // per-COM safe state before releasing the initialization lease; never
+        // let a timeout leave the port looking busy while the radio is unknown.
+        try
+        {
+            await _modemService.SendCommandAsync(
+                portName, "AT+CFUN=4", 8000, silent: true, ct: CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[{portName}] [IMEI_RECOVERY_RADIO_OFF] {ex.Message}", "WARN");
+        }
+
+        if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
+
+        await Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
+            port.IsRebooting = false;
+            port.Status = SimStatus.NoResponse;
+            port.LastError = string.IsNullOrWhiteSpace(errorMessage)
+                ? "Lỗi IMEI tạm thời; COM đang được tự khôi phục"
+                : errorMessage;
+            port.DeviceName = "IMEI lỗi – đang tự khôi phục COM...";
+            port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+            UpdateDashboard();
+        });
+
+        AddLog($"[{portName}] [IMEI_RECOVERY_SCHEDULED] COM được trả về recovery riêng; lỗi={errorMessage}", "WARN");
+        if (scheduleRefresh)
+            ScheduleImeiVerificationRecovery(portName, ccid, epoch);
+    }
+
     public async Task<bool> ResetNetworkSafelyAsync(string portName)
     {
         var port = GetPortsSnapshot().FirstOrDefault(p => p.PortName == portName);
@@ -2555,6 +2601,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         string portName = port.PortName;
         using var initializationCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        initializationCts.CancelAfter(ImeiInitializationTimeout);
         CancellationToken initializationToken = initializationCts.Token;
         try
         {
@@ -2572,28 +2619,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 AddLog($"[{portName}] Không đọc được IMEI hoặc phiên SIM đã thay đổi.", "WARN");
                 if (IsSimSessionCurrent(portName, ccid, epoch))
                 {
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        port.Status = SimStatus.NoResponse;
-                        port.LastError = "Không đọc được IMEI khi khởi tạo";
-                        port.DeviceName = "Khởi tạo thất bại – chờ recovery";
-                        UpdateDashboard();
-                    });
+                    await RecoverImeiComAfterFailureAsync(
+                        port, ccid, epoch, "Không đọc được IMEI khi khởi tạo");
                 }
                 return;
             }
 
             if (!IsSimSessionCurrent(portName, ccid, epoch))
             {
-                AddLog($"[{portName}] Phiên CCID đã thay đổi trước khi xử lý IMEI; giữ sóng tắt.", "ERROR");
+                AddLog($"[{portName}] Phiên CCID đã thay đổi trước khi xử lý IMEI; giữ sóng tắt và chờ phiên mới.", "WARN");
                 await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
-                    port.Status = SimStatus.SecurityBlocked;
+                    port.Status = SimStatus.NoResponse;
                     port.LastError = "Phiên SIM đã thay đổi trước khi ghi IMEI";
-                    port.DeviceName = "Đã chặn – chưa xác minh được SIM/IMEI";
+                    port.DeviceName = "Đang chờ xác minh SIM mới...";
                     UpdateDashboard();
                 });
+                _modemService.StartHotplugWaitLoop(portName);
                 return;
             }
 
@@ -2627,6 +2670,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (result.Status == Services.ImeiProcessStatus.Matched || result.Status == Services.ImeiProcessStatus.Applied)
             {
+                // Keep the target verified immediately before CFUN=1,1. If the
+                // USB endpoint disappears or CPIN is slow after reboot, recovery
+                // must resume this target instead of falling back to an older XLSX
+                // value and falsely blocking the SIM.
+                if (result.ModemResetRequested)
+                {
+                    string stagedImei = NormalizeImei(result.FinalImei);
+                    if (Services.ImeiManagementService.IsValidImei(stagedImei))
+                    {
+                        _verifiedImeiByCcid[NormalizeCcid(ccid)] = stagedImei;
+                        AddLog($"[{portName}] [IMEI_TARGET_STAGED] CCID={NormalizeCcid(ccid)}; IMEI={stagedImei}; giữ mục tiêu qua reboot/recovery.", "INFO");
+                    }
+                }
+
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     port.Imei = result.FinalImei;
@@ -2661,18 +2718,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // Kết quả radio-on đã xác minh mới là nguồn sự thật. Dùng
                     // AddNewImeiCacheEntry ở đây giữ IMEI cũ theo first-write-wins,
                     // khiến lần mở app sau chặn toàn bộ SIM vì slot 7 không khớp XLSX.
-                    SaveLatestImeiCacheEntry(new SimBackupEntry
+                    try
                     {
-                        Ccid = ccid,
-                        Imei = result.FinalImei,
-                        PhoneNumber = port.PhoneNumber,
-                        CreatedAt = existing?.CreatedAt ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                        SourceFile = string.IsNullOrWhiteSpace(result.TargetSource)
-                            ? (existing?.SourceFile ?? "verified-live-accept")
-                            : result.TargetSource,
-                        SimRegDate = port.SimRegDate
-                    });
-                    AddLog($"[{portName}] [IMEI_BACKUP_COMMIT] CCID={ccid}; IMEI={result.FinalImei}; chỉ lưu sau xác minh radio-on.", "SUCCESS");
+                        SaveLatestImeiCacheEntry(new SimBackupEntry
+                        {
+                            Ccid = ccid,
+                            Imei = result.FinalImei,
+                            PhoneNumber = port.PhoneNumber,
+                            CreatedAt = existing?.CreatedAt ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                            SourceFile = string.IsNullOrWhiteSpace(result.TargetSource)
+                                ? (existing?.SourceFile ?? "verified-live-accept")
+                                : result.TargetSource,
+                            SimRegDate = port.SimRegDate
+                        });
+                        AddLog($"[{portName}] [IMEI_BACKUP_COMMIT] CCID={ccid}; IMEI={result.FinalImei}; chỉ lưu sau xác minh radio-on.", "SUCCESS");
+                    }
+                    catch (Exception ex) when (overwriteBackupWithCurrentImei)
+                    {
+                        // Create-New is already verified on the modem. A locked
+                        // workbook must not turn a successful write into a COM
+                        // failure or cause the old XLSX IMEI to be used again.
+                        AddLog($"[{portName}] [IMEI_BACKUP_COMMIT_BEST_EFFORT] IMEI mới đã hoạt động; bỏ qua lỗi Excel: {ex.Message}", "WARN");
+                    }
                 }
                 else if (!active
                     && result.ModemResetRequested
@@ -2691,13 +2758,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 else if (!active && IsSimSessionCurrent(portName, ccid, epoch))
                 {
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    if (resetFailure == SautoResetFailureKind.IdentityMismatch)
                     {
-                        port.Status = SimStatus.SecurityBlocked;
-                        port.LastError = "Không hoàn tất được cấu hình/xác minh SIM";
-                        port.DeviceName = "Đã chặn – xác minh CCID/IMEI sau bật sóng thất bại";
-                        UpdateDashboard();
-                    });
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            port.Status = SimStatus.SecurityBlocked;
+                            port.LastError = "IMEI sau reboot không khớp IMEI đã ghi";
+                            port.DeviceName = "Đã chặn bảo mật – IMEI sau reboot không khớp";
+                            UpdateDashboard();
+                        });
+                    }
+                    else
+                    {
+                        await RecoverImeiComAfterFailureAsync(
+                            port, ccid, epoch,
+                            "Không hoàn tất được cấu hình/xác minh SIM sau khi tạo IMEI");
+                    }
                 }
             }
             else if (result.Status == Services.ImeiProcessStatus.WaitingAccept)
@@ -2714,6 +2790,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (result.Status == Services.ImeiProcessStatus.SecurityBlocked)
             {
+                try
+                {
+                    // SecurityBlocked is reserved for a confirmed identity/policy
+                    // failure. Keep RF disabled while the row is intentionally
+                    // blocked; transient command failures are handled above as
+                    // recoverable NoResponse instead.
+                    await _modemService.SendCommandAsync(
+                        portName, "AT+CFUN=4", 8000, silent: true, ct: CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    AddLog($"[{portName}] [IMEI_BLOCK_RADIO_OFF] {ex.Message}", "WARN");
+                }
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
@@ -2726,49 +2815,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (!initializationToken.IsCancellationRequested)
             {
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
-                    port.Status = forceAccept ? SimStatus.SecurityBlocked : SimStatus.NoResponse;
-                    port.LastError = result.ErrorMessage;
-                    if (forceAccept)
-                        port.DeviceName = "Xử lý IMEI thất bại – giữ radio tắt để kiểm tra lại";
-                    UpdateDashboard();
-                });
+                await RecoverImeiComAfterFailureAsync(
+                    port, ccid, epoch, result.ErrorMessage);
             }
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
-            await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 8000, silent: true);
-            AddLog($"[{portName}] Khởi tạo SIM quá hạn 2 phút; giải phóng khóa và chuyển recovery.", "WARN");
-            if (IsSimSessionCurrent(portName, ccid, epoch))
-            {
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    port.Status = SimStatus.NoResponse;
-                    port.LastError = "Khởi tạo SIM quá hạn 2 phút";
-                    port.DeviceName = "Khởi tạo quá hạn – chờ recovery";
-                    UpdateDashboard();
-                });
-            }
+            await RecoverImeiComAfterFailureAsync(
+                port, ccid, epoch, "Khởi tạo IMEI quá hạn 3 phút");
         }
         catch (OperationCanceledException)
         {
-            await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 8000, silent: true);
+            await RecoverImeiComAfterFailureAsync(
+                port, ccid, epoch, "Phiên IMEI bị hủy; COM đang được tự khôi phục", scheduleRefresh: false);
         }
         catch (Exception ex)
         {
-            await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 8000, silent: true);
             if (IsSimSessionCurrent(portName, ccid, epoch))
             {
                 AddLog($"[{portName}] Lỗi xử lý phiên SIM: {ex.Message}", "ERROR");
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    port.Status = SimStatus.NoResponse;
-                    port.LastError = ex.Message;
-                    port.DeviceName = "Khởi tạo lỗi – chờ recovery";
-                    UpdateDashboard();
-                });
+                await RecoverImeiComAfterFailureAsync(port, ccid, epoch, ex.Message);
             }
         }
         finally
@@ -3582,6 +3648,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.SmsErrorCount = 0;
         port.ReconnectCount = 0;
         port.LastError = string.Empty;
+        _imeiMismatchRepairAttempts.TryRemove(portName, out _);
         
         // Cập nhật tên thiết bị thực tế dựa trên IMEI
         // Liệt kê đầy đủ mọi chuỗi trạng thái tạm thời có thể được set trước đó
@@ -3621,6 +3688,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (port == null || string.IsNullOrWhiteSpace(ccid) || target.Length != 15) return false;
         if (!TryBeginPortInitialization(portName, out Guid initializationLease)) return false;
         IDisposable backgroundLease = _modemService.SuspendPortBackgroundOperations(portName);
+        (long Epoch, CancellationToken Token)? activeSession = null;
 
         try
         {
@@ -3630,6 +3698,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 session = (existingSession.Epoch, existingSession.Token);
             else
                 session = StartSimSession(portName, ccid);
+            activeSession = session;
 
             // Một probe ngắn là đủ trước khi sở hữu COM. Sau điểm này epoch/token
             // của phiên SIM chặn mọi thao tác nếu có hot-swap; không lặp QCCID/ICCID
@@ -3657,6 +3726,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return IsSimSessionCurrent(portName, ccid, session.Epoch)
                 && port.Status == SimStatus.Active
                 && Services.ImeiManagementService.AreEquivalentImei(port.Imei, target);
+        }
+        catch (OperationCanceledException)
+        {
+            if (activeSession is { } current
+                && IsSimSessionCurrent(portName, ccid, current.Epoch))
+            {
+                await RecoverImeiComAfterFailureAsync(
+                    port, ccid, current.Epoch,
+                    "Tạo IMEI bị hủy/quá hạn; COM đang được tự khôi phục");
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (activeSession is { } current
+                && IsSimSessionCurrent(portName, ccid, current.Epoch))
+            {
+                await RecoverImeiComAfterFailureAsync(
+                    port, ccid, current.Epoch, ex.Message);
+            }
+            else
+            {
+                AddLog($"[{portName}] [IMEI_ACTION_FAILED] {ex.Message}", "ERROR");
+            }
+            return false;
         }
         finally
         {
@@ -3822,19 +3916,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
             AddLog($"[{portName}] [IMEI_SESSION_RESUME_FAILED] {ex.Message}", "ERROR");
             if (IsSimSessionCurrent(portName, ccid, epoch))
             {
+                bool repairScheduled = false;
                 if (identityMismatchDetected)
-                    await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                {
+                    try
+                    {
+                        await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                    }
+                    catch (Exception radioEx)
+                    {
+                        AddLog($"[{portName}] [IMEI_MISMATCH_RADIO_OFF] {radioEx.Message}", "WARN");
+                    }
+
+                    repairScheduled = ScheduleImeiMismatchRepair(
+                        portName, ccid, verifiedImei, epoch);
+                }
                 else
                     _modemService.StartPollingNetwork(portName);
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
                     port.Status = identityMismatchDetected
-                        ? SimStatus.SecurityBlocked
+                        ? (repairScheduled ? SimStatus.NoResponse : SimStatus.SecurityBlocked)
                         : SimStatus.Connecting;
                     port.LastError = ex.Message;
                     port.DeviceName = identityMismatchDetected
-                        ? "Chặn SIM – IMEI sau refresh chưa được xác minh"
+                        ? (repairScheduled
+                            ? "IMEI sau reboot chưa khớp – đang tự ghi/xác minh lại..."
+                            : "Chặn SIM – IMEI sau refresh chưa được xác minh")
                         : "Đang chờ mạng sau khi tạo IMEI...";
                     UpdateDashboard();
                 });
@@ -3844,6 +3953,54 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             EndPortInitialization(portName, initializationLease);
         }
+    }
+
+    private bool ScheduleImeiMismatchRepair(
+        string portName,
+        string ccid,
+        string targetImei,
+        long epoch)
+    {
+        string normalizedTarget = NormalizeImei(targetImei);
+        if (!Services.ImeiManagementService.IsValidImei(normalizedTarget)) return false;
+
+        string repairKey = $"{portName}|{NormalizeCcid(ccid)}|{epoch}";
+        if (!_imeiMismatchRepairOwners.TryAdd(repairKey, 0)) return true;
+
+        int attempt = _imeiMismatchRepairAttempts.AddOrUpdate(
+            portName, 1, static (_, previous) => previous + 1);
+        if (attempt > MaxImeiMismatchRepairAttempts)
+        {
+            _imeiMismatchRepairOwners.TryRemove(repairKey, out _);
+            AddLog($"[{portName}] [IMEI_MISMATCH_BLOCKED] Đã thử ghi/xác minh lại {MaxImeiMismatchRepairAttempts} lần nhưng IMEI vẫn lệch; giữ RF tắt để bảo vệ SIM.", "ERROR");
+            return false;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), _lifetimeCts.Token);
+                if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
+
+                AddLog($"[{portName}] [IMEI_MISMATCH_RECOVERY] Lần {attempt}/{MaxImeiMismatchRepairAttempts}; ghi lại mục tiêu {normalizedTarget} rồi reboot/xác minh lại.", "WARN");
+                bool repaired = await PaintImeiForCurrentSimAsync(
+                    portName, normalizedTarget, overwriteBackupWithCurrentImei: false);
+                if (!repaired && IsSimSessionCurrent(portName, ccid, epoch))
+                    AddLog($"[{portName}] [IMEI_MISMATCH_RECOVERY_FAILED] Chưa sửa được sau lần {attempt}; COM vẫn giữ trạng thái an toàn.", "ERROR");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                AddLog($"[{portName}] [IMEI_MISMATCH_RECOVERY_FAILED] {ex.Message}", "ERROR");
+            }
+            finally
+            {
+                _imeiMismatchRepairOwners.TryRemove(repairKey, out _);
+            }
+        }, _lifetimeCts.Token);
+
+        return true;
     }
 
     private void ModemService_PortDisconnected(object? sender, GsmDataEventArgs e)
@@ -5573,12 +5730,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // ngay sau timeout lệnh (~10 giây), khiến +CUSD chậm của COM8/COM75 bị bỏ lỡ.
             if (attempt == maxAttempts)
             {
-                AddLog($"[{port.PortName}] [USSD_NO_RESPONSE] {ussdCode} không trả dữ liệu hợp lệ sau {maxAttempts} lần; giữ COM hoạt động, không reset modem.", "WARN");
+                AddLog($"[{port.PortName}] [USSD_NO_RESPONSE] {ussdCode} không trả dữ liệu hợp lệ sau {maxAttempts} lần; kích hoạt phục hồi USSD riêng COM.", "WARN");
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     port.LastMessageContent = $"[USSD][CHỜ PHẢN HỒI] {ussdCode} chưa trả dữ liệu; hệ thống sẽ chạy lại ở nhịp COPS kế tiếp";
                     port.Sender = "USSD";
                 });
+
+                // A stale CUSD context is common after an IMEI reboot or a
+                // delayed +CUSD URC. Close it and cycle only this radio before
+                // putting the lookup back in the 30-second queue. This keeps
+                // the COM usable and prevents an endless *111# retry loop from
+                // masking a modem that needs a fresh registration.
+                if (!requireBalance
+                    && IsSimSessionCurrent(port.PortName, ccid, epoch)
+                    && port.Status == SimStatus.Active)
+                {
+                    bool recovered = await RecoverUssdSessionAsync(port, ccid, epoch, token);
+                    AddLog(
+                        recovered
+                            ? $"[{port.PortName}] [USSD_RECOVERY_READY] Radio/COPS đã sẵn sàng; xếp lại {ussdCode} sau một nhịp."
+                            : $"[{port.PortName}] [USSD_RECOVERY_PENDING] Chưa đăng ký lại được COPS; giữ COM và tiếp tục watchdog.",
+                        recovered ? "SUCCESS" : "WARN");
+                }
                 return false;
             }
 
@@ -6401,8 +6575,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// SMS từ ToolWeb luôn đi vào pipeline chung theo từng COM và không bị chặn
-    /// bởi cooldown của thao tác UI.
+    /// Tương thích với các caller cũ của ToolWeb. Web phải dùng cùng pipeline
+    /// với thao tác gửi thủ công để giữ session SIM, cooldown và khóa modem.
     /// </summary>
     public async Task<string> QueueSmsFromWebAsync(
         string portName,
@@ -6410,26 +6584,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string content,
         CancellationToken ct = default)
     {
-        string result = await _smsService.SendAsync(portName, phoneNumber, content, ct);
-        if (result.Contains("thành công", StringComparison.OrdinalIgnoreCase)
-            || result.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase))
-        {
-            RecordSmsSuccess(portName);
-            AddLog($"[{portName}] [WEB_SMS_SENT] Đã gửi đến {phoneNumber}; đang chờ OTP.", "SUCCESS");
-            if (AppSettings.AutoCheckBalanceAfterSms)
-            {
-                _ = Task.Run(async () =>
-                {
-                    await Task.Delay(AutoBalanceAfterSmsDelay, _lifetimeCts.Token);
-                    await CheckBalanceForPortAsync(portName);
-                }, _lifetimeCts.Token);
-            }
-        }
-        else
-        {
-            RecordPortError(portName, result, "SMS");
-            AddLog($"[{portName}] [WEB_SMS_FAILED] {result}", "ERROR");
-        }
+        string result = await QueueSmsAsync(portName, phoneNumber, content, ct);
+        bool accepted = result.Contains("thành công", StringComparison.OrdinalIgnoreCase)
+            || result.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase);
+        AddLog(
+            $"[{portName}] [WEB_SMS_{(accepted ? "SENT" : "FAILED")}] "
+            + (accepted
+                ? $"Đã gửi đến {phoneNumber}; đang chờ OTP."
+                : result),
+            accepted ? "SUCCESS" : "ERROR");
         return result;
     }
 
@@ -7517,6 +7680,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _pendingNoSimImeiByPort[portName] = target;
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCts.Token);
+        cts.CancelAfter(ImeiInitializationTimeout);
         try
         {
             await Application.Current.Dispatcher.InvokeAsync(() =>
@@ -7542,16 +7706,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (result.Status != Services.ImeiProcessStatus.Applied)
             {
-                _pendingNoSimImeiByPort.TryRemove(portName, out _);
-                await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+                bool transient = result.Status == Services.ImeiProcessStatus.Error;
+                if (!transient)
+                    _pendingNoSimImeiByPort.TryRemove(portName, out _);
+                await _modemService.SendCommandAsync(
+                    portName, "AT+CFUN=4", 5000, silent: true, ct: CancellationToken.None);
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     port.IsRebooting = false;
-                    port.Status = SimStatus.ImeiError;
+                    port.Status = transient ? SimStatus.NoResponse : SimStatus.SecurityBlocked;
                     port.LastError = result.ErrorMessage;
-                    port.DeviceName = "Ghi IMEI thất bại – radio đang tắt";
+                    port.DeviceName = transient
+                        ? "IMEI lỗi tạm thời – COM đang tự khôi phục..."
+                        : "IMEI bị chặn bảo mật – cần kiểm tra lại";
                     UpdateDashboard();
                 });
+                resumeHotplugAfterOperation = true;
+                AddLog(
+                    transient
+                        ? $"[{portName}] [IMEI_NO_SIM_RECOVERY] Giữ IMEI chờ xử lý và trả COM về hot-plug sau lỗi tạm thời."
+                        : $"[{portName}] [IMEI_NO_SIM_BLOCKED] Giữ radio tắt vì lỗi xác thực IMEI đã xác nhận.",
+                    transient ? "WARN" : "ERROR");
                 return false;
             }
 
@@ -7563,14 +7738,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
-            _pendingNoSimImeiByPort.TryRemove(portName, out _);
-            await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
+            try
+            {
+                await _modemService.SendCommandAsync(
+                    portName, "AT+CFUN=4", 5000, silent: true, ct: CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                AddLog($"[{portName}] [IMEI_NO_SIM_RADIO_OFF] {ex.Message}", "WARN");
+            }
+            resumeHotplugAfterOperation = true;
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                port.IsRebooting = false;
+                port.Status = SimStatus.NoResponse;
+                port.LastError = "Tạo IMEI quá hạn; đã giải phóng COM để tự khôi phục";
+                port.DeviceName = "Tạo IMEI quá hạn – đang tự khôi phục COM...";
+                UpdateDashboard();
+            });
             return false;
         }
-        catch
+        catch (Exception ex)
         {
-            _pendingNoSimImeiByPort.TryRemove(portName, out _);
-            throw;
+            resumeHotplugAfterOperation = true;
+            AddLog($"[{portName}] [IMEI_NO_SIM_RECOVERY] {ex.Message}", "ERROR");
+            try
+            {
+                await _modemService.SendCommandAsync(
+                    portName, "AT+CFUN=4", 5000, silent: true, ct: CancellationToken.None);
+            }
+            catch (Exception radioEx)
+            {
+                AddLog($"[{portName}] [IMEI_NO_SIM_RADIO_OFF] {radioEx.Message}", "WARN");
+            }
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                port.IsRebooting = false;
+                port.Status = SimStatus.NoResponse;
+                port.LastError = ex.Message;
+                port.DeviceName = "Tạo IMEI lỗi – đang tự khôi phục COM...";
+                UpdateDashboard();
+            });
+            return false;
         }
         finally
         {

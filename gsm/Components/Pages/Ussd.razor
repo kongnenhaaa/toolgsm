@@ -518,7 +518,15 @@
                     // Đổi RAT làm modem đăng ký mạng lại. Khởi động lại vòng
                     // polling để phát ngay CSQ/COPS mới thay vì chờ chu kỳ nền
                     // tiếp theo (trước đây cột Tín hiệu bị giữ dấu '-').
-                    ModemService.StartPollingNetwork(port);
+                    var pollingPort = Vm.GetPortsSnapshot()
+                        .FirstOrDefault(item => string.Equals(
+                            item.PortName,
+                            port,
+                            StringComparison.OrdinalIgnoreCase));
+                    ModemService.StartPollingNetwork(
+                        port,
+                        pollingPort?.Serial ?? string.Empty,
+                        pollingPort?.Imei ?? string.Empty);
                     _ = RefreshSignalAfterNetworkChangeAsync(port);
                 }
                 message = success

@@ -119,4 +119,63 @@ public class QuectelModemProfileTests
     {
         Assert.Equal(expected, GsmModemService.HasActiveOutgoingVoiceSession(response));
     }
+
+    [Theory]
+    [InlineData(false, 7, 8, false)]
+    [InlineData(false, 8, 8, true)]
+    [InlineData(true, 8, 8, false)]
+    [InlineData(true, 60, 8, false)]
+    public void ActiveCallProbe_KeepsWaitingThroughDialingAndAlerting(
+        bool sawVoice,
+        int attempts,
+        int maxNoVoiceAttempts,
+        bool expectedStop) =>
+        Assert.Equal(
+            expectedStop,
+            GsmModemService.ShouldStopWaitingForActiveCall(
+                sawVoice,
+                attempts,
+                maxNoVoiceAttempts));
+
+    [Theory]
+    [InlineData("\r\nOK\r\n", true)]
+    [InlineData("NO CARRIER\r\nOK\r\n", true)]
+    [InlineData("ERROR", false)]
+    [InlineData("ERROR: Timeout", false)]
+    public void HangupAcknowledgement_RequiresCleanOk(
+        string response,
+        bool expected)
+    {
+        Assert.Equal(expected,
+            GsmModemService.IsSuccessfulCallHangupAcknowledgement(response));
+    }
+
+    [Theory]
+    [InlineData("\r\nOK\r\n", true)]
+    [InlineData("+CLCC: 2,0,0,0,0,\"900\",129\r\nOK", false)]
+    [InlineData("+CLCC: 2,1,4,0,0,\"0900\",129\r\nOK", false)]
+    [InlineData("ERROR: Port not open", false)]
+    [InlineData("", false)]
+    public void PostHangupSnapshot_RequiresCompletedClccWithNoVoiceRows(
+        string response,
+        bool expected)
+    {
+        Assert.Equal(expected,
+            GsmModemService.IsTrustedNoVoiceCallSnapshot(response));
+    }
+
+    [Theory]
+    [InlineData("+QCCID: 89840200011834605154\r\nOK", "89840200011834605154", true)]
+    [InlineData("+QCCID: 89840200011834605155\r\nOK", "89840200011834605154", false)]
+    [InlineData("ERROR", "89840200011834605154", false)]
+    [InlineData("+QCCID: 89840200011834605154", "898402123", false)]
+    public void PhysicalCcidProof_RequiresExactTwentyDigitMatch(
+        string response,
+        string expectedCcid,
+        bool expected)
+    {
+        Assert.Equal(expected,
+            GsmModemService.ResponseMatchesExpectedCcid(
+                response, expectedCcid));
+    }
 }

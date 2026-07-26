@@ -4,8 +4,12 @@ namespace gsm.Models;
 
 public partial class SmsMessage : ObservableObject
 {
+    public string DeliveryId { get; set; } = string.Empty;
+    public DateTimeOffset ReceivedAtUtc { get; set; }
     public string Sender { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
+    public string DisplayContent =>
+        gsm.Services.VietnameseCarrierTextNormalizer.RestoreForDisplay(Content);
     public string ReceivedTime { get; set; } = string.Empty;
     [ObservableProperty]
     private string _receiverPhone = string.Empty;

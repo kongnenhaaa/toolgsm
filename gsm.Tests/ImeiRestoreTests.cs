@@ -522,4 +522,38 @@ public sealed class ImeiRestoreTests
         Assert.Equal(previousGeneratedImei, backup.Imei);
         Assert.Equal(nextImei, result.FinalImei);
     }
+
+    [Fact]
+    public async Task SimBoundWrite_TargetJournalFailure_PreventsAnyModemMutation()
+    {
+        const string ccid = "89840200011750541177";
+        const string currentImei = "352054261826334";
+        const string targetImei = "355008370781449";
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, _) => Task.FromResult("OK")
+        };
+        var service = new ImeiManagementService(modem);
+
+        ImeiProcessResult result = await service.ProcessImeiAsync(
+            new SimPort { PortName = "COM12", Serial = ccid, Imei = currentImei },
+            ccid,
+            currentImei,
+            new AppSettings { EnableImeiRestore = true, EnableNewSimIntakeMode = true },
+            _ => new SimBackupEntry { Ccid = ccid, Imei = currentImei },
+            _ => { },
+            action => action(),
+            forceAccept: true,
+            validateIdentityAsync: () => Task.FromResult(true),
+            explicitTargetImei: targetImei,
+            overwriteBackupWithCurrentImei: true,
+            persistTargetBeforeMutation: _ => throw new IOException("journal locked"));
+
+        Assert.Equal(ImeiProcessStatus.SecurityBlocked, result.Status);
+        Assert.Contains("journal IMEI", result.ErrorMessage);
+        Assert.Contains("journal locked", result.ErrorMessage);
+        Assert.DoesNotContain(modem.Commands, command =>
+            command.StartsWith("AT+CFUN=", StringComparison.Ordinal)
+            || command.StartsWith("AT+EGMR=1", StringComparison.Ordinal));
+    }
 }

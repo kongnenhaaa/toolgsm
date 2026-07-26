@@ -14,6 +14,31 @@ public sealed record DecodedSmsBody(
     string? Sender = null,
     bool RecoveredMislabelledUcs2 = false);
 
+/// <summary>
+/// Sender aliases that have been observed to switch inside one carrier-created
+/// multipart message. Keep this list deliberately narrow: treating every
+/// numeric short code as equivalent could combine unrelated messages that
+/// happen to reuse the same concatenation reference.
+/// </summary>
+internal static class SmsMultipartSenderAliases
+{
+    internal static readonly TimeSpan HandoffWindow = TimeSpan.FromMinutes(2);
+
+    public static bool AreEquivalent(string left, string right)
+    {
+        if (string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return IsPair(left, right, "888", "565656");
+    }
+
+    private static bool IsPair(string left, string right, string first, string second) =>
+        string.Equals(left.Trim(), first, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(right.Trim(), second, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(left.Trim(), second, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(right.Trim(), first, StringComparison.OrdinalIgnoreCase);
+}
+
 public static class SmsBodyDecoder
 {
     private static readonly UnicodeEncoding StrictBigEndianUnicode = new(true, false, true);
@@ -46,10 +71,22 @@ public static class SmsBodyDecoder
 
         string hex = string.Concat(lines.Select(x => x.Trim()));
         bool looksHex = IsHex(hex);
+        // A quoted CMGR/QCMGR/CMT header is explicit text mode. Carrier SMS
+        // bodies can legitimately be hexadecimal-looking activation codes or
+        // OTPs (for example "313233"). In that envelope, decode only a strong
+        // UCS2/UDH structure; interpreting arbitrary printable byte pairs would
+        // silently turn "313233" into "123" before the SIM slot is deleted.
+        bool explicitTextEnvelope = Regex.IsMatch(
+            raw,
+            @"\+(?:Q?CMGR|CMT):\s*""",
+            RegexOptions.IgnoreCase);
         DecodedSmsBody decoded;
-        if (looksHex && TryDecodeHex(hex, out var hexDecoded))
+        if (looksHex && TryDecodeHex(
+                hex,
+                explicitTextEnvelope,
+                out var hexDecoded))
             decoded = hexDecoded;
-        else if (looksHex && hex.Length > 16)
+        else if (looksHex && hex.Length > 16 && !explicitTextEnvelope)
             // Never publish/delete a long undecodable PDU as if it were message text.
             // Returning empty makes the read queue retry and leaves the SMS on the SIM.
             decoded = new DecodedSmsBody(string.Empty, null, true);
@@ -65,7 +102,7 @@ public static class SmsBodyDecoder
         string trimmed = line.Trim();
         bool isModemUrc = Regex.IsMatch(
             trimmed,
-            @"^\+(?:CTZE|CUSD|C(?:G|E)?REG|COPS|QIND|QSIMSTAT|CPIN|CCFC):",
+            @"^\+(?:CMTI?|CSQ|COPS|C(?:G|E)?REG|CUSD|CLIP|QSIMSTAT|CPIN|QTONEDET|CTZE|QIND|CCFC|CMS\s+ERROR|CME\s+ERROR):",
             RegexOptions.IgnoreCase);
         if (!isModemUrc)
             return line;
@@ -81,7 +118,10 @@ public static class SmsBodyDecoder
         return pdu.Success ? pdu.Groups["pdu"].Value : string.Empty;
     }
 
-    private static bool TryDecodeHex(string hex, out DecodedSmsBody decoded)
+    private static bool TryDecodeHex(
+        string hex,
+        bool explicitTextEnvelope,
+        out DecodedSmsBody decoded)
     {
         decoded = new(hex, null, true);
         byte[] bytes;
@@ -89,7 +129,10 @@ public static class SmsBodyDecoder
 
         // Some modem/firmware combinations ignore CMGF=1 and return a complete
         // SMS-DELIVER PDU. Decode that envelope before treating the bytes as UCS2.
-        if (TryDecodeDeliverPdu(bytes, out decoded)) return true;
+        // A quoted header, however, explicitly identifies text mode; a literal
+        // token that merely resembles a PDU must remain text.
+        if (!explicitTextEnvelope && TryDecodeDeliverPdu(bytes, out decoded))
+            return true;
 
         int offset = 0;
         SmsConcatInfo? concat = null;
@@ -97,6 +140,19 @@ public static class SmsBodyDecoder
 
         int count = bytes.Length - offset;
         if ((count & 1) != 0 && count > 0 && bytes[offset] == 0) { offset++; count--; } // EC20 alignment byte
+
+        // In text mode an explicit UDH is authoritative. Without one, require a
+        // strong UTF-16BE byte pattern and printable decoded text. This retains
+        // literal ASCII-hex tokens while still decoding UCS2 from CSCS="UCS2".
+        if (explicitTextEnvelope && concat == null)
+        {
+            if (!TryDecodeStrongBareUcs2(
+                    bytes.AsSpan(offset, count),
+                    out string strongUcs2))
+                return false;
+            decoded = new(strongUcs2, null, true);
+            return true;
+        }
 
         // Heuristic: If it's purely printable ASCII, it's not UCS2 (fixes VinaPhone sending GSM7 text as hex).
         bool isAscii = count > 0 && Enumerable.Range(offset, count).All(i => bytes[i] >= 0x20 && bytes[i] <= 0x7E || bytes[i] == 0x0A || bytes[i] == 0x0D);
@@ -114,6 +170,50 @@ public static class SmsBodyDecoder
         return true;
     }
 
+    private static bool TryDecodeStrongBareUcs2(
+        ReadOnlySpan<byte> bytes,
+        out string content)
+    {
+        content = string.Empty;
+        if (bytes.Length < 4 || (bytes.Length & 1) != 0)
+            return false;
+
+        int codeUnits = bytes.Length / 2;
+        int structuredHighBytes = 0;
+        for (int i = 0; i < bytes.Length; i += 2)
+        {
+            // Basic Latin, Latin-1/Extended-A and Vietnamese precomposed code
+            // points occupy these high-byte pages in UTF-16BE.
+            if (bytes[i] is 0x00 or 0x01 or 0x1E)
+                structuredHighBytes++;
+        }
+
+        // Short OTPs need two code units to be decodable, so require every pair
+        // to match. Longer Vietnamese text tolerates a small number of symbols
+        // outside the common pages while retaining a strong structural signal.
+        int requiredStructuredBytes = codeUnits < 4
+            ? codeUnits
+            : (codeUnits * 70 + 99) / 100;
+        if (structuredHighBytes < requiredStructuredBytes)
+            return false;
+
+        try { content = StrictBigEndianUnicode.GetString(bytes).TrimEnd('\0'); }
+        catch (DecoderFallbackException) { return false; }
+        if (string.IsNullOrWhiteSpace(content) || content.IndexOf('\0') >= 0)
+            return false;
+
+        foreach (char c in content)
+        {
+            if (char.IsControl(c) && c is not '\r' and not '\n' and not '\t')
+            {
+                content = string.Empty;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static bool TryDecodeDeliverPdu(byte[] pdu, out DecodedSmsBody decoded)
     {
         decoded = new(Convert.ToHexString(pdu), null, true);
@@ -127,6 +227,16 @@ public static class SmsBodyDecoder
 
             int addressLength = pdu[p++];
             byte addressType = pdu[p++];
+            // TP-OA is mandatory in an SMS-DELIVER PDU. In particular, reject
+            // zero-length addresses and values without the extension bit set.
+            // A bare UTF-16BE body beginning "H VỤ..." otherwise looks like
+            //   00 48 00 20 00 56 ...
+            // (empty SMSC, plausible first octet, empty OA, invalid TOA, PID,
+            // apparent 8-bit DCS) and its remaining Unicode bytes leak through
+            // the Latin-1 branch as NUL/control characters.
+            if (addressLength is <= 0 or > 20 || (addressType & 0x80) == 0)
+                return false;
+
             bool alphaSender = (addressType & 0x70) == 0x50;
             int addressBytes = alphaSender ? (addressLength + 1) / 2 : (addressLength + 1) / 2;
             if (p + addressBytes + 10 > pdu.Length) return false;
@@ -142,6 +252,13 @@ public static class SmsBodyDecoder
             int userDataLength = pdu[p++];
             if (p > pdu.Length) return false;
             ReadOnlySpan<byte> userData = pdu.AsSpan(p);
+            int alphabet = dcs & 0x0C;
+            int requiredUserDataBytes = alphabet == 0x00
+                ? (userDataLength * 7 + 7) / 8
+                : userDataLength;
+            int maxUserDataLength = alphabet == 0x00 ? 160 : 140;
+            if (userDataLength > maxUserDataLength || requiredUserDataBytes > userData.Length)
+                return false;
 
             int headerBytes = 0;
             SmsConcatInfo? concat = null;
@@ -150,17 +267,19 @@ public static class SmsBodyDecoder
                 if (userData.Length == 0) return false;
                 headerBytes = userData[0] + 1;
                 if (headerBytes > userData.Length) return false;
+                int headerUnits = alphabet == 0x00 ? (headerBytes * 8 + 6) / 7 : headerBytes;
+                if (headerUnits > userDataLength) return false;
                 TryParseUdh(userData, out _, out concat);
             }
 
             string content;
-            if ((dcs & 0x0C) == 0x08) // UCS2
+            if (alphabet == 0x08) // UCS2
             {
                 int byteCount = Math.Min(userDataLength - headerBytes, userData.Length - headerBytes);
                 if (byteCount < 0 || (byteCount & 1) != 0) return false;
                 content = Encoding.BigEndianUnicode.GetString(userData.Slice(headerBytes, byteCount)).TrimEnd('\0');
             }
-            else if ((dcs & 0x0C) == 0x00) // GSM 7-bit default alphabet
+            else if (alphabet == 0x00) // GSM 7-bit default alphabet
             {
                 int headerSeptets = (headerBytes * 8 + 6) / 7;
                 int textSeptets = Math.Max(0, userDataLength - headerSeptets);
@@ -492,11 +611,14 @@ public sealed class SmsMultipartAssembler
 {
     private sealed class Buffer
     {
+        public required string Sender { get; init; }
+        public required int Reference { get; init; }
         public required int Total { get; init; }
         public DateTimeOffset LastUpdated { get; set; }
         public Dictionary<int, string> Parts { get; } = new();
         public HashSet<string> Indices { get; } = new(StringComparer.Ordinal);
         public Dictionary<int, string> PartIndices { get; } = new();
+        public Dictionary<int, string> PartSenders { get; } = new();
     }
     private sealed class PortState
     {
@@ -519,11 +641,42 @@ public sealed class SmsMultipartAssembler
         {
             RemoveExpiredCore(state, timestamp);
             string processedKey = $"{index}\u001f{sender}\u001f{concat.Reference}\u001f{concat.Total}\u001f{concat.Sequence}\u001f{content}";
-            if (!string.IsNullOrWhiteSpace(index) && state.ProcessedIndices.ContainsKey(processedKey))
+            if (!string.IsNullOrWhiteSpace(index)
+                && (state.ProcessedIndices.ContainsKey(processedKey)
+                    || state.ProcessedIndices.Keys.Any(key => IsEquivalentFingerprint(
+                        key, index, sender, concat, content))))
                 return new(SmsAssemblyStatus.Duplicate, null, Array.Empty<string>());
             string key = $"{sender}\u001f{concat.Reference}\u001f{concat.Total}";
             if (!state.Buffers.TryGetValue(key, out var buffer))
-                state.Buffers[key] = buffer = new Buffer { Total = concat.Total, LastUpdated = timestamp };
+            {
+                // The observed VNPT handoff changes 888 to 565656 after part 1.
+                // Adopt an alias buffer only when it is the sole recent,
+                // non-conflicting candidate. A conflicting same-sequence part
+                // starts its own buffer so two real messages cannot corrupt one
+                // another merely because their references collided.
+                KeyValuePair<string, Buffer>[] candidates = state.Buffers
+                    .Where(pair => pair.Value.Reference == concat.Reference
+                                   && pair.Value.Total == concat.Total
+                                   && SmsMultipartSenderAliases.AreEquivalent(pair.Value.Sender, sender)
+                                   && WithinAliasWindow(pair.Value.LastUpdated, timestamp)
+                                   && IsPartCompatible(pair.Value, concat.Sequence, content))
+                    .ToArray();
+                if (candidates.Length == 1)
+                {
+                    key = candidates[0].Key;
+                    buffer = candidates[0].Value;
+                }
+                else
+                {
+                    state.Buffers[key] = buffer = new Buffer
+                    {
+                        Sender = sender,
+                        Reference = concat.Reference,
+                        Total = concat.Total,
+                        LastUpdated = timestamp
+                    };
+                }
+            }
             if (buffer.Parts.TryGetValue(concat.Sequence, out string? old))
             {
                 if (!string.Equals(old, content, StringComparison.Ordinal)) return new(SmsAssemblyStatus.Conflict, null, Array.Empty<string>());
@@ -531,6 +684,7 @@ public sealed class SmsMultipartAssembler
                 return new(SmsAssemblyStatus.Duplicate, null, Array.Empty<string>());
             }
             buffer.Parts.Add(concat.Sequence, content);
+            buffer.PartSenders[concat.Sequence] = sender;
             if (!string.IsNullOrWhiteSpace(index))
             {
                 buffer.Indices.Add(index);
@@ -547,7 +701,9 @@ public sealed class SmsMultipartAssembler
                 // is not a message identity; include the multipart identity and payload.
                 string completedIndex = buffer.PartIndices.TryGetValue(completedPart.Key, out string? partIndex)
                     ? partIndex : index;
-                string fingerprint = $"{completedIndex}\u001f{sender}\u001f{concat.Reference}\u001f{concat.Total}\u001f{completedPart.Key}\u001f{completedPart.Value}";
+                string completedSender = buffer.PartSenders.TryGetValue(completedPart.Key, out string? partSender)
+                    ? partSender : sender;
+                string fingerprint = $"{completedIndex}\u001f{completedSender}\u001f{concat.Reference}\u001f{concat.Total}\u001f{completedPart.Key}\u001f{completedPart.Value}";
                 state.ProcessedIndices[fingerprint] = timestamp;
             }
             state.Buffers.Remove(key);
@@ -560,10 +716,15 @@ public sealed class SmsMultipartAssembler
         if (!_ports.TryGetValue(port, out PortState? state)) return;
         lock (state.Gate)
         {
-            state.Buffers.Remove($"{sender}\u001f{concat.Reference}\u001f{concat.Total}");
-            string identity = $"\u001f{sender}\u001f{concat.Reference}\u001f{concat.Total}\u001f";
+            foreach (string key in state.Buffers
+                         .Where(pair => pair.Value.Reference == concat.Reference
+                                        && pair.Value.Total == concat.Total
+                                        && SmsMultipartSenderAliases.AreEquivalent(pair.Value.Sender, sender))
+                         .Select(pair => pair.Key)
+                         .ToArray())
+                state.Buffers.Remove(key);
             foreach (string key in state.ProcessedIndices.Keys
-                         .Where(key => key.Contains(identity, StringComparison.Ordinal))
+                         .Where(key => IsEquivalentFingerprintIdentity(key, sender, concat))
                          .ToArray())
                 state.ProcessedIndices.Remove(key);
         }
@@ -592,5 +753,41 @@ public sealed class SmsMultipartAssembler
         var processed = state.ProcessedIndices.Where(x => now - x.Value > _timeout).Select(x => x.Key).ToArray();
         foreach (string key in processed) state.ProcessedIndices.Remove(key);
         return keys.Length;
+    }
+
+    private static bool IsPartCompatible(Buffer buffer, int sequence, string content) =>
+        !buffer.Parts.TryGetValue(sequence, out string? existing)
+        || string.Equals(existing, content, StringComparison.Ordinal);
+
+    private static bool WithinAliasWindow(DateTimeOffset left, DateTimeOffset right) =>
+        (left - right).Duration() <= SmsMultipartSenderAliases.HandoffWindow;
+
+    private static bool IsEquivalentFingerprint(
+        string fingerprint,
+        string index,
+        string sender,
+        SmsConcatInfo concat,
+        string content)
+    {
+        string[] fields = fingerprint.Split('\u001f');
+        return fields.Length == 6
+               && string.Equals(fields[0], index, StringComparison.Ordinal)
+               && SmsMultipartSenderAliases.AreEquivalent(fields[1], sender)
+               && int.TryParse(fields[2], out int reference) && reference == concat.Reference
+               && int.TryParse(fields[3], out int total) && total == concat.Total
+               && int.TryParse(fields[4], out int sequence) && sequence == concat.Sequence
+               && string.Equals(fields[5], content, StringComparison.Ordinal);
+    }
+
+    private static bool IsEquivalentFingerprintIdentity(
+        string fingerprint,
+        string sender,
+        SmsConcatInfo concat)
+    {
+        string[] fields = fingerprint.Split('\u001f');
+        return fields.Length == 6
+               && SmsMultipartSenderAliases.AreEquivalent(fields[1], sender)
+               && int.TryParse(fields[2], out int reference) && reference == concat.Reference
+               && int.TryParse(fields[3], out int total) && total == concat.Total;
     }
 }

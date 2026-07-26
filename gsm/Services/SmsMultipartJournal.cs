@@ -1,5 +1,8 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace gsm.Services;
 
@@ -9,41 +12,90 @@ namespace gsm.Services;
 /// </summary>
 internal sealed class SmsMultipartJournal
 {
+    private static readonly int[] ReplaceRetryDelaysMs = [25, 50, 100, 200, 400, 800];
+    internal static readonly TimeSpan CorrelationWindow = TimeSpan.FromMinutes(30);
+
     internal sealed record Part(int Sequence, string Content);
+    internal sealed record CompletedSnapshot(
+        string MessageId,
+        string Scope,
+        string PortName,
+        string Sender,
+        SmsConcatInfo Concatenation,
+        string Content,
+        bool DeliveryAcknowledged,
+        bool RequiresSimCleanup,
+        bool SimCleanupConfirmed);
 
     private sealed class Entry
     {
         public string Scope { get; set; } = string.Empty;
+        public string GenerationId { get; set; } = string.Empty;
+        public string MessageId { get; set; } = string.Empty;
+        public string LastPortName { get; set; } = string.Empty;
         public string Sender { get; set; } = string.Empty;
+        public HashSet<string> AcceptedSenders { get; set; } =
+            new(StringComparer.OrdinalIgnoreCase);
         public int Reference { get; set; }
         public int Total { get; set; }
         public DateTimeOffset LastUpdated { get; set; }
+        public bool DeliveryAcknowledged { get; set; }
         public Dictionary<int, string> Parts { get; set; } = new();
+        public Dictionary<int, string> PartIdentities { get; set; } = new();
+        public HashSet<string> CleanedPartIdentities { get; set; } =
+            new(StringComparer.Ordinal);
 
         public Entry Clone() => new()
         {
             Scope = Scope,
+            GenerationId = GenerationId,
+            MessageId = MessageId,
+            LastPortName = LastPortName,
             Sender = Sender,
+            AcceptedSenders = new HashSet<string>(
+                AcceptedSenders, StringComparer.OrdinalIgnoreCase),
             Reference = Reference,
             Total = Total,
             LastUpdated = LastUpdated,
-            Parts = Parts.ToDictionary(x => x.Key, x => x.Value)
+            DeliveryAcknowledged = DeliveryAcknowledged,
+            Parts = Parts.ToDictionary(x => x.Key, x => x.Value),
+            PartIdentities = PartIdentities.ToDictionary(x => x.Key, x => x.Value),
+            CleanedPartIdentities = new HashSet<string>(
+                CleanedPartIdentities,
+                StringComparer.Ordinal)
         };
+    }
+
+    private sealed class LegacyMigrationManifest
+    {
+        public int Version { get; set; } = 1;
+        public HashSet<string> CompletedSources { get; set; } =
+            new(StringComparer.OrdinalIgnoreCase);
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly object _gate = new();
     private readonly string _filePath;
-    private readonly TimeSpan _timeout;
+    private readonly string _migrationManifestPath;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private bool _loadFailed;
 
-    public SmsMultipartJournal(string filePath, TimeSpan? timeout = null)
+    public SmsMultipartJournal(
+        string filePath,
+        TimeSpan? timeout = null,
+        IEnumerable<string>? legacyPaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         _filePath = Path.GetFullPath(filePath);
-        _timeout = timeout ?? TimeSpan.FromMinutes(10);
+        _migrationManifestPath = _filePath + ".legacy-migration.json";
+        // `timeout` remains in the signature for binary/source compatibility
+        // with older callers. Once a part has been durably committed, its SIM
+        // slot may already have been released; expiring that part by time would
+        // therefore be irreversible data loss.
+        _ = timeout;
+        bool stableJournalAlreadyExists = File.Exists(_filePath);
         Load();
+        ImportLegacyFiles(legacyPaths, stableJournalAlreadyExists);
     }
 
     public IReadOnlyList<Part> RecordAndGetParts(
@@ -51,47 +103,134 @@ internal sealed class SmsMultipartJournal
         string sender,
         SmsConcatInfo concat,
         string content,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        string? portName = null,
+        string? partIdentity = null,
+        string? messageIdHint = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
-        if (concat.Total is < 2 or > 255 || concat.Sequence < 1 || concat.Sequence > concat.Total)
+        if (concat.Total is < 1 or > 255 || concat.Sequence < 1 || concat.Sequence > concat.Total)
             throw new InvalidDataException("Invalid multipart metadata.");
 
         DateTimeOffset timestamp = now ?? DateTimeOffset.UtcNow;
-        string key = Key(scope, sender, concat.Reference, concat.Total);
         lock (_gate)
         {
-            if (_loadFailed)
-                throw new InvalidDataException(
-                    $"Multipart journal is unreadable and was preserved at '{_filePath}'.");
-            RemoveExpiredLocked(timestamp);
-            _entries.TryGetValue(key, out Entry? existing);
-            Entry? rollback = existing?.Clone();
-            bool wasMissing = existing == null;
+            EnsureLoadedLocked();
+            Dictionary<string, Entry> rollback = CloneEntriesLocked();
 
-            if (existing == null)
+            KeyValuePair<string, Entry>? anchor = FindAppendTargetLocked(
+                scope,
+                sender,
+                concat,
+                content,
+                partIdentity,
+                timestamp);
+            List<KeyValuePair<string, Entry>> entriesToMerge = new();
+            if (anchor.HasValue)
             {
+                entriesToMerge.Add(anchor.Value);
+                entriesToMerge.AddRange(FindCompatibleAliasesLocked(
+                    anchor.Value,
+                    scope,
+                    sender,
+                    concat,
+                    content));
+            }
+            else
+            {
+                // A sender may switch from 888 to 565656 after the first segment.
+                // Adopt only one recent, compatible alias entry. Multiple matches
+                // are ambiguous and therefore remain isolated.
+                // With a durable source fingerprint a conflicting sequence is
+                // a new carrier generation reusing the same concat reference,
+                // not corruption of the old incomplete message. Callers that
+                // cannot provide an identity retain the conservative legacy
+                // conflict behavior below.
+                if (string.IsNullOrWhiteSpace(partIdentity))
+                {
+                    KeyValuePair<string, Entry>[] conflictingDirect = _entries
+                        .Where(pair => SameMultipart(
+                                           pair.Value,
+                                           scope,
+                                           concat.Reference,
+                                           concat.Total)
+                                       && SenderWasAccepted(pair.Value, sender)
+                                       && WithinCorrelationWindow(
+                                           pair.Value.LastUpdated,
+                                           timestamp))
+                        .OrderByDescending(pair => pair.Value.LastUpdated)
+                        .ToArray();
+                    if (conflictingDirect.Length == 1)
+                        entriesToMerge.Add(conflictingDirect[0]);
+                }
+            }
+
+            Entry existing;
+            string key;
+            if (entriesToMerge.Count == 0)
+            {
+                string generationId = Guid.NewGuid().ToString("N");
                 existing = new Entry
                 {
                     Scope = scope,
+                    GenerationId = generationId,
+                    MessageId = string.IsNullOrWhiteSpace(messageIdHint)
+                        ? BuildGeneratedMessageId(generationId)
+                        : messageIdHint,
+                    LastPortName = portName ?? InferLegacyPort(scope),
                     Sender = sender,
+                    AcceptedSenders = new HashSet<string>(
+                        [sender], StringComparer.OrdinalIgnoreCase),
                     Reference = concat.Reference,
                     Total = concat.Total,
                     LastUpdated = timestamp
                 };
+                key = Key(existing);
                 _entries[key] = existing;
             }
-
-            if (existing.Parts.TryGetValue(concat.Sequence, out string? previous)
-                && !string.Equals(previous, content, StringComparison.Ordinal))
+            else
             {
-                RestoreLocked(key, rollback, wasMissing);
+                KeyValuePair<string, Entry> target = entriesToMerge[0];
+                key = target.Key;
+                existing = target.Value;
+                foreach (KeyValuePair<string, Entry> source in entriesToMerge.Skip(1))
+                    MergeEntryLocked(key, existing, source);
+            }
+
+            if (!string.IsNullOrWhiteSpace(messageIdHint)
+                && !string.Equals(
+                    existing.MessageId,
+                    messageIdHint,
+                    StringComparison.Ordinal))
+            {
+                RestoreAllLocked(rollback);
+                throw new InvalidDataException(
+                    $"Delivery identity conflict for {scope}/{sender}/{concat.Reference}.");
+            }
+
+            if (!IsPartCompatible(existing, concat.Sequence, content))
+            {
+                RestoreAllLocked(rollback);
                 throw new InvalidDataException(
                     $"Multipart conflict for {scope}/{sender}/{concat.Reference}, part {concat.Sequence}.");
             }
 
+            existing.AcceptedSenders.Add(existing.Sender);
+            existing.AcceptedSenders.Add(sender);
+            if (!string.IsNullOrWhiteSpace(portName))
+                existing.LastPortName = portName;
+            if (string.IsNullOrWhiteSpace(existing.MessageId))
+                existing.MessageId = IsLegacyGeneration(existing.GenerationId)
+                    ? BuildLegacyMessageId(
+                        existing.Scope,
+                        existing.Sender,
+                        existing.Reference,
+                        existing.Total)
+                    : BuildGeneratedMessageId(existing.GenerationId);
             existing.Parts[concat.Sequence] = content;
+            if (!string.IsNullOrWhiteSpace(partIdentity))
+                existing.PartIdentities[concat.Sequence] = partIdentity;
             existing.LastUpdated = timestamp;
             try
             {
@@ -99,7 +238,7 @@ internal sealed class SmsMultipartJournal
             }
             catch
             {
-                RestoreLocked(key, rollback, wasMissing);
+                RestoreAllLocked(rollback);
                 throw;
             }
 
@@ -113,26 +252,360 @@ internal sealed class SmsMultipartJournal
     {
         lock (_gate)
         {
-            if (!_entries.TryGetValue(Key(scope, sender, concat.Reference, concat.Total), out Entry? entry)
-                || DateTimeOffset.UtcNow - entry.LastUpdated > _timeout)
+            EnsureLoadedLocked();
+            List<KeyValuePair<string, Entry>> group = ResolveExistingGroupLocked(
+                scope, sender, concat.Reference, concat.Total);
+            if (group.Count == 0)
                 return Array.Empty<Part>();
-            return entry.Parts.OrderBy(x => x.Key).Select(x => new Part(x.Key, x.Value)).ToArray();
+
+            return CombineParts(group.Select(pair => pair.Value))
+                .OrderBy(x => x.Key)
+                .Select(x => new Part(x.Key, x.Value))
+                .ToArray();
         }
     }
 
-    public void Complete(string scope, string sender, SmsConcatInfo concat)
+    public string GetMessageId(
+        string scope,
+        string sender,
+        SmsConcatInfo concat)
     {
-        string key = Key(scope, sender, concat.Reference, concat.Total);
         lock (_gate)
         {
-            if (!_entries.Remove(key, out Entry? removed)) return;
+            EnsureLoadedLocked();
+            List<KeyValuePair<string, Entry>> group = ResolveExistingGroupLocked(
+                scope, sender, concat.Reference, concat.Total);
+            Entry? anchor = group
+                .OrderByDescending(pair => pair.Value.LastUpdated)
+                .Select(pair => pair.Value)
+                .FirstOrDefault();
+            if (anchor == null)
+                return string.Empty;
+            return string.IsNullOrWhiteSpace(anchor.MessageId)
+                ? MessageIdFor(anchor)
+                : anchor.MessageId;
+        }
+    }
+
+    public string GetMessageIdForPartIdentity(
+        string scope,
+        string partIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(partIdentity);
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            Entry? entry = _entries.Values
+                .Where(candidate => string.Equals(
+                    candidate.Scope,
+                    scope,
+                    StringComparison.Ordinal))
+                .Where(candidate => candidate.PartIdentities.Values.Any(value =>
+                    string.Equals(value, partIdentity, StringComparison.Ordinal)))
+                .OrderByDescending(candidate => candidate.LastUpdated)
+                .FirstOrDefault();
+            if (entry == null) return string.Empty;
+            return string.IsNullOrWhiteSpace(entry.MessageId)
+                ? MessageIdFor(entry)
+                : entry.MessageId;
+        }
+    }
+
+    public IReadOnlyList<CompletedSnapshot> GetCompletedSnapshots(
+        string? scope = null,
+        bool includeAcknowledged = false)
+    {
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            var completed = new List<CompletedSnapshot>();
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, Entry> candidate in _entries
+                         .OrderBy(pair => pair.Value.LastUpdated))
+            {
+                if (visited.Contains(candidate.Key)
+                    || scope != null
+                    && !string.Equals(candidate.Value.Scope, scope, StringComparison.Ordinal))
+                    continue;
+
+                List<KeyValuePair<string, Entry>> group =
+                    ExactGroupLocked(candidate.Value);
+                if (group.Count == 0) group.Add(candidate);
+                foreach (KeyValuePair<string, Entry> pair in group)
+                    visited.Add(pair.Key);
+
+                Dictionary<int, string> parts = CombineParts(
+                    group.Select(pair => pair.Value));
+                if (parts.Count != candidate.Value.Total
+                    || Enumerable.Range(1, candidate.Value.Total)
+                        .Any(sequence => !parts.ContainsKey(sequence)))
+                    continue;
+
+                bool acknowledged = group.All(pair =>
+                    pair.Value.DeliveryAcknowledged);
+                if (acknowledged && !includeAcknowledged) continue;
+
+                Entry anchor = group
+                    .OrderBy(pair => pair.Value.LastUpdated)
+                    .First().Value;
+                Dictionary<int, string> partIdentities = CombinePartIdentities(
+                    group.Select(pair => pair.Value));
+                bool requiresSimCleanup = group.Any(pair =>
+                        IsLegacyGeneration(pair.Value.GenerationId))
+                    || partIdentities.Count < parts.Count
+                    || partIdentities.Values.Any(identity =>
+                        identity.StartsWith(
+                            "sms-stored-",
+                            StringComparison.Ordinal));
+                string[] storedPartIdentities = partIdentities.Values
+                    .Where(identity => identity.StartsWith(
+                        "sms-stored-",
+                        StringComparison.Ordinal))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                bool simCleanupConfirmed = partIdentities.Count == parts.Count
+                    && storedPartIdentities.Length > 0
+                    && storedPartIdentities.All(identity => group.Any(pair =>
+                        pair.Value.CleanedPartIdentities.Contains(identity)));
+                string messageId = string.IsNullOrWhiteSpace(anchor.MessageId)
+                    ? MessageIdFor(anchor)
+                    : anchor.MessageId;
+                completed.Add(new CompletedSnapshot(
+                    messageId,
+                    anchor.Scope,
+                    group.Select(pair => pair.Value.LastPortName)
+                        .LastOrDefault(value => !string.IsNullOrWhiteSpace(value))
+                        ?? InferLegacyPort(anchor.Scope),
+                    anchor.Sender,
+                    new SmsConcatInfo(anchor.Reference, anchor.Total, anchor.Total),
+                    string.Concat(Enumerable.Range(1, anchor.Total)
+                        .Select(sequence => parts[sequence])),
+                    acknowledged,
+                    requiresSimCleanup,
+                    simCleanupConfirmed));
+            }
+
+            return completed;
+        }
+    }
+
+    public void MarkDeliveryAcknowledged(string messageId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            Entry? anchor = _entries.Values.FirstOrDefault(entry =>
+                string.Equals(
+                    entry.MessageId,
+                    messageId,
+                    StringComparison.Ordinal));
+            if (anchor == null) return;
+            Entry[] matches = ExactGroupLocked(anchor)
+                .Select(pair => pair.Value)
+                .ToArray();
+            if (matches.Length == 0 || matches.All(entry =>
+                    entry.DeliveryAcknowledged))
+                return;
+
+            Dictionary<string, Entry> rollback = CloneEntriesLocked();
+            foreach (Entry entry in matches)
+                entry.DeliveryAcknowledged = true;
             try
             {
                 SaveLocked();
             }
             catch
             {
-                _entries[key] = removed;
+                RestoreAllLocked(rollback);
+                throw;
+            }
+        }
+    }
+
+    public bool IsDeliveryAcknowledged(string messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId)) return false;
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            Entry? anchor = _entries.Values.FirstOrDefault(entry =>
+                string.Equals(
+                    entry.MessageId,
+                    messageId,
+                    StringComparison.Ordinal));
+            if (anchor == null) return false;
+            List<KeyValuePair<string, Entry>> group =
+                ExactGroupLocked(anchor);
+            return group.Count > 0
+                && group.All(pair => pair.Value.DeliveryAcknowledged);
+        }
+    }
+
+    public void MarkPartCleaned(string messageId, string partIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(partIdentity);
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            Entry? anchor = _entries.Values.FirstOrDefault(entry =>
+                string.Equals(entry.MessageId, messageId, StringComparison.Ordinal));
+            if (anchor == null)
+                throw new InvalidDataException(
+                    $"Multipart cleanup target '{messageId}' does not exist.");
+            Entry[] group = ExactGroupLocked(anchor)
+                .Select(pair => pair.Value)
+                .ToArray();
+            if (group.Length == 0
+                || group.Any(entry => entry.CleanedPartIdentities.Contains(
+                    partIdentity)))
+                return;
+
+            bool identityBelongsToGroup = group.Any(entry =>
+                entry.PartIdentities.Values.Any(identity => string.Equals(
+                    identity,
+                    partIdentity,
+                    StringComparison.Ordinal)));
+            if (!identityBelongsToGroup)
+                throw new InvalidDataException(
+                    $"Part identity '{partIdentity}' does not belong to '{messageId}'.");
+
+            Dictionary<string, Entry> rollback = CloneEntriesLocked();
+            anchor.CleanedPartIdentities.Add(partIdentity);
+            try
+            {
+                SaveLocked();
+            }
+            catch
+            {
+                RestoreAllLocked(rollback);
+                throw;
+            }
+        }
+    }
+
+    public bool IsSimCleanupConfirmed(string messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId)) return false;
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            Entry? anchor = _entries.Values.FirstOrDefault(entry =>
+                string.Equals(entry.MessageId, messageId, StringComparison.Ordinal));
+            if (anchor == null) return false;
+            Entry[] group = ExactGroupLocked(anchor)
+                .Select(pair => pair.Value)
+                .ToArray();
+            if (group.Length == 0) return false;
+            Dictionary<int, string> parts = CombineParts(group);
+            Dictionary<int, string> partIdentities = CombinePartIdentities(group);
+            string[] storedPartIdentities = partIdentities.Values
+                .Where(identity => identity.StartsWith(
+                    "sms-stored-",
+                    StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return parts.Count > 0
+                && partIdentities.Count == parts.Count
+                && storedPartIdentities.Length > 0
+                && storedPartIdentities.All(identity => group.Any(entry =>
+                    entry.CleanedPartIdentities.Contains(identity)));
+        }
+    }
+
+    public void Complete(string messageId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            Entry? anchor = _entries.Values.FirstOrDefault(entry =>
+                string.Equals(
+                    entry.MessageId,
+                    messageId,
+                    StringComparison.Ordinal));
+            if (anchor == null) return;
+            List<KeyValuePair<string, Entry>> group =
+                ExactGroupLocked(anchor);
+            if (group.Count == 0) return;
+            Dictionary<string, Entry> rollback = CloneEntriesLocked();
+            foreach (KeyValuePair<string, Entry> pair in group)
+                _entries.Remove(pair.Key);
+            try
+            {
+                SaveLocked();
+            }
+            catch
+            {
+                RestoreAllLocked(rollback);
+                throw;
+            }
+        }
+    }
+
+    public void RebindLegacyPortScope(string portName, string newScope)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newScope);
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            KeyValuePair<string, Entry>[] moving = _entries
+                .Where(pair => string.Equals(
+                                   pair.Value.Scope,
+                                   portName,
+                                   StringComparison.OrdinalIgnoreCase)
+                               && string.Equals(
+                                   pair.Value.LastPortName,
+                                   portName,
+                                   StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (moving.Length == 0) return;
+
+            Dictionary<string, Entry> rollback = CloneEntriesLocked();
+            DateTimeOffset reboundAt = DateTimeOffset.UtcNow;
+            foreach (KeyValuePair<string, Entry> pair in moving)
+            {
+                _entries.Remove(pair.Key);
+                pair.Value.Scope = newScope;
+                pair.Value.LastPortName = portName;
+                pair.Value.LastUpdated = reboundAt;
+                // Keep MessageId stable. It may already be present in the
+                // durable inbox, and it is the at-least-once deduplication key.
+                _entries[UniqueKeyLocked(pair.Value)] = pair.Value;
+            }
+            try
+            {
+                SaveLocked();
+            }
+            catch
+            {
+                RestoreAllLocked(rollback);
+                throw;
+            }
+        }
+    }
+
+    public void Complete(string scope, string sender, SmsConcatInfo concat)
+    {
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            List<KeyValuePair<string, Entry>> group = ResolveExistingGroupLocked(
+                scope, sender, concat.Reference, concat.Total);
+            if (group.Count == 0) return;
+            Dictionary<string, Entry> rollback = CloneEntriesLocked();
+            foreach (KeyValuePair<string, Entry> pair in group)
+                _entries.Remove(pair.Key);
+            try
+            {
+                SaveLocked();
+            }
+            catch
+            {
+                RestoreAllLocked(rollback);
                 throw;
             }
         }
@@ -145,58 +618,723 @@ internal sealed class SmsMultipartJournal
             if (!File.Exists(_filePath)) return;
             try
             {
-                Entry[] entries = JsonSerializer.Deserialize<Entry[]>(
-                    File.ReadAllText(_filePath), JsonOptions) ?? Array.Empty<Entry>();
-                DateTimeOffset now = DateTimeOffset.UtcNow;
+                Entry[] entries = ReadValidatedEntries(_filePath);
+                var staged = new Dictionary<string, Entry>(StringComparer.Ordinal);
                 foreach (Entry entry in entries)
                 {
-                    if (string.IsNullOrWhiteSpace(entry.Scope)
-                        || string.IsNullOrWhiteSpace(entry.Sender)
-                        || entry.Total is < 2 or > 255
-                        || entry.Parts.Count == 0
-                        || now - entry.LastUpdated > _timeout)
-                        continue;
-                    _entries[Key(entry.Scope, entry.Sender, entry.Reference, entry.Total)] = entry;
+                    if (!staged.TryAdd(Key(entry), entry))
+                        throw new InvalidDataException(
+                            "Multipart journal contains a duplicate generation.");
                 }
+
+                // Publish only after the entire file has parsed and validated.
+                // A corrupt tail must never expose a valid prefix to replay or
+                // cleanup callers.
+                _entries.Clear();
+                foreach (KeyValuePair<string, Entry> pair in staged)
+                    _entries[pair.Key] = pair.Value;
             }
-            catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (IsJournalReadWriteException(ex))
             {
                 // Keep the unreadable file for manual recovery. New segments will fail
                 // safely on save instead of deleting their SIM records without a journal.
+                _entries.Clear();
                 _loadFailed = true;
             }
         }
     }
 
-    private void RemoveExpiredLocked(DateTimeOffset now)
+    private void ImportLegacyFiles(
+        IEnumerable<string>? legacyPaths,
+        bool stableJournalAlreadyExists)
     {
-        foreach (string key in _entries
-                     .Where(x => now - x.Value.LastUpdated > _timeout)
-                     .Select(x => x.Key)
-                     .ToArray())
-            _entries.Remove(key);
+        if (legacyPaths == null || _loadFailed) return;
+        string[] sources;
+        try
+        {
+            sources = legacyPaths
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(Path.GetFullPath)
+                .Where(path => !string.Equals(
+                    path,
+                    _filePath,
+                    StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (Exception ex) when (IsJournalReadWriteException(ex))
+        {
+            _loadFailed = true;
+            return;
+        }
+        if (sources.Length == 0) return;
+
+        lock (_gate)
+        {
+            LegacyMigrationManifest manifest;
+            bool manifestExists;
+            try
+            {
+                manifest = LoadLegacyMigrationManifestLocked(out manifestExists);
+            }
+            catch (Exception ex) when (IsJournalReadWriteException(ex))
+            {
+                _loadFailed = true;
+                return;
+            }
+
+            if (!manifestExists)
+            {
+                // An existing stable journal from an older build has already
+                // established the migration baseline. Mark every configured
+                // source as handled without reading it; importing it now could
+                // resurrect messages that the stable journal already completed.
+                if (stableJournalAlreadyExists)
+                    manifest.CompletedSources.UnionWith(sources);
+                try
+                {
+                    // Write the empty manifest before the first import. If the
+                    // process stops after committing the stable file but before
+                    // marking a source complete, the next run can safely retry it.
+                    SaveLegacyMigrationManifestLocked(manifest);
+                }
+                catch (Exception ex) when (IsJournalReadWriteException(ex))
+                {
+                    _loadFailed = true;
+                    return;
+                }
+                if (stableJournalAlreadyExists) return;
+            }
+
+            foreach (string source in sources)
+            {
+                if (manifest.CompletedSources.Contains(source)
+                    || !File.Exists(source))
+                    continue;
+
+                Entry[] imported;
+                try
+                {
+                    // Parse and validate the whole source before touching the
+                    // live dictionary. A null/corrupt trailing entry therefore
+                    // cannot leak a valid prefix into the stable journal.
+                    imported = ReadValidatedEntries(source);
+                }
+                catch (Exception ex) when (IsJournalReadWriteException(ex))
+                {
+                    _loadFailed = true;
+                    return;
+                }
+
+                Dictionary<string, Entry> rollback = CloneEntriesLocked();
+                bool stableCommitFinished = false;
+                try
+                {
+                    bool changed = MergeImportedEntriesLocked(imported);
+                    if (changed) SaveLocked();
+                    stableCommitFinished = true;
+
+                    manifest.CompletedSources.Add(source);
+                    SaveLegacyMigrationManifestLocked(manifest);
+                }
+                catch (Exception ex) when (IsJournalReadWriteException(ex))
+                {
+                    if (!stableCommitFinished)
+                        RestoreAllLocked(rollback);
+                    // The source remains absent from the durable manifest, so a
+                    // future clean startup retries it. Block this instance from
+                    // replaying or mutating state whose migration is incomplete.
+                    _loadFailed = true;
+                    return;
+                }
+            }
+        }
     }
+
+    private static Entry[] ReadValidatedEntries(string path)
+    {
+        Entry?[]? deserialized = JsonSerializer.Deserialize<Entry?[]>(
+            File.ReadAllText(path), JsonOptions);
+        if (deserialized == null)
+            throw new InvalidDataException(
+                "Multipart journal root must be an array, not null.");
+
+        var validated = new Entry[deserialized.Length];
+        for (int index = 0; index < deserialized.Length; index++)
+        {
+            Entry entry = deserialized[index]
+                ?? throw new InvalidDataException(
+                    "Multipart journal contains a null entry.");
+            if (entry.Parts == null)
+                throw new InvalidDataException(
+                    "Multipart journal contains null parts.");
+
+            NormalizeLoadedEntry(entry);
+            ValidateLoadedEntry(entry);
+            validated[index] = entry;
+        }
+        return validated;
+    }
+
+    private static void ValidateLoadedEntry(Entry entry)
+    {
+        if (string.IsNullOrWhiteSpace(entry.Scope)
+            || string.IsNullOrWhiteSpace(entry.Sender)
+            // Direct +CMT messages use a stable positive 31-bit hash as their
+            // synthetic reference; carrier multipart references are narrower.
+            || entry.Reference < 0
+            || entry.Total is < 1 or > 255
+            || entry.Parts.Count == 0
+            || entry.Parts.Any(part =>
+                part.Key < 1
+                || part.Key > entry.Total
+                || string.IsNullOrWhiteSpace(part.Value))
+            || entry.PartIdentities.Any(identity =>
+                identity.Key < 1
+                || identity.Key > entry.Total
+                || !entry.Parts.ContainsKey(identity.Key)
+                || string.IsNullOrWhiteSpace(identity.Value))
+            || entry.CleanedPartIdentities.Any(string.IsNullOrWhiteSpace)
+            || entry.AcceptedSenders.Any(string.IsNullOrWhiteSpace)
+            || string.IsNullOrWhiteSpace(entry.GenerationId)
+            || string.IsNullOrWhiteSpace(entry.MessageId))
+        {
+            throw new InvalidDataException(
+                "Multipart journal contains an invalid entry.");
+        }
+    }
+
+    private bool MergeImportedEntriesLocked(IEnumerable<Entry> imported)
+    {
+        bool changed = false;
+        foreach (Entry source in imported)
+        {
+            string key = Key(source);
+            if (!_entries.TryGetValue(key, out Entry? existing))
+            {
+                Entry? messageIdOwner = _entries.Values.FirstOrDefault(entry =>
+                    string.Equals(
+                        entry.MessageId,
+                        source.MessageId,
+                        StringComparison.Ordinal));
+                if (messageIdOwner != null
+                    && !string.Equals(
+                        messageIdOwner.GenerationId,
+                        source.GenerationId,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "Legacy multipart source reuses a delivery identity.");
+                }
+
+                _entries[key] = source.Clone();
+                changed = true;
+                continue;
+            }
+
+            if (!string.Equals(
+                    existing.MessageId,
+                    source.MessageId,
+                    StringComparison.Ordinal)
+                || !EntriesAreCompatible(existing, source)
+                || existing.PartIdentities.Any(identity =>
+                    source.PartIdentities.TryGetValue(identity.Key, out string? other)
+                    && !string.Equals(identity.Value, other, StringComparison.Ordinal)))
+            {
+                throw new InvalidDataException(
+                    "Legacy multipart source conflicts with stable state.");
+            }
+
+            foreach (KeyValuePair<int, string> part in source.Parts)
+                if (existing.Parts.TryAdd(part.Key, part.Value)) changed = true;
+            foreach (KeyValuePair<int, string> identity in source.PartIdentities)
+                if (existing.PartIdentities.TryAdd(identity.Key, identity.Value)) changed = true;
+            foreach (string identity in source.CleanedPartIdentities)
+                if (existing.CleanedPartIdentities.Add(identity)) changed = true;
+            foreach (string sender in source.AcceptedSenders)
+                if (existing.AcceptedSenders.Add(sender)) changed = true;
+            if (source.LastUpdated > existing.LastUpdated)
+            {
+                existing.LastUpdated = source.LastUpdated;
+                if (!string.IsNullOrWhiteSpace(source.LastPortName))
+                    existing.LastPortName = source.LastPortName;
+                changed = true;
+            }
+            if (!existing.DeliveryAcknowledged && source.DeliveryAcknowledged)
+            {
+                existing.DeliveryAcknowledged = true;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private LegacyMigrationManifest LoadLegacyMigrationManifestLocked(
+        out bool exists)
+    {
+        exists = File.Exists(_migrationManifestPath);
+        if (!exists) return new LegacyMigrationManifest();
+
+        LegacyMigrationManifest? manifest =
+            JsonSerializer.Deserialize<LegacyMigrationManifest>(
+                File.ReadAllText(_migrationManifestPath), JsonOptions);
+        if (manifest == null
+            || manifest.Version != 1
+            || manifest.CompletedSources == null)
+        {
+            throw new InvalidDataException(
+                "Multipart legacy-migration manifest is invalid.");
+        }
+
+        var normalized = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string source in manifest.CompletedSources)
+        {
+            if (string.IsNullOrWhiteSpace(source))
+                throw new InvalidDataException(
+                    "Multipart legacy-migration manifest contains an invalid source.");
+            normalized.Add(Path.GetFullPath(source));
+        }
+        manifest.CompletedSources = normalized;
+        return manifest;
+    }
+
+    private void SaveLegacyMigrationManifestLocked(LegacyMigrationManifest manifest) =>
+        SaveJsonAtomicallyLocked(_migrationManifestPath, manifest);
 
     private void SaveLocked()
+        => SaveJsonAtomicallyLocked(_filePath, _entries.Values.ToArray());
+
+    private static bool IsJournalReadWriteException(Exception ex) =>
+        ex is JsonException
+            or InvalidDataException
+            or IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or NotSupportedException;
+
+    private void EnsureLoadedLocked()
     {
-        string? directory = Path.GetDirectoryName(_filePath);
+        if (_loadFailed)
+            throw new InvalidDataException(
+                $"Multipart journal is unreadable and was preserved at '{_filePath}'.");
+    }
+
+    private void SaveJsonAtomicallyLocked(string destinationPath, object value)
+    {
+        string? directory = Path.GetDirectoryName(destinationPath);
         if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
-        string tempPath = _filePath + ".tmp";
+        string tempPath = destinationPath + ".tmp";
         using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
         {
-            JsonSerializer.Serialize(stream, _entries.Values.ToArray(), JsonOptions);
+            JsonSerializer.Serialize(stream, value, value.GetType(), JsonOptions);
             stream.Flush(flushToDisk: true);
         }
-        if (File.Exists(_filePath)) File.Replace(tempPath, _filePath, null);
-        else File.Move(tempPath, _filePath);
+        CommitTempFileWithRetry(tempPath, destinationPath);
     }
 
-    private void RestoreLocked(string key, Entry? rollback, bool wasMissing)
+    private static void CommitTempFileWithRetry(
+        string tempPath,
+        string destinationPath)
     {
-        if (wasMissing || rollback == null) _entries.Remove(key);
-        else _entries[key] = rollback;
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                // Re-evaluate the destination on every attempt. ReplaceFile can leave
+                // both names intact after a transient sharing/delete conflict, while
+                // another failure mode can leave only the replacement name behind.
+                if (File.Exists(destinationPath))
+                    File.Replace(tempPath, destinationPath, null);
+                else
+                    File.Move(tempPath, destinationPath);
+                return;
+            }
+            catch (IOException) when (attempt < ReplaceRetryDelaysMs.Length)
+            {
+                // Antivirus, indexers and backup software can briefly open the journal
+                // without FILE_SHARE_DELETE. The decoded segment is already durable in
+                // the flushed temp file, so bounded retry is safe and prevents the SIM
+                // slot from being retained/re-read because of a millisecond-scale lock.
+                Thread.Sleep(ReplaceRetryDelaysMs[attempt]);
+            }
+        }
     }
 
-    private static string Key(string scope, string sender, int reference, int total) =>
-        $"{scope}\u001f{sender}\u001f{reference}\u001f{total}";
+    private Dictionary<string, Entry> CloneEntriesLocked() =>
+        _entries.ToDictionary(pair => pair.Key, pair => pair.Value.Clone(), StringComparer.Ordinal);
+
+    private void RestoreAllLocked(Dictionary<string, Entry> rollback)
+    {
+        _entries.Clear();
+        foreach (KeyValuePair<string, Entry> pair in rollback)
+            _entries[pair.Key] = pair.Value;
+    }
+
+    private KeyValuePair<string, Entry>? FindAppendTargetLocked(
+        string scope,
+        string sender,
+        SmsConcatInfo concat,
+        string content,
+        string? partIdentity,
+        DateTimeOffset timestamp)
+    {
+        KeyValuePair<string, Entry>[] direct = _entries
+            .Where(pair => SameMultipart(
+                               pair.Value,
+                               scope,
+                               concat.Reference,
+                               concat.Total)
+                           && SenderWasAccepted(pair.Value, sender)
+                           && (PartIdentityMatches(
+                                   pair.Value,
+                                   concat.Sequence,
+                                   partIdentity)
+                               || WithinCorrelationWindow(
+                                   pair.Value.LastUpdated,
+                                   timestamp))
+                           && CanAppendPart(
+                               pair.Value,
+                               concat.Sequence,
+                               content,
+                               partIdentity))
+            .OrderByDescending(pair => PartIdentityMatches(
+                pair.Value, concat.Sequence, partIdentity))
+            .ThenByDescending(pair => pair.Value.LastUpdated)
+            .ToArray();
+        if (direct.Length > 0)
+            return direct[0];
+
+        KeyValuePair<string, Entry>[] aliases = _entries
+            .Where(pair => SameMultipart(
+                               pair.Value,
+                               scope,
+                               concat.Reference,
+                               concat.Total)
+                           && SmsMultipartSenderAliases.AreEquivalent(
+                               pair.Value.Sender,
+                               sender)
+                           && (PartIdentityMatches(
+                                   pair.Value,
+                                   concat.Sequence,
+                                   partIdentity)
+                               || WithinAliasWindow(
+                                   pair.Value.LastUpdated,
+                                   timestamp))
+                           && CanAppendPart(
+                               pair.Value,
+                               concat.Sequence,
+                               content,
+                               partIdentity))
+            .OrderByDescending(pair => PartIdentityMatches(
+                pair.Value, concat.Sequence, partIdentity))
+            .ThenByDescending(pair => pair.Value.LastUpdated)
+            .ToArray();
+        return aliases.Length == 1 ? aliases[0] : null;
+    }
+
+    private KeyValuePair<string, Entry>? FindTrustedAnchorLocked(
+        string scope,
+        string sender,
+        int reference,
+        int total)
+    {
+        KeyValuePair<string, Entry>[] matches = _entries
+            .Where(pair => SameMultipart(pair.Value, scope, reference, total))
+            .ToArray();
+        KeyValuePair<string, Entry>[] direct = matches
+            .Where(pair => string.Equals(
+                pair.Value.Sender, sender, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(pair => pair.Value.LastUpdated)
+            .ToArray();
+        if (direct.Length > 0) return direct[0];
+
+        KeyValuePair<string, Entry>[] accepted = matches
+            .Where(pair => pair.Value.AcceptedSenders.Any(value =>
+                string.Equals(value, sender, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(pair => pair.Value.LastUpdated)
+            .ToArray();
+        return accepted.Length > 0 ? accepted[0] : null;
+    }
+
+    private static bool SenderWasAccepted(Entry entry, string sender) =>
+        string.Equals(entry.Sender, sender, StringComparison.OrdinalIgnoreCase)
+        || entry.AcceptedSenders.Any(value => string.Equals(
+            value, sender, StringComparison.OrdinalIgnoreCase));
+
+    private static bool PartIdentityMatches(
+        Entry entry,
+        int sequence,
+        string? partIdentity) =>
+        !string.IsNullOrWhiteSpace(partIdentity)
+        && entry.PartIdentities.TryGetValue(sequence, out string? existing)
+        && string.Equals(existing, partIdentity, StringComparison.Ordinal);
+
+    private static bool CanAppendPart(
+        Entry entry,
+        int sequence,
+        string content,
+        string? partIdentity)
+    {
+        if (!IsPartCompatible(entry, sequence, content))
+            return false;
+        if (string.IsNullOrWhiteSpace(partIdentity)
+            || !entry.PartIdentities.TryGetValue(sequence, out string? existing)
+            || string.IsNullOrWhiteSpace(existing))
+            return true;
+        return string.Equals(existing, partIdentity, StringComparison.Ordinal);
+    }
+
+    private IEnumerable<KeyValuePair<string, Entry>> FindCompatibleAliasesLocked(
+        KeyValuePair<string, Entry> anchor,
+        string scope,
+        string sender,
+        SmsConcatInfo concat,
+        string content) =>
+        _entries.Where(pair =>
+            !string.Equals(pair.Key, anchor.Key, StringComparison.Ordinal)
+            && SameMultipart(pair.Value, scope, concat.Reference, concat.Total)
+            && SmsMultipartSenderAliases.AreEquivalent(pair.Value.Sender, sender)
+            && WithinAliasWindow(pair.Value.LastUpdated, anchor.Value.LastUpdated)
+            && CanGroupEntries(anchor.Value, pair.Value)
+            && EntriesAreCompatible(anchor.Value, pair.Value)
+            && IsPartCompatible(pair.Value, concat.Sequence, content));
+
+    private List<KeyValuePair<string, Entry>> ResolveExistingGroupLocked(
+        string scope,
+        string sender,
+        int reference,
+        int total)
+    {
+        KeyValuePair<string, Entry>? anchor = FindTrustedAnchorLocked(
+            scope, sender, reference, total);
+        if (!anchor.HasValue)
+        {
+            KeyValuePair<string, Entry>[] aliases = _entries
+                .Where(pair => SameMultipart(pair.Value, scope, reference, total)
+                               && SmsMultipartSenderAliases.AreEquivalent(
+                                   pair.Value.Sender, sender))
+                .ToArray();
+            if (aliases.Length != 1) return new();
+            anchor = aliases[0];
+        }
+
+        var group = new List<KeyValuePair<string, Entry>> { anchor.Value };
+        group.AddRange(_entries.Where(pair =>
+            !string.Equals(pair.Key, anchor.Value.Key, StringComparison.Ordinal)
+            && SameMultipart(pair.Value, scope, reference, total)
+            && SmsMultipartSenderAliases.AreEquivalent(pair.Value.Sender, sender)
+            && WithinAliasWindow(pair.Value.LastUpdated, anchor.Value.Value.LastUpdated)
+            && CanGroupEntries(anchor.Value.Value, pair.Value)
+            && EntriesAreCompatible(anchor.Value.Value, pair.Value)));
+        return group;
+    }
+
+    /// <summary>
+    /// Resolves only the persisted carrier generation represented by
+    /// <paramref name="anchor"/>.  A concatenation reference is only 8/16 bits
+    /// and is routinely reused; acknowledgement/cleanup must therefore never
+    /// re-resolve by scope/sender/reference alone and accidentally mutate a
+    /// newer message generation.
+    /// </summary>
+    private List<KeyValuePair<string, Entry>> ExactGroupLocked(Entry anchor)
+    {
+        if (!IsLegacyGeneration(anchor.GenerationId))
+        {
+            return _entries
+                .Where(pair =>
+                    string.Equals(
+                        pair.Value.GenerationId,
+                        anchor.GenerationId,
+                        StringComparison.Ordinal)
+                    || string.Equals(
+                        pair.Value.MessageId,
+                        anchor.MessageId,
+                        StringComparison.Ordinal))
+                .ToList();
+        }
+
+        // Legacy journals predate GenerationId.  Their split 888/565656
+        // entries are one group only when the old narrow alias/time/content
+        // safeguards all agree.  New entries always use a random generation.
+        return _entries
+            .Where(pair =>
+                IsLegacyGeneration(pair.Value.GenerationId)
+                && SameMultipart(
+                    pair.Value,
+                    anchor.Scope,
+                    anchor.Reference,
+                    anchor.Total)
+                && SmsMultipartSenderAliases.AreEquivalent(
+                    pair.Value.Sender,
+                    anchor.Sender)
+                && WithinAliasWindow(
+                    pair.Value.LastUpdated,
+                    anchor.LastUpdated)
+                && EntriesAreCompatible(pair.Value, anchor))
+            .ToList();
+    }
+
+    private void MergeEntryLocked(
+        string targetKey,
+        Entry target,
+        KeyValuePair<string, Entry> source)
+    {
+        foreach (KeyValuePair<int, string> part in source.Value.Parts)
+            target.Parts[part.Key] = part.Value;
+        foreach (KeyValuePair<int, string> identity in source.Value.PartIdentities)
+            target.PartIdentities.TryAdd(identity.Key, identity.Value);
+        foreach (string identity in source.Value.CleanedPartIdentities)
+            target.CleanedPartIdentities.Add(identity);
+        target.AcceptedSenders.Add(target.Sender);
+        target.AcceptedSenders.Add(source.Value.Sender);
+        foreach (string acceptedSender in source.Value.AcceptedSenders)
+            target.AcceptedSenders.Add(acceptedSender);
+        if (string.IsNullOrWhiteSpace(target.MessageId))
+            target.MessageId = source.Value.MessageId;
+        target.DeliveryAcknowledged |= source.Value.DeliveryAcknowledged;
+        if (source.Value.LastUpdated > target.LastUpdated)
+        {
+            target.LastUpdated = source.Value.LastUpdated;
+            if (!string.IsNullOrWhiteSpace(source.Value.LastPortName))
+                target.LastPortName = source.Value.LastPortName;
+        }
+        if (!string.Equals(source.Key, targetKey, StringComparison.Ordinal))
+            _entries.Remove(source.Key);
+    }
+
+    private static bool SameMultipart(
+        Entry entry,
+        string scope,
+        int reference,
+        int total) =>
+        string.Equals(entry.Scope, scope, StringComparison.Ordinal)
+        && entry.Reference == reference
+        && entry.Total == total;
+
+    private static bool IsPartCompatible(Entry entry, int sequence, string content) =>
+        !entry.Parts.TryGetValue(sequence, out string? existing)
+        || string.Equals(existing, content, StringComparison.Ordinal);
+
+    private static bool EntriesAreCompatible(Entry left, Entry right) =>
+        left.Parts.All(part => !right.Parts.TryGetValue(part.Key, out string? other)
+                               || string.Equals(part.Value, other, StringComparison.Ordinal));
+
+    private static bool CanGroupEntries(Entry left, Entry right) =>
+        string.Equals(
+            left.GenerationId,
+            right.GenerationId,
+            StringComparison.Ordinal)
+        || IsLegacyGeneration(left.GenerationId)
+        && IsLegacyGeneration(right.GenerationId);
+
+    private static Dictionary<int, string> CombineParts(IEnumerable<Entry> entries)
+    {
+        var parts = new Dictionary<int, string>();
+        foreach (Entry entry in entries)
+            foreach (KeyValuePair<int, string> part in entry.Parts)
+                parts.TryAdd(part.Key, part.Value);
+        return parts;
+    }
+
+    private static Dictionary<int, string> CombinePartIdentities(
+        IEnumerable<Entry> entries)
+    {
+        var identities = new Dictionary<int, string>();
+        foreach (Entry entry in entries)
+            foreach (KeyValuePair<int, string> part in entry.PartIdentities)
+                identities.TryAdd(part.Key, part.Value);
+        return identities;
+    }
+
+    private static bool WithinAliasWindow(DateTimeOffset left, DateTimeOffset right) =>
+        (left - right).Duration() <= SmsMultipartSenderAliases.HandoffWindow;
+
+    private static bool WithinCorrelationWindow(
+        DateTimeOffset left,
+        DateTimeOffset right) =>
+        (left - right).Duration() <= CorrelationWindow;
+
+    private static void NormalizeLoadedEntry(Entry entry)
+    {
+        entry.AcceptedSenders = new HashSet<string>(
+            entry.AcceptedSenders ?? [], StringComparer.OrdinalIgnoreCase);
+        entry.AcceptedSenders.Add(entry.Sender);
+        entry.Parts ??= new Dictionary<int, string>();
+        entry.PartIdentities ??= new Dictionary<int, string>();
+        entry.CleanedPartIdentities = new HashSet<string>(
+            entry.CleanedPartIdentities ?? [],
+            StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(entry.GenerationId))
+            entry.GenerationId = BuildLegacyGenerationId(
+                entry.Scope,
+                entry.Sender,
+                entry.Reference,
+                entry.Total);
+        if (string.IsNullOrWhiteSpace(entry.MessageId))
+            entry.MessageId = MessageIdFor(entry);
+        if (string.IsNullOrWhiteSpace(entry.LastPortName))
+            entry.LastPortName = InferLegacyPort(entry.Scope);
+    }
+
+    private static string BuildLegacyGenerationId(
+        string scope,
+        string sender,
+        int reference,
+        int total)
+    {
+        string identity =
+            $"legacy\u001f{scope}\u001f{sender}\u001f{reference}\u001f{total}";
+        return $"legacy-{Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant()}";
+    }
+
+    private static string BuildLegacyMessageId(
+        string scope,
+        string sender,
+        int reference,
+        int total)
+    {
+        string identity =
+            $"multipart\u001f{scope}\u001f{sender}\u001f{reference}\u001f{total}";
+        return $"sms-mp-{Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant()}";
+    }
+
+    private static string BuildGeneratedMessageId(string generationId) =>
+        $"sms-mp-{generationId}";
+
+    private static bool IsLegacyGeneration(string generationId) =>
+        generationId.StartsWith("legacy-", StringComparison.Ordinal);
+
+    private static string MessageIdFor(Entry entry) =>
+        IsLegacyGeneration(entry.GenerationId)
+            ? BuildLegacyMessageId(
+                entry.Scope,
+                entry.Sender,
+                entry.Reference,
+                entry.Total)
+            : BuildGeneratedMessageId(entry.GenerationId);
+
+    private static string InferLegacyPort(string scope)
+    {
+        string candidate = scope.Split('\u001f', 2)[0].Trim();
+        return Regex.IsMatch(candidate, @"^COM\d+$", RegexOptions.IgnoreCase)
+            ? candidate
+            : string.Empty;
+    }
+
+    private static string Key(Entry entry) =>
+        $"{entry.Scope}\u001f{entry.Sender}\u001f{entry.Reference}\u001f{entry.Total}\u001f{entry.GenerationId}";
+
+    private string UniqueKeyLocked(Entry entry)
+    {
+        string key = Key(entry);
+        if (!_entries.ContainsKey(key)) return key;
+        bool wasLegacy = IsLegacyGeneration(entry.GenerationId);
+        entry.GenerationId = Guid.NewGuid().ToString("N");
+        if (string.IsNullOrWhiteSpace(entry.MessageId)
+            || wasLegacy)
+            entry.MessageId = BuildGeneratedMessageId(entry.GenerationId);
+        return Key(entry);
+    }
 }

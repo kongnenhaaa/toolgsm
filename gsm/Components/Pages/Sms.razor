@@ -120,15 +120,15 @@
                     </MudTd>
                     <MudTd Style="font-size:16px;">@context.Sender</MudTd>
                     <MudTd Style="font-size:16px; white-space:nowrap;"
-                           title="@context.Content">
-                        @context.Content
+                           title="@context.DisplayContent">
+                        @context.DisplayContent
                     </MudTd>
                     <MudTd Style="font-size:16px; font-family:monospace; color:#2563EB; font-weight:600;">
                         @(context.Otp ?? "—")
                     </MudTd>
                     <MudTd>
                         <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small"
-                                       OnClick="@(() => CopyText(context.Content))" title="Copy nội dung" />
+                                       OnClick="@(() => CopyText(context.DisplayContent))" title="Copy nội dung" />
                         <MudIconButton Icon="@Icons.Material.Filled.Reply" Size="Size.Small" Color="Color.Primary"
                                        OnClick="@(() => ResendSms(context))" title="Gửi lại" />
                         <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
@@ -428,6 +428,7 @@
         return (sms.Sender?.ToLowerInvariant().Contains(f) == true)
             || (sms.ReceiverPhone?.ToLowerInvariant().Contains(f) == true)
             || (sms.Content?.ToLowerInvariant().Contains(f) == true)
+            || sms.DisplayContent.ToLowerInvariant().Contains(f)
             || (sms.PortName?.ToLowerInvariant().Contains(f) == true)
             || (sms.Otp?.Contains(f) == true);
     }
@@ -833,7 +834,7 @@
             {
                 lines.AppendLine(string.Join(",",
                     Csv(sms.ReceivedTime), Csv(sms.PortName), Csv(GetReceiverDisplay(sms)),
-                    Csv(sms.Sender), Csv(sms.Content), Csv(sms.Otp)));
+                    Csv(sms.Sender), Csv(sms.DisplayContent), Csv(sms.Otp)));
             }
             string fileName = $"sms_history_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
             string path = System.IO.Path.Combine(

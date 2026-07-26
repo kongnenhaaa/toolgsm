@@ -5,6 +5,20 @@ namespace gsm.Tests;
 
 public sealed class ImeiIdentityTests
 {
+    [Fact]
+    public void SautoGenerator_AlwaysUsesConfiguredTacAndValidLuhn()
+    {
+        for (int sample = 0; sample < 10_000; sample++)
+        {
+            string imei = ImeiManagementService.GenerateRandomImei();
+
+            Assert.Equal(15, imei.Length);
+            Assert.True(imei.All(char.IsAsciiDigit));
+            Assert.Contains(imei[..8], ImeiManagementService.FakeTacs);
+            Assert.True(ImeiManagementService.IsValidImei(imei));
+        }
+    }
+
     [Theory]
     [InlineData("352054261826334")]
     [InlineData("358226401760615")]

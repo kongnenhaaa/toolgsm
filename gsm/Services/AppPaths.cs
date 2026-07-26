@@ -6,6 +6,10 @@ namespace gsm.Services;
 public static class AppPaths
 {
     public static string RuntimeDirectory { get; } = AppContext.BaseDirectory;
+    public static string UserDataDirectory { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ToolGSM",
+        "Data");
 
     public static string ForRuntimeFile(string fileName)
     {
@@ -13,6 +17,17 @@ public static class AppPaths
             throw new ArgumentException("File name is required.", nameof(fileName));
 
         return Path.Combine(RuntimeDirectory, fileName);
+    }
+
+    public static string ForUserDataFile(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)
+            || Path.GetFileName(fileName) != fileName)
+        {
+            throw new ArgumentException("A plain file name is required.", nameof(fileName));
+        }
+
+        return Path.Combine(UserDataDirectory, fileName);
     }
 
     public static string ResolveRuntimeOrAncestorFile(

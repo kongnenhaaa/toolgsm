@@ -36,6 +36,38 @@ public class SmsMultipartAssemblerTests
     }
 
     [Fact]
+    public void BareUcs2StartingLikeDeliverPdu_IsNotMisparsedAsEightBitPayload()
+    {
+        // Runtime part 2 started with "H VỤ...". Its UTF-16BE bytes happen to
+        // resemble an SMS-DELIVER envelope:
+        //   00 = SMSC length, 48 = first octet, 00 = address length,
+        //   20 = invalid address type, 00 = PID, 56 = apparent DCS.
+        // Accepting that false envelope exposes the remaining UTF-16 bytes as
+        // Latin-1 controls/NULs (for example "I\u001eÀ\0U\0 ...").
+        const string expected = "H VỤ 1 CHIỀU lúc 03/07/2026 do thay đổi thông tin";
+        string rawUcs2 = Convert.ToHexString(Encoding.BigEndianUnicode.GetBytes(expected));
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(rawUcs2);
+
+        Assert.Equal(expected, result.Content);
+        Assert.Null(result.Concatenation);
+        Assert.False(result.RecoveredMislabelledUcs2);
+        Assert.DoesNotContain('\0', result.Content);
+    }
+
+    [Fact]
+    public void ValidEightBitDeliverPdu_IsNotReinterpretedAsUcs2()
+    {
+        byte[] payload = [0x00, 0x41, 0x00, 0x42, 0x00, 0x43, 0xFE, 0xFD];
+        string pdu = BuildEightBitDeliverPdu(payload);
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(pdu);
+
+        Assert.Equal(Encoding.Latin1.GetString(payload), result.Content);
+        Assert.False(result.RecoveredMislabelledUcs2);
+    }
+
+    [Fact]
     public void ShortFinalUcs2SegmentMislabelledAsGsm7_KeepsItsRealLength()
     {
         const string expected = "Quý khách vui lòng liên hệ 18001091 để được hỗ trợ.";
@@ -156,6 +188,23 @@ public class SmsMultipartAssemblerTests
     }
 
     [Theory]
+    [InlineData("+CSQ: 25,99")]
+    [InlineData("+CLIP: \"+84901234567\",145")]
+    [InlineData("+QTONEDET: 49")]
+    [InlineData("+CMTI: \"SM\",7")]
+    public void InterleavedKnownUrc_AfterPdu_DoesNotTurnPduIntoText(string urc)
+    {
+        const string pdu = "069148192050444006D0381C0E000062707171236482A0050003B602015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D566B69CED4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C";
+        string raw = $"+CMGR: 0,,23\r\n{pdu}\r\n{urc}\r\nOK\r\n";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.StartsWith("(TB) So huu 01 License", result.Content);
+        Assert.Equal(new SmsConcatInfo(0xB6, 2, 1), result.Concatenation);
+        Assert.DoesNotContain(urc, result.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
     [InlineData("+CTZE: \"+28\",0,\"2026/07/17,10:32:46\"\r\nOK\r\n")]
     [InlineData("+CUSD: 0,\"0053006F002000540042\",15\r\nOK\r\n")]
     [InlineData("+COPS: 0,0,\"VinaPhone VINAPHONE\",7\r\nOK\r\n")]
@@ -221,6 +270,56 @@ public class SmsMultipartAssemblerTests
         Assert.True(result.WasHex);
         Assert.Empty(result.Content);
         Assert.Equal("123456", SmsBodyDecoder.Decode("123456").Content);
+    }
+
+    [Theory]
+    [InlineData("+CMGR: \"REC UNREAD\",\"BANK\"\r\nDEADBEEFDEADBEEFDEADBEEFDEADBEEF\r\nOK\r\n")]
+    [InlineData("+CMT: \"BANK\",,\"26/07/26,12:00:00+28\"\r\nDEADBEEFDEADBEEFDEADBEEFDEADBEEF\r\n")]
+    public void LongHexToken_InExplicitTextEnvelope_IsPreserved(string raw)
+    {
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.Equal("DEADBEEFDEADBEEFDEADBEEFDEADBEEF", result.Content);
+    }
+
+    [Theory]
+    [InlineData("+CMGR: \"REC UNREAD\",\"BANK\"\r\n313233\r\nOK\r\n", "313233")]
+    [InlineData("+CMT: \"BANK\",,\"26/07/26,12:00:00+28\"\r\n4142434445464748494A\r\n", "4142434445464748494A")]
+    public void PrintableAsciiHexToken_InExplicitTextEnvelope_RemainsLiteral(
+        string raw,
+        string expected)
+    {
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.Equal(expected, result.Content);
+        Assert.False(result.WasHex);
+    }
+
+    [Fact]
+    public void StrongUcs2_InExplicitTextEnvelope_IsStillDecoded()
+    {
+        const string expected = "Mã OTP 123456";
+        string hex = Convert.ToHexString(Encoding.BigEndianUnicode.GetBytes(expected));
+        string raw = $"+CMGR: \"REC UNREAD\",\"BANK\"\r\n{hex}\r\nOK\r\n";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.Equal(expected, result.Content);
+        Assert.True(result.WasHex);
+    }
+
+    [Fact]
+    public void ExplicitUdh_InTextEnvelope_IsStillDecoded()
+    {
+        byte[] udh = [0x05, 0x00, 0x03, 0xA7, 0x02, 0x01];
+        byte[] text = Encoding.BigEndianUnicode.GetBytes("OTP 123");
+        string hex = Convert.ToHexString(udh.Concat(text).ToArray());
+        string raw = $"+CMGR: \"REC UNREAD\",\"BANK\"\r\n{hex}\r\nOK\r\n";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.Equal("OTP 123", result.Content);
+        Assert.Equal(new SmsConcatInfo(0xA7, 2, 1), result.Concatenation);
     }
 
     [Theory]
@@ -335,6 +434,88 @@ public class SmsMultipartAssemblerTests
         Assert.Equal("B1B2", a.Add("COM1", "ZALO", new(2, 2, 2), "B2", "4").Content);
         Assert.Equal("A1A2", a.Add("COM1", "ZALO", new(1, 2, 2), "A2", "5").Content);
         Assert.Equal("C1C2", a.Add("COM2", "ZALO", new(1, 2, 2), "C2", "6").Content);
+    }
+
+    [Fact]
+    public void KnownCarrierAliasHandoff_AssemblesAllPartsInSequence()
+    {
+        var assembler = new SmsMultipartAssembler();
+        DateTimeOffset start = new(2026, 7, 26, 3, 5, 48, TimeSpan.Zero);
+        string[] parts =
+        [
+            "(TB) CHỈ 10K CÓ NGAY 7GB DATA/24H\nSoạn MGP10 gửi 888 có ngay:\nMIỄN ",
+            "PHÍ 7GB Data/24h + Gói VIP MangoPlus - xem ĐỘC QUYỀN trên nền tảng ",
+            "OTT show Anh Trai Vượt Ngàn Chông Gai, thưởng thức SỚM NHẤT Chó Hoa",
+            "ng Và Xương, và nhiều nội dung hấp dẫn khác tại https://mangoplus.v",
+            "n\nCước chỉ 10.000đ/24h. CSKH: 18001091 (0đ)."
+        ];
+
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            assembler.Add("COM110", "888", new(69, 5, 1), parts[0], "1", start).Status);
+        for (int sequence = 2; sequence < 5; sequence++)
+        {
+            Assert.Equal(SmsAssemblyStatus.Waiting,
+                assembler.Add(
+                    "COM110",
+                    "565656",
+                    new(69, 5, sequence),
+                    parts[sequence - 1],
+                    sequence.ToString(),
+                    start.AddSeconds(sequence)).Status);
+        }
+
+        SmsAssemblyResult result = assembler.Add(
+            "COM110", "565656", new(69, 5, 5), parts[4], "5", start.AddSeconds(5));
+
+        Assert.Equal(SmsAssemblyStatus.Completed, result.Status);
+        Assert.Equal(string.Concat(parts), result.Content);
+        Assert.Equal(new[] { "1", "2", "3", "4", "5" }, result.MessageIndices.Order());
+    }
+
+    [Fact]
+    public void KnownAliasesWithConflictingSameSequence_RemainSeparateMessages()
+    {
+        var assembler = new SmsMultipartAssembler();
+        DateTimeOffset start = new(2026, 7, 26, 3, 5, 48, TimeSpan.Zero);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            assembler.Add("COM110", "888", new(69, 2, 1), "message-a:", "1", start).Status);
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            assembler.Add("COM110", "565656", new(69, 2, 1), "message-b:", "2", start.AddSeconds(1)).Status);
+
+        Assert.Equal("message-a:end-a",
+            assembler.Add("COM110", "888", new(69, 2, 2), "end-a", "3", start.AddSeconds(2)).Content);
+        Assert.Equal("message-b:end-b",
+            assembler.Add("COM110", "565656", new(69, 2, 2), "end-b", "4", start.AddSeconds(3)).Content);
+    }
+
+    [Fact]
+    public void KnownAliasesOutsideHandoffWindow_DoNotMerge()
+    {
+        var assembler = new SmsMultipartAssembler();
+        DateTimeOffset start = new(2026, 7, 26, 3, 5, 48, TimeSpan.Zero);
+
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            assembler.Add("COM110", "888", new(69, 2, 1), "old-1", "1", start).Status);
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            assembler.Add(
+                "COM110",
+                "565656",
+                new(69, 2, 2),
+                "new-2",
+                "2",
+                start.Add(SmsMultipartSenderAliases.HandoffWindow).AddSeconds(1)).Status);
+    }
+
+    [Fact]
+    public void UnrelatedSendersWithSameReferenceAndDisjointParts_DoNotMerge()
+    {
+        var assembler = new SmsMultipartAssembler();
+
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            assembler.Add("COM1", "BANK_A", new(41, 2, 1), "A1", "1").Status);
+        Assert.Equal(SmsAssemblyStatus.Waiting,
+            assembler.Add("COM1", "BANK_B", new(41, 2, 2), "B2", "2").Status);
     }
 
     [Fact]
@@ -469,6 +650,24 @@ public class SmsMultipartAssemblerTests
             0x00,                         // incorrect DCS: GSM 7-bit
             0x62, 0x70, 0x72, 0x20, 0x10, 0x10, 0x00,
             (byte)(payload.Length * 8 / 7)
+        };
+        pdu.AddRange(payload);
+        return Convert.ToHexString(pdu.ToArray());
+    }
+
+    private static string BuildEightBitDeliverPdu(byte[] payload)
+    {
+        Assert.InRange(payload.Length, 1, 140);
+        var pdu = new List<byte>
+        {
+            0x00,                         // no SMSC address
+            0x00,                         // SMS-DELIVER, no UDH
+            0x0A, 0x91,                   // 10-digit international sender
+            0x48, 0x09, 0x21, 0x43, 0x65,
+            0x00,                         // PID
+            0x04,                         // 8-bit data
+            0x62, 0x70, 0x72, 0x20, 0x10, 0x10, 0x00,
+            (byte)payload.Length
         };
         pdu.AddRange(payload);
         return Convert.ToHexString(pdu.ToArray());

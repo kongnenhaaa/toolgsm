@@ -7,7 +7,12 @@ namespace gsm.Services;
 
 public interface IGsmUssdService : IDisposable
 {
-    Task<string> SendAsync(string portName, string ussdCode, int maxAttempts = 3, CancellationToken ct = default);
+    Task<string> SendAsync(
+        string portName,
+        string ussdCode,
+        int maxAttempts = 3,
+        CancellationToken ct = default,
+        string? expectedCcid = null);
 }
 
 public sealed class GsmUssdService : IGsmUssdService
@@ -40,7 +45,8 @@ public sealed class GsmUssdService : IGsmUssdService
         string portName,
         string ussdCode,
         int maxAttempts = 3,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? expectedCcid = null)
     {
         if (string.IsNullOrWhiteSpace(ussdCode)) return "ERROR: Invalid USSD request";
         if (!_sessions.TryGet(portName, out var session)) return SessionChangedError;
@@ -56,6 +62,16 @@ public sealed class GsmUssdService : IGsmUssdService
             {
                 if (!IsCurrent(session)) return SessionChangedError;
                 await ThrottleAsync(portName, token);
+                if (!string.IsNullOrWhiteSpace(expectedCcid)
+                    && (!string.Equals(
+                            session.Ccid,
+                            expectedCcid,
+                            StringComparison.Ordinal)
+                        || !await _modem.VerifyExpectedCcidAsync(
+                            portName, expectedCcid, token)))
+                {
+                    return "ERROR: Current physical SIM does not match the pinned CCID";
+                }
 
                 string? preflight = await PreparePortAsync(session, token);
                 if (preflight != null)

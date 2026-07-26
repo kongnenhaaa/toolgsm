@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using gsm.Models;
@@ -342,7 +343,8 @@ public class ImeiManagementService
         Func<Task<bool>>? validateIdentityAsync = null,
         Func<string, bool>? imeiAlreadyAssigned = null,
         string? explicitTargetImei = null,
-        bool overwriteBackupWithCurrentImei = false)
+        bool overwriteBackupWithCurrentImei = false,
+        Action<string>? persistTargetBeforeMutation = null)
     {
         string portName = port.PortName;
         using var operationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -504,6 +506,54 @@ public class ImeiManagementService
 
             Log($"[{portName}] [IMEI_TARGET] source={targetSource}; CCID={ccid}; target={targetImei}");
 
+            if (!await SessionIsValidAsync())
+            {
+                return new ImeiProcessResult
+                {
+                    Status = ImeiProcessStatus.Error,
+                    ErrorMessage = "SIM đã thay đổi ngay trước khi chuẩn bị ghi IMEI"
+                };
+            }
+
+            // Write-ahead ownership is part of the safety boundary: after this
+            // point CFUN/EGMR may mutate modem state or reboot the USB endpoint.
+            // The caller must durably remember the exact CCID -> target first,
+            // otherwise a power loss could make the next startup restore an old
+            // workbook value over the newly written IMEI.
+            try
+            {
+                persistTargetBeforeMutation?.Invoke(targetImei);
+            }
+            catch (Exception ex)
+            {
+                // Durable ownership is mandatory, not a transient modem error.
+                // Surface a fail-closed policy result so the caller keeps RF off
+                // and marks the row blocked; no CFUN/EGMR command has run yet.
+                Log(
+                    $"[{portName}] [IMEI_JOURNAL_BLOCKED] Không thể lưu target {targetImei}: {ex.Message}",
+                    "ERROR");
+                return new ImeiProcessResult
+                {
+                    Status = ImeiProcessStatus.SecurityBlocked,
+                    ErrorMessage =
+                        $"Không thể lưu journal IMEI bền vững; đã hủy ghi: {ex.Message}",
+                    FinalImei = canonicalCurrentImei,
+                    TargetSource = targetSource
+                };
+            }
+
+            // Re-read physical identity after the durable target checkpoint and
+            // immediately before CFUN/EGMR. The session registry alone can lag a
+            // hot-swap notification and is not sufficient proof of SIM identity.
+            if (!await SessionIsValidAsync())
+            {
+                return new ImeiProcessResult
+                {
+                    Status = ImeiProcessStatus.Error,
+                    ErrorMessage = "SIM đã thay đổi tại ranh giới ghi IMEI; journal target được giữ để phục hồi an toàn"
+                };
+            }
+
             // Sequence captured from SAuto: CFUN=4, verify, write slot 7,
             // wait 500 ms, read slot 7, wait 100 ms, then reset with CFUN=1,1.
             // SAuto retry sequence for CFUN=4:
@@ -580,6 +630,18 @@ public class ImeiManagementService
         {
             return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Phiên xử lý SIM đã bị hủy" };
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log(
+                $"[{portName}] [IMEI_JOURNAL_BLOCKED] Không thể xác minh/lưu durable state: {ex.Message}",
+                "ERROR");
+            return new ImeiProcessResult
+            {
+                Status = ImeiProcessStatus.SecurityBlocked,
+                ErrorMessage =
+                    $"Không thể xác minh/lưu journal IMEI bền vững; đã hủy ghi: {ex.Message}"
+            };
+        }
         catch (Exception ex)
         {
             Log($"[{portName}] Lỗi trong quá trình xử lý IMEI: {ex.Message}", "ERROR");
@@ -597,7 +659,8 @@ public class ImeiManagementService
         Func<string, bool>? savePreviousImei,
         Action<Action> dispatcherInvoke,
         bool backupCurrentBeforeWrite,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Func<Task<bool>>? validateNoSimAsync = null)
     {
         string portName = port.PortName;
         string targetImei = NormalizeImei(explicitTargetImei);
@@ -617,8 +680,17 @@ public class ImeiManagementService
 
         try
         {
+            async Task<bool> NoSimStillValidAsync()
+            {
+                ct.ThrowIfCancellationRequested();
+                return validateNoSimAsync == null
+                    || await validateNoSimAsync();
+            }
+
             if (!IsValidImei(targetImei))
                 return new ImeiProcessResult { Status = ImeiProcessStatus.SecurityBlocked, ErrorMessage = SecurityErrors.WrongImei };
+            if (!await NoSimStillValidAsync())
+                return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Đã phát hiện SIM; hủy nhánh ghi IMEI không-SIM" };
 
             string cfun4 = await _modemService.SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct);
             string cfunState = await _modemService.SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct);
@@ -630,8 +702,11 @@ public class ImeiManagementService
 
             string currentResponse = await _modemService.SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true, ct);
             string currentImei = ExtractImei(currentResponse);
-            if (!IsValidImei(currentImei))
+            if (!IsUsableObservedImei(currentImei))
                 return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "Không đọc được IMEI hiện tại trước khi ghi" };
+            currentImei = ToCanonicalImei(currentImei);
+            if (!await NoSimStillValidAsync())
+                return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM được cắm vào trước khi ghi IMEI; đã hủy an toàn" };
 
             bool backupSaved = false;
             if (backupCurrentBeforeWrite && savePreviousImei != null)
@@ -678,6 +753,8 @@ public class ImeiManagementService
                 Log($"[{portName}] [IMEI_WRITE_ACK_LOST] Không nhận OK nhưng slot 7 đã khớp; tiếp tục như SAuto.", "WARN");
 
             await Task.Delay(100, ct);
+            if (!await NoSimStillValidAsync())
+                return new ImeiProcessResult { Status = ImeiProcessStatus.Error, ErrorMessage = "SIM được cắm vào sau khi ghi IMEI; giữ RF tắt để xác minh CCID" };
             dispatcherInvoke(() =>
             {
                 port.Imei = targetImei;

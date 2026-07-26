@@ -10,7 +10,7 @@ public sealed class GsmOperationServicesTests
     private const string CcidB = "89840987654321098765";
 
     [Fact]
-    public async Task Sms_Success_UsesCurrentComAndRestoresUcs2()
+    public async Task Sms_Success_PreservesVietnameseAndRestoresUcs2()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM5", CcidA);
@@ -22,7 +22,7 @@ public sealed class GsmOperationServicesTests
         Assert.Contains("thành công", result, StringComparison.OrdinalIgnoreCase);
         var request = Assert.Single(modem.SmsRequests);
         Assert.Equal("COM5", request.Port);
-        Assert.Equal("Tieng Viet dep", request.Message);
+        Assert.Equal("Tiếng Việt đẹp", request.Message);
         Assert.Contains("COM5:AT+CSCS=\"UCS2\"", modem.Commands);
         Assert.False(sms.IsInProgress("COM5"));
     }
@@ -474,7 +474,106 @@ public sealed class GsmOperationServicesTests
 
         Assert.Contains("Timeout sending SMS payload", result);
         Assert.Single(modem.SmsRequests);
+        Assert.Empty(modem.ReconnectRequests);
         Assert.Empty(delay.Delays);
+    }
+
+    [Fact]
+    public async Task Sms_ChannelRecoveryFailure_ReconnectsPortOnceWithoutResendingPayload()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM120", CcidA);
+        const string uncertainResult =
+            "ERROR: Timeout sending SMS payload; SMS channel recovery failed";
+        var modem = new FakeGsmModemService
+        {
+            SmsHandler = (_, _, _) => Task.FromResult(uncertainResult)
+        };
+        var delay = new ImmediateGsmOperationDelay();
+        using var sms = new GsmSmsService(modem, sessions, delay);
+
+        string result = await sms.SendAsync("COM120", "0912345678", "test");
+
+        Assert.Equal(uncertainResult, result);
+        Assert.Single(modem.SmsRequests);
+        var reconnect = Assert.Single(modem.ReconnectRequests);
+        Assert.Equal("COM120", reconnect.Port);
+        Assert.Equal(115200, reconnect.BaudRate);
+        Assert.Empty(delay.Delays);
+        Assert.Empty(modem.Commands);
+        Assert.False(sms.IsInProgress("COM120"));
+    }
+
+    [Fact]
+    public async Task Sms_ChannelRecoveryFailure_PreservesOriginalResultWhenReconnectFails()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM121", CcidA);
+        const string uncertainResult =
+            "ERROR: Timeout sending SMS payload; SMS channel recovery failed";
+        var modem = new FakeGsmModemService
+        {
+            SmsHandler = (_, _, _) => Task.FromResult(uncertainResult),
+            ReconnectHandler = (_, _, _) => Task.FromException<bool>(
+                new IOException("COM reopen failed"))
+        };
+        using var sms = new GsmSmsService(
+            modem,
+            sessions,
+            new ImmediateGsmOperationDelay());
+
+        string result = await sms.SendAsync("COM121", "0912345678", "test");
+
+        Assert.Equal(uncertainResult, result);
+        Assert.Single(modem.SmsRequests);
+        Assert.Single(modem.ReconnectRequests);
+    }
+
+    [Fact]
+    public async Task Sms_Cms350_IsNotRetriedOrReconnected()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM122", CcidA);
+        var modem = new FakeGsmModemService
+        {
+            SmsHandler = (_, _, _) => Task.FromResult("+CMS ERROR: 350")
+        };
+        var delay = new ImmediateGsmOperationDelay();
+        using var sms = new GsmSmsService(modem, sessions, delay);
+
+        string result = await sms.SendAsync("COM122", "888", "DK EZ");
+
+        Assert.Contains("+CMS ERROR: 350", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(modem.SmsRequests);
+        Assert.Empty(modem.ReconnectRequests);
+        Assert.Empty(delay.Delays);
+    }
+
+    [Fact]
+    public async Task Sms_SessionChangesBeforeRecovery_DoesNotReconnectStaleSession()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM123", CcidA);
+        const string uncertainResult =
+            "ERROR: Timeout sending SMS payload; SMS channel recovery failed";
+        var modem = new FakeGsmModemService
+        {
+            SmsHandler = (_, _, _) =>
+            {
+                sessions.Begin("COM123", CcidB);
+                return Task.FromResult(uncertainResult);
+            }
+        };
+        using var sms = new GsmSmsService(
+            modem,
+            sessions,
+            new ImmediateGsmOperationDelay());
+
+        string result = await sms.SendAsync("COM123", "0912345678", "test");
+
+        Assert.Contains("SIM session changed", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(modem.SmsRequests);
+        Assert.Empty(modem.ReconnectRequests);
     }
 
     [Theory]
@@ -721,5 +820,95 @@ public sealed class GsmOperationServicesTests
         string result = await ussd.SendAsync("COM15", "*101#", 1);
 
         Assert.Contains("25000 VND", result);
+    }
+
+    [Fact]
+    public async Task Sms_ExpectedCcid_IsReadFreshBeforeEverySafeRetry()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM40", CcidA);
+        int sends = 0;
+        var modem = new FakeGsmModemService
+        {
+            SmsHandler = (_, _, _) => Task.FromResult(
+                Interlocked.Increment(ref sends) == 1
+                    ? "ERROR: Timeout waiting for > prompt"
+                    : "+CMGS: 7\r\nOK")
+        };
+        using var sms = new GsmSmsService(
+            modem, sessions, new ImmediateGsmOperationDelay());
+
+        string result = await sms.SendAsync(
+            "COM40", "888", "data", expectedCcid: CcidA);
+
+        Assert.Contains("thành công", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, modem.CcidVerifications.Count);
+        Assert.All(modem.CcidVerifications,
+            proof => Assert.Equal(CcidA, proof.ExpectedCcid));
+    }
+
+    [Fact]
+    public async Task Sms_PhysicalCcidMismatch_FailsBeforePayload()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM41", CcidA);
+        var modem = new FakeGsmModemService
+        {
+            CcidVerificationHandler = (_, _, _) => Task.FromResult(false)
+        };
+        using var sms = new GsmSmsService(
+            modem, sessions, new ImmediateGsmOperationDelay());
+
+        string result = await sms.SendAsync(
+            "COM41", "888", "data", expectedCcid: CcidA);
+
+        Assert.Contains("does not match", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(modem.SmsRequests);
+    }
+
+    [Fact]
+    public async Task Ussd_PhysicalCcidMismatch_FailsBeforeCusd()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM42", CcidA);
+        var modem = new FakeGsmModemService
+        {
+            CcidVerificationHandler = (_, _, _) => Task.FromResult(false)
+        };
+        using var sms = new GsmSmsService(
+            modem, sessions, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(
+            modem, sessions, sms, new ImmediateGsmOperationDelay());
+
+        string result = await ussd.SendAsync(
+            "COM42", "*101#", 1, expectedCcid: CcidA);
+
+        Assert.Contains("does not match", result, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(modem.Commands,
+            command => command.Contains("AT+CUSD=1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Call_PhysicalCcidMismatch_FailsBeforeDial()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM43", CcidA);
+        bool callEntered = false;
+        var modem = new FakeGsmModemService
+        {
+            CcidVerificationHandler = (_, _, _) => Task.FromResult(false),
+            CallHandler = (_, _, _) =>
+            {
+                callEntered = true;
+                return Task.FromResult(true);
+            }
+        };
+        using var calls = new GsmCallService(modem, sessions);
+
+        bool result = await calls.CallAsync(
+            "COM43", "900", null, 15, false, expectedCcid: CcidA);
+
+        Assert.False(result);
+        Assert.False(callEntered);
     }
 }

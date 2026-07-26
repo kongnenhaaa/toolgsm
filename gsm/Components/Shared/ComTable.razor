@@ -382,14 +382,9 @@
             {
                 await RunAllPortsAsync(acquiredTargets, async port =>
                 {
-                    string target = gsm.Services.ImeiManagementService.GenerateRandomImei();
-                    bool hasSim = !string.IsNullOrWhiteSpace(Digits(port.Serial));
-                    bool applied = hasSim
-                        ? await Vm.PaintImeiForCurrentSimAsync(
-                            port.PortName, target, overwriteBackupWithCurrentImei: true)
-                        : await Vm.PaintImeiWithoutSimAsync(
-                            port.PortName, target, backupCurrentBeforeWrite: true);
-                    if (applied)
+                    var result = await Vm.CreateNewImeiForPortAsync(
+                        port.PortName);
+                    if (result.Success)
                         Interlocked.Increment(ref success);
                 });
                 Snackbar.Add($"Tạo IMEI mới hoàn tất: {success}/{acquiredTargets.Count} cổng.",

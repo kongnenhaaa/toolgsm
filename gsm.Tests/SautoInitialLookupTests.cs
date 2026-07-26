@@ -86,9 +86,10 @@ public sealed class SautoInitialLookupTests
     [Theory]
     [InlineData("+CUSD: 1,\"TB:0912345678\",15", "", "", "", "", true)]
     [InlineData("ERROR: Timeout", "", "+CUSD: 1,\"TB:0912345678\",15", "", "", true)]
-    [InlineData("ERROR: Timeout", "old", "new", "0911111111", "0911111111", true)]
+    [InlineData("ERROR: Timeout", "old", "new", "0911111111", "0911111111", false)]
     [InlineData("ERROR: Timeout", "old", "old", "", "0912345678", true)]
     [InlineData("ERROR: Timeout", "old", "old", "0912345678", "0912345678", false)]
+    [InlineData("+CUSD: 0,\"Dich vu hien khong san sang\",15", "old", "Dich vu hien khong san sang", "", "", false)]
     [InlineData("ERROR: Timeout", "", "", "", "", false)]
     public void Sauto111Retry_StopsOnlyForFreshResponseFromCurrentAttempt(
         string commandResult,

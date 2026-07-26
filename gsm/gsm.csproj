@@ -30,18 +30,20 @@
     </Content>
   </ItemGroup>
 
-  <!-- Mỗi lần tạo EXE là một bộ cài mới: luôn ghi đè kho runtime bằng workbook
-       trắng chỉ có tiêu đề, tuyệt đối không đóng gói dữ liệu SIM/IMEI cũ. -->
+  <!-- Một thư mục output mới luôn nhận workbook trắng. Nếu build/publish đè
+       vào thư mục runtime đang dùng, không được xóa các binding SIM/IMEI. -->
   <Target Name="ResetImeiBackupAfterBuild" AfterTargets="Build">
     <Copy SourceFiles="$(MSBuildProjectDirectory)\Assets\imei_backup.blank.xlsx"
           DestinationFiles="$(TargetDir)imei_backup.xlsx"
-          SkipUnchangedFiles="false" />
+          SkipUnchangedFiles="true"
+          Condition="!Exists('$(TargetDir)imei_backup.xlsx')" />
   </Target>
 
   <Target Name="ResetImeiBackupAfterPublish" AfterTargets="Publish">
     <Copy SourceFiles="$(MSBuildProjectDirectory)\Assets\imei_backup.blank.xlsx"
           DestinationFiles="$(PublishDir)imei_backup.xlsx"
-          SkipUnchangedFiles="false" />
+          SkipUnchangedFiles="true"
+          Condition="!Exists('$(PublishDir)imei_backup.xlsx')" />
   </Target>
 
   <!-- Publish vào một thư mục cũ không tự xóa dependency đã bỏ khỏi project. -->

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "requestId": "vina-live-com83-20260726-final-v7",
+  "confirmTelecomActions": true,
+  "portName": "COM83",
+  "expectedCcid": "89840200011834605261",
+  "portWaitSeconds": 600,
+  "stablePortSeconds": 5,
+  "imeiWaitSeconds": 600,
+  "automaticUssdWaitSeconds": 900,
+  "postOperationWaitSeconds": 60,
+  "smsResponseWaitSeconds": 300
+}

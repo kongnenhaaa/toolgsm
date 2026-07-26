@@ -10,7 +10,8 @@ public interface IGsmCallService : IDisposable
         string? wavPath,
         int durationSeconds,
         bool record,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        string? expectedCcid = null);
 }
 
 public sealed class GsmCallService : IGsmCallService
@@ -32,7 +33,8 @@ public sealed class GsmCallService : IGsmCallService
         string? wavPath,
         int durationSeconds,
         bool record,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? expectedCcid = null)
     {
         if (!_sessions.TryGet(portName, out var session)) return false;
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, session.Token);
@@ -44,6 +46,16 @@ public sealed class GsmCallService : IGsmCallService
             try
             {
                 if (!_sessions.IsCurrent(portName, session.Ccid, session.Epoch)) return false;
+                if (!string.IsNullOrWhiteSpace(expectedCcid)
+                    && (!string.Equals(
+                            session.Ccid,
+                            expectedCcid,
+                            StringComparison.Ordinal)
+                        || !await _modem.VerifyExpectedCcidAsync(
+                            portName, expectedCcid, linkedCts.Token)))
+                {
+                    return false;
+                }
                 bool result = await _modem.CallWithAudioAsync(
                     portName, phoneNumber, wavPath, durationSeconds, record, linkedCts.Token);
                 return result && _sessions.IsCurrent(portName, session.Ccid, session.Epoch);

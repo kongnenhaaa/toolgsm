@@ -82,6 +82,8 @@ public sealed class SautoInitializationSequenceTests
             "+CUSD: 0,\"Dich vu dang ban\",15", "", "Dich vu dang ban", "", ""));
         Assert.False(MainViewModel.HasFreshSautoBalanceResponse(
             "+CUSD: 0,\"Dich vu dang ban\",15", "", "Dich vu dang ban", "10000", "10000"));
+        Assert.False(MainViewModel.HasFreshSautoBalanceResponse(
+            "+CUSD: 0,\"Dich vu tam loi\",15", "TKC: 10000d", "TKC: 10000d", "10000", "10000"));
         Assert.True(MainViewModel.HasFreshSautoBalanceResponse(
             "+CUSD: 0,\"TKC: 0d\",15", "", "TKC: 0d", "", "0"));
         Assert.True(MainViewModel.HasFreshSautoBalanceResponse(
@@ -98,6 +100,69 @@ public sealed class SautoInitializationSequenceTests
     {
         Assert.Equal(expected, GsmModemService.IsNetworkRegistered(response));
     }
+
+    [Theory]
+    [InlineData("+CME ERROR: 13", "ERROR", true)]
+    [InlineData("+CPIN: NOT READY", "+CME ERROR: 13", true)]
+    [InlineData("+CPIN: READY", "+QCCID: 89840200011834605261\r\nOK", false)]
+    [InlineData("+CPIN: SIM PIN", "ERROR", false)]
+    [InlineData("+CPIN: SIM PUK", "ERROR", false)]
+    public void StartupSimRecovery_RestartsOfflineOnlyWhenIdentityIsUnreadableAndUnlocked(
+        string cpinResponse,
+        string ccidResponse,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.ShouldAttemptStartupOfflineSimRecovery(
+                cpinResponse,
+                ccidResponse));
+
+    [Fact]
+    public void PortHealth_DefersIntentionalPortOwnershipAndLockContention()
+    {
+        Assert.True(GsmModemService.ShouldDeferPortHealthProbe(
+            backgroundSuspended: false,
+            callInProgress: false,
+            commandPending: false,
+            coordinatedRecoveryOwnsPort: true));
+        Assert.False(GsmModemService.ShouldDeferPortHealthProbe(
+            backgroundSuspended: false,
+            callInProgress: false,
+            commandPending: false,
+            coordinatedRecoveryOwnsPort: false));
+        Assert.True(GsmModemService.IsDeferredPortHealthProbeResponse(
+            "ERROR: Timeout waiting for lock"));
+        Assert.True(GsmModemService.IsDeferredPortHealthProbeResponse(
+            "ERROR: Another command is already in progress"));
+        Assert.False(GsmModemService.IsDeferredPortHealthProbeResponse(
+            "ERROR: Timeout (device did not return OK/ERROR)"));
+    }
+
+    [Theory]
+    [InlineData("+CME ERROR: 13", true)]
+    [InlineData("+CPIN: NOT READY", true)]
+    [InlineData("+CME ERROR: 10", false)]
+    [InlineData("+CPIN: NOT INSERTED", false)]
+    [InlineData("ERROR: Timeout", false)]
+    public void HotplugOfflineRecovery_RetriesOnlyRecoverableSimStackStates(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsOfflineRecoverableSimStackResponse(response));
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(3, true)]
+    [InlineData(4, false)]
+    [InlineData(6, true)]
+    public void HotplugOfflineRecovery_UsesBoundedCooldown(
+        int pass,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.ShouldRunHotplugOfflineRecovery(pass));
 
     [Theory]
     [InlineData("89840200011797965884", "VinaPhone")]

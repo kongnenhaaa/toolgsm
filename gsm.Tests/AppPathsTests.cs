@@ -5,6 +5,22 @@ namespace gsm.Tests;
 public sealed class AppPathsTests
 {
     [Fact]
+    public void UserDataFile_IsIndependentFromPublishDirectory()
+    {
+        string expectedRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ToolGSM",
+            "Data");
+
+        Assert.Equal(
+            Path.Combine(expectedRoot, "imei_pending_no_sim.json"),
+            AppPaths.ForUserDataFile("imei_pending_no_sim.json"));
+        Assert.NotEqual(
+            Path.Combine(AppPaths.RuntimeDirectory, "imei_pending_no_sim.json"),
+            AppPaths.ForUserDataFile("imei_pending_no_sim.json"));
+    }
+
+    [Fact]
     public void ResolveRuntimeOrAncestorFile_FindsBackupAbovePublishDirectory()
     {
         string root = Path.Combine(Path.GetTempPath(), "toolgsm-path-test-" + Guid.NewGuid().ToString("N"));

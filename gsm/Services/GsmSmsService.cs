@@ -8,7 +8,12 @@ public interface IGsmSmsService : IDisposable
 {
     ConcurrentDictionary<string, bool> InProgressPorts { get; }
     bool IsInProgress(string portName);
-    Task<string> SendAsync(string portName, string phoneNumber, string content, CancellationToken ct = default);
+    Task<string> SendAsync(
+        string portName,
+        string phoneNumber,
+        string content,
+        CancellationToken ct = default,
+        string? expectedCcid = null);
 }
 
 public sealed class GsmSmsService : IGsmSmsService
@@ -37,7 +42,8 @@ public sealed class GsmSmsService : IGsmSmsService
         string portName,
         string phoneNumber,
         string content,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? expectedCcid = null)
     {
         if (string.IsNullOrWhiteSpace(phoneNumber) || string.IsNullOrWhiteSpace(content))
             return "ERROR: Missing SMS recipient or content";
@@ -48,26 +54,54 @@ public sealed class GsmSmsService : IGsmSmsService
         CancellationToken token = linkedCts.Token;
         var portLock = _portLocks.GetOrAdd(portName, _ => new SemaphoreSlim(1, 1));
         await portLock.WaitAsync(token);
+        bool reconnectPort = false;
 
         try
         {
             if (!IsCurrent(session)) return SessionChangedError;
             InProgressPorts[portName] = true;
-            string safeContent = RemoveDiacritics(content);
 
             for (int attempt = 1; attempt <= 3; attempt++)
             {
                 token.ThrowIfCancellationRequested();
                 if (!IsCurrent(session)) return SessionChangedError;
+                if (!string.IsNullOrWhiteSpace(expectedCcid)
+                    && (!string.Equals(
+                            session.Ccid,
+                            expectedCcid,
+                            StringComparison.Ordinal)
+                        || !await _modem.VerifyExpectedCcidAsync(
+                            portName, expectedCcid, token)))
+                {
+                    return "ERROR: Current physical SIM does not match the pinned CCID";
+                }
 
-                await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true, token);
-                if (!IsCurrent(session)) return SessionChangedError;
-                await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,0", 5000, true, token);
-                if (!IsCurrent(session)) return SessionChangedError;
-
-                string result = await _modem.SendSmsAsync(portName, phoneNumber, safeContent, 30000, token);
+                // Preserve the user's original Unicode text. GsmModemService selects
+                // GSM or UCS2 for each message and configures CSCS/CSMP while holding
+                // the per-port command lock, so stripping Vietnamese diacritics or
+                // forcing GSM here both loses content and creates a redundant mode flip.
+                string result = await _modem.SendSmsAsync(portName, phoneNumber, content, 30000, token);
+                if (result.Contains(
+                        GsmModemService.SmsPayloadSubmittedMarker,
+                        StringComparison.Ordinal))
+                {
+                    // Preserve the irreversible Ctrl+Z boundary even when a SIM
+                    // watcher invalidates the session before the modem replies.
+                    // A durable incoming response may still prove acceptance;
+                    // this payload must never be retried.
+                    reconnectPort = RequiresPortReconnect(result);
+                    return result;
+                }
                 if (!IsCurrent(session)) return SessionChangedError;
                 if (IsSuccess(result)) return "Gửi thành công";
+                if (RequiresPortReconnect(result))
+                {
+                    // The payload may already have reached the carrier. Never resend it.
+                    // Reopen only this COM after the modem's in-place channel recovery
+                    // has failed, so later operations start from a clean serial session.
+                    reconnectPort = true;
+                    return result;
+                }
                 if (attempt >= 3 || !ShouldRetry(result)) return result;
 
                 await _delay.WaitAsync(TimeSpan.FromSeconds(2 * attempt), token);
@@ -83,25 +117,50 @@ public sealed class GsmSmsService : IGsmSmsService
         }
         finally
         {
-            if (IsCurrent(session))
+            try
             {
-                try
+                // A failed SMS channel cannot be restored reliably with another charset
+                // command. Skip that work and perform one targeted COM reconnect instead.
+                if (!reconnectPort && IsCurrent(session))
                 {
-                    if (_modem.GetModemProfile(portName)?.IsQuectel == true)
-                        await _modem.SendCommandAsync(portName, "AT+CMGF=0", 5000, true);
-                    else
+                    try
                     {
-                        await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
-                        await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,8", 5000, true);
+                        if (_modem.GetModemProfile(portName)?.IsQuectel == true)
+                            await _modem.SendCommandAsync(portName, "AT+CMGF=0", 5000, true);
+                        else
+                        {
+                            await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
+                            await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,8", 5000, true);
+                        }
+                    }
+                    catch
+                    {
+                        // Không che kết quả gửi chính; lần khởi tạo/poll kế tiếp sẽ đặt lại charset.
                     }
                 }
-                catch
+
+                if (reconnectPort
+                    && !ct.IsCancellationRequested
+                    && IsCurrent(session))
                 {
-                    // Không che kết quả gửi chính; lần khởi tạo/poll kế tiếp sẽ đặt lại charset.
+                    try
+                    {
+                        // Use the caller lifetime rather than session.Token: reconnect
+                        // initialization intentionally replaces the old SIM session.
+                        await _modem.ReconnectPortAsync(portName, 115200, ct);
+                    }
+                    catch
+                    {
+                        // Preserve the original uncertain send result. A reconnect
+                        // failure must never turn into an automatic payload retry.
+                    }
                 }
             }
-            InProgressPorts.TryRemove(portName, out _);
-            portLock.Release();
+            finally
+            {
+                InProgressPorts.TryRemove(portName, out _);
+                portLock.Release();
+            }
         }
     }
 
@@ -139,6 +198,9 @@ public sealed class GsmSmsService : IGsmSmsService
         // duplicate SMS. Payload/final-response timeouts are intentionally not retried.
         || response.Contains("Timeout waiting for > prompt", StringComparison.OrdinalIgnoreCase)
         || response.Contains("Timeout configuring SMS", StringComparison.OrdinalIgnoreCase);
+
+    private static bool RequiresPortReconnect(string response) =>
+        response.Contains("SMS channel recovery failed", StringComparison.OrdinalIgnoreCase);
 
     private const string SessionChangedError = "ERROR: SIM session changed during SMS operation";
 }

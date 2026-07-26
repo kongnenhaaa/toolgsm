@@ -389,11 +389,7 @@
         if (confirm != true) return;
 
         BackendConcurrency.ConfigureThreadPool(targets.Count);
-        await Task.WhenAll(targets.Select(port =>
-            PerformPaintImeiAsync(
-                port,
-                gsm.Services.ImeiManagementService.GenerateRandomImei(),
-                overwriteBackupWithCurrentImei: true)));
+        await Task.WhenAll(targets.Select(PerformCreateNewImeiAsync));
     }
 
     static bool IsWaitingForImeiAction(SimPort port) =>
@@ -423,8 +419,36 @@
 
         if (confirm != true) return;
 
-        string targetImei = gsm.Services.ImeiManagementService.GenerateRandomImei();
-        await PerformPaintImeiAsync(port, targetImei, overwriteBackupWithCurrentImei: true);
+        await PerformCreateNewImeiAsync(port);
+    }
+
+    async Task PerformCreateNewImeiAsync(SimPort port)
+    {
+        try
+        {
+            var result = await Vm.CreateNewImeiForPortAsync(port.PortName);
+            if (result.Success)
+            {
+                Snackbar.Add(
+                    $"[{port.PortName}] Tráng IMEI {result.TargetImei} thành công!",
+                    Severity.Success);
+            }
+            else
+            {
+                string target = string.IsNullOrWhiteSpace(result.TargetImei)
+                    ? "mới"
+                    : result.TargetImei;
+                Snackbar.Add(
+                    $"[{port.PortName}] Tráng IMEI {target} thất bại!",
+                    Severity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(
+                $"[{port.PortName}] Lỗi tạo IMEI mới: {ex.Message}",
+                Severity.Error);
+        }
     }
 
     async Task PerformPaintImeiAsync(

@@ -6,12 +6,17 @@ namespace gsm.Tests.Fakes;
 
 public sealed class FakeGsmModemService : IGsmModemService
 {
+    public void SetSmsSimIdentity(string portName, string? ccid) { }
     public ConcurrentQueue<string> Commands { get; } = new();
     public ConcurrentQueue<(string Port, string Phone, string Message)> SmsRequests { get; } = new();
+    public ConcurrentQueue<(string Port, int BaudRate)> ReconnectRequests { get; } = new();
+    public ConcurrentQueue<(string Port, string ExpectedCcid)> CcidVerifications { get; } = new();
 
     public Func<string, string, Task<string>>? CommandHandler { get; set; }
     public Func<string, string, string, Task<string>>? SmsHandler { get; set; }
     public Func<string, string, CancellationToken, Task<bool>>? CallHandler { get; set; }
+    public Func<string, int, CancellationToken, Task<bool>>? ReconnectHandler { get; set; }
+    public Func<string, string, CancellationToken, Task<bool>>? CcidVerificationHandler { get; set; }
     public bool CallInProgress { get; set; }
     public QuectelModemProfile? ModemProfile { get; set; }
 
@@ -40,6 +45,17 @@ public sealed class FakeGsmModemService : IGsmModemService
 
     public Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false) =>
         SendCommandAsync(portName, data, timeoutMs, silent);
+
+    public async Task<bool> VerifyExpectedCcidAsync(
+        string portName,
+        string expectedCcid,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        CcidVerifications.Enqueue((portName, expectedCcid));
+        return CcidVerificationHandler == null
+            || await CcidVerificationHandler(portName, expectedCcid, ct).WaitAsync(ct);
+    }
 
     public async Task<string> SendSmsAsync(
         string portName,
@@ -72,13 +88,29 @@ public sealed class FakeGsmModemService : IGsmModemService
     public Task SweepUnreadSmsAsync(string portName) => Task.CompletedTask;
     public Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile) => Task.FromResult("OK");
     public Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile) => Task.FromResult(true);
-    public void StartPollingNetwork(string portName) { }
+    public void StartPollingNetwork(
+        string portName,
+        string expectedCcid,
+        string expectedImei) { }
     public void SetSimRemovalWatchEnabled(string portName, bool enabled) { }
     public List<string> GetAvailablePorts() => ["COM1", "COM2"];
     public string ConnectAll(int baudRate = 115200) => "OK";
+    public async Task<bool> ReconnectPortAsync(
+        string portName,
+        int baudRate = 115200,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ReconnectRequests.Enqueue((portName, baudRate));
+        if (ReconnectHandler != null)
+            return await ReconnectHandler(portName, baudRate, ct).WaitAsync(ct);
+        return true;
+    }
     public void Disconnect(string portName) { }
     public void DisconnectAll() { }
-    public IDisposable SuspendPortBackgroundOperations(string portName) => new NoopDisposable();
+    public IDisposable SuspendPortBackgroundOperations(
+        string portName,
+        bool preserveCurrentNetworkPollingForResume = true) => new NoopDisposable();
     public void StartHotplugWaitLoop(string portName) { }
     public Task HandleSimInsertedAsync(string portName) => Task.CompletedTask;
     public Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);

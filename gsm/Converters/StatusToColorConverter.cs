@@ -14,7 +14,10 @@ namespace gsm.Converters
             {
                 if (status == SimStatus.Active)
                     return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#22C55E"));
-                if (status == "Mất kết nối" || status == SimStatus.NoResponse || status == SimStatus.SecurityBlocked)
+                if (status == "Mất kết nối"
+                    || status == SimStatus.NoResponse
+                    || status == SimStatus.NetworkUnavailable
+                    || status == SimStatus.SecurityBlocked)
                     return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EF4444"));
                 if (status == SimStatus.Connecting)
                     return new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F59E0B"));

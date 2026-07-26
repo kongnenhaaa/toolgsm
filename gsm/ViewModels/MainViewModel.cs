@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -216,6 +216,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, byte> _initialSubscriberLookupCompleted = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _initialAccountLookupCompleted = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _networkReopenOwners = new(StringComparer.OrdinalIgnoreCase);
+    // Pha ghi IMEI đã kết thúc và commit trước khi vòng dò mạng bắt đầu, nên
+    // reopen chỉ được phép sửa pha mạng. Mỗi (COM + CCID) chỉ có ngân sách
+    // reopen hữu hạn; hết ngân sách thì kết luận "không có nhà mạng" thay vì
+    // để COM lặp reopen -> resume -> chờ COPS vô hạn ở "Đang xử lý".
+    private readonly ConcurrentDictionary<string, int> _networkReopenAttempts = new(StringComparer.OrdinalIgnoreCase);
+    internal const int MaxNetworkReopenAttemptsPerSim = 3;
     private readonly ConcurrentDictionary<string, byte> _targetedRecoveryPorts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _managedRecoveryPorts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _serviceReconnectRetryOwners = new(StringComparer.OrdinalIgnoreCase);
@@ -2237,7 +2243,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task RefreshPortsAsync(
         IEnumerable<string> portNames,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool resetNetworkReopenBudget = true)
     {
         var names = portNames.Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -2248,6 +2255,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _targetedRecoveryPorts[name] = 0;
             _managedRecoveryPorts[name] = 0;
+            // Làm mới do user/recovery khác yêu cầu là một lần thử mới nên được
+            // nạp lại ngân sách; reopen của chính vòng chờ COPS thì không.
+            if (resetNetworkReopenBudget)
+                ClearNetworkReopenBudget(name);
             InvalidateSimSession(name);
         }
         await Application.Current.Dispatcher.InvokeAsync(() =>
@@ -3937,28 +3948,54 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         $"[{e.PortName}] [NETWORK_REOPEN_IGNORED] Event cũ hoặc danh tính phiên hiện tại chưa được xác minh.",
                         "INFO");
                 }
+                else if (IsIdentityReverifyReopen(e.Data))
+                {
+                    // Reopen vì danh tính cần xác minh lại là yêu cầu đúng đắn
+                    // riêng, không thuộc vòng lặp chờ COPS nên không tính ngân sách.
+                    RequestNetworkReopen(
+                        port,
+                        e.PortName,
+                        "Cần mở lại riêng COM để xác minh lại danh tính",
+                        "[NETWORK_REOPEN] Refresh riêng COM để xác minh lại IMEI/CCID.");
+                }
+                else if (_networkReopenOwners.ContainsKey(e.PortName))
+                {
+                    // Reopen của lượt trước còn đang chạy; event trùng không
+                    // được tiêu thêm ngân sách của SIM này.
+                    AddLog(
+                        $"[{e.PortName}] [NETWORK_REOPEN_SKIPPED] Đang mở lại riêng COM cho lượt trước.",
+                        "INFO");
+                }
                 else
                 {
-                    MarkNetworkRegistrationPending(
-                        port,
-                        sessionCurrent: true,
-                        "Có sóng nhưng COPS chưa trả nhà mạng – đang mở lại riêng COM");
-                    UpdateDashboard();
-                    if (_networkReopenOwners.TryAdd(e.PortName, 0))
+                    string reopenKey = BuildNetworkReopenKey(e.PortName, recoveryCcid);
+                    int reopenAttempt = _networkReopenAttempts.AddOrUpdate(
+                        reopenKey, 1, (_, current) => current + 1);
+                    if (ShouldAbandonNetworkReopen(reopenAttempt))
                     {
-                        string portName = e.PortName;
-                        _ = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                AddLog($"[{portName}] [NETWORK_REOPEN] Refresh riêng COM vì CSQ tốt nhưng COPS không có nhà mạng.", "WARN");
-                                await RefreshPortAsync(portName);
-                            }
-                            finally
-                            {
-                                _networkReopenOwners.TryRemove(portName, out _);
-                            }
-                        });
+                        // IMEI đã ghi và commit xong; chỉ mạng là không lên được.
+                        // Kết thúc ở trạng thái rõ ràng để COM không nằm mãi ở
+                        // "Đang xử lý" và không ai chạm lại vào IMEI.
+                        MarkNetworkRegistrationUnavailable(
+                            port,
+                            $"Có sóng (CSQ) nhưng không đăng ký được nhà mạng sau {MaxNetworkReopenAttemptsPerSim} lượt mở lại COM; kiểm tra SIM/anten rồi bấm Làm mới");
+                        AddLog(
+                            $"[{e.PortName}] [NETWORK_REOPEN_EXHAUSTED] Đã mở lại COM {MaxNetworkReopenAttemptsPerSim} lượt cho CCID={NormalizeCcid(recoveryCcid)} nhưng COPS vẫn không có nhà mạng; dừng vòng lặp và giữ IMEI đã xác minh.",
+                            "ERROR");
+                        UpdateDashboard();
+                    }
+                    else
+                    {
+                        MarkNetworkRegistrationPending(
+                            port,
+                            sessionCurrent: true,
+                            $"Có sóng nhưng COPS chưa trả nhà mạng – đang mở lại riêng COM (lượt {reopenAttempt}/{MaxNetworkReopenAttemptsPerSim})");
+                        UpdateDashboard();
+                        RequestNetworkReopen(
+                            port,
+                            e.PortName,
+                            reason: null,
+                            $"[NETWORK_REOPEN] Refresh riêng COM vì CSQ tốt nhưng COPS không có nhà mạng (lượt {reopenAttempt}/{MaxNetworkReopenAttemptsPerSim}).");
                     }
                 }
             }
@@ -4660,6 +4697,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.Status = SimStatus.Active;
         port.LastError = string.Empty;
         port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+        // Mạng đã lên: mọi lượt reopen trước đó không còn tính vào ngân sách.
+        ClearNetworkReopenBudget(portName);
         UpdateDashboard();
 
         foreach (var sms in SmsMessages.Where(s => s.PortName == portName))
@@ -4725,7 +4764,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         bool sessionCurrent) =>
         sessionCurrent
         && !initializationInProgress
-        && port.Status == SimStatus.Connecting
+        // NetworkUnavailable là kết luận của pha mạng, không phải của SIM/IMEI.
+        // Nếu sau đó COPS/CREG vẫn xác nhận đăng ký thì hàng được lên Active
+        // ngay, không cần user bấm Làm mới.
+        && (port.Status == SimStatus.Connecting
+            || port.Status == SimStatus.NetworkUnavailable)
         && !string.IsNullOrWhiteSpace(NormalizeCcid(port.Serial))
         && Services.ImeiManagementService.IsValidImei(NormalizeImei(port.Imei));
 
@@ -4745,6 +4788,79 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.LastError = reason;
         port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
         return demoted;
+    }
+
+    /// <summary>
+    /// Kết thúc pha mạng sau khi đã hết ngân sách mở lại COM. IMEI/CCID đã
+    /// xác minh vẫn được giữ nguyên; chỉ trạng thái mạng chuyển sang lỗi để
+    /// hàng không còn hiển thị spinner "Đang xử lý".
+    /// </summary>
+    internal static void MarkNetworkRegistrationUnavailable(
+        SimPort port,
+        string reason)
+    {
+        port.Status = SimStatus.NetworkUnavailable;
+        port.DeviceName = "Không đăng ký được nhà mạng (IMEI đã giữ nguyên)";
+        port.NetworkProvider = string.Empty;
+        port.NetworkType = string.Empty;
+        port.LastError = reason;
+        port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+    }
+
+    internal static string BuildNetworkReopenKey(string portName, string ccid) =>
+        $"{portName}\u001f{NormalizeCcid(ccid)}";
+
+    internal static bool ShouldAbandonNetworkReopen(int reopenAttempt) =>
+        reopenAttempt > MaxNetworkReopenAttemptsPerSim;
+
+    internal static bool IsIdentityReverifyReopen(string? data) =>
+        data?.Contains("reason=identity-reverify", StringComparison.OrdinalIgnoreCase)
+            == true;
+
+    /// <summary>
+    /// Ngân sách reopen thuộc về từng SIM trên từng COM. Xóa khi mạng đã lên
+    /// hoặc khi user tự bấm Làm mới; reopen tự động không được tự nạp lại
+    /// ngân sách của chính nó.
+    /// </summary>
+    private void ClearNetworkReopenBudget(string portName)
+    {
+        string prefix = portName + "\u001f";
+        foreach (string key in _networkReopenAttempts.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _networkReopenAttempts.TryRemove(key, out _);
+        }
+    }
+
+    private void RequestNetworkReopen(
+        SimPort port,
+        string portName,
+        string? reason,
+        string logMessage)
+    {
+        if (!string.IsNullOrWhiteSpace(reason))
+        {
+            MarkNetworkRegistrationPending(port, sessionCurrent: true, reason);
+            UpdateDashboard();
+        }
+        if (!_networkReopenOwners.TryAdd(portName, 0)) return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                AddLog($"[{portName}] {logMessage}", "WARN");
+                // Reopen tự động phải giữ nguyên ngân sách để vòng
+                // reopen -> resume -> chờ COPS luôn tiến tới giới hạn.
+                await RefreshPortsAsync(
+                    [portName],
+                    resetNetworkReopenBudget: false);
+            }
+            finally
+            {
+                _networkReopenOwners.TryRemove(portName, out _);
+            }
+        });
     }
 
     // ---------------------------------------------------------------------
@@ -5241,6 +5357,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             ? "pending-imei-create-auto-resume"
                             : "pending-imei-restore-auto-resume"
                     });
+                    // Đây là commit bền vững thật sự của IMEI mới khi pha ghi đi
+                    // qua đường auto-resume. Không phát cùng một mốc bằng chứng
+                    // như đường trực tiếp khiến mọi bên chờ [IMEI_BACKUP_COMMIT]
+                    // (runner nghiệm thu, log vận hành) treo dù workbook đã lưu.
+                    AddLog(
+                        $"[{portName}] [IMEI_BACKUP_COMMIT] CCID={normalizedCcid}; IMEI={normalizedImei}; lưu sau xác minh auto-resume.",
+                        "SUCCESS");
                     try
                     {
                         _pendingNoSimImeiJournal.Remove(
@@ -7114,6 +7237,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string previousUssd = port.LastUssdResult ?? string.Empty;
             string previousPhone = port.PhoneNumber ?? string.Empty;
             string previousBalance = port.Balance ?? string.Empty;
+            // Mốc để nhận ra +CUSD của chính lượt này kể cả khi nhà mạng trả
+            // đúng nội dung như lần trước (TKC không đổi là trường hợp phổ biến).
+            DateTime attemptStartedAt = DateTime.Now;
 
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
@@ -7147,13 +7273,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 || port.Status != SimStatus.Active)
                 return false;
 
+            bool UssdArrivedThisAttempt() =>
+                port.LastUssdResultAt.HasValue
+                && port.LastUssdResultAt.Value >= attemptStartedAt;
+
             bool HasStageResponse() => requireBalance
                 ? HasFreshSautoBalanceResponse(
                     result, previousUssd, port.LastUssdResult,
-                    previousBalance, port.Balance)
+                    previousBalance, port.Balance,
+                    UssdArrivedThisAttempt())
                 : HasFreshSautoUssdResponse(
                     result, previousUssd, port.LastUssdResult,
-                    previousPhone, port.PhoneNumber);
+                    previousPhone, port.PhoneNumber,
+                    UssdArrivedThisAttempt());
 
             if (HasStageResponse())
             {
@@ -9614,14 +9746,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string? previousUssd,
         string? currentUssd,
         string? previousPhone,
-        string? currentPhone)
+        string? currentPhone,
+        bool ussdArrivedThisAttempt = false)
     {
         bool phoneChanged = !string.IsNullOrWhiteSpace(currentPhone)
             && !string.Equals(previousPhone, currentPhone, StringComparison.Ordinal);
         bool commandHasCusd =
             commandResult?.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase) ?? false;
+        // Payload trùng nội dung lần trước vẫn là phản hồi mới nếu +CUSD vừa
+        // đến trong chính lượt này; chỉ so chuỗi sẽ làm vòng dò lặp vô hạn.
         bool currentUssdChanged = !string.IsNullOrWhiteSpace(currentUssd)
-            && !string.Equals(previousUssd, currentUssd, StringComparison.Ordinal);
+            && (ussdArrivedThisAttempt
+                || !string.Equals(previousUssd, currentUssd, StringComparison.Ordinal));
 
         // A menu, advertisement, or error +CUSD is not a successful *111#.
         // Only fresh payload text that actually contains a subscriber number,
@@ -9638,12 +9774,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string? previousUssd,
         string? currentUssd,
         string? previousBalance,
-        string? currentBalance)
+        string? currentBalance,
+        bool ussdArrivedThisAttempt = false)
     {
         bool commandHasCusd =
             commandResult?.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase) ?? false;
+        // Cùng lý do như trên: TKC không đổi (rất phổ biến, nhất là SIM 0đ) vẫn
+        // phải được coi là *101# đã trả dữ liệu cho lượt hiện tại.
         bool currentUssdChanged = !string.IsNullOrWhiteSpace(currentUssd)
-            && !string.Equals(previousUssd, currentUssd, StringComparison.Ordinal);
+            && (ussdArrivedThisAttempt
+                || !string.Equals(previousUssd, currentUssd, StringComparison.Ordinal));
         bool receivedFreshUssd = commandHasCusd || currentUssdChanged;
         bool hasParsedBalance = !string.IsNullOrWhiteSpace(currentBalance);
         bool balanceChanged = hasParsedBalance

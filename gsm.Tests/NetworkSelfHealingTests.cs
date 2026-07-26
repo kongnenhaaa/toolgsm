@@ -283,6 +283,83 @@ public sealed class NetworkSelfHealingTests
             GsmModemService.ShouldRequestNetworkReopen(recoveryPasses));
 
     [Theory]
+    [InlineData(1, false)]
+    [InlineData(3, false)]
+    [InlineData(4, true)]
+    [InlineData(9, true)]
+    public void MissingCops_ReopenLoopStopsAfterBudget(
+        int reopenAttempt,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            MainViewModel.ShouldAbandonNetworkReopen(reopenAttempt));
+
+    [Fact]
+    public void ReopenBudget_IsScopedToPortAndCcid()
+    {
+        Assert.Equal(
+            MainViewModel.BuildNetworkReopenKey("COM93", Ccid),
+            MainViewModel.BuildNetworkReopenKey("COM93", $" {Ccid} "));
+        Assert.NotEqual(
+            MainViewModel.BuildNetworkReopenKey("COM93", Ccid),
+            MainViewModel.BuildNetworkReopenKey("COM93", "89840200011735319913"));
+        Assert.NotEqual(
+            MainViewModel.BuildNetworkReopenKey("COM93", Ccid),
+            MainViewModel.BuildNetworkReopenKey("COM107", Ccid));
+    }
+
+    [Theory]
+    [InlineData("[NETWORK_REOPEN_REQUIRED] reason=identity-reverify; expected_ccid=1", true)]
+    [InlineData("[NETWORK_REOPEN_REQUIRED] Đã thử 6 lượt auto-select/detach/RF", false)]
+    public void IdentityReverifyReopen_IsExemptFromRegistrationBudget(
+        string data,
+        bool expected) =>
+        Assert.Equal(expected, MainViewModel.IsIdentityReverifyReopen(data));
+
+    [Fact]
+    public void ExhaustedReopenBudget_EndsNetworkPhaseWithoutTouchingImei()
+    {
+        var port = new SimPort
+        {
+            PortName = "COM93",
+            Serial = Ccid,
+            Imei = Imei,
+            Status = SimStatus.Connecting,
+            NetworkProvider = "VinaPhone",
+            NetworkType = "4G",
+            SignalRssi = 27
+        };
+
+        MainViewModel.MarkNetworkRegistrationUnavailable(
+            port, "Có sóng nhưng không đăng ký được nhà mạng");
+
+        Assert.Equal(SimStatus.NetworkUnavailable, port.Status);
+        Assert.NotEqual(SimStatus.Connecting, port.Status);
+        Assert.Equal(Ccid, port.Serial);
+        Assert.Equal(Imei, port.Imei);
+        Assert.Equal(27, port.SignalRssi);
+        Assert.Empty(port.NetworkProvider);
+        Assert.Empty(port.NetworkType);
+    }
+
+    [Fact]
+    public void AbandonedNetworkPhase_StillPromotesOnLateRegistration()
+    {
+        var port = new SimPort
+        {
+            PortName = "COM93",
+            Serial = Ccid,
+            Imei = Imei,
+            Status = SimStatus.NetworkUnavailable
+        };
+
+        Assert.True(MainViewModel.CanPromoteNetworkRegistration(
+            port,
+            initializationInProgress: false,
+            sessionCurrent: true));
+    }
+
+    [Theory]
     [InlineData("+CREG: 0,1", "+CGREG: 0,2", "+CEREG: 0,2", "2G")]
     [InlineData("+CREG: 0,2", "+CGREG: 0,5", "+CEREG: 0,2", "3G")]
     [InlineData("+CREG: 0,2", "+CGREG: 0,2", "+CEREG: 0,1", "4G")]

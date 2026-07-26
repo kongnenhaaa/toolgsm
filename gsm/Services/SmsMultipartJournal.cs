@@ -287,6 +287,27 @@ internal sealed class SmsMultipartJournal
         }
     }
 
+    /// <summary>
+    /// Định danh của mọi mảnh thuộc một tin. Dùng để đánh dấu "đã phát" cho
+    /// từng mảnh: đọc lại đúng slot đó sau khi tin đã ra không được tạo thêm
+    /// một nhóm ghép dở mới.
+    /// </summary>
+    internal IReadOnlyList<string> GetPartIdentities(string messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId)) return Array.Empty<string>();
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            return _entries.Values
+                .Where(entry => string.Equals(
+                    entry.MessageId, messageId, StringComparison.Ordinal))
+                .SelectMany(entry => entry.PartIdentities.Values)
+                .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+    }
+
     public string GetMessageIdForPartIdentity(
         string scope,
         string partIdentity)
@@ -1200,6 +1221,94 @@ internal sealed class SmsMultipartJournal
         }
         if (!string.Equals(source.Key, targetKey, StringComparison.Ordinal))
             _entries.Remove(source.Key);
+    }
+
+    /// <summary>
+    /// Ghép lại những tin đã bị chẻ thành nhiều nhóm ghép dở vì người gửi được
+    /// firmware trả ở hai dạng khác nhau trong cùng một tin. Chỉ hợp nhất khi
+    /// kết quả tạo ra một tin ĐỦ mảnh và không mảnh nào xung đột nội dung –
+    /// nhóm còn thiếu mảnh vẫn được giữ nguyên để không bao giờ trộn hai tin
+    /// khác nhau dùng trùng concat reference. Trả về số tin đã cứu được.
+    /// </summary>
+    internal int SalvageSplitSenderGroups()
+    {
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            if (_loadFailed) return 0;
+
+            int salvaged = 0;
+            bool changed = false;
+            foreach (IGrouping<(string Scope, int Reference, int Total), KeyValuePair<string, Entry>> group
+                     in _entries
+                         .GroupBy(pair => (
+                             pair.Value.Scope,
+                             pair.Value.Reference,
+                             pair.Value.Total))
+                         .ToArray())
+            {
+                KeyValuePair<string, Entry>[] candidates = group.ToArray();
+                if (candidates.Length < 2) continue;
+
+                KeyValuePair<string, Entry> anchor = candidates
+                    .OrderBy(pair => pair.Value.LastUpdated)
+                    .First();
+                KeyValuePair<string, Entry>[] mergeable = candidates
+                    .Where(pair => !string.Equals(
+                            pair.Key, anchor.Key, StringComparison.Ordinal)
+                        && SmsMultipartSenderAliases.AreEquivalent(
+                            pair.Value.Sender, anchor.Value.Sender)
+                        && EntriesAreCompatible(anchor.Value, pair.Value))
+                    .ToArray();
+                if (mergeable.Length == 0) continue;
+
+                Dictionary<int, string> combined = CombineParts(
+                    mergeable.Select(pair => pair.Value).Prepend(anchor.Value));
+                bool complete = anchor.Value.Total > 0
+                    && Enumerable.Range(1, anchor.Value.Total)
+                        .All(combined.ContainsKey);
+                if (!complete) continue;
+
+                foreach (KeyValuePair<string, Entry> source in mergeable)
+                    MergeEntryLocked(anchor.Key, anchor.Value, source);
+                salvaged++;
+                changed = true;
+            }
+
+            if (changed) SaveLocked();
+            return salvaged;
+        }
+    }
+
+    /// <summary>
+    /// Các nhóm còn thiếu mảnh quá lâu. Chúng không tự hiện được nên phải nhìn
+    /// thấy được thay vì im lặng nằm trong journal.
+    /// </summary>
+    internal IReadOnlyList<string> DescribeStalledGroups(
+        TimeSpan olderThan,
+        DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            if (_loadFailed) return Array.Empty<string>();
+
+            return _entries.Values
+                .Where(entry => !entry.DeliveryAcknowledged
+                    && entry.Total > 0
+                    && entry.Parts.Count < entry.Total
+                    && now - entry.LastUpdated >= olderThan)
+                .OrderBy(entry => entry.LastUpdated)
+                .Select(entry =>
+                    $"port={entry.LastPortName}; sender={entry.Sender}; ref={entry.Reference}; "
+                    + $"parts={entry.Parts.Count}/{entry.Total}; missing="
+                    + string.Join(
+                        ",",
+                        Enumerable.Range(1, entry.Total)
+                            .Where(sequence => !entry.Parts.ContainsKey(sequence)))
+                    + $"; last={entry.LastUpdated:HH:mm:ss}")
+                .ToArray();
+        }
     }
 
     private static bool SameMultipart(

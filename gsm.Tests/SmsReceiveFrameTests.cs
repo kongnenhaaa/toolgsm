@@ -5,6 +5,92 @@ namespace gsm.Tests;
 public class SmsReceiveFrameTests
 {
     [Theory]
+    [InlineData("AT+CMGS=\"888\"", false)]
+    [InlineData("AT+CMGR=1", false)]
+    [InlineData("AT+CMGL=\"ALL\"", false)]
+    [InlineData("AT+CMGD=0,0", false)]
+    [InlineData("AT+CPMS?", false)]
+    [InlineData("AT+CUSD=1,\"*101#\",15", false)]
+    [InlineData("AT+QCMGR=1", false)]
+    // Bước ghi payload sau dấu nhắc '>': +CMS ERROR chính là câu trả lời của nó.
+    [InlineData("SMS_PAYLOAD", false)]
+    // Lệnh không thuộc dịch vụ tin nhắn: +CMS ERROR về muộn là rác của lệnh trước.
+    [InlineData("AT+CGMR", true)]
+    [InlineData("AT+CGMI", true)]
+    [InlineData("AT+EGMR=0,7;", true)]
+    [InlineData("AT+COPS?", true)]
+    [InlineData("AT+CPIN?", true)]
+    public void LateCmsErrorOnlyTerminatesMessagingCommands(
+        string pendingCommand,
+        bool expectedStale)
+    {
+        Assert.Equal(
+            expectedStale,
+            GsmModemService.IsStaleCmsErrorTerminator(
+                "+CMS ERROR: 350\r\n", pendingCommand));
+    }
+
+    [Theory]
+    [InlineData("\r\nQuectel\r\nEC20F\r\nRevision: EC20CEHDLGR08A05M1G\r\n\r\nOK", true)]
+    [InlineData("\r\nEC20F\r\n\r\nOK", true)]
+    [InlineData("\r\nOK", false)]
+    [InlineData("+CMS ERROR: 350", false)]
+    [InlineData("ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)", false)]
+    [InlineData("", false)]
+    public void EmptyAtiIsDetectedSoIdentityCanBeReprobed(
+        string atiResponse,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            GsmModemService.HasReadableModemIdentity(atiResponse));
+    }
+
+    [Theory]
+    [InlineData("\r\nOK\r\n")]
+    [InlineData("\r\nERROR\r\n")]
+    [InlineData("+CME ERROR: 13\r\n")]
+    public void NonCmsTerminatorsAreNeverTreatedAsStale(string terminator)
+    {
+        Assert.False(GsmModemService.IsStaleCmsErrorTerminator(
+            terminator, "AT+CGMR"));
+    }
+
+    [Fact]
+    public void UnknownPendingCommandKeepsAcceptingCmsErrorSoNothingHangs()
+    {
+        Assert.False(GsmModemService.IsStaleCmsErrorTerminator(
+            "+CMS ERROR: 350\r\n", null));
+        Assert.False(GsmModemService.IsStaleCmsErrorTerminator(
+            "+CMS ERROR: 350\r\n", "   "));
+    }
+
+    [Theory]
+    [InlineData("+CPMS: \"SM\",3,50,\"SM\",3,50,\"SM\",3,50\r\n\r\nOK", 3, 50)]
+    [InlineData("+CPMS: \"ME\",50,50,\"SM\",0,50,\"MT\",50,50\r\n\r\nOK", 50, 50)]
+    public void SimStorageUsageIsReadFromCpms(
+        string response,
+        int expectedUsed,
+        int expectedTotal)
+    {
+        Assert.True(GsmModemService.TryParseSimStorageUsage(
+            response, out int used, out int total));
+        Assert.Equal(expectedUsed, used);
+        Assert.Equal(expectedTotal, total);
+    }
+
+    [Theory]
+    [InlineData("OK")]
+    [InlineData("+CPMS: \"SM\",3,0")]
+    [InlineData("ERROR: Timeout")]
+    [InlineData("")]
+    public void UnparsableCpmsNeverReportsStorageUsage(string response)
+    {
+        Assert.False(GsmModemService.TryParseSimStorageUsage(
+            response, out _, out _));
+    }
+
+    [Theory]
     [InlineData("+CMS ERROR: 302")]
     [InlineData("+CMS ERROR: 322")]
     [InlineData("Memory Full")]

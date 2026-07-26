@@ -15,6 +15,63 @@ public sealed record DecodedSmsBody(
     bool RecoveredMislabelledUcs2 = false);
 
 /// <summary>
+/// Chuẩn hóa tên người gửi. Một số firmware EC20 trả người gửi chữ dưới dạng
+/// các mã ASCII thập phân nối liền (86 105 110 97 80 104 111 110 101 =
+/// "VinaPhone"). Mọi nhánh đọc SMS phải quy về cùng một dạng, nếu không cùng
+/// một tin sẽ bị tách nhóm theo người gửi.
+/// </summary>
+internal static class SmsSenderText
+{
+    /// <summary>
+    /// Trả về dạng chữ nếu giá trị là chuỗi mã ASCII thập phân; ngược lại trả
+    /// nguyên giá trị đã trim. Chỉ áp dụng cho chuỗi dài hơn một số điện thoại
+    /// hợp lệ để không bao giờ biến đổi người gửi dạng số thường.
+    /// </summary>
+    public static string Canonicalize(string? sender)
+    {
+        string value = sender?.Trim() ?? string.Empty;
+        // Chỉ nhận kết quả có chữ: một chuỗi số thuần giải ra số thuần vẫn là
+        // người gửi dạng số và không được biến đổi.
+        if (value.Length > 15
+            && value.All(char.IsDigit)
+            && TryDecodeDecimalAscii(value, out string decoded)
+            && decoded.Length >= 2
+            && decoded.Any(char.IsLetter))
+        {
+            return decoded;
+        }
+        return value;
+    }
+
+    public static bool TryDecodeDecimalAscii(string value, out string decoded)
+    {
+        var memo = new Dictionary<int, string?>();
+        string? Parse(int offset)
+        {
+            if (offset == value.Length) return string.Empty;
+            if (memo.TryGetValue(offset, out string? cached)) return cached;
+            // Printable ASCII codes are 2 or 3 decimal digits. Prefer 3 digits where valid.
+            foreach (int width in new[] { 3, 2 })
+            {
+                if (offset + width > value.Length
+                    || !int.TryParse(value.AsSpan(offset, width), out int code)
+                    || code is < 32 or > 126)
+                {
+                    continue;
+                }
+                string? tail = Parse(offset + width);
+                if (tail != null) return memo[offset] = ((char)code) + tail;
+            }
+            memo[offset] = null;
+            return null;
+        }
+
+        decoded = Parse(0) ?? string.Empty;
+        return decoded.Length > 0;
+    }
+}
+
+/// <summary>
 /// Sender aliases that have been observed to switch inside one carrier-created
 /// multipart message. Keep this list deliberately narrow: treating every
 /// numeric short code as equivalent could combine unrelated messages that
@@ -28,6 +85,17 @@ internal static class SmsMultipartSenderAliases
     {
         if (string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase))
             return true;
+
+        // Cùng một tên nhà mạng có thể được firmware trả ở dạng chữ ở mảnh này
+        // và dạng mã ASCII thập phân ở mảnh khác của đúng một tin. Nếu không coi
+        // hai dạng là một, tin bị chẻ thành hai nhóm ghép dở và không bao giờ ra.
+        if (string.Equals(
+                SmsSenderText.Canonicalize(left),
+                SmsSenderText.Canonicalize(right),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
 
         return IsPair(left, right, "888", "565656");
     }

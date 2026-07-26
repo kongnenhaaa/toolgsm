@@ -8,6 +8,7 @@
         gsm.Models.SimStatus.Connecting      => ("Đang xử lý", "status-connecting", true),
         gsm.Models.SimStatus.ImeiError       => ("Lỗi IMEI", "status-error", false),
         gsm.Models.SimStatus.NoResponse      => ("Mất phản hồi", "status-error", false),
+        gsm.Models.SimStatus.NetworkUnavailable => ("Không có mạng", "status-error", false),
         // Operation results are shown in the same status column as the modem state.
         // Keep the old compact value as an alias so cached/legacy rows are rendered
         // with the new user-facing label as well.

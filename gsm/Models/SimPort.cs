@@ -169,7 +169,26 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private string _lastCommandResult = string.Empty;
 
-    public string LastUssdResult { get; set; } = string.Empty;
+    private string _lastUssdResult = string.Empty;
+    public string LastUssdResult
+    {
+        get => _lastUssdResult;
+        set
+        {
+            _lastUssdResult = value ?? string.Empty;
+            // Nhà mạng thường trả *101# với payload y hệt lần trước (cùng TKC,
+            // cùng HSD). So sánh chuỗi sẽ kết luận "chưa có phản hồi" và làm
+            // vòng dò USSD lặp vô hạn, nên mốc thời gian mới là bằng chứng
+            // "vừa có +CUSD", không phải nội dung khác nhau.
+            LastUssdResultAt = string.IsNullOrWhiteSpace(_lastUssdResult)
+                ? null
+                : DateTime.Now;
+        }
+    }
+
+    /// <summary>Thời điểm payload USSD gần nhất được ghi nhận (null nếu chưa có).</summary>
+    public DateTime? LastUssdResultAt { get; private set; }
+
     public string LastSmsResult { get; set; } = string.Empty;
     [ObservableProperty]
     private string _lastSmsSender = string.Empty;

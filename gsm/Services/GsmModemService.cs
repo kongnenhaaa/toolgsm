@@ -1111,6 +1111,17 @@ public class GsmModemService : IGsmModemService
             return decoded.Content;
         }
 
+        if (!string.IsNullOrWhiteSpace(deliveryId)
+            && _deliveredStoredSms.ContainsKey(deliveryId))
+        {
+            // Slot này thuộc một tin đã phát xong. Đọc lại (do sweep hoặc CMGL
+            // trùng lượt) chỉ để dọn slot; ghi lại vào journal sẽ tạo một nhóm
+            // ghép dở mới không bao giờ đủ mảnh.
+            if (!string.IsNullOrWhiteSpace(msgIndex))
+                indicesToDelete.Add(msgIndex);
+            return null;
+        }
+
         IReadOnlyList<SmsMultipartJournal.Part> durableParts;
         try
         {
@@ -1870,6 +1881,14 @@ public class GsmModemService : IGsmModemService
             RememberDeliveredSms(completedDeliveryId);
             if (decoded.Concatenation != null)
             {
+                // Nhớ theo từng mảnh, không chỉ theo tin: sau khi tin đã ra,
+                // slot của bất kỳ mảnh nào được đọc lại cũng phải bị nhận ra là
+                // đã phát để không sinh nhóm ghép dở trùng lặp.
+                foreach (string partIdentity in
+                         _multipartJournal.GetPartIdentities(completedDeliveryId))
+                {
+                    RememberDeliveredSms(partIdentity);
+                }
                 try
                 {
                     _multipartJournal.MarkDeliveryAcknowledged(
@@ -1953,6 +1972,54 @@ public class GsmModemService : IGsmModemService
         @"\+(?:Q?CMGR|CMT):\s*""[^""]*"",\s*""([^""]+)""",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>
+    /// ATI đã trả danh tính thật hay chỉ là OK/ERROR/mã lỗi. Dùng để biết có
+    /// phải hỏi lại sau khi thoát chế độ nhập SMS.
+    /// </summary>
+    internal static bool HasReadableModemIdentity(string? atiResponse)
+    {
+        string response = atiResponse ?? string.Empty;
+        if (response.Contains("Quectel", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return Regex.IsMatch(
+            response,
+            @"\b(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}\b",
+            RegexOptions.IgnoreCase);
+    }
+
+    internal static bool IsStaleCmsErrorTerminator(
+        string terminator,
+        string? pendingCommand) =>
+        terminator.Contains("+CMS ERROR", StringComparison.OrdinalIgnoreCase)
+        && !CanCommandReturnCmsError(pendingCommand);
+
+    /// <summary>
+    /// Chỉ các lệnh thuộc dịch vụ tin nhắn/USSD mới có thể trả +CMS ERROR. Lệnh
+    /// nào không thuộc nhóm này mà nhận +CMS ERROR thì đó là phản hồi về muộn
+    /// của một lệnh SMS trước đó. Không xác định được lệnh đang chờ thì giữ
+    /// hành vi cũ (nhận làm phản hồi) để không bao giờ treo lệnh vô hạn.
+    /// </summary>
+    internal const string SmsPayloadCommandState = "SMS_PAYLOAD";
+
+    internal static bool CanCommandReturnCmsError(string? pendingCommand)
+    {
+        string command = pendingCommand?.Trim() ?? string.Empty;
+        if (command.Length == 0) return true;
+        // Bước ghi payload sau dấu nhắc '>' không phải là một lệnh AT nhưng
+        // chính +CMS ERROR mới là câu trả lời của nó (ví dụ 350 khi nhà mạng
+        // chặn chiều đi). Bỏ qua ở đây sẽ làm mọi lần gửi lỗi phải chờ hết
+        // timeout thay vì báo lỗi ngay.
+        if (string.Equals(
+                command, SmsPayloadCommandState, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        return Regex.IsMatch(
+            command,
+            @"^AT\+(?:Q?CMG[SWDRLC]|CMSS|CNMA|CNMI|CPMS|CSCA|CSCB|CSDH|CSMS|CMMS|CUSD)\b",
+            RegexOptions.IgnoreCase);
+    }
+
     private static string ParseSenderFromCmgr(string raw)
     {
         Match direct = Regex.Match(raw, @"\+CMT:\s*""([^""]+)""", RegexOptions.IgnoreCase);
@@ -1979,41 +2046,12 @@ public class GsmModemService : IGsmModemService
         return "Unknown";
     }
 
-    public static string DecodeSmsSender(string? rawSender)
-    {
-        string value = rawSender?.Trim() ?? string.Empty;
+    public static string DecodeSmsSender(string? rawSender) =>
         // Some EC20C firmware renders an alphanumeric sender as concatenated decimal ASCII:
         // 86 105 110 97 80 104 111 110 101 => "VinaPhone".
-        // Limit this fallback to values longer than a valid phone number so ordinary numeric
-        // senders are never transformed.
-        if (value.Length > 15 && value.All(char.IsDigit) && TryDecodeDecimalAscii(value, out string decoded))
-            return decoded;
-        return value;
-    }
-
-    private static bool TryDecodeDecimalAscii(string value, out string decoded)
-    {
-        var memo = new Dictionary<int, string?>();
-        string? Parse(int offset)
-        {
-            if (offset == value.Length) return string.Empty;
-            if (memo.TryGetValue(offset, out string? cached)) return cached;
-            // Printable ASCII codes are 2 or 3 decimal digits. Prefer 3 digits where valid.
-            foreach (int width in new[] { 3, 2 })
-            {
-                if (offset + width > value.Length ||
-                    !int.TryParse(value.AsSpan(offset, width), out int code) || code is < 32 or > 126)
-                    continue;
-                string? tail = Parse(offset + width);
-                if (tail != null) return memo[offset] = ((char)code) + tail;
-            }
-            memo[offset] = null;
-            return null;
-        }
-
-        decoded = Parse(0) ?? string.Empty;
-        return decoded.Length >= 2 && decoded.Any(char.IsLetter);
-    }
+        // One shared implementation keeps every read path (live +CMT, +CMGR,
+        // CMGL, PDU) and the multipart journal on the same sender string.
+        SmsSenderText.Canonicalize(rawSender);
     // ==================================================================
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
@@ -3515,6 +3553,21 @@ public class GsmModemService : IGsmModemService
         await Task.Delay(100, ct);
 
         string ati = await SendCommandAsync(portName, "ATI", 5000, silent: true, ct: ct);
+        if (!HasReadableModemIdentity(ati))
+        {
+            // Modem có thể còn ở chế độ nhập payload SMS của lượt gửi trước, khi
+            // đó chính ký tự của ATI bị nuốt làm nội dung tin. ESC lần nữa với
+            // khoảng chờ dài hơn rồi hỏi lại, nếu không profile sẽ rỗng và cổng
+            // mất các nhánh riêng cho Quectel cho tới lần mở lại sau.
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[MODEM_IDENTITY_RETRY] ATI chưa trả danh tính ({ati.Trim()}); thoát chế độ nhập SMS rồi hỏi lại."
+            });
+            await SendEscapeWithoutResponseAsync(portName, ct);
+            await Task.Delay(500, ct);
+            ati = await SendCommandAsync(portName, "ATI", 5000, silent: true, ct: ct);
+        }
         await SendCommandAsync(portName, "AT+CPMS=\"ME\",\"SM\",\"MT\"", 5000, silent: true, ct: ct);
         await Task.Delay(100, ct);
 
@@ -5396,6 +5449,163 @@ public class GsmModemService : IGsmModemService
         return string.Equals(scope, portName, StringComparison.OrdinalIgnoreCase);
     }
 
+    private long _lastMultipartSalvageTicks;
+    private long _lastMultipartStalledReportTicks;
+    private static readonly TimeSpan MultipartSalvageInterval =
+        TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan MultipartStalledReportInterval =
+        TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan MultipartStalledThreshold =
+        TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Một tin nhiều mảnh có thể bị chẻ thành nhiều nhóm ghép dở khi firmware
+    /// trả người gửi ở hai dạng khác nhau; nhóm nào cũng thiếu mảnh nên tin
+    /// không bao giờ ra. Quét lại journal theo nhịp và báo cả những nhóm vẫn
+    /// thiếu mảnh thật để chúng không im lặng nằm mãi trên đĩa.
+    /// </summary>
+    private void TryRepairMultipartJournal(string portName)
+    {
+        if (!ShouldRunThrottledJournalPass(
+                ref _lastMultipartSalvageTicks, MultipartSalvageInterval))
+        {
+            return;
+        }
+
+        try
+        {
+            int salvaged = _multipartJournal.SalvageSplitSenderGroups();
+            if (salvaged > 0)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_MULTIPART_SALVAGED] Đã ghép lại {salvaged} tin bị chẻ nhóm theo người gửi; replay sẽ đẩy vào inbox."
+                });
+            }
+
+            if (!ShouldRunThrottledJournalPass(
+                    ref _lastMultipartStalledReportTicks,
+                    MultipartStalledReportInterval))
+            {
+                return;
+            }
+            foreach (string stalled in _multipartJournal.DescribeStalledGroups(
+                         MultipartStalledThreshold, DateTimeOffset.Now))
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_MULTIPART_STALLED] {stalled}"
+                });
+            }
+        }
+        catch (Exception ex) when (ex is IOException
+                                      or UnauthorizedAccessException
+                                      or InvalidDataException)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[SMS_MULTIPART_SALVAGE_RETRY] {ex.Message}"
+            });
+        }
+    }
+
+    private readonly ConcurrentDictionary<string, long> _simStorageReportTicks =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan SimStorageReportInterval =
+        TimeSpan.FromMinutes(10);
+    internal const int SimStorageWarnPercent = 50;
+    internal const int SimStorageCriticalPercent = 80;
+
+    /// <summary>
+    /// Bộ nhớ SIM đầy là đường mất tin duy nhất mà ứng dụng không tự thấy: modem
+    /// từ chối tin mới trước khi có URC nào để xử lý. Đọc AT+CPMS? theo nhịp và
+    /// chỉ log khi mức dùng đã đáng lo, để trạng thái bình thường không gây nhiễu.
+    /// </summary>
+    private async Task ReportSimStorageUsageAsync(string portName)
+    {
+        long now = Environment.TickCount64;
+        long previous = _simStorageReportTicks.GetOrAdd(portName, 0);
+        bool firstPass = previous == 0;
+        if (!firstPass
+            && now - previous < (long)SimStorageReportInterval.TotalMilliseconds)
+        {
+            return;
+        }
+        if (!_simStorageReportTicks.TryUpdate(portName, now, previous)) return;
+
+        string response = await SendCommandAsync(
+            portName, "AT+CPMS?", 5000, silent: true);
+        if (!TryParseSimStorageUsage(response, out int used, out int total))
+        {
+            // Lượt đọc đầu có thể chỉ nhận được 'OK' khi dòng +CPMS: bị lệch
+            // nhịp với lượt đọc trước. Thử lại một lần trước khi kết luận là
+            // không giám sát được.
+            await Task.Delay(500);
+            response = await SendCommandAsync(
+                portName, "AT+CPMS?", 5000, silent: true);
+        }
+        if (!TryParseSimStorageUsage(response, out used, out total))
+        {
+            if (firstPass)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_SIM_STORAGE_UNKNOWN] Không đọc được AT+CPMS?: {response.Trim()}; không giám sát được mức dùng bộ nhớ SIM."
+                });
+            }
+            return;
+        }
+
+        int percent = (int)Math.Round(used * 100d / total, MidpointRounding.AwayFromZero);
+        // Lượt đầu mỗi cổng luôn ghi một dòng mốc: im lặng phải có nghĩa là
+        // "đã kiểm tra và còn chỗ", không phải "chưa từng kiểm tra".
+        if (percent < SimStorageWarnPercent && !firstPass) return;
+
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = percent >= SimStorageCriticalPercent
+                ? $"[SMS_SIM_STORAGE_CRITICAL] Bộ nhớ SIM {used}/{total} ({percent}%); tin mới có thể bị modem từ chối trước khi vào tool."
+                : $"[SMS_SIM_STORAGE] Bộ nhớ SIM {used}/{total} ({percent}%)."
+        });
+    }
+
+    internal static bool TryParseSimStorageUsage(
+        string? cpmsResponse,
+        out int used,
+        out int total)
+    {
+        used = 0;
+        total = 0;
+        if (string.IsNullOrWhiteSpace(cpmsResponse)) return false;
+
+        // +CPMS: "SM",3,50,"SM",3,50,"SM",3,50 — bộ đọc là cặp số đầu tiên.
+        Match match = Regex.Match(
+            cpmsResponse,
+            @"\+CPMS:\s*""[^""]*""\s*,\s*(?<used>\d+)\s*,\s*(?<total>\d+)",
+            RegexOptions.IgnoreCase);
+        return match.Success
+            && int.TryParse(match.Groups["used"].Value, out used)
+            && int.TryParse(match.Groups["total"].Value, out total)
+            && total > 0;
+    }
+
+    private static bool ShouldRunThrottledJournalPass(
+        ref long lastTicks,
+        TimeSpan interval)
+    {
+        long now = Environment.TickCount64;
+        long previous = Interlocked.Read(ref lastTicks);
+        if (previous != 0 && now - previous < (long)interval.TotalMilliseconds)
+            return false;
+        return Interlocked.CompareExchange(ref lastTicks, now, previous)
+            == previous;
+    }
+
     private void ScheduleCompletedMultipartReplay(
         string scope,
         string portName,
@@ -6613,7 +6823,29 @@ public class GsmModemService : IGsmModemService
                 else
                 {
                 // Kiểm tra dấu hiệu kết thúc của lệnh AT (OK, ERROR, hoặc CMS/CME ERROR, hoặc dấu nhắc >, hoặc CONNECT)
-                var match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?|>\s*|\r?\nCONNECT\r?\n?)");
+                string? pendingCommand = tcs.Task.AsyncState as string;
+                Match match = Match.Empty;
+                while (true)
+                {
+                    match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?|>\s*|\r?\nCONNECT\r?\n?)");
+                    if (!match.Success
+                        || !IsStaleCmsErrorTerminator(match.Value, pendingCommand))
+                    {
+                        break;
+                    }
+
+                    // +CMS ERROR của một lệnh SMS đã bỏ dở có thể về muộn, đúng
+                    // lúc lệnh khác đang chờ. Nhận nó làm phản hồi sẽ làm lệnh
+                    // đó "trả lời" bằng mã lỗi SMS (đã thấy profile modem rỗng
+                    // vì lý do này). Cắt đoạn rác và tiếp tục chờ phản hồi thật.
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[AT_STALE_CMS_ERROR] Bỏ qua '{match.Value.Trim()}' về muộn khi đang chờ '{pendingCommand?.Trim()}'."
+                    });
+                    buffer.Remove(match.Index, match.Length);
+                    currentData = buffer.ToString();
+                }
                 if (match.Success)
                 {
                     if (tcs.Task.AsyncState is string cmd
@@ -7661,6 +7893,10 @@ public class GsmModemService : IGsmModemService
             await ReconcileSimCleanupIntentsFromSweepAsync(
                 portName,
                 generation);
+            // Cứu các tin bị chẻ nhóm theo người gửi trước khi hẹn replay: nhóm
+            // vừa được ghép đủ mảnh sẽ được chính lượt replay này đẩy vào inbox.
+            TryRepairMultipartJournal(portName);
+            await ReportSimStorageUsageAsync(portName);
             if (TryGetSmsScope(
                     portName, generation, out string replayScope))
                 ScheduleCompletedMultipartReplay(

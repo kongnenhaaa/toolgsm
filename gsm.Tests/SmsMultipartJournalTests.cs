@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using gsm.Services;
 
 namespace gsm.Tests;
@@ -878,6 +878,160 @@ public sealed class SmsMultipartJournalTests
         int reference,
         string content) =>
         $"[{LegacyEntryObjectJson(scope, reference, content)}]";
+
+    [Fact]
+    public void MixedSenderEncodingsStillCompleteOneMessageLive()
+    {
+        string path = TempJournalPath();
+        try
+        {
+            const string scope = "COM109\u001f89840200011834602615";
+            var journal = new SmsMultipartJournal(path);
+            // Đúng một tin 3 mảnh nhưng firmware trả người gửi ở hai dạng:
+            // "VinaPhone" và chuỗi mã ASCII thập phân của cùng tên đó.
+            journal.RecordAndGetParts(
+                scope, "VinaPhone", new(123, 3, 1), "phan-1",
+                portName: "COM109", partIdentity: "id-1");
+            journal.RecordAndGetParts(
+                scope, "861051109780104111110101", new(123, 3, 2), "phan-2",
+                portName: "COM109", partIdentity: "id-2");
+            journal.RecordAndGetParts(
+                scope, "861051109780104111110101", new(123, 3, 3), "phan-3",
+                portName: "COM109", partIdentity: "id-3");
+
+            SmsMultipartJournal.CompletedSnapshot snapshot =
+                Assert.Single(journal.GetCompletedSnapshots(scope));
+            Assert.Equal("phan-1phan-2phan-3", snapshot.Content);
+        }
+        finally
+        {
+            DeleteJournalFiles(path);
+        }
+    }
+
+    [Fact]
+    public void AlreadySplitSenderGroupsOnDiskAreSalvagedIntoOneMessage()
+    {
+        string path = TempJournalPath();
+        try
+        {
+            const string scope = "COM10989840200011834602615";
+            // Journal do bản cũ ghi: cùng scope/reference/total nhưng bị chẻ
+            // thành hai generation vì người gửi lưu ở hai dạng khác nhau.
+            File.WriteAllText(path, "[" + string.Join(",",
+                SplitEntryJson(
+                    scope, "gen-a", "VinaPhone", 123, 3,
+                    new Dictionary<int, string> { [1] = "phan-1" }),
+                SplitEntryJson(
+                    scope, "gen-b", "861051109780104111110101", 123, 3,
+                    new Dictionary<int, string>
+                    {
+                        [2] = "phan-2",
+                        [3] = "phan-3"
+                    })) + "]");
+
+            var journal = new SmsMultipartJournal(path);
+            Assert.Empty(journal.GetCompletedSnapshots(scope));
+
+            Assert.Equal(1, journal.SalvageSplitSenderGroups());
+            Assert.Equal(
+                "phan-1phan-2phan-3",
+                Assert.Single(journal.GetCompletedSnapshots(scope)).Content);
+
+            // Bản đã ghép phải bền vững qua restart.
+            Assert.Equal(
+                "phan-1phan-2phan-3",
+                Assert.Single(new SmsMultipartJournal(path)
+                    .GetCompletedSnapshots(scope)).Content);
+        }
+        finally
+        {
+            DeleteJournalFiles(path);
+        }
+    }
+
+    private static string SplitEntryJson(
+        string scope,
+        string generationId,
+        string sender,
+        int reference,
+        int total,
+        Dictionary<int, string> parts) =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Scope = scope,
+            GenerationId = generationId,
+            MessageId = "sms-mp-" + generationId,
+            LastPortName = "COM109",
+            Sender = sender,
+            AcceptedSenders = new[] { sender },
+            Reference = reference,
+            Total = total,
+            LastUpdated = DateTimeOffset.UtcNow,
+            DeliveryAcknowledged = false,
+            Parts = parts,
+            PartIdentities = parts.ToDictionary(
+                pair => pair.Key,
+                pair => $"id-{generationId}-{pair.Key}"),
+            CleanedPartIdentities = Array.Empty<string>()
+        });
+
+    [Fact]
+    public void SalvageLeavesGroupsThatStillMissSegments()
+    {
+        string path = TempJournalPath();
+        try
+        {
+            const string scope = "COM104\u001f89840200011821319504";
+            var journal = new SmsMultipartJournal(path);
+            journal.RecordAndGetParts(
+                scope, "VinaPhone", new(159, 3, 1), "phan-1",
+                portName: "COM104", partIdentity: "id-1");
+            journal.RecordAndGetParts(
+                scope, "861051109780104111110101", new(159, 3, 2), "phan-2",
+                portName: "COM104", partIdentity: "id-2");
+
+            Assert.Equal(0, journal.SalvageSplitSenderGroups());
+            Assert.Empty(journal.GetCompletedSnapshots(scope));
+
+            IReadOnlyList<string> stalled = journal.DescribeStalledGroups(
+                TimeSpan.Zero, DateTimeOffset.Now);
+            Assert.NotEmpty(stalled);
+            Assert.Contains(stalled, text => text.Contains("missing=3"));
+        }
+        finally
+        {
+            DeleteJournalFiles(path);
+        }
+    }
+
+    [Fact]
+    public void SalvageNeverMergesTwoMessagesSharingAConcatReference()
+    {
+        string path = TempJournalPath();
+        try
+        {
+            const string scope = "COM88\u001f89840200011836551638";
+            var journal = new SmsMultipartJournal(path);
+            journal.RecordAndGetParts(
+                scope, "888", new(246, 2, 1), "tin-A-phan-1",
+                portName: "COM88", partIdentity: "id-a1");
+            // Cùng reference nhưng người gửi khác hẳn và nội dung mảnh 1 khác:
+            // đây là tin khác dùng trùng reference, không được trộn.
+            journal.RecordAndGetParts(
+                scope, "Shopee", new(246, 2, 1), "tin-B-phan-1",
+                portName: "COM88", partIdentity: "id-b1");
+            journal.RecordAndGetParts(
+                scope, "Shopee", new(246, 2, 2), "tin-B-phan-2",
+                portName: "COM88", partIdentity: "id-b2");
+
+            Assert.Equal(0, journal.SalvageSplitSenderGroups());
+        }
+        finally
+        {
+            DeleteJournalFiles(path);
+        }
+    }
 
     private static string LegacyEntryObjectJson(
         string scope,

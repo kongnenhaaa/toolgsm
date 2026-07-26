@@ -104,6 +104,11 @@ public sealed class RealDeviceSmokeTestRunner
                     claim, store, cancellationToken)
                 .ConfigureAwait(false);
         }
+        else if (claim.Request.Scenario == RealDeviceSmokeScenario.SmsOnly)
+        {
+            await ExecuteSmsOnlyRequestAsync(claim, store, cancellationToken)
+                .ConfigureAwait(false);
+        }
         else
         {
             await ExecuteClaimedRequestAsync(claim, store, cancellationToken)
@@ -667,6 +672,130 @@ public sealed class RealDeviceSmokeTestRunner
             {
                 _host.ReleaseBatchImeiReservations(owner);
             }
+        }
+    }
+
+    /// <summary>
+    /// Chỉ kiểm tra đường nhận SMS: gửi đúng một SMS 'data' tới 888 rồi chờ
+    /// phản hồi xuất hiện trong durable inbox. Không chạm vào IMEI, không gọi.
+    /// </summary>
+    private async Task ExecuteSmsOnlyRequestAsync(
+        RealDeviceSmokeClaim claim,
+        AtomicSmokeResultStore store,
+        CancellationToken cancellationToken)
+    {
+        var state = new RealDeviceSmokeResult
+        {
+            RunId = claim.RunId,
+            Scenario = RealDeviceSmokeScenario.SmsOnly,
+            Outcome = RealDeviceSmokeOutcome.Running,
+            CurrentStep = "startup",
+            StartedAtUtc = UtcNow,
+            UpdatedAtUtc = UtcNow,
+            OriginalRequestPath = claim.OriginalPath,
+            ClaimedRequestPath = claim.ClaimedPath,
+            ResultPath = store.ResultPath,
+            RequestedPortName = claim.Request.PortName?.Trim() ?? string.Empty,
+            RequestedCcid = NormalizeDigits(claim.Request.ExpectedCcid),
+            FixedActions = new RealDeviceSmokeActions
+            {
+                Provider = ExpectedProvider,
+                ExpectedCcid = NormalizeDigits(claim.Request.ExpectedCcid),
+                SmsRecipient = SmsRecipient,
+                SmsBody = SmsBody
+            }
+        };
+
+        using var logs = new RealDeviceSmokeLogCollector(_host, _timeProvider);
+        Checkpoint(store, state, logs);
+        _host.Log(
+            $"[REAL_DEVICE_SMS_ONLY_START] run={state.RunId}; port={state.RequestedPortName}; result={state.ResultPath}",
+            "INFO");
+
+        try
+        {
+            BeginStep(store, state, logs, "select-port", chargeable: false,
+                "Chờ đúng cổng đã ghim ở trạng thái Active/VinaPhone ổn định.");
+            RealDeviceSmokePortSnapshot selected = await WaitForStablePortAsync(
+                    claim.Request, cancellationToken)
+                .ConfigureAwait(false);
+            state.PortName = selected.PortName;
+            state.PinnedCcid = selected.Ccid;
+            state.InitialImei = selected.Imei;
+            // IMEI hiện tại là mốc để phát hiện hot-swap; scenario này không ghi IMEI.
+            state.TargetImei = NormalizeDigits(selected.Imei);
+            state.NetworkProvider = selected.NetworkProvider;
+            CompleteStep(store, state, logs,
+                $"Đã ghim {selected.PortName}; CCID={selected.Ccid}; IMEI={selected.Imei}; provider={selected.NetworkProvider}.");
+
+            IReadOnlySet<string> baselineDeliveryIds = _host.GetRecentSms(1000)
+                .Select(record => record.DeliveryId)
+                .ToHashSet(StringComparer.Ordinal);
+            DateTimeOffset smsStartedAt = UtcNow;
+            BeginStep(store, state, logs, "sms-data-to-888", chargeable: true,
+                "Chuẩn bị gửi chính xác 'data' đến 888; không có retry ở runner.");
+            EnsurePinnedPortNow(state, requireTargetImei: true);
+            string smsResult = await _host.QueueSmsAsync(
+                    state.PortName,
+                    SmsRecipient,
+                    SmsBody,
+                    state.PinnedCcid,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            state.SmsSendResult = smsResult;
+            RealDeviceSmsSubmitDisposition smsDisposition =
+                ClassifySmsSubmitResult(smsResult);
+            if (smsDisposition == RealDeviceSmsSubmitDisposition.PrePayloadFailed)
+            {
+                FailKnown(store, state, logs,
+                    $"SMS bị từ chối trước khi payload được submit; không có SMS để chờ: {smsResult}");
+            }
+
+            SetCurrentStepStatus(
+                state,
+                RealDeviceSmokeStepStatus.AwaitingResponse,
+                smsDisposition == RealDeviceSmsSubmitDisposition.Confirmed
+                    ? $"Modem đã xác nhận submit; đang chờ phản hồi mới từ {SmsRecipient} trong durable inbox."
+                    : $"Payload đã qua Ctrl+Z nhưng phản hồi modem không chắc chắn; tuyệt đối không retry, đang chờ phản hồi mới từ {SmsRecipient}.");
+            Checkpoint(store, state, logs);
+
+            SmsInboxRecord incoming = await WaitForIncomingSmsAsync(
+                    state.PortName,
+                    smsStartedAt,
+                    baselineDeliveryIds,
+                    claim.Request.SmsResponseWaitSeconds,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            state.IncomingSms = incoming;
+            await WaitForPinnedPortAsync(
+                    state,
+                    claim.Request.PostOperationWaitSeconds,
+                    requireTargetImei: true,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            CompleteStep(store, state, logs,
+                $"Đã nhận và đọc lại durable SMS delivery={incoming.DeliveryId}; sender={incoming.Sender}; chars={incoming.Content.Length}; trễ={(incoming.ReceivedAtUtc - smsStartedAt).TotalSeconds:0.0}s.");
+
+            state.Outcome = RealDeviceSmokeOutcome.Passed;
+            state.CurrentStep = "complete";
+            state.CompletedAtUtc = UtcNow;
+            state.Error = string.Empty;
+            Checkpoint(store, state, logs);
+            _host.Log(
+                $"[{state.PortName}] [REAL_DEVICE_SMS_ONLY_PASSED] run={state.RunId}; result={state.ResultPath}",
+                "SUCCESS");
+        }
+        catch (OperationCanceledException ex)
+        {
+            FinalizeInterrupted(store, state, logs, ex.Message, cancelled: true);
+        }
+        catch (RealDeviceSmokeRunException ex)
+        {
+            FinalizeInterrupted(store, state, logs, ex.Message, cancelled: false);
+        }
+        catch (Exception ex)
+        {
+            FinalizeInterrupted(store, state, logs, ex.ToString(), cancelled: false);
         }
     }
 
@@ -1691,6 +1820,12 @@ public sealed class RealDeviceSmokeTestRunner
             throw new InvalidDataException(
                 "portNames/resumeRunId chỉ dùng cho scenario ImeiUssdBatch.");
         }
+        if (request.Scenario == RealDeviceSmokeScenario.SmsOnly
+            && !string.IsNullOrWhiteSpace(request.ContinuationOfRunId))
+        {
+            throw new InvalidDataException(
+                "SmsOnly không dùng continuationOfRunId; scenario này chỉ gửi SMS và chờ phản hồi.");
+        }
         if (string.IsNullOrWhiteSpace(request.PortName)
             || !Regex.IsMatch(request.PortName.Trim(), @"^COM[1-9][0-9]{0,4}$",
                 RegexOptions.IgnoreCase))
@@ -2036,7 +2171,12 @@ public enum RealDeviceSmokeOutcome
 public enum RealDeviceSmokeScenario
 {
     Full,
-    ImeiUssdBatch
+    ImeiUssdBatch,
+    /// <summary>
+    /// Chỉ kiểm tra đường nhận SMS trên một cổng đã Active: gửi 'data' tới 888
+    /// rồi chờ phản hồi vào durable inbox. Không đổi IMEI, không gọi, không USSD.
+    /// </summary>
+    SmsOnly
 }
 
 public enum RealDeviceSmokeStepStatus

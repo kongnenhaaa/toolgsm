@@ -64,6 +64,8 @@ public static class SettingsService
         settings.WriteOtpToFirebase = true;
         settings.SignalScanIntervalSeconds = Math.Clamp(
             settings.SignalScanIntervalSeconds, 5, 300);
+        settings.StartupUssdMode = StartupUssdModes.Normalize(
+            settings.StartupUssdMode);
         if (string.IsNullOrWhiteSpace(settings.MachineId))
             settings.MachineId = Environment.MachineName;
         return settings;

@@ -295,6 +295,7 @@ public class GsmModemService : IGsmModemService
     private const int MaxNetworkSimRecoveryAttemptsWithHardReset = MaxNetworkSimRecoveryAttempts + 1;
     private const int MaxNetworkSimRecoveryAttemptsWithManualOperator = MaxNetworkSimRecoveryAttemptsWithHardReset + 1;
     private const int MaxNetworkRegistrationRecoveryPassesBeforeReopen = 6;
+    internal const int NetworkLossConfirmationMisses = 3;
     /// <summary>Guard chống race condition: đánh dấu port đang trong quá trình khởi tạo SIM đầu tiên.</summary>
     private readonly ConcurrentDictionary<string, bool> _simInitInProgress = new();
     private readonly ConcurrentDictionary<string, bool> _simInsertInProgress = new();
@@ -2396,7 +2397,9 @@ public class GsmModemService : IGsmModemService
                 await Task.Delay(TimeSpan.FromSeconds(20), token);
                 while (!token.IsCancellationRequested)
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(15), token);
+                    await Task.Delay(
+                        GetPortHealthProbeInterval(consecutiveFailures),
+                        token);
                     if (token.IsCancellationRequested) break;
 
                     bool coordinatedRecoveryOwnsPort =
@@ -2409,24 +2412,24 @@ public class GsmModemService : IGsmModemService
                     if (ShouldDeferPortHealthProbe(
                             _suspendedBackgroundPorts.ContainsKey(portName),
                             IsCallInProgress(portName),
-                            _commandTcs.ContainsKey(portName),
+                            _commandTcs.ContainsKey(portName)
+                                && consecutiveFailures == 0,
                             coordinatedRecoveryOwnsPort))
                     {
-                        consecutiveFailures = 0;
-                        _portHealthFailureCounts.TryRemove(portName, out _);
                         continue;
                     }
 
                     bool healthy = _serialPorts.TryGetValue(portName, out var serialPort)
                         && serialPort.IsOpen;
+                    string probe = healthy
+                        ? string.Empty
+                        : "ERROR: Port not open";
                     if (healthy)
                     {
-                        string probe = await SendCommandAsync(
+                        probe = await SendCommandAsync(
                             portName, "AT", 3000, silent: true, ct: token);
                         if (IsDeferredPortHealthProbeResponse(probe))
                         {
-                            consecutiveFailures = 0;
-                            _portHealthFailureCounts.TryRemove(portName, out _);
                             continue;
                         }
 
@@ -2442,7 +2445,9 @@ public class GsmModemService : IGsmModemService
                         continue;
                     }
 
-                    consecutiveFailures++;
+                    consecutiveFailures = NextPortHealthFailureCount(
+                        consecutiveFailures,
+                        probe);
                     _portHealthFailureCounts[portName] = consecutiveFailures;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
@@ -2524,6 +2529,58 @@ public class GsmModemService : IGsmModemService
             "Timeout waiting for lock", StringComparison.OrdinalIgnoreCase) == true
         || response?.Contains(
             "Another command is already in progress", StringComparison.OrdinalIgnoreCase) == true;
+
+    internal static TimeSpan GetPortHealthProbeInterval(
+        int confirmedFailures) =>
+        confirmedFailures > 0
+            ? TimeSpan.FromSeconds(3)
+            : TimeSpan.FromSeconds(15);
+
+    internal static int NextPortHealthFailureCount(
+        int currentCount,
+        string? probeResponse)
+    {
+        if (IsDeferredPortHealthProbeResponse(probeResponse))
+            return Math.Max(0, currentCount);
+
+        bool healthy =
+            probeResponse?.Contains("OK", StringComparison.OrdinalIgnoreCase) == true
+            && probeResponse.Contains(
+                "Timeout", StringComparison.OrdinalIgnoreCase) == false
+            && probeResponse.Contains(
+                "ERROR", StringComparison.OrdinalIgnoreCase) == false;
+        return healthy ? 0 : Math.Max(0, currentCount) + 1;
+    }
+
+    internal static bool IsDeferredNetworkPollingResponse(string? response) =>
+        IsDeferredPortHealthProbeResponse(response);
+
+    internal static int NextNetworkLossMissCount(
+        int currentCount,
+        string? copsResponse)
+    {
+        if (TryParseCopsResponse(copsResponse, out _, out _))
+            return 0;
+
+        if (IsDeferredNetworkPollingResponse(copsResponse))
+            return Math.Max(0, currentCount);
+
+        return Math.Max(0, currentCount) + 1;
+    }
+
+    internal static bool ShouldReportNetworkLoss(
+        string? copsResponse,
+        int consecutiveMisses) =>
+        consecutiveMisses >= NetworkLossConfirmationMisses
+        && !IsDeferredNetworkPollingResponse(copsResponse)
+        && !TryParseCopsResponse(copsResponse, out _, out _);
+
+    internal static TimeSpan GetNetworkRegistrationProbeInterval(
+        int configuredSignalScanSeconds) =>
+        TimeSpan.FromSeconds(Math.Clamp(
+            configuredSignalScanSeconds,
+            5,
+            15));
 
     private async Task InitializeOpenedPortsAsync(IReadOnlyCollection<string> portNames)
     {
@@ -3871,7 +3928,7 @@ public class GsmModemService : IGsmModemService
                 }
                 else if (isSimRemoved && lastState)
                 {
-                    // Chỉ bật theo dõi rút SIM sau khi *111# và *101# đã cùng OK.
+                    // Chỉ bật theo dõi rút SIM sau khi kế hoạch USSD tự động đã hoàn tất.
                     ClearSimRemovalEvidence(portName);
                 }
                 
@@ -4287,7 +4344,7 @@ public class GsmModemService : IGsmModemService
         // Recovery sweep is independent from network/operator detection. +CMTI can be lost
         // while a long AT command is running or while the USB serial driver reconnects.
         // CMGL=ALL also recovers multipart segments already marked REC READ by CMGR before
-        // a restart. Delay the first bulk sweep until SAuto's CPIN/CSQ/COPS/*111# startup
+        // a restart. Delay the first bulk sweep until SAuto's CPIN/CSQ/COPS/USSD startup
         // window has completed; live +CMTI/+CMT is still processed immediately.
         _ = Task.Run(async () =>
         {
@@ -4321,13 +4378,14 @@ public class GsmModemService : IGsmModemService
             int cycles = 0;
             int waitingNoticeCount = 0;
             bool operatorReported = false;
+            int consecutiveCopsMissesAfterRegistration = 0;
             while (true)
             {
                 try
                 {
                     await Task.Delay(
                         operatorReported
-                            ? GsmBackgroundSupervisor.GetSignalScanInterval(
+                            ? GetNetworkRegistrationProbeInterval(
                                 SettingsService.Current.SignalScanIntervalSeconds)
                             : TimeSpan.FromMilliseconds(500),
                         token);
@@ -4409,21 +4467,9 @@ public class GsmModemService : IGsmModemService
                 }
 
                 cycles++;
-                // While registration is pending, query COPS every pass so a COM
-                // does not sit in a 50-second blind gap. Once COPS succeeds,
-                // keep the lighter five-cycle cadence for health monitoring.
-                if (operatorReported && cycles % 5 != 0)
-                {
-                    // CSQ is a health/UI probe; do not let it delay the first
-                    // post-IMEI COPS query or the first *111# activation.
-                    await Task.Delay(100, token);
-                    string liveCsq = await SendCommandAsync(
-                        portName, "AT+CSQ", 2000, silent: true, ct: token);
-                    if (liveCsq.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = liveCsq.Trim() });
-                    continue;
-                }
-
+                // Poll registration every active pass, capped at 15 seconds.
+                // The separate signal supervisor owns CSQ updates, so replacing
+                // the old four-CSQ/one-COPS cadence does not add per-port traffic.
                 string copsStr = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true, ct: token);
                 if (TryParseCopsResponse(copsStr, out _, out string act))
                 {
@@ -4434,8 +4480,19 @@ public class GsmModemService : IGsmModemService
                     // Lấy mạng thành công, nhả sự kiện ra để ViewModel bắt và tự động chạy USSD
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = copsStr.Trim() });
                     operatorReported = true;
+                    consecutiveCopsMissesAfterRegistration = 0;
                     waitingNoticeCount = 0;
                     ClearNetworkSimRecoveryAttempts(portName);
+                    continue;
+                }
+
+                // A local lock/command-contention result means AT+COPS? never
+                // reached the modem. It is not evidence that registration was
+                // lost, so keep the verified Active state and retry COPS on the
+                // next network scan instead of starting COPS/CFUN recovery.
+                if (IsDeferredNetworkPollingResponse(copsStr))
+                {
+                    cycles = operatorReported ? 4 : Math.Min(cycles, 4);
                     continue;
                 }
 
@@ -4447,7 +4504,11 @@ public class GsmModemService : IGsmModemService
                     bool recovered = await RecoverNetworkSimFailureAsync(
                         portName, copsStr, token);
                     cycles = 0;
-                    if (recovered) continue;
+                    if (recovered)
+                    {
+                        consecutiveCopsMissesAfterRegistration = 0;
+                        continue;
+                    }
                 }
 
                 // Only probe CSQ after a COPS miss. A slow CSQ response must not
@@ -4458,20 +4519,88 @@ public class GsmModemService : IGsmModemService
                 if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
 
+                string? recoveryCreg = null;
+                string? recoveryCgreg = null;
+                string? recoveryCereg = null;
                 if (operatorReported)
                 {
+                    consecutiveCopsMissesAfterRegistration =
+                        NextNetworkLossMissCount(
+                            consecutiveCopsMissesAfterRegistration,
+                            copsStr);
+
+                    // Before changing the UI, confirm that no registration
+                    // domain still reports home/roaming service. Some EC20
+                    // firmware temporarily omits the COPS operator while CREG,
+                    // CGREG or CEREG remains valid.
+                    recoveryCreg = await SendCommandAsync(
+                        portName, "AT+CREG?", 4000, silent: true, ct: token);
+                    recoveryCgreg = await SendCommandAsync(
+                        portName, "AT+CGREG?", 4000, silent: true, ct: token);
+                    recoveryCereg = await SendCommandAsync(
+                        portName, "AT+CEREG?", 4000, silent: true, ct: token);
+                    string confirmedNetworkType =
+                        ResolveRegisteredFallbackNetworkType(
+                            recoveryCreg,
+                            recoveryCgreg,
+                            recoveryCereg);
+                    if (!string.IsNullOrWhiteSpace(confirmedNetworkType))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[NETWORK_FALLBACK] type={confirmedNetworkType}; CREG/CGREG/CEREG vẫn đăng ký trong lúc COPS tạm thời không trả nhà mạng."
+                        });
+                        consecutiveCopsMissesAfterRegistration = 0;
+                        waitingNoticeCount = 0;
+                        cycles = 0;
+                        ClearNetworkSimRecoveryAttempts(portName);
+                        continue;
+                    }
+
+                    if (IsDeferredNetworkPollingResponse(recoveryCreg)
+                        || IsDeferredNetworkPollingResponse(recoveryCgreg)
+                        || IsDeferredNetworkPollingResponse(recoveryCereg))
+                    {
+                        cycles = 4;
+                        continue;
+                    }
+
+                    bool explicitlyUnregistered =
+                        AreAllRegistrationDomainsExplicitlyUnregistered(
+                            recoveryCreg,
+                            recoveryCgreg,
+                            recoveryCereg);
+                    if (!explicitlyUnregistered
+                        && !ShouldReportNetworkLoss(
+                            copsStr,
+                            consecutiveCopsMissesAfterRegistration))
+                    {
+                        // Inconclusive transport/modem misses are debounced.
+                        // Explicit unregistered states bypass the debounce and
+                        // start recovery on this same pass.
+                        cycles = 4;
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[NETWORK_PROBE_RETRY] COPS chưa xác nhận ({consecutiveCopsMissesAfterRegistration}/{NetworkLossConfirmationMisses}); giữ Active và kiểm tra lại."
+                        });
+                        continue;
+                    }
+
                     // COPS disappeared after a previously healthy registration.
-                    // Re-enter the recovery path instead of silently continuing
-                    // with stale network/UI data.
+                    // Explicit loss is recovered immediately; otherwise only
+                    // repeated, non-contention misses may re-enter recovery.
+                    consecutiveCopsMissesAfterRegistration = 0;
                     operatorReported = false;
-                    waitingNoticeCount++;
-                    // Re-enter the per-port recovery probe quickly after a
-                    // previously healthy registration disappears.
-                    cycles = 29;
+                    waitingNoticeCount = 0;
+                    cycles = 30;
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = "[NETWORK_LOST] COPS biến mất sau khi đang hoạt động; bắt đầu khôi phục đăng ký mạng."
+                        Data = explicitlyUnregistered
+                            ? "[NETWORK_LOST] COPS và CREG/CGREG/CEREG xác nhận mất đăng ký; khôi phục ngay."
+                            : "[NETWORK_LOST] COPS không phản hồi qua nhiều lần xác minh; bắt đầu khôi phục đăng ký mạng."
                     });
                 }
 
@@ -4482,11 +4611,11 @@ public class GsmModemService : IGsmModemService
                 if (cycles >= 30)
                 {
                     waitingNoticeCount++;
-                    string creg = await SendCommandAsync(
+                    string creg = recoveryCreg ?? await SendCommandAsync(
                         portName, "AT+CREG?", 4000, silent: true, ct: token);
-                    string cgreg = await SendCommandAsync(
+                    string cgreg = recoveryCgreg ?? await SendCommandAsync(
                         portName, "AT+CGREG?", 4000, silent: true, ct: token);
-                    string cereg = await SendCommandAsync(
+                    string cereg = recoveryCereg ?? await SendCommandAsync(
                         portName, "AT+CEREG?", 4000, silent: true, ct: token);
                     string registeredType = ResolveRegisteredFallbackNetworkType(
                         creg, cgreg, cereg);
@@ -4535,7 +4664,10 @@ public class GsmModemService : IGsmModemService
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = $"[NETWORK_RECOVERY] Có CSQ nhưng COPS chưa trả nhà mạng; {recoveryAction} (lần {waitingNoticeCount}): {copsAuto.Trim()}"
+                        Data = csqStr.Contains(
+                            "+CSQ:", StringComparison.OrdinalIgnoreCase)
+                            ? $"[NETWORK_RECOVERY] COPS chưa trả nhà mạng nhưng CSQ vừa xác nhận; {recoveryAction} (lần {waitingNoticeCount}): {copsAuto.Trim()}"
+                            : $"[NETWORK_RECOVERY] COPS và CSQ đều chưa xác nhận; {recoveryAction} (lần {waitingNoticeCount}): {copsAuto.Trim()}"
                     });
                     if (copsAuto.Contains("+CME ERROR: 13", StringComparison.OrdinalIgnoreCase))
                     {
@@ -4582,13 +4714,34 @@ public class GsmModemService : IGsmModemService
 
     internal static bool IsNetworkRegistered(string? response)
     {
+        return TryParseNetworkRegistrationState(response, out int state)
+            && state is 1 or 5;
+    }
+
+    internal static bool TryParseNetworkRegistrationState(
+        string? response,
+        out int state)
+    {
+        state = -1;
         if (string.IsNullOrWhiteSpace(response)) return false;
         Match match = Regex.Match(
             response,
             @"\+(?:C|CG|CE)REG:\s*(?:\d+\s*,\s*)?(?<stat>\d+)",
             RegexOptions.IgnoreCase);
-        return match.Success && match.Groups["stat"].Value is "1" or "5";
+        return match.Success
+            && int.TryParse(match.Groups["stat"].Value, out state);
     }
+
+    internal static bool AreAllRegistrationDomainsExplicitlyUnregistered(
+        string? creg,
+        string? cgreg,
+        string? cereg) =>
+        TryParseNetworkRegistrationState(creg, out int csState)
+        && TryParseNetworkRegistrationState(cgreg, out int psState)
+        && TryParseNetworkRegistrationState(cereg, out int epsState)
+        && csState is not (1 or 5)
+        && psState is not (1 or 5)
+        && epsState is not (1 or 5);
 
     internal static bool TryParseCopsResponse(
         string? response, out string operatorName, out string accessTechnology)

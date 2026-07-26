@@ -72,7 +72,12 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
                 await BackendConcurrency.ForEachPortAsync(
                     context.GetPorts().Where(context.IsActive), async (port, ct) =>
                 {
-                    if (_modem.IsCallInProgress(port.PortName)) return;
+                    if (ShouldSkipSignalProbe(
+                            context.IsSmsInProgress(port.PortName),
+                            _modem.IsCallInProgress(port.PortName)))
+                    {
+                        return;
+                    }
                     try
                     {
                         if (!_sessions.TryGet(port.PortName, out var session)) return;
@@ -92,6 +97,11 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
 
     internal static TimeSpan GetSignalScanInterval(int seconds) =>
         TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 300));
+
+    internal static bool ShouldSkipSignalProbe(
+        bool smsInProgress,
+        bool callInProgress) =>
+        smsInProgress || callInProgress;
 
     private async Task RunSmsSweepLoopAsync(GsmBackgroundSupervisorContext context, CancellationToken token)
     {

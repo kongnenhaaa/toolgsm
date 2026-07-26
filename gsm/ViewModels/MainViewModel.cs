@@ -2819,7 +2819,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 // Voice URCs are not part of the IMEI/network critical path. Run
                 // their best-effort setup after the first registration window so
-                // CLIP/DSCI cannot delay COPS or *111#/*101# on this COM.
+                // CLIP/DSCI cannot delay COPS or the configured startup USSD on this COM.
                 _ = Task.Run(async () =>
                 {
                     try
@@ -4236,7 +4236,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     // COPS is the point at which radio registration is complete.
                     // A port may have been downgraded to Connecting while waiting
-                    // for COPS; promote it here so *111#/*101# can start normally.
+                    // for COPS; promote it here so the configured startup USSD can start.
                     // Do not let a stale COPS response race a Create/Restore
                     // IMEI operation and make the UI look online before the
                     // new identity has been verified after reboot.
@@ -4305,7 +4305,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         // The SAuto activation path does not query CCFC. Only touch call
                         // forwarding when that independent feature is explicitly enabled;
                         // otherwise every periodic COPS response would inject AT+CCFC=0,2
-                        // into the activation/USSD flow and contend with *111#.
+                        // into the activation/USSD flow and contend with startup USSD.
                         if (AppSettings != null
                             && AppSettings.EnableAutoCallForwarding
                             && IsSimSessionCurrent(port.PortName, activeCcid, activeEpoch)
@@ -4351,7 +4351,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _modemService.SetSmsSimIdentity(e.PortName, ccid);
 
                     // Bắt đầu theo dõi rút SIM ngay khi đã xác nhận CCID. Không
-                    // chờ *111#/*101# vì SIM mới có thể đang ở trạng thái
+                    // chờ kế hoạch USSD tự động vì SIM mới có thể đang ở trạng thái
                     // SecurityBlocked/WaitingAccept; tháo SIM trong trạng thái
                     // đó vẫn phải xóa CCID và kết thúc phiên SIM cũ.
                     _modemService.SetSimRemovalWatchEnabled(e.PortName, true);
@@ -6935,9 +6935,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Luồng tự động sau khi COPS đã đăng ký mạng: lấy thông tin thuê bao bằng
-    /// *111#, rồi lấy TKC bằng *101#. Mỗi stage chỉ hoàn tất khi parse được dữ
-    /// liệu đúng nghĩa; menu/lỗi +CUSD không được coi là thành công.
+    /// Chạy đúng kế hoạch USSD đã chọn sau khi COPS đăng ký mạng. Mặc định chỉ
+    /// chạy *101#; người dùng có thể đổi sang chỉ *111# hoặc *111# rồi *101#.
+    /// Mỗi stage chỉ hoàn tất khi parse được dữ liệu đúng nghĩa.
     /// </summary>
     private async Task RunInitialBalanceLookupAsync(
         SimPort port, string ccid, long epoch, CancellationToken token)
@@ -6946,39 +6946,73 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || !IsVinaNetworkReadyForInitialLookup(port))
             return;
 
-        string lookupKey = $"{port.PortName}|{NormalizeCcid(ccid)}|{epoch}";
+        string mode = StartupUssdModes.Normalize(
+            SettingsService.Current.StartupUssdMode);
+        string ownerKey = $"{port.PortName}|{NormalizeCcid(ccid)}|{epoch}";
+        string lookupKey = $"{ownerKey}|{mode}";
         if (_initialAccountLookupCompleted.ContainsKey(lookupKey)) return;
-        if (!_initialBalanceLookupOwners.TryAdd(lookupKey, 0)) return;
+        if (!_initialBalanceLookupOwners.TryAdd(ownerKey, 0)) return;
 
         IDisposable? backgroundLease = null;
         try
         {
-            // Khóa các vòng CPIN/COPS/CMGL nền trong suốt phiên *111# của đúng
-            // COM này. Nếu không, một lệnh quét có thể chen vào giữa CUSD=2 và
-            // CUSD=1 khi nhiều cổng cùng chạy.
+            // Khóa các vòng CPIN/COPS/CMGL nền trong suốt kế hoạch USSD của đúng
+            // COM này để không có lệnh quét chen giữa CUSD=2 và CUSD=1.
             backgroundLease = _modemService.SuspendPortBackgroundOperations(port.PortName);
-            AddLog($"[{port.PortName}] [SAUTO_NETWORK_READY] epoch={epoch}; ccid={NormalizeCcid(ccid)}; COPS đã đăng ký {port.NetworkProvider}; tự động chạy *111# rồi *101#.", "SUCCESS");
+            AddLog(
+                $"[{port.PortName}] [SAUTO_NETWORK_READY] epoch={epoch}; ccid={NormalizeCcid(ccid)}; "
+                + $"COPS đã đăng ký {port.NetworkProvider}; tự động chạy {StartupUssdModes.GetDescription(mode)}.",
+                "SUCCESS");
             await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = true);
 
-            bool subscriberOk = _initialSubscriberLookupCompleted.ContainsKey(lookupKey);
-            if (!subscriberOk)
+            bool run111 = StartupUssdModes.Includes111(mode);
+            bool run101 = StartupUssdModes.Includes101(mode);
+            bool subscriberOk = !run111
+                || _initialSubscriberLookupCompleted.ContainsKey(lookupKey);
+            bool subscriberRanNow = false;
+            if (run111 && !subscriberOk)
             {
                 subscriberOk = await RunSautoInitialUssdStageAsync(
                     port, ccid, epoch, token,
-                    "*111#", SautoInitial111CommandOrder, requireBalance: false);
+                    "*111#", SautoInitial111CommandOrder,
+                    requireBalance: false,
+                    allow111MenuFallback: false);
                 if (subscriberOk)
+                {
                     _initialSubscriberLookupCompleted.TryAdd(lookupKey, 0);
+                    subscriberRanNow = true;
+                }
             }
 
-            bool balanceOk = false;
-            if (subscriberOk
+            if (run111 && subscriberOk)
+            {
+                AddLog(
+                    $"[{port.PortName}] [USSD_111_OK] epoch={epoch}; ccid={NormalizeCcid(ccid)}; "
+                    + "Đã nhận dữ liệu thuê bao từ *111#.",
+                    "SUCCESS");
+            }
+
+            bool balanceOk = !run101;
+            if (run101
+                && subscriberOk
                 && IsSimSessionCurrent(port.PortName, ccid, epoch)
                 && port.Status == SimStatus.Active)
             {
-                AddLog($"[{port.PortName}] [USSD_111_OK] epoch={epoch}; ccid={NormalizeCcid(ccid)}; Đã nhận dữ liệu thuê bao từ *111#; tiếp tục tự động lấy TKC.", "SUCCESS");
+                if (subscriberRanNow
+                    && mode == StartupUssdModes.Subscriber111ThenBalance101)
+                {
+                    AddLog(
+                        $"[{port.PortName}] [USSD_INTER_STAGE_DELAY] Chờ 10 giây sau *111# trước khi chạy *101#.",
+                        "INFO");
+                    await Task.Delay(TimeSpan.FromSeconds(10), token);
+                }
+
                 balanceOk = await RunSautoInitialUssdStageAsync(
                     port, ccid, epoch, token,
-                    "*101#", SautoInitial101CommandOrder, requireBalance: true);
+                    "*101#", SautoInitial101CommandOrder,
+                    requireBalance: true,
+                    allow111MenuFallback:
+                        mode == StartupUssdModes.Subscriber111ThenBalance101);
             }
 
             if (subscriberOk && balanceOk)
@@ -6986,30 +7020,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
                 _modemService.SetSimRemovalWatchEnabled(port.PortName, true);
                 SetOperationStatus(port.PortName, "USSD", true);
-                AddLog($"[{port.PortName}] [USSD_INITIAL_COMPLETE] epoch={epoch}; ccid={NormalizeCcid(ccid)}; *111# và *101# đều đã trả dữ liệu hợp lệ.", "SUCCESS");
+                AddLog(
+                    $"[{port.PortName}] [USSD_INITIAL_COMPLETE] epoch={epoch}; ccid={NormalizeCcid(ccid)}; "
+                    + $"Đã hoàn tất {StartupUssdModes.GetDescription(mode)}.",
+                    "SUCCESS");
             }
             else if (IsSimSessionCurrent(port.PortName, ccid, epoch)
-                && port.Status == SimStatus.Active)
+                && port.Status == SimStatus.Active
+                && string.Equals(
+                    mode,
+                    StartupUssdModes.Normalize(SettingsService.Current.StartupUssdMode),
+                    StringComparison.Ordinal))
             {
-                ScheduleInitialLookupRetry(port, ccid, epoch);
+                ScheduleInitialLookupRetry(port, ccid, epoch, lookupKey, mode);
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            AddLog($"[{port.PortName}] Luồng *111#/*101# tự động lỗi: {ex.Message}", "WARN");
+            AddLog(
+                $"[{port.PortName}] Luồng USSD tự động ({StartupUssdModes.GetDescription(mode)}) lỗi: {ex.Message}",
+                "WARN");
         }
         finally
         {
             backgroundLease?.Dispose();
-            _initialBalanceLookupOwners.TryRemove(lookupKey, out _);
+            _initialBalanceLookupOwners.TryRemove(ownerKey, out _);
             if (IsSimSessionCurrent(port.PortName, ccid, epoch))
+            {
                 await Application.Current.Dispatcher.InvokeAsync(() => port.IsBalanceLoading = false);
+                if (!string.Equals(
+                    mode,
+                    StartupUssdModes.Normalize(SettingsService.Current.StartupUssdMode),
+                    StringComparison.Ordinal))
+                {
+                    TryStartVinaInitialLookup(port);
+                }
+            }
         }
     }
 
     private void ScheduleInitialLookupRetry(
-        SimPort port, string ccid, long epoch)
+        SimPort port, string ccid, long epoch, string lookupKey, string mode)
     {
         _ = Task.Run(async () =>
         {
@@ -7021,10 +7073,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 await Task.Delay(TimeSpan.FromSeconds(30), _lifetimeCts.Token);
                 if (IsSimSessionCurrent(port.PortName, ccid, epoch)
                     && port.Status == SimStatus.Active
-                    && !_initialAccountLookupCompleted.ContainsKey(
-                        $"{port.PortName}|{NormalizeCcid(ccid)}|{epoch}"))
+                    && string.Equals(
+                        mode,
+                        StartupUssdModes.Normalize(SettingsService.Current.StartupUssdMode),
+                        StringComparison.Ordinal)
+                    && !_initialAccountLookupCompleted.ContainsKey(lookupKey))
                 {
-                    AddLog($"[{port.PortName}] [USSD_REQUEUE] *111#/*101# chưa đủ dữ liệu; đưa riêng COM trở lại hàng đợi tự động.", "WARN");
+                    AddLog(
+                        $"[{port.PortName}] [USSD_REQUEUE] {StartupUssdModes.GetDescription(mode)} chưa đủ dữ liệu; "
+                        + "đưa riêng COM trở lại hàng đợi tự động.",
+                        "WARN");
                     TryStartVinaInitialLookup(port);
                 }
             }
@@ -7039,7 +7097,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         CancellationToken token,
         string ussdCode,
         IReadOnlyList<string> commands,
-        bool requireBalance)
+        bool requireBalance,
+        bool allow111MenuFallback)
     {
         int maxAttempts = requireBalance ? 4 : 2;
         TimeSpan retryCadence = TimeSpan.FromSeconds(30);
@@ -7063,13 +7122,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.IsBalanceLoading = true;
             });
 
-            // Some EC20 sessions accept *111# but delay the asynchronous USSD
-            // context before *101#. Keep retry local to this COM: do not toggle
-            // CFUN in the middle of the SAuto lookup because that drops a healthy
-            // registration and makes the next COPS/USSD pass race the reboot.
+            // Keep balance retry local to this COM: do not toggle CFUN in the
+            // middle of the lookup because that drops a healthy registration
+            // and makes the next COPS/USSD pass race the reboot.
             if (requireBalance && attempt == 2)
             {
-                AddLog($"[{port.PortName}] [USSD_RETRY_PASSIVE] Giữ radio hiện tại và tiếp tục thử direct *101#; chỉ dùng menu *111# sau khi đã hết toàn bộ lượt direct.", "INFO");
+                AddLog(
+                    allow111MenuFallback
+                        ? $"[{port.PortName}] [USSD_RETRY_PASSIVE] Giữ radio hiện tại và tiếp tục thử direct *101#; chỉ dùng menu *111# sau khi hết lượt direct."
+                        : $"[{port.PortName}] [USSD_RETRY_PASSIVE] Giữ radio hiện tại và tiếp tục thử direct *101#; chế độ hiện tại không tự gọi *111#.",
+                    "INFO");
             }
 
             string result = await SendSautoInitialUssdAsync(
@@ -7141,8 +7203,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // A stale CUSD context is common after an IMEI reboot or a
                 // delayed +CUSD URC. Close it and cycle only this radio before
                 // putting the lookup back in the 30-second queue. This keeps
-                // the COM usable and prevents an endless *111# retry loop from
-                // masking a modem that needs a fresh registration.
+                // the COM usable and prevents an endless startup-USSD retry
+                // loop from masking a modem that needs a fresh registration.
                 if (!requireBalance
                     && IsSimSessionCurrent(port.PortName, ccid, epoch)
                     && port.Status == SimStatus.Active)
@@ -7162,6 +7224,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         if (requireBalance
+            && allow111MenuFallback
             && IsSimSessionCurrent(port.PortName, ccid, epoch)
             && port.Status == SimStatus.Active)
         {
@@ -7236,7 +7299,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             MarkPortNetworkActive(portName);
                         }
                     });
-                    AddLog($"[{portName}] [USSD_RECOVERY_OK] Radio và COPS đã sẵn sàng; xếp lại *111#/*101#.", "SUCCESS");
+                    AddLog($"[{portName}] [USSD_RECOVERY_OK] Radio và COPS đã sẵn sàng; xếp lại kế hoạch USSD tự động.", "SUCCESS");
                     return true;
                 }
 
@@ -7687,7 +7750,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Áp dụng cài đặt mới (từ Settings.razor) ngay lập tức:
-    /// sync AppSettings + apply call forwarding.
+    /// sync AppSettings, apply call forwarding và kích hoạt kế hoạch USSD mới
+    /// trên các phiên SIM Active chưa hoàn tất đúng chế độ đó.
     /// </summary>
     public async Task ApplySettingsAsync()
     {
@@ -7726,6 +7790,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 await _modemService.SendCommandAsync(port.PortName, "AT+CCFC=0,4", timeoutMs: 5000);
                 Application.Current.Dispatcher.Invoke(() => port.ForwardedTo = string.Empty);
             }));
+        }
+
+        foreach (var port in GetPortsSnapshot().Where(
+            p => p.Status == Models.SimStatus.Active))
+        {
+            TryStartVinaInitialLookup(port);
         }
     }
 
@@ -10640,7 +10710,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // A command-panel USSD is complete asynchronously via +CUSD. Do not
                 // turn the temporary "waiting for network" state into a false green
-                // result; the direct USSD pipeline and initial *111#/*101# flow set
+                // result; the direct USSD pipeline and configured startup flow set
                 // USSD OK when their actual response is available.
                 bool waitingForUssd = cmdType.Equals("USSD", StringComparison.OrdinalIgnoreCase)
                     && finalResult.Contains("Đang chờ", StringComparison.OrdinalIgnoreCase);

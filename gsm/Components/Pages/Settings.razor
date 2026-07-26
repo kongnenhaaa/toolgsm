@@ -69,6 +69,20 @@
                 <MudSwitch T="bool" @bind-Value="_autoCheckBalanceAfterSms"
                            Label="Tự check TKC sau khi gửi SMS"
                            Color="Color.Primary" Class="mb-2" />
+                <MudSelect T="string" @bind-Value="_startupUssdMode"
+                           Label="USSD tự động khi SIM online"
+                           Variant="Variant.Outlined" Margin="Margin.Dense"
+                           HelperText="Mặc định chỉ *101#. Chế độ cả hai chờ 10 giây giữa hai lệnh.">
+                    <MudSelectItem T="string" Value="@StartupUssdModes.Balance101">
+                        Chỉ *101# (mặc định)
+                    </MudSelectItem>
+                    <MudSelectItem T="string" Value="@StartupUssdModes.Subscriber111">
+                        Chỉ *111#
+                    </MudSelectItem>
+                    <MudSelectItem T="string" Value="@StartupUssdModes.Subscriber111ThenBalance101">
+                        Cả hai: *111# → chờ 10 giây → *101#
+                    </MudSelectItem>
+                </MudSelect>
             </MudPaper>
 
             <!-- WHITELIST / BLACKLIST -->
@@ -347,6 +361,7 @@
     // ========== SMS & USSD ==========
     private bool _receiveAllSms = true;
     private bool _autoCheckBalanceAfterSms = true;
+    private string _startupUssdMode = StartupUssdModes.Balance101;
 
     // ========== WHITELIST / BLACKLIST ==========
     private bool _enableSenderBlacklist = false;
@@ -421,6 +436,7 @@
 
             _receiveAllSms = cfg.ReceiveAllSms;
             _autoCheckBalanceAfterSms = cfg.AutoCheckBalanceAfterSms;
+            _startupUssdMode = StartupUssdModes.Normalize(cfg.StartupUssdMode);
 
             _enableSenderBlacklist = cfg.EnableSenderBlacklist;
             _senderBlacklist = cfg.SenderBlacklist ?? "";
@@ -490,6 +506,7 @@
 
             cfg.ReceiveAllSms = _receiveAllSms;
             cfg.AutoCheckBalanceAfterSms = _autoCheckBalanceAfterSms;
+            cfg.StartupUssdMode = StartupUssdModes.Normalize(_startupUssdMode);
 
             cfg.EnableSenderBlacklist = _enableSenderBlacklist;
             cfg.SenderBlacklist = _senderBlacklist.Trim();
@@ -556,6 +573,7 @@
 
         _receiveAllSms = true;
         _autoCheckBalanceAfterSms = true;
+        _startupUssdMode = StartupUssdModes.Balance101;
 
         _enableSenderBlacklist = false;
         _senderBlacklist = "";

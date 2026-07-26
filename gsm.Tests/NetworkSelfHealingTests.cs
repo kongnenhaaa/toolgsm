@@ -176,6 +176,101 @@ public sealed class NetworkSelfHealingTests
     }
 
     [Theory]
+    [InlineData("ERROR: Timeout waiting for lock")]
+    [InlineData("ERROR: Another command is already in progress")]
+    public void NetworkPolling_ContentionResponseIsDeferred(string response)
+    {
+        Assert.True(GsmModemService.IsDeferredNetworkPollingResponse(response));
+        Assert.False(GsmModemService.ShouldReportNetworkLoss(
+            response,
+            GsmModemService.NetworkLossConfirmationMisses + 10));
+    }
+
+    [Theory]
+    [InlineData("ERROR: Timeout (device did not return OK/ERROR)", 1, false)]
+    [InlineData("ERROR: Timeout (device did not return OK/ERROR)", 2, false)]
+    [InlineData("ERROR: Timeout (device did not return OK/ERROR)", 3, true)]
+    [InlineData("+COPS: 0", 3, true)]
+    [InlineData("+COPS: 0,0,\"VinaPhone VINAPHONE\",7", 10, false)]
+    public void NetworkLoss_RequiresRepeatedNonContentionCopsMisses(
+        string response,
+        int consecutiveMisses,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            GsmModemService.ShouldReportNetworkLoss(
+                response,
+                consecutiveMisses));
+    }
+
+    [Fact]
+    public void NetworkLoss_ContentionPreservesButDoesNotIncreaseEvidence()
+    {
+        int misses = GsmModemService.NextNetworkLossMissCount(
+            0,
+            "ERROR: Timeout (device did not return OK/ERROR)");
+        Assert.Equal(1, misses);
+
+        misses = GsmModemService.NextNetworkLossMissCount(
+            misses,
+            "ERROR: Timeout waiting for lock");
+        Assert.Equal(1, misses);
+
+        misses = GsmModemService.NextNetworkLossMissCount(
+            misses,
+            "ERROR: Timeout (device did not return OK/ERROR)");
+        Assert.Equal(2, misses);
+        Assert.False(GsmModemService.ShouldReportNetworkLoss(
+            "ERROR: Timeout (device did not return OK/ERROR)",
+            misses));
+    }
+
+    [Theory]
+    [InlineData("+CREG: 0,0", "+CGREG: 0,2", "+CEREG: 0,3", true)]
+    [InlineData("+CREG: 0,1", "+CGREG: 0,2", "+CEREG: 0,3", false)]
+    [InlineData("+CREG: 0,2", "ERROR: Timeout", "+CEREG: 0,3", false)]
+    public void ExplicitRegistrationLoss_RequiresAllDomainsToConfirmUnregistered(
+        string creg,
+        string cgreg,
+        string cereg,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            GsmModemService.AreAllRegistrationDomainsExplicitlyUnregistered(
+                creg,
+                cgreg,
+                cereg));
+    }
+
+    [Theory]
+    [InlineData(1, 5)]
+    [InlineData(15, 15)]
+    [InlineData(300, 15)]
+    public void RegistrationProbeCadence_IsCappedForFastRecovery(
+        int configuredSeconds,
+        int expectedSeconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            GsmModemService.GetNetworkRegistrationProbeInterval(
+                configuredSeconds));
+    }
+
+    [Fact]
+    public void NetworkLoss_RegisteredFallbackKeepsNetworkConfirmed()
+    {
+        string networkType =
+            GsmModemService.ResolveRegisteredFallbackNetworkType(
+                "+CREG: 0,2",
+                "+CGREG: 0,5",
+                "+CEREG: 0,2");
+
+        Assert.Equal("3G", networkType);
+    }
+
+    [Theory]
     [InlineData(0, false)]
     [InlineData(5, false)]
     [InlineData(6, true)]

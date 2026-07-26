@@ -7,6 +7,39 @@ namespace gsm.Tests;
 public sealed class SautoInitialLookupTests
 {
     [Theory]
+    [InlineData(null, StartupUssdModes.Balance101)]
+    [InlineData("", StartupUssdModes.Balance101)]
+    [InlineData("invalid", StartupUssdModes.Balance101)]
+    [InlineData("101", StartupUssdModes.Balance101)]
+    [InlineData("111", StartupUssdModes.Subscriber111)]
+    [InlineData("111_THEN_101", StartupUssdModes.Subscriber111ThenBalance101)]
+    public void StartupUssdMode_NormalizesToSupportedValue(
+        string? configured, string expected) =>
+        Assert.Equal(expected, StartupUssdModes.Normalize(configured));
+
+    [Theory]
+    [InlineData(StartupUssdModes.Balance101, false, true)]
+    [InlineData(StartupUssdModes.Subscriber111, true, false)]
+    [InlineData(StartupUssdModes.Subscriber111ThenBalance101, true, true)]
+    public void StartupUssdMode_SelectsOnlyConfiguredCommands(
+        string mode, bool includes111, bool includes101)
+    {
+        Assert.Equal(includes111, StartupUssdModes.Includes111(mode));
+        Assert.Equal(includes101, StartupUssdModes.Includes101(mode));
+        Assert.Equal(includes111, StartupUssdModes.GetCodes(mode).Contains("*111#"));
+        Assert.Equal(includes101, StartupUssdModes.GetCodes(mode).Contains("*101#"));
+    }
+
+    [Fact]
+    public void StartupUssdMode_DefaultsToOnly101()
+    {
+        var settings = new AppSettings();
+
+        Assert.Equal(StartupUssdModes.Balance101, settings.StartupUssdMode);
+        Assert.Equal(["*101#"], StartupUssdModes.GetCodes(settings.StartupUssdMode));
+    }
+
+    [Theory]
     [InlineData("VinaPhone", "2G", 20, SimStatus.Active, true)]
     [InlineData("VinaPhone", "3G", 20, SimStatus.Active, true)]
     [InlineData("VinaPhone", "4G", 20, SimStatus.Active, true)]

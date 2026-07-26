@@ -15,6 +15,23 @@ public class SimPortSignalScanTests
             gsm.Services.GsmBackgroundSupervisor.GetSignalScanInterval(configured));
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void SignalProbe_DefersSmsAndCalls(
+        bool smsInProgress,
+        bool callInProgress,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            gsm.Services.GsmBackgroundSupervisor.ShouldSkipSignalProbe(
+                smsInProgress,
+                callInProgress));
+    }
+
     [Fact]
     public void LastSignalScanAt_FormatsTimeAndNotifiesDisplay()
     {

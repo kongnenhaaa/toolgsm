@@ -138,6 +138,36 @@ public sealed class SautoInitializationSequenceTests
             "ERROR: Timeout (device did not return OK/ERROR)"));
     }
 
+    [Fact]
+    public void PortHealth_FailureEvidenceSurvivesLockContention()
+    {
+        int failures = GsmModemService.NextPortHealthFailureCount(
+            0,
+            "ERROR: Timeout (device did not return OK/ERROR)");
+        Assert.Equal(1, failures);
+        Assert.Equal(
+            TimeSpan.FromSeconds(3),
+            GsmModemService.GetPortHealthProbeInterval(failures));
+
+        failures = GsmModemService.NextPortHealthFailureCount(
+            failures,
+            "ERROR: Timeout waiting for lock");
+        Assert.Equal(1, failures);
+
+        failures = GsmModemService.NextPortHealthFailureCount(
+            failures,
+            "ERROR: Timeout (device did not return OK/ERROR)");
+        Assert.Equal(2, failures);
+
+        failures = GsmModemService.NextPortHealthFailureCount(
+            failures,
+            "OK");
+        Assert.Equal(0, failures);
+        Assert.Equal(
+            TimeSpan.FromSeconds(15),
+            GsmModemService.GetPortHealthProbeInterval(failures));
+    }
+
     [Theory]
     [InlineData("+CME ERROR: 13", true)]
     [InlineData("+CPIN: NOT READY", true)]

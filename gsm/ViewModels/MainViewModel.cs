@@ -7218,7 +7218,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 AddLog(
                     $"[{port.PortName}] [USSD_CS_WAIT] COPS/4G có thể đã lên nhưng CREG chưa 1/5; chưa gửi {StartupUssdModes.GetDescription(mode)}, sẽ retry sau 30 giây.",
                     "WARN");
-                ScheduleInitialLookupRetry(port, ccid, epoch, lookupKey, mode);
+
+                // SAuto's successful path does not merely wait for CREG: it
+                // replays the full modem/SIM initialization sequence before
+                // releasing RF and starting COPS again.  A resumed session can
+                // be data-registered while the EC20 CS stack is stale, so a
+                // plain 30-second retry would never reach the recovery path.
+                // Reuse the existing per-COM full refresh, which also has a
+                // two-minute cooldown and invalidates the old SIM session
+                // before rebuilding it safely.
+                bool refreshed = false;
+                if (IsSimSessionCurrent(port.PortName, ccid, epoch)
+                    && port.Status == SimStatus.Active)
+                {
+                    refreshed = await RecoverUssdSessionFullAsync(
+                        port, ccid, epoch, token);
+                }
+
+                AddLog(
+                    refreshed
+                        ? $"[{port.PortName}] [USSD_CS_REFRESH] CREG chưa 1/5; đã chạy lại đầy đủ chuỗi SAuto để đăng ký lại CS/COPS."
+                        : $"[{port.PortName}] [USSD_CS_REFRESH_PENDING] Chưa chạy lại được chuỗi SAuto; giữ COM cho retry có kiểm soát.",
+                    refreshed ? "SUCCESS" : "WARN");
+
+                // A successful refresh invalidates this epoch and restarts the
+                // normal initialization pipeline. Only schedule the old
+                // session when the refresh was skipped or throttled.
+                if (!refreshed && IsSimSessionCurrent(port.PortName, ccid, epoch))
+                    ScheduleInitialLookupRetry(port, ccid, epoch, lookupKey, mode);
                 return;
             }
 

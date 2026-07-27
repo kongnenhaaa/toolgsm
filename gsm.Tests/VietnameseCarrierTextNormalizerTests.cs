@@ -6,6 +6,16 @@ namespace gsm.Tests;
 public sealed class VietnameseCarrierTextNormalizerTests
 {
     [Fact]
+    public void RestoreForDisplay_ConvertsGsm7UnderscoreControlFromPersistedSms()
+    {
+        const string input = "Dung luong Data con lai cua goi MI\u0011BIGKM\u0011TR\u0011OCS: 0 MB.";
+
+        Assert.Equal(
+            "Dung lượng Data còn lại của gói MI_BIGKM_TR_OCS: 0 MB.",
+            VietnameseCarrierTextNormalizer.RestoreForDisplay(input));
+    }
+
+    [Fact]
     public void RestoreForDisplay_RestoresKnownRemainingDataTemplate()
     {
         const string input =

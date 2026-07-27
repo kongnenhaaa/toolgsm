@@ -11,7 +11,11 @@ public static partial class VietnameseCarrierTextNormalizer
 {
     public static string RestoreForDisplay(string? content)
     {
-        string text = content ?? string.Empty;
+        // A few EC20 text-mode paths expose GSM-7 underscore (0x11) as a
+        // Unicode control character. Normalize it here as well as in the
+        // decoder so messages already persisted before the decoder fix render
+        // correctly in the inbox/UI.
+        string text = (content ?? string.Empty).Replace('\u0011', '_');
         if (string.IsNullOrWhiteSpace(text)
             || ContainsVietnameseDiacritics(text))
         {

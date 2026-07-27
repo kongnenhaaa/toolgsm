@@ -6,6 +6,18 @@ namespace gsm.Tests;
 public class SmsMultipartAssemblerTests
 {
     [Fact]
+    public void TextModeGsm7UnderscoreControl_IsNormalizedToUnderscore()
+    {
+        const string raw = "+CMGR: \"REC UNREAD\",\"888\",,\"27/07/26,14:22:00+28\"\r\n"
+            + "Dung luong cua goi MI\u0011BIGKM\u0011TR\u0011OCS: 0 MB\r\nOK\r\n";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.Contains("MI_BIGKM_TR_OCS", result.Content);
+        Assert.DoesNotContain('\u0011', result.Content);
+    }
+
+    [Fact]
     public void FullGsm7DeliverPdu_IsDecodedInsteadOfExposedAsHex()
     {
         const string pdu = "069148192050444006D0381C0E000062707180817582A00500035D02015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D16A385B8C4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C";

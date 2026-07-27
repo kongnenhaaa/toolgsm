@@ -160,10 +160,24 @@ public static class SmsBodyDecoder
             decoded = new DecodedSmsBody(string.Empty, null, true);
         else
             decoded = new DecodedSmsBody(string.Join("\n", lines).Trim(), null);
+
+        // Some EC20 text-mode paths expose GSM-7 default-alphabet bytes as
+        // Unicode control characters instead of applying the alphabet table.
+        // GSM-7 value 0x11 is the underscore, so preserve the carrier text
+        // instead of publishing a non-printable U+0011 in the inbox/UI.
+        decoded = decoded with
+        {
+            Content = NormalizeGsm7CompatibilityControls(decoded.Content)
+        };
         return decoded.Concatenation == null && TryParseQcmgrConcat(raw, out var qcmgrConcat)
             ? decoded with { Concatenation = qcmgrConcat }
             : decoded;
     }
+
+    private static string NormalizeGsm7CompatibilityControls(string content) =>
+        content.IndexOf('\u0011') >= 0
+            ? content.Replace('\u0011', '_')
+            : content;
 
     private static string StripInterleavedModemUrc(string line)
     {

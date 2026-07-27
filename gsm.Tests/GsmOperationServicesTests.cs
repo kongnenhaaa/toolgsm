@@ -76,6 +76,43 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
+    public async Task Ussd_LteWithoutCsRegistration_TemporarilyUsesPreferred3GThenRestoresAuto()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM7", CcidA);
+        bool forced3G = false;
+        var modem = new FakeGsmModemService
+        {
+            CommandHandler = (_, command) => Task.FromResult(command switch
+            {
+                "AT+CPIN?" => "+CPIN: READY\r\nOK",
+                "AT+CREG?" => forced3G ? "+CREG: 0,1\r\nOK" : "+CREG: 0,0\r\nOK",
+                "AT+COPS?" => "+COPS: 1,2,\"45201\",7\r\nOK",
+                _ when command.StartsWith("AT+COPS=1,2,\"45201\",2", StringComparison.Ordinal) =>
+                    SetForced3G(),
+                "AT+CUSD=1,\"002A0031003000310023\"" =>
+                    "+CUSD: 0,\"8000 VND\",15\r\nOK",
+                _ => "OK"
+            })
+        };
+
+        string SetForced3G()
+        {
+            forced3G = true;
+            return "OK";
+        }
+
+        using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+
+        string result = await ussd.SendAsync("COM7", "*101#", 1);
+
+        Assert.Contains("8000 VND", result);
+        Assert.Contains("COM7:AT+COPS=1,2,\"45201\",2", modem.Commands);
+        Assert.Contains("COM7:AT+COPS=0", modem.Commands);
+    }
+
+    [Fact]
     public async Task Ussd_BareOkThenLateCusd_IsReportedAsSuccess()
     {
         using var sessions = new PortSessionRegistry();

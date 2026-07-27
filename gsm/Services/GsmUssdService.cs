@@ -73,24 +73,46 @@ public sealed class GsmUssdService : IGsmUssdService
                     return "ERROR: Current physical SIM does not match the pinned CCID";
                 }
 
-                string? preflight = await PreparePortAsync(session, token);
+                IDisposable? backgroundLease = _modem.SuspendPortBackgroundOperations(portName);
+                PortPreparation preparation;
+                try
+                {
+                    preparation = await PreparePortAsync(session, token);
+                }
+                catch
+                {
+                    backgroundLease?.Dispose();
+                    throw;
+                }
+                bool restoreAutomaticNetwork = preparation.RestoreAutomaticNetwork;
+                string? preflight = preparation.Error;
                 if (preflight != null)
                 {
                     result = preflight;
+                    if (restoreAutomaticNetwork && IsCurrent(session))
+                    {
+                        try { await _modem.SendCommandAsync(portName, "AT+COPS=0", 15000, true); }
+                        catch { /* Do not hide the primary USSD result. */ }
+                    }
                     if (IsCurrent(session))
                     {
                         try { await _modem.SendCommandAsync(portName, "AT+CREG=2", 5000, true); }
                         catch { /* Không che lỗi preflight chính. */ }
                     }
+                    backgroundLease?.Dispose();
+                    backgroundLease = null;
                 }
                 else
                 {
-                    if (!IsCurrent(session)) return SessionChangedError;
-                    IDisposable? backgroundLease = null;
+                    if (!IsCurrent(session))
+                    {
+                        backgroundLease?.Dispose();
+                        return SessionChangedError;
+                    }
                     try
                     {
                         if (!IsCurrent(session)) return SessionChangedError;
-                        backgroundLease = _modem.SuspendPortBackgroundOperations(portName);
+                        // The preflight lease remains active through CUSD.
                         // Chuỗi tương thích SAuto: PDU mode + UCS2 charset + Hex encoded USSD
                         await CommandAsync(session, "AT+CMGF=0", 5000, token);
                         await CommandAsync(session, "AT+CSCS=\"UCS2\"", 5000, token);
@@ -109,6 +131,11 @@ public sealed class GsmUssdService : IGsmUssdService
                     {
                         if (IsCurrent(session))
                         {
+                            if (restoreAutomaticNetwork)
+                            {
+                                try { await _modem.SendCommandAsync(portName, "AT+COPS=0", 15000, true); }
+                                catch { /* Do not hide the primary USSD result. */ }
+                            }
                             try { await _modem.SendCommandAsync(portName, "AT+CMGF=1", 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }
                             try { await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true); }
@@ -210,10 +237,10 @@ public sealed class GsmUssdService : IGsmUssdService
         _lastByPort[portName] = now;
     }
 
-    private async Task<string?> PreparePortAsync(PortSessionLease session, CancellationToken token)
+    private async Task<PortPreparation> PreparePortAsync(PortSessionLease session, CancellationToken token)
     {
         string at = await CommandAsync(session, "AT", 3000, token);
-        if (IsCommandError(at)) return $"ERROR: Modem not ready ({at.Trim()})";
+        if (IsCommandError(at)) return new($"ERROR: Modem not ready ({at.Trim()})", false);
 
         if (!_ussdSupported.TryGetValue(session.PortName, out bool supportsUssd))
         {
@@ -221,10 +248,10 @@ public sealed class GsmUssdService : IGsmUssdService
             supportsUssd = !IsCommandError(test);
             _ussdSupported[session.PortName] = supportsUssd;
         }
-        if (!supportsUssd) return "ERROR: Modem firmware does not expose AT+CUSD";
+        if (!supportsUssd) return new("ERROR: Modem firmware does not expose AT+CUSD", false);
 
         string pin = await CommandAsync(session, "AT+CPIN?", 5000, token);
-        if (IsCommandError(pin)) return $"ERROR: SIM status check failed ({pin.Trim()})";
+        if (IsCommandError(pin)) return new($"ERROR: SIM status check failed ({pin.Trim()})", false);
         // Retry CPIN: modem vừa khởi động hoặc SIM hot-plug có thể trả về bare OK
         // trước khi report +CPIN: READY (giống pattern retry CREG bên dưới)
         for (int pinProbe = 0; pinProbe < 3 && !Regex.IsMatch(pin, @"\+CPIN:\s*READY", RegexOptions.IgnoreCase); pinProbe++)
@@ -234,22 +261,36 @@ public sealed class GsmUssdService : IGsmUssdService
             pin = await CommandAsync(session, "AT+CPIN?", 5000, token);
         }
         if (!Regex.IsMatch(pin, @"\+CPIN:\s*READY", RegexOptions.IgnoreCase))
-            return $"ERROR: SIM not ready ({pin.Trim()})";
+            return new($"ERROR: SIM not ready ({pin.Trim()})", false);
 
 
         // Tắt URC CREG chi tiết trong cửa sổ USSD để phản hồi lệnh không bị xen ngang.
-        // Không thay đổi RAT/radio; cuối thao tác sẽ khôi phục CREG=2.
+        // Chỉ chuyển RAT tạm thời khi LTE không có đăng ký CS; cuối thao tác
+        // sẽ khôi phục COPS tự động và CREG=2.
         await CommandAsync(session, "AT+CREG=0", 5000, token);
         string registration = await CommandAsync(session, "AT+CREG?", 5000, token);
         bool registered = IsCsRegistered(registration);
-        // CFUN vừa bật trên 32/64 cổng có thể cần vài giây mới vào CS. Chờ thụ động
-        // thay vì COPS=0 hoặc đổi WCDMA/GSM làm các modem tự rớt mạng lẫn nhau.
-        // Tăng lên 10 probe × 3s = 30s để xử lý trường hợp CS domain lên chậm sau đổi network mode.
+        bool restoreAutomaticNetwork = false;
+        // Cho modem vài giây để CS lên tự nhiên trước khi dùng fallback RAT riêng COM.
+        // Fallback chỉ chạy sau 5 probe, tránh ép 3G khi CREG vừa chuyển sang 1/5.
         for (int probe = 0; probe < 10 && !registered; probe++)
         {
             await _delay.WaitAsync(TimeSpan.FromSeconds(3), token);
             registration = await CommandAsync(session, "AT+CREG?", 5000, token);
             registered = IsCsRegistered(registration);
+
+            if (!registered && probe == 4 && TryGetCregStatus(registration, out int probeStatus)
+                && probeStatus is 0 or 2)
+            {
+                (bool recovered, bool changedNetwork) =
+                    await TryRecoverCsRegistrationAsync(session, token);
+                restoreAutomaticNetwork |= changedNetwork;
+                if (recovered)
+                {
+                    registered = true;
+                    break;
+                }
+            }
         }
         if (!registered)
         {
@@ -266,7 +307,9 @@ public sealed class GsmUssdService : IGsmUssdService
             }
             else
             {
-                return $"ERROR: SIM not registered on CS network ({registration.Trim()})";
+                return new(
+                    $"ERROR: SIM not registered on CS network ({registration.Trim()})",
+                    restoreAutomaticNetwork);
             }
         }
 
@@ -277,8 +320,68 @@ public sealed class GsmUssdService : IGsmUssdService
 
         await CommandAsync(session, "AT+CUSD=2", 5000, token);
         await _delay.WaitAsync(TimeSpan.FromMilliseconds(400), token);
-        return null;
+        return new(null, restoreAutomaticNetwork);
     }
+
+    private async Task<(bool Registered, bool ChangedNetwork)> TryRecoverCsRegistrationAsync(
+        PortSessionLease session,
+        CancellationToken token)
+    {
+        string cops = await CommandAsync(session, "AT+COPS?", 5000, token);
+        if (!IsLteNetwork(cops))
+            return (false, false);
+
+        bool changedNetwork = false;
+        foreach (string operatorCode in GsmModemService.GetOperatorCodesForCcid(session.Ccid))
+        {
+            changedNetwork = true;
+            string forced3G = await CommandAsync(
+                session,
+                $"AT+COPS=1,2,\"{operatorCode}\",2",
+                20000,
+                token);
+            if (IsCommandError(forced3G)) continue;
+
+            for (int probe = 0; probe < 8; probe++)
+            {
+                await _delay.WaitAsync(TimeSpan.FromSeconds(2), token);
+                string registration = await CommandAsync(session, "AT+CREG?", 5000, token);
+                if (IsCsRegistered(registration))
+                    return (true, true);
+            }
+        }
+
+        // Preferred 3G can be unavailable at the current cell. Return the
+        // modem to automatic selection instead of leaving a port pinned there.
+        changedNetwork = true;
+        await CommandAsync(session, "AT+COPS=0", 15000, token);
+        for (int probe = 0; probe < 6; probe++)
+        {
+            await _delay.WaitAsync(TimeSpan.FromSeconds(2), token);
+            string registration = await CommandAsync(session, "AT+CREG?", 5000, token);
+            if (IsCsRegistered(registration))
+                return (true, true);
+        }
+
+        return (false, changedNetwork);
+    }
+
+    private static bool IsLteNetwork(string response) =>
+        Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+COPS:[^\r\n]*,\s*7(?:\s|$)",
+            RegexOptions.IgnoreCase);
+
+    private static bool TryGetCregStatus(string response, out int status)
+    {
+        status = -1;
+        var match = Regex.Match(response ?? string.Empty, @"\+CREG:\s*\d+\s*,\s*(\d+)");
+        return match.Success && int.TryParse(match.Groups[1].Value, out status);
+    }
+
+    private readonly record struct PortPreparation(
+        string? Error,
+        bool RestoreAutomaticNetwork);
 
     private async Task<string> CommandAsync(PortSessionLease session, string command, int timeout, CancellationToken token)
     {

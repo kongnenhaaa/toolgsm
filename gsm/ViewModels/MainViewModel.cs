@@ -7337,8 +7337,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // putting the lookup back in the 30-second queue. This keeps
                 // the COM usable and prevents an endless startup-USSD retry
                 // loop from masking a modem that needs a fresh registration.
-                if (!requireBalance
-                    && IsSimSessionCurrent(port.PortName, ccid, epoch)
+                if (IsSimSessionCurrent(port.PortName, ccid, epoch)
                     && port.Status == SimStatus.Active)
                 {
                     bool recovered = await RecoverUssdSessionAsync(port, ccid, epoch, token);

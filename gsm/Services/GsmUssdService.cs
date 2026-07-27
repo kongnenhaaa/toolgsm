@@ -371,27 +371,29 @@ public sealed class GsmUssdService : IGsmUssdService
         PortSessionLease session,
         CancellationToken token)
     {
-        string cops = await CommandAsync(session, "AT+COPS?", 5000, token);
-        if (!IsLteNetwork(cops))
-            return (false, false);
-
         bool changedNetwork = false;
         foreach (string operatorCode in GsmModemService.GetOperatorCodesForCcid(session.Ccid))
         {
-            changedNetwork = true;
-            string forced3G = await CommandAsync(
-                session,
-                $"AT+COPS=1,2,\"{operatorCode}\",2",
-                20000,
-                token);
-            if (IsCommandError(forced3G)) continue;
-
-            for (int probe = 0; probe < 8; probe++)
+            // COPS/4G can be healthy while CS is still 0,0. Try the
+            // circuit-switched RATs explicitly; 3G first, then 2G. The
+            // current RAT is not trusted as a proxy for CREG.
+            foreach (string rat in new[] { "2", "0" })
             {
-                await _delay.WaitAsync(TimeSpan.FromSeconds(2), token);
-                string registration = await CommandAsync(session, "AT+CREG?", 5000, token);
-                if (IsCsRegistered(registration))
-                    return (true, true);
+                changedNetwork = true;
+                string forcedCs = await CommandAsync(
+                    session,
+                    $"AT+COPS=1,2,\"{operatorCode}\",{rat}",
+                    20000,
+                    token);
+                if (IsCommandError(forcedCs)) continue;
+
+                for (int probe = 0; probe < 8; probe++)
+                {
+                    await _delay.WaitAsync(TimeSpan.FromSeconds(2), token);
+                    string registration = await CommandAsync(session, "AT+CREG?", 5000, token);
+                    if (IsCsRegistered(registration))
+                        return (true, true);
+                }
             }
         }
 
@@ -409,12 +411,6 @@ public sealed class GsmUssdService : IGsmUssdService
 
         return (false, changedNetwork);
     }
-
-    private static bool IsLteNetwork(string response) =>
-        Regex.IsMatch(
-            response ?? string.Empty,
-            @"\+COPS:[^\r\n]*,\s*7(?:\s|$)",
-            RegexOptions.IgnoreCase);
 
     private static bool TryGetCregStatus(string response, out int status)
     {

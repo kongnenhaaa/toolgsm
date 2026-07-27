@@ -50,7 +50,7 @@ public sealed class SautoInitializationSequenceTests
         [
             "AT+CUSD=2",
             "AT+CUSD=1",
-            "AT+CUSD=1,\"*101#\",15"
+            "AT+CUSD=1,\"002A0031003000310023\",15"
         ];
 
         Assert.Equal(expected111, MainViewModel.SautoInitial111CommandOrder);

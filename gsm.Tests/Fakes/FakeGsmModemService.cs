@@ -93,6 +93,10 @@ public sealed class FakeGsmModemService : IGsmModemService
         string expectedCcid,
         string expectedImei) { }
     public void SetSimRemovalWatchEnabled(string portName, bool enabled) { }
+    public Task<bool> EnsureCsRegistrationForUssdAsync(
+        string portName,
+        CancellationToken ct = default) =>
+        Task.FromResult(true);
     public List<string> GetAvailablePorts() => ["COM1", "COM2"];
     public string ConnectAll(int baudRate = 115200) => "OK";
     public async Task<bool> ReconnectPortAsync(

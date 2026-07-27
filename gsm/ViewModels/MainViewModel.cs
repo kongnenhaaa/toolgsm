@@ -439,7 +439,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [
         "AT+CUSD=2",
         "AT+CUSD=1",
-        "AT+CUSD=1,\"*101#\",15"
+        "AT+CUSD=1,\"002A0031003000310023\",15"
     ];
 
     [ObservableProperty]
@@ -7206,6 +7206,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Khóa các vòng CPIN/COPS/CMGL nền trong suốt kế hoạch USSD của đúng
             // COM này để không có lệnh quét chen giữa CUSD=2 và CUSD=1.
             backgroundLease = _modemService.SuspendPortBackgroundOperations(port.PortName);
+
+            // COPS/4G chỉ chứng minh SIM đã vào EPS/data.  USSD trên EC20
+            // cần CS registration thật sự (CREG 1/5); nếu không modem vẫn
+            // trả OK/CUSD=1 nhưng tổng đài không trả payload +CUSD:0,...
+            // Gate này thử 3G/2G rồi auto và chỉ cho phép stage chạy tiếp
+            // sau khi CREG đã đăng ký, tránh để COM quay vòng USSD giả.
+            if (!await _modemService.EnsureCsRegistrationForUssdAsync(
+                    port.PortName, token))
+            {
+                AddLog(
+                    $"[{port.PortName}] [USSD_CS_WAIT] COPS/4G có thể đã lên nhưng CREG chưa 1/5; chưa gửi {StartupUssdModes.GetDescription(mode)}, sẽ retry sau 30 giây.",
+                    "WARN");
+                ScheduleInitialLookupRetry(port, ccid, epoch, lookupKey, mode);
+                return;
+            }
+
             AddLog(
                 $"[{port.PortName}] [SAUTO_NETWORK_READY] epoch={epoch}; ccid={NormalizeCcid(ccid)}; "
                 + $"COPS đã đăng ký {port.NetworkProvider}; tự động chạy {StartupUssdModes.GetDescription(mode)}.",
@@ -7294,6 +7310,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            if (IsSimSessionCurrent(port.PortName, ccid, epoch))
+            {
+                // Return the UART to the SMS/UI baseline after the direct
+                // UCS2 USSD stage. The next USSD stage re-applies UCS2 before
+                // sending, so late retries remain deterministic.
+                try
+                {
+                    await _modemService.SendCommandAsync(
+                        port.PortName, "AT+CMGF=1", 5000, silent: true);
+                }
+                catch { }
+                try
+                {
+                    await _modemService.SendCommandAsync(
+                        port.PortName, "AT+CSCS=\"GSM\"", 5000, silent: true);
+                }
+                catch { }
+                try
+                {
+                    await _modemService.SendCommandAsync(
+                        port.PortName, "AT+CUSD=1", 5000, silent: true);
+                }
+                catch { }
+            }
             backgroundLease?.Dispose();
             _initialBalanceLookupOwners.TryRemove(ownerKey, out _);
             if (IsSimSessionCurrent(port.PortName, ccid, epoch))
@@ -7644,6 +7684,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (commands.Count < 3)
             return "ERROR: Chuỗi lệnh USSD khởi tạo không đầy đủ";
+
+        // The direct 32-port AT test showed that EC20 returns *101# reliably
+        // when the same PDU/UCS2 setup is used as the manual USSD service.
+        // Keep *111# on the captured SAuto text path, but make the balance
+        // stage use the proven encoded command.
+        if (string.Equals(ussdCode, "*101#", StringComparison.Ordinal))
+        {
+            await _modemService.SendCommandAsync(
+                portName, "AT+CMGF=0", 5000, silent: true, ct: token);
+            await _modemService.SendCommandAsync(
+                portName, "AT+CSCS=\"UCS2\"", 5000, silent: true, ct: token);
+        }
 
         // Giữ đúng thứ tự đã xác nhận trên EC20 thực tế: hủy phiên cũ trước,
         // chờ modem settle, rồi bật phát URC và mới gửi mã USSD.

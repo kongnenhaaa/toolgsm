@@ -78,6 +78,13 @@ public interface IGsmModemService
     /// </summary>
     void SetSimRemovalWatchEnabled(string portName, bool enabled);
     void SetSmsSimIdentity(string portName, string? ccid);
+    /// <summary>
+    /// Ensures the circuit-switched registration required by USSD/calls.
+    /// LTE/EPS registration alone is not sufficient for AT+CUSD on EC20.
+    /// </summary>
+    Task<bool> EnsureCsRegistrationForUssdAsync(
+        string portName,
+        CancellationToken ct = default);
     List<string> GetAvailablePorts();
     string ConnectAll(int baudRate = 115200);
     Task<bool> ReconnectPortAsync(
@@ -2029,6 +2036,135 @@ public class GsmModemService : IGsmModemService
             return false;
         }
     }
+
+    /// <summary>
+    /// USSD on this modem family needs CS registration (CREG 1/5).  A healthy
+    /// LTE/EPS registration (CEREG 1/5) can coexist with CREG 0,0, in which
+    /// case AT+CUSD is acknowledged but the network never returns +CUSD.
+    /// Keep this gate bounded and prefer the CS-capable RATs before falling
+    /// back to automatic selection.
+    /// </summary>
+    public async Task<bool> EnsureCsRegistrationForUssdAsync(
+        string portName,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+
+        try
+        {
+            await SendCommandAsync(
+                portName, "AT+CREG=2", 5000, silent: true, ct: ct);
+
+            if (await WaitForCsRegistrationAsync(
+                    portName, probes: 3, delayMs: 500, ct))
+                return true;
+
+            string? expectedCcid = _networkSimIdentities.TryGetValue(
+                portName, out string? knownCcid)
+                ? knownCcid
+                : null;
+            string cops = await SendCommandAsync(
+                portName, "AT+COPS?", 5000, silent: true, ct: ct);
+
+            string[] operatorCodes = GetOperatorCodesForCcid(expectedCcid);
+            if (operatorCodes.Length == 0
+                && TryParseCopsResponse(
+                    cops, out string operatorName, out _)
+                && Regex.IsMatch(
+                    operatorName, @"^452\d{2}$", RegexOptions.IgnoreCase))
+            {
+                operatorCodes = [operatorName];
+            }
+
+            // RAT 2 = UTRAN/3G, RAT 0 = GSM/2G.  Do not try to force LTE for
+            // this gate: LTE may have EPS service while CS remains absent.
+            foreach (string operatorCode in operatorCodes)
+            {
+                foreach (string rat in new[] { "2", "0" })
+                {
+                    string forced = await SendCommandAsync(
+                        portName,
+                        $"AT+COPS=1,2,\"{operatorCode}\",{rat}",
+                        20000,
+                        silent: true,
+                        ct: ct);
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[USSD_CS_FORCE] operator={operatorCode}; rat={rat}; {forced.Trim()}"
+                    });
+
+                    if (IsCommandFailure(forced)) continue;
+                    if (await WaitForCsRegistrationAsync(
+                            portName, probes: 12, delayMs: 1500, ct))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[USSD_CS_READY] CREG 1/5 đã đăng ký; giữ RAT {rat} để chạy USSD."
+                        });
+                        return true;
+                    }
+                }
+            }
+
+            // The forced RAT may be unavailable at the current cell. Restore
+            // automatic selection, but still refuse USSD until CREG is valid.
+            string automatic = await SendCommandAsync(
+                portName, "AT+COPS=0", 15000, silent: true, ct: ct);
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[USSD_CS_AUTO] Không có CS trên RAT ép; trả COPS auto: {automatic.Trim()}"
+            });
+            if (await WaitForCsRegistrationAsync(
+                    portName, probes: 12, delayMs: 1500, ct))
+                return true;
+
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[USSD_CS_NOT_READY] CREG chưa ở trạng thái 1/5; không gửi *101# để tránh OK giả/treo chờ +CUSD."
+            });
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[USSD_CS_NOT_READY] Không kiểm tra được CREG: {ex.Message}"
+            });
+            return false;
+        }
+    }
+
+    private async Task<bool> WaitForCsRegistrationAsync(
+        string portName,
+        int probes,
+        int delayMs,
+        CancellationToken ct)
+    {
+        for (int probe = 0; probe < probes; probe++)
+        {
+            string registration = await SendCommandAsync(
+                portName, "AT+CREG?", 5000, silent: true, ct: ct);
+            if (IsCsRegistered(registration)) return true;
+            if (probe + 1 < probes)
+                await Task.Delay(delayMs, ct);
+        }
+
+        return false;
+    }
+
+    private static bool IsCsRegistered(string? response) =>
+        TryParseNetworkRegistrationState(response, out int state)
+        && state is 1 or 5
+        && Regex.IsMatch(response ?? string.Empty, @"\+CREG:", RegexOptions.IgnoreCase);
 
     /// <summary>
     /// ATI đã trả danh tính thật hay chỉ là OK/ERROR/mã lỗi. Dùng để biết có

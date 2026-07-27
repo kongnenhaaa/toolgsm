@@ -215,6 +215,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, byte> _initialBalanceLookupOwners = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _initialSubscriberLookupCompleted = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _initialAccountLookupCompleted = new(StringComparer.OrdinalIgnoreCase);
+    // USSD timeout recovery must use the same full modem refresh as the UI
+    // button, but only one refresh may own a COM at a time.  The cooldown also
+    // prevents a permanently unavailable USSD service from rebooting a modem
+    // every 30-second retry cycle.
+    private readonly ConcurrentDictionary<string, byte> _automaticUssdRefreshOwners = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _automaticUssdRefreshLastAt = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan AutomaticUssdRefreshCooldown = TimeSpan.FromMinutes(2);
     private readonly ConcurrentDictionary<string, byte> _networkReopenOwners = new(StringComparer.OrdinalIgnoreCase);
     // Pha ghi IMEI đã kết thúc và commit trước khi vòng dò mạng bắt đầu, nên
     // reopen chỉ được phép sửa pha mạng. Mỗi (COM + CCID) chỉ có ngân sách
@@ -424,12 +431,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     internal static IReadOnlyList<string> SautoInitial111CommandOrder { get; } =
     [
         "AT+CUSD=2",
+        "AT+CUSD=1",
         "AT+CUSD=1,\"*111#\",15"
     ];
 
     internal static IReadOnlyList<string> SautoInitial101CommandOrder { get; } =
     [
         "AT+CUSD=2",
+        "AT+CUSD=1",
         "AT+CUSD=1,\"*101#\",15"
     ];
 
@@ -1734,7 +1743,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void LoadSmsInbox()
     {
         foreach (SmsInboxRecord record in _smsInboxStore.GetRecent(MaxSmsMessagesInMemory))
-            SmsMessages.Add(ToSmsMessage(record));
+            InsertSmsMessageBounded(ToSmsMessage(record));
         foreach (string warning in _smsInboxStore.RecoveryWarnings)
             AddLog($"[SMS_INBOX_RECOVERY] {warning}", "WARN");
     }
@@ -1778,10 +1787,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void InsertSmsMessageBounded(SmsMessage message)
     {
-        SmsMessages.Insert(0, message);
+        DateTimeOffset messageTime = GetSmsDisplayTime(message);
+        int insertAt = 0;
+        while (insertAt < SmsMessages.Count
+               && GetSmsDisplayTime(SmsMessages[insertAt]) >= messageTime)
+        {
+            insertAt++;
+        }
+        SmsMessages.Insert(insertAt, message);
         while (SmsMessages.Count > MaxSmsMessagesInMemory)
             SmsMessages.RemoveAt(SmsMessages.Count - 1);
     }
+
+    private static DateTimeOffset GetSmsDisplayTime(SmsMessage message) =>
+        message.SmsTimestampUtc
+        ?? (message.ReceivedAtUtc == default
+            ? DateTimeOffset.UtcNow
+            : message.ReceivedAtUtc);
 
     private void InsertOtpHistoryBounded(Services.OtpRecord record)
     {
@@ -1794,8 +1816,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         DeliveryId = record.DeliveryId,
         ReceivedAtUtc = record.ReceivedAtUtc,
+        SmsTimestampUtc = record.SmsTimestampUtc,
         PortName = record.PortName,
-        ReceivedTime = record.ReceivedAtUtc.ToLocalTime().ToString("HH:mm:ss"),
+        ReceivedTime = (record.SmsTimestampUtc ?? record.ReceivedAtUtc)
+            .ToLocalTime().ToString("HH:mm:ss"),
         Content = record.Content,
         Sender = record.Sender,
         Otp = record.Otp,
@@ -2689,6 +2713,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return false;
             }
 
+            bool ussdChannelReady = await EnsurePostImeiUssdChannelAsync(
+                port, ccid, epoch, token);
+            AddLog(
+                ussdChannelReady
+                    ? $"[{port.PortName}] [IMEI_RESUME_USSD_READY] Kênh AT/URC và CUSD=1 đã khớp sau resume."
+                    : $"[{port.PortName}] [IMEI_RESUME_USSD_PENDING] IMEI/CCID đúng nhưng CUSD=1 chưa xác minh được; USSD sẽ tự kiểm tra lại trước khi gửi.",
+                ussdChannelReady ? "SUCCESS" : "WARN");
+
             await Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return;
@@ -2817,6 +2849,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port, ccid, expectedImei, sessionCurrent: true);
             if (identityReady)
             {
+                // Chỉ chạy sau khi slot 7 và CCID đã xác minh đúng. Đây là
+                // phần bàn giao sau reboot IMEI, không thay đổi chuỗi SAuto.
+                bool ussdChannelReady = await EnsurePostImeiUssdChannelAsync(
+                    port, ccid, epoch, token);
+                AddLog(
+                    ussdChannelReady
+                        ? $"[{port.PortName}] [IMEI_POST_USSD_READY] Kênh AT/URC và CUSD=1 đã khớp sau reboot IMEI."
+                        : $"[{port.PortName}] [IMEI_POST_USSD_PENDING] IMEI/CCID đúng nhưng CUSD=1 chưa xác minh được; USSD sẽ tự kiểm tra lại trước khi gửi.",
+                    ussdChannelReady ? "SUCCESS" : "WARN");
+
                 // The IMEI write was already read back successfully before CFUN=1,1.
                 // Release this COM as soon as the modem is usable; do not keep the
                 // whole bank behind the foreground IMEI lease while waiting for
@@ -2958,6 +3000,77 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         return new SautoResetResult(false, SautoResetFailureKind.TransientSimNotReady);
+    }
+
+    private void ResetInitialUssdStateAfterNewImei(string portName, string ccid)
+    {
+        string prefix = $"{portName}|{NormalizeCcid(ccid)}|";
+        foreach (string key in _initialAccountLookupCompleted.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _initialAccountLookupCompleted.TryRemove(key, out _);
+        }
+        foreach (string key in _initialSubscriberLookupCompleted.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _initialSubscriberLookupCompleted.TryRemove(key, out _);
+        }
+
+        _automaticUssdRefreshLastAt.TryRemove(
+            $"{portName}|{NormalizeCcid(ccid)}",
+            out _);
+    }
+
+    private async Task<bool> EnsurePostImeiUssdChannelAsync(
+        SimPort port,
+        string ccid,
+        long epoch,
+        CancellationToken token)
+    {
+        if (!IsSimSessionCurrent(port.PortName, ccid, epoch)) return false;
+
+        var commands = new List<string>
+        {
+            "AT+CMGF=1",
+            "AT+CSCS=\"GSM\"",
+            "AT+CNMI=1,1,0,0,0"
+        };
+        if (_modemService.GetModemProfile(port.PortName)?.Supports(
+                ModemCapability.UrcPortRouting) == true)
+        {
+            commands.Add("AT+QURCCFG=\"urcport\",\"uart1\"");
+        }
+
+        foreach (string command in commands)
+        {
+            string response = await _modemService.SendCommandAsync(
+                port.PortName, command, 5000, silent: true, ct: token);
+            if (response.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        // Đóng ngữ cảnh USSD cũ nếu còn, sau đó bật và đọc lại bit phát URC.
+        // CUSD=2 là best-effort vì modem vừa reboot thường chưa có phiên.
+        await _modemService.SendCommandAsync(
+            port.PortName, "AT+CUSD=2", 5000, silent: true, ct: token);
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            string enable = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CUSD=1", 5000, silent: true, ct: token);
+            if (enable.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string state = await _modemService.SendCommandAsync(
+                port.PortName, "AT+CUSD?", 5000, silent: true, ct: token);
+            if (Regex.IsMatch(state, @"\+CUSD:\s*1\b", RegexOptions.IgnoreCase)
+                || !Regex.IsMatch(state, @"\+CUSD:\s*0\b", RegexOptions.IgnoreCase))
+                return true;
+
+            if (attempt < 2)
+                await Task.Delay(150, token);
+        }
+
+        return false;
     }
 
     private void ScheduleImeiVerificationRecovery(
@@ -3235,6 +3348,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (active)
                 {
                     _verifiedImeiByCcid[NormalizeCcid(ccid)] = NormalizeImei(result.FinalImei);
+                    if (result.ModemResetRequested && overwriteBackupWithCurrentImei)
+                    {
+                        // Giữ nguyên toàn bộ chuỗi ghi/xác minh/reboot của SAuto.
+                        // Chỉ xóa cờ USSD cũ để IMEI mới không bị bỏ qua *101# vì
+                        // cùng COM/CCID/epoch đã từng hoàn tất lookup trước đó.
+                        ResetInitialUssdStateAfterNewImei(portName, ccid);
+                        AddLog(
+                            $"[{portName}] [IMEI_NEW_USSD_RESET] Đã xóa trạng thái USSD cũ của đúng CCID; chờ COPS rồi chạy lại *101#.",
+                            "INFO");
+                    }
                 }
                 if (active)
                 {
@@ -5612,6 +5735,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     {
                         DeliveryId = deliveryId,
                         ReceivedAtUtc = receivedAtUtc,
+                        SmsTimestampUtc = e.SmsTimestampUtc,
                         PortName = e.PortName,
                         // Preserve the exact carrier payload for OTP, webhook and
                         // resend. SmsMessage.DisplayContent restores only known
@@ -7141,6 +7265,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (subscriberOk && balanceOk)
             {
                 _initialAccountLookupCompleted.TryAdd(lookupKey, 0);
+                _automaticUssdRefreshLastAt.TryRemove(
+                    $"{port.PortName}|{NormalizeCcid(ccid)}",
+                    out _);
                 _modemService.SetSimRemovalWatchEnabled(port.PortName, true);
                 SetOperationStatus(port.PortName, "USSD", true);
                 AddLog(
@@ -7340,7 +7467,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (IsSimSessionCurrent(port.PortName, ccid, epoch)
                     && port.Status == SimStatus.Active)
                 {
-                    bool recovered = await RecoverUssdSessionAsync(port, ccid, epoch, token);
+                    bool recovered = await RecoverUssdSessionFullAsync(port, ccid, epoch, token);
                     AddLog(
                         recovered
                             ? $"[{port.PortName}] [USSD_RECOVERY_READY] Radio/COPS đã sẵn sàng; xếp lại {ussdCode} sau một nhịp."
@@ -7371,74 +7498,49 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return false;
     }
 
-    private async Task<bool> RecoverUssdSessionAsync(
+    private async Task<bool> RecoverUssdSessionFullAsync(
         SimPort port, string ccid, long epoch, CancellationToken token)
     {
         string portName = port.PortName;
+        string refreshKey = $"{portName}|{NormalizeCcid(ccid)}";
+
+        if (!IsSimSessionCurrent(portName, ccid, epoch)
+            || port.Status != SimStatus.Active)
+            return false;
+
+        if (!_automaticUssdRefreshOwners.TryAdd(portName, 0))
+        {
+            AddLog(
+                $"[{portName}] [USSD_AUTO_REFRESH_BUSY] COM đang được một luồng khác khôi phục; giữ phiên hiện tại.",
+                "WARN");
+            return false;
+        }
+
         try
         {
-            AddLog($"[{portName}] [USSD_RECOVERY] Đóng phiên USSD và khởi động lại radio riêng COM.", "WARN");
-            await Application.Current.Dispatcher.InvokeAsync(() =>
+            token.ThrowIfCancellationRequested();
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            if (_automaticUssdRefreshLastAt.TryGetValue(refreshKey, out DateTimeOffset lastAt)
+                && now - lastAt < AutomaticUssdRefreshCooldown)
             {
-                MarkNetworkRegistrationPending(
-                    port,
-                    IsSimSessionCurrent(portName, ccid, epoch),
-                    "USSD không phản hồi; đang đăng ký lại nhà mạng");
-                UpdateDashboard();
-            });
-            await _modemService.SendCommandAsync(portName, "AT+CUSD=2", 3000, silent: true, ct: token);
-
-            string radioOff = await _modemService.SendCommandAsync(
-                portName, "AT+CFUN=4", 10000, silent: true, ct: token);
-            if (radioOff.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+                AddLog(
+                    $"[{portName}] [USSD_AUTO_REFRESH_COOLDOWN] Đã refresh gần đây; chờ retry kế tiếp thay vì reboot lại COM.",
+                    "WARN");
                 return false;
-
-            await Task.Delay(500, token);
-            string radioOn = await _modemService.SendCommandAsync(
-                portName, "AT+CFUN=1", 15000, silent: true, ct: token);
-            if (radioOn.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            for (int attempt = 0; attempt < 20; attempt++)
-            {
-                token.ThrowIfCancellationRequested();
-                if (!IsSimSessionCurrent(portName, ccid, epoch))
-                    return false;
-
-                string cpin = await _modemService.SendCommandAsync(
-                    portName, "AT+CPIN?", 4000, silent: true, ct: token);
-                string cops = await _modemService.SendCommandAsync(
-                    portName, "AT+COPS?", 5000, silent: true, ct: token);
-                bool simReady = cpin.Contains("READY", StringComparison.OrdinalIgnoreCase)
-                    && !cpin.Contains("NOT READY", StringComparison.OrdinalIgnoreCase);
-                bool registered = GsmModemService.TryParseCopsResponse(
-                    cops, out string parsedOperator, out string act);
-                if (simReady && registered)
-                {
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
-                        port.NetworkProvider = NormalizeNetworkProvider(parsedOperator);
-                        port.NetworkType = GsmModemService.MapCopsAccessTechnology(act);
-                        if (string.IsNullOrWhiteSpace(port.NetworkType))
-                            port.NetworkType = "Mạng";
-                        if (CanPromoteNetworkRegistration(
-                            port,
-                            _initializingPorts.ContainsKey(portName),
-                            sessionCurrent: true))
-                        {
-                            MarkPortNetworkActive(portName);
-                        }
-                    });
-                    AddLog($"[{portName}] [USSD_RECOVERY_OK] Radio và COPS đã sẵn sàng; xếp lại kế hoạch USSD tự động.", "SUCCESS");
-                    return true;
-                }
-
-                await Task.Delay(1000, token);
             }
 
-            AddLog($"[{portName}] [USSD_RECOVERY_FAILED] Radio đã bật nhưng chưa đăng ký lại COPS.", "WARN");
-            return false;
+            _automaticUssdRefreshLastAt[refreshKey] = now;
+            AddLog(
+                $"[{portName}] [USSD_AUTO_REFRESH] *101# không phản hồi; gọi khôi phục đầy đủ như nút Refresh.",
+                "WARN");
+
+            bool recovered = await RecoverActivePortAsync(portName);
+            AddLog(
+                recovered
+                    ? $"[{portName}] [USSD_AUTO_REFRESH_READY] Đã reload modem/SIM/IMEI/COPS; pipeline sẽ tự chạy lại *101# trên phiên mới."
+                    : $"[{portName}] [USSD_AUTO_REFRESH_FAILED] Không hoàn tất được reload modem; giữ COM để retry có kiểm soát.",
+                recovered ? "SUCCESS" : "WARN");
+            return recovered;
         }
         catch (OperationCanceledException)
         {
@@ -7446,8 +7548,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            AddLog($"[{portName}] [USSD_RECOVERY_FAILED] {ex.Message}", "WARN");
+            AddLog($"[{portName}] [USSD_AUTO_REFRESH_FAILED] {ex.Message}", "WARN");
             return false;
+        }
+        finally
+        {
+            _automaticUssdRefreshOwners.TryRemove(portName, out _);
         }
     }
 
@@ -7536,7 +7642,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || !IsPortReadyForOperation(portName))
             return "ERROR: SIM session changed";
 
-        // Giữ đường tự động tối giản: chỉ CUSD=2, chờ settle rồi gửi mã cần chạy.
+        if (commands.Count < 3)
+            return "ERROR: Chuỗi lệnh USSD khởi tạo không đầy đủ";
+
+        // Giữ đúng thứ tự đã xác nhận trên EC20 thực tế: hủy phiên cũ trước,
+        // chờ modem settle, rồi bật phát URC và mới gửi mã USSD.
         string cancel = await _modemService.SendCommandAsync(
             portName, commands[0], 2000, silent: true, ct: token);
         if (cancel.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
@@ -7550,8 +7660,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
             || !IsPortReadyForOperation(portName))
             return "ERROR: SIM session changed";
 
+        // CUSD=1 là cấu hình bắt buộc để modem phát +CUSD về đúng UART.
+        // Không suy diễn từ việc lệnh bật trả OK: đọc lại vì EC20 có thể tự
+        // rơi về +CUSD:0 sau RF/CS transition.
+        string enable = await _modemService.SendCommandAsync(
+            portName, commands[1], 5000, silent: true, ct: token);
+        if (enable.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            return $"ERROR: Không bật được phát kết quả USSD ({enable.Trim()})";
+
+        string presentation = await _modemService.SendCommandAsync(
+            portName, "AT+CUSD?", 5000, silent: true, ct: token);
+        if (Regex.IsMatch(presentation, @"\+CUSD:\s*0\b", RegexOptions.IgnoreCase))
+        {
+            enable = await _modemService.SendCommandAsync(
+                portName, commands[1], 5000, silent: true, ct: token);
+            presentation = await _modemService.SendCommandAsync(
+                portName, "AT+CUSD?", 5000, silent: true, ct: token);
+            if (enable.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || Regex.IsMatch(presentation, @"\+CUSD:\s*0\b", RegexOptions.IgnoreCase))
+            {
+                return $"ERROR: Modem vẫn tắt phát URC USSD ({presentation.Trim()})";
+            }
+        }
+
         return await _modemService.SendCommandAsync(
-            portName, commands[1], 10000, silent: true, ct: token);
+            portName, commands[2], 10000, silent: true, ct: token);
     }
 
 
@@ -7991,10 +8124,63 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void DeleteSms(SmsMessage? sms)
     {
-        if (sms != null)
-        {
-            SmsMessages.Remove(sms);
+        if (DeleteSmsHistoryItem(sms))
             SnackbarMessageQueue.Enqueue("Đã xóa tin nhắn.");
+    }
+
+    public bool DeleteSmsHistoryItem(SmsMessage? sms)
+    {
+        if (sms == null) return false;
+
+        try
+        {
+            // Call-history rows may not have a durable DeliveryId. They can be
+            // removed from the volatile UI directly; real SMS rows must first
+            // be removed from SmsInboxStore so they cannot return after reload.
+            if (!string.IsNullOrWhiteSpace(sms.DeliveryId))
+            {
+                int deleted = _smsInboxStore.Delete([sms.DeliveryId]);
+                if (deleted == 0)
+                {
+                    AddLog(
+                        $"[{sms.PortName}] Không tìm thấy SMS bền vững để xóa: {sms.DeliveryId}",
+                        "WARN");
+                    return false;
+                }
+            }
+
+            SmsMessages.Remove(sms);
+            OnPropertyChanged(nameof(FilteredSmsMessages));
+            OnPropertyChanged(nameof(SmsReceivedCount));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or InvalidDataException)
+        {
+            AddLog(
+                $"[{sms.PortName}] Xóa SMS khỏi lịch sử thất bại: {ex.Message}",
+                "ERROR");
+            return false;
+        }
+    }
+
+    public bool ClearSmsHistory()
+    {
+        try
+        {
+            _smsInboxStore.Clear();
+            SmsMessages.Clear();
+            OnPropertyChanged(nameof(FilteredSmsMessages));
+            OnPropertyChanged(nameof(SmsReceivedCount));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or InvalidDataException)
+        {
+            AddLog($"Xóa toàn bộ lịch sử SMS thất bại: {ex.Message}", "ERROR");
+            return false;
         }
     }
 
@@ -8020,12 +8206,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void DeleteFilteredSms()
     {
         var filtered = FilteredSmsMessages.Cast<SmsMessage>().ToList();
-        foreach (var sms in filtered)
+        int deleted = 0;
+        foreach (SmsMessage sms in filtered)
         {
-            SmsMessages.Remove(sms);
+            if (DeleteSmsHistoryItem(sms)) deleted++;
         }
 
-        SnackbarMessageQueue.Enqueue($"Đã xóa {filtered.Count} tin nhắn.");
+        SnackbarMessageQueue.Enqueue($"Đã xóa {deleted}/{filtered.Count} tin nhắn.");
     }
 
     [RelayCommand]

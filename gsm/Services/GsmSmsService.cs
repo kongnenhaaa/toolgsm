@@ -55,10 +55,16 @@ public sealed class GsmSmsService : IGsmSmsService
         var portLock = _portLocks.GetOrAdd(portName, _ => new SemaphoreSlim(1, 1));
         await portLock.WaitAsync(token);
         bool reconnectPort = false;
+        IDisposable? backgroundLease = null;
 
         try
         {
             if (!IsCurrent(session)) return SessionChangedError;
+            // Pause only background polling while this SMS transaction owns the
+            // modem. All foreground commands still share GsmModemService's
+            // per-COM semaphore, so network polling cannot steal the channel
+            // between CMGS and its final response.
+            backgroundLease = _modem.SuspendPortBackgroundOperations(portName);
             InProgressPorts[portName] = true;
 
             for (int attempt = 1; attempt <= 3; attempt++)
@@ -158,8 +164,28 @@ public sealed class GsmSmsService : IGsmSmsService
             }
             finally
             {
+                backgroundLease?.Dispose();
                 InProgressPorts.TryRemove(portName, out _);
                 portLock.Release();
+
+                // CMGS can leave a +CMTI notification queued while the modem is
+                // finishing the send. Read stored SMS immediately after the
+                // transaction instead of waiting for the periodic sweep.
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(750).ConfigureAwait(false);
+                        await _modem.SweepUnreadSmsAsync(portName)
+                            .ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // The modem service owns the durable retry path; a
+                        // best-effort post-send sweep must never change the SMS
+                        // send result or fault the caller's task.
+                    }
+                });
             }
         }
     }

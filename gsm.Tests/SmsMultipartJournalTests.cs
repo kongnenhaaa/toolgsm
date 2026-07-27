@@ -1006,6 +1006,56 @@ public sealed class SmsMultipartJournalTests
     }
 
     [Fact]
+    public void StalledGroupGetsOnePartialSnapshotAndCanStillCompleteLater()
+    {
+        string path = TempJournalPath();
+        try
+        {
+            const string scope = "ccid:89840200011836551638";
+            DateTimeOffset started = DateTimeOffset.UtcNow.AddMinutes(-5);
+            var journal = new SmsMultipartJournal(path);
+            journal.RecordAndGetParts(
+                scope,
+                "888",
+                new(13, 2, 1),
+                "Dung luong Data con lai",
+                now: started,
+                portName: "COM104",
+                partIdentity: "part-1");
+
+            SmsMultipartJournal.StalledSnapshot stalled = Assert.Single(
+                journal.GetStalledSnapshots(
+                    TimeSpan.FromMinutes(2),
+                    DateTimeOffset.UtcNow));
+            Assert.Equal("Dung luong Data con lai", stalled.Content);
+            Assert.Equal(1, stalled.PresentParts);
+
+            journal.MarkPartialDeliveryAcknowledged(stalled.MessageId);
+            Assert.Empty(journal.GetStalledSnapshots(
+                TimeSpan.FromMinutes(2),
+                DateTimeOffset.UtcNow));
+
+            IReadOnlyList<SmsMultipartJournal.Part> completed =
+                journal.RecordAndGetParts(
+                    scope,
+                    "888",
+                    new(13, 2, 2),
+                    ": 0 MB",
+                    now: DateTimeOffset.UtcNow,
+                    portName: "COM104",
+                    partIdentity: "part-2");
+            Assert.Equal(
+                new[] { 1, 2 },
+                completed.Select(part => part.Sequence).ToArray());
+            Assert.Single(journal.GetCompletedSnapshots(scope));
+        }
+        finally
+        {
+            DeleteJournalFiles(path);
+        }
+    }
+
+    [Fact]
     public void SalvageNeverMergesTwoMessagesSharingAConcatReference()
     {
         string path = TempJournalPath();

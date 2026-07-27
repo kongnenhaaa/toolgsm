@@ -10,6 +10,7 @@ public sealed record SmsInboxRecord
 {
     public required string DeliveryId { get; init; }
     public required DateTimeOffset ReceivedAtUtc { get; init; }
+    public DateTimeOffset? SmsTimestampUtc { get; init; }
     public required string PortName { get; init; }
     public string ReceiverPhone { get; init; } = string.Empty;
     public required string Sender { get; init; }
@@ -187,6 +188,78 @@ public sealed class SmsInboxStore
     }
 
     /// <summary>
+    /// Permanently removes the selected durable inbox records. The UI must not
+    /// remove a row only from memory because LoadSmsInbox would restore it on
+    /// the next render/restart.
+    /// </summary>
+    public int Delete(IEnumerable<string> deliveryIds)
+    {
+        ArgumentNullException.ThrowIfNull(deliveryIds);
+        HashSet<string> targets = deliveryIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToHashSet(StringComparer.Ordinal);
+        if (targets.Count == 0) return 0;
+
+        lock (_gate)
+        {
+            if (!Directory.Exists(_directoryPath)) return 0;
+
+            int deleted = 0;
+            foreach (string filePath in EnumerateInboxFiles(descending: false))
+            {
+                List<SmsInboxRecord> records = ReadRecordsSafely(filePath).ToList();
+                List<SmsInboxRecord> remaining = records
+                    .Where(record => !targets.Contains(record.DeliveryId))
+                    .ToList();
+                int removedFromFile = records.Count - remaining.Count;
+                if (removedFromFile == 0) continue;
+
+                if (remaining.Count == 0)
+                {
+                    File.Delete(filePath);
+                }
+                else
+                {
+                    RewriteFile(filePath, remaining);
+                }
+
+                deleted += removedFromFile;
+            }
+
+            if (deleted > 0)
+                RebuildIndexesLocked();
+            return deleted;
+        }
+    }
+
+    /// <summary>
+    /// Permanently clears the application SMS history. This does not send
+    /// AT+CMGD and therefore does not delete unread SMS still stored in SIMs.
+    /// </summary>
+    public int Clear()
+    {
+        lock (_gate)
+        {
+            if (!Directory.Exists(_directoryPath))
+            {
+                ResetIndexesLocked();
+                return 0;
+            }
+
+            string[] files = EnumerateInboxFiles(descending: false).ToArray();
+            int deleted = 0;
+            foreach (string filePath in files)
+            {
+                deleted += ReadRecordsSafely(filePath).Count();
+                File.Delete(filePath);
+            }
+
+            ResetIndexesLocked();
+            return deleted;
+        }
+    }
+
+    /// <summary>
     /// Deterministic fallback for older event producers that do not yet provide
     /// a transport-level DeliveryId.
     /// </summary>
@@ -236,6 +309,70 @@ public sealed class SmsInboxStore
             }
 
             ResolveRecoveryAppendPaths();
+        }
+    }
+
+    private void RebuildIndexesLocked()
+    {
+        ResetIndexesLocked();
+        LoadDeliveryIds();
+    }
+
+    private void ResetIndexesLocked()
+    {
+        _recentDeliveryFingerprints.Clear();
+        _recentDeliveryOrder.Clear();
+        _tornTailFiles.Clear();
+        _reportedCorruptLines.Clear();
+        _recoveryAppendPaths.Clear();
+        _recoveryWarnings.Clear();
+        _count = 0;
+    }
+
+    private void RewriteFile(
+        string filePath,
+        IReadOnlyList<SmsInboxRecord> records)
+    {
+        string temporaryPath = filePath
+            + $".delete-{Guid.NewGuid():N}.tmp";
+        try
+        {
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.Read,
+                BufferSize = 4096,
+                Options = _durableWrites ? FileOptions.WriteThrough : FileOptions.None
+            };
+            using (var stream = new FileStream(temporaryPath, options))
+            {
+                foreach (SmsInboxRecord record in records)
+                {
+                    byte[] line = Utf8NoBom.GetBytes(
+                        JsonSerializer.Serialize(record, JsonOptions) + "\n");
+                    stream.Write(line);
+                }
+
+                if (_durableWrites)
+                    stream.Flush(flushToDisk: true);
+                else
+                    stream.Flush();
+            }
+
+            File.Move(temporaryPath, filePath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // Preserve the original delete result; a leftover temp file is
+                // outside the inbox filename pattern and is harmless.
+            }
         }
     }
 

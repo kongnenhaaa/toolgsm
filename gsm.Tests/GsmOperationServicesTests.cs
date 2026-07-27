@@ -636,6 +636,21 @@ public sealed class GsmOperationServicesTests
         Assert.False(GsmModemService.IsCleanSmsRecoveryProbe(response));
 
     [Fact]
+    public void Sms_HeaderTimestamp_UsesCarrierTimezoneAndNotReadTime()
+    {
+        const string raw =
+            "+CMGR: \"REC READ\",\"888\",\"\",\"26/07/27,20:47:56+28\"\r\n"
+            + "Dung luong Data con lai\r\nOK\r\n";
+
+        Assert.True(GsmModemService.TryParseSmsTimestamp(
+            raw,
+            out DateTimeOffset timestampUtc));
+        Assert.Equal(
+            new DateTimeOffset(2026, 7, 27, 13, 47, 56, TimeSpan.Zero),
+            timestampUtc);
+    }
+
+    [Fact]
     public async Task Sms_CallerCancelsWhileWaitingForSameComLock_DoesNotSendSecondMessage()
     {
         using var sessions = new PortSessionRegistry();

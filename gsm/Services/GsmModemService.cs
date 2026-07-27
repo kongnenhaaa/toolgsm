@@ -121,6 +121,7 @@ public class GsmDataEventArgs : EventArgs
     public string Otp { get; set; } = string.Empty;
     public string DeliveryId { get; set; } = string.Empty;
     public bool DeliveryAccepted { get; set; }
+    public DateTimeOffset? SmsTimestampUtc { get; set; }
 }
 
 public class GsmModemService : IGsmModemService
@@ -231,6 +232,7 @@ public class GsmModemService : IGsmModemService
         "AT+CNMI=1,1,0,0,0",
         "AT+QCFG=\"nwscanmode\",0,1",
         "AT+QURCCFG=\"urcport\",\"uart1\"",
+        "AT+CUSD=1",
         "AT+CPIN?"
     ];
 
@@ -1779,6 +1781,11 @@ public class GsmModemService : IGsmModemService
         DecodedSmsBody decoded = SmsBodyDecoder.Decode(smsContent);
         if (string.IsNullOrWhiteSpace(decoded.Content))
             return false;
+        DateTimeOffset? smsTimestampUtc = TryParseSmsTimestamp(
+            smsContent,
+            out DateTimeOffset parsedSmsTimestamp)
+            ? parsedSmsTimestamp
+            : null;
 
         string sender = ParseSenderFromCmgr(smsContent);
         if (sender == "Unknown" && !string.IsNullOrWhiteSpace(decoded.Sender))
@@ -1859,7 +1866,8 @@ public class GsmModemService : IGsmModemService
                 MsgIndex = msgIndex,
                 Sender = sender,
                 Otp = ExtractOtp(fullContent) ?? string.Empty,
-                DeliveryId = completedDeliveryId
+                DeliveryId = completedDeliveryId,
+                SmsTimestampUtc = smsTimestampUtc
             };
             try
             {
@@ -1971,6 +1979,56 @@ public class GsmModemService : IGsmModemService
     static readonly Regex CmgrHeaderRegex = new(
         @"\+(?:Q?CMGR|CMT):\s*""[^""]*"",\s*""([^""]+)""",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    internal static bool TryParseSmsTimestamp(
+        string? raw,
+        out DateTimeOffset timestampUtc)
+    {
+        timestampUtc = default;
+        Match match = Regex.Match(
+            raw ?? string.Empty,
+            @"(?<stamp>\d{2}/\d{2}/\d{2},\d{2}:\d{2}:\d{2})(?<zone>[+-]\d{2})?",
+            RegexOptions.CultureInvariant);
+        if (!match.Success
+            || !DateTime.TryParseExact(
+                match.Groups["stamp"].Value,
+                "yy/MM/dd,HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out DateTime localTime))
+        {
+            return false;
+        }
+
+        TimeSpan offset;
+        if (match.Groups["zone"].Success
+            && int.TryParse(
+                match.Groups["zone"].Value,
+                System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out int quarterHours)
+            && Math.Abs(quarterHours) <= 56)
+        {
+            offset = TimeSpan.FromMinutes(quarterHours * 15);
+        }
+        else
+        {
+            offset = TimeZoneInfo.Local.GetUtcOffset(localTime);
+        }
+
+        try
+        {
+            timestampUtc = new DateTimeOffset(
+                    DateTime.SpecifyKind(localTime, DateTimeKind.Unspecified),
+                    offset)
+                .ToUniversalTime();
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// ATI đã trả danh tính thật hay chỉ là OK/ERROR/mã lỗi. Dùng để biết có
@@ -3693,6 +3751,10 @@ public class GsmModemService : IGsmModemService
 
         await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true, ct: ct);
         await Task.Delay(500, ct);
+        // Keep USSD result-code presentation enabled after every modem/SIM
+        // initialization. Without this, the modem can accept CUSD but suppress
+        // the +CUSD URC on the serial stream.
+        await SendCommandAsync(portName, "AT+CUSD=1", 5000, silent: true, ct: ct);
         string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true, ct: ct);
 
         string model = Regex.Match(ati, @"\b(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}\b", RegexOptions.IgnoreCase).Value;
@@ -3886,6 +3948,9 @@ public class GsmModemService : IGsmModemService
             if (!simReady) return false;
 
             _lastSimState[portName] = true;
+            // RF/SIM recovery can reset the CUSD presentation bit independently
+            // of the rest of the modem configuration.
+            await SendCommandAsync(portName, "AT+CUSD=1", 5000, silent: true, ct: ct);
         }
         finally
         {
@@ -5529,7 +5594,8 @@ public class GsmModemService : IGsmModemService
         string sender,
         string content,
         string deliveryId,
-        string msgIndex = "")
+        string msgIndex = "",
+        DateTimeOffset? smsTimestampUtc = null)
     {
         var delivery = new GsmDataEventArgs
         {
@@ -5538,7 +5604,8 @@ public class GsmModemService : IGsmModemService
             MsgIndex = msgIndex,
             Sender = sender,
             Otp = ExtractOtp(content) ?? string.Empty,
-            DeliveryId = deliveryId
+            DeliveryId = deliveryId,
+            SmsTimestampUtc = smsTimestampUtc
         };
         try
         {
@@ -5579,6 +5646,11 @@ public class GsmModemService : IGsmModemService
         TimeSpan.FromMinutes(10);
     private static readonly TimeSpan MultipartStalledThreshold =
         TimeSpan.FromMinutes(10);
+    // Do not keep a carrier segment invisible for hours. The remaining part may
+    // still arrive later and can complete the journal, but the part already
+    // received must become visible after this bounded grace period.
+    private static readonly TimeSpan MultipartPartialFallbackThreshold =
+        TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Một tin nhiều mảnh có thể bị chẻ thành nhiều nhóm ghép dở khi firmware
@@ -5619,6 +5691,41 @@ public class GsmModemService : IGsmModemService
                 {
                     PortName = portName,
                     Data = $"[SMS_MULTIPART_STALLED] {stalled}"
+                });
+            }
+
+            foreach (SmsMultipartJournal.StalledSnapshot snapshot in
+                     _multipartJournal.GetStalledSnapshots(
+                         MultipartPartialFallbackThreshold,
+                         DateTimeOffset.Now))
+            {
+                string targetPort = string.IsNullOrWhiteSpace(snapshot.PortName)
+                    ? portName
+                    : snapshot.PortName;
+                if (!DirectScopeStillCurrent(targetPort, snapshot.Scope))
+                    continue;
+
+                string partialDeliveryId =
+                    $"{snapshot.MessageId}:partial:{snapshot.PresentParts}/{snapshot.Concatenation.Total}";
+                bool accepted = DispatchDecodedSms(
+                    targetPort,
+                    snapshot.Sender,
+                    snapshot.Content,
+                    partialDeliveryId);
+                if (!accepted)
+                    continue;
+
+                // This releases the visible delivery from the retry loop while
+                // retaining the durable journal. If the missing part arrives
+                // later, the original message can still complete safely.
+                _multipartJournal.MarkPartialDeliveryAcknowledged(
+                    snapshot.MessageId);
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = targetPort,
+                    Data = $"[SMS_MULTIPART_PARTIAL] delivery={snapshot.MessageId}; "
+                         + $"hiển thị {snapshot.PresentParts}/{snapshot.Concatenation.Total} phần "
+                         + "sau thời gian chờ; không để SMS bị kẹt trong journal."
                 });
             }
         }
@@ -5836,16 +5943,28 @@ public class GsmModemService : IGsmModemService
             {
                 if (initialDelayMs > 0)
                     await Task.Delay(initialDelayMs).ConfigureAwait(false);
-                DateTime deadline = DateTime.UtcNow.AddMinutes(2);
-                while (DateTime.UtcNow < deadline
-                       && _serialPorts.ContainsKey(portName)
-                       && (_commandTcs.ContainsKey(portName)
-                           || _suspendedBackgroundPorts.ContainsKey(portName)
-                           || IsCallInProgress(portName)))
+                DateTime reportAfter = DateTime.UtcNow.AddMinutes(2);
+                while (_serialPorts.ContainsKey(portName))
                 {
-                    await Task.Delay(250).ConfigureAwait(false);
+                    bool busy = _commandTcs.ContainsKey(portName)
+                        || _suspendedBackgroundPorts.ContainsKey(portName)
+                        || IsCallInProgress(portName);
+                    if (!busy) break;
+
+                    if (DateTime.UtcNow >= reportAfter)
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = "[SMS_SWEEP_WAITING] COM đang bận; giữ yêu cầu quét và tiếp tục thử lại."
+                        });
+                        reportAfter = DateTime.UtcNow.AddMinutes(2);
+                    }
+
+                    await Task.Delay(500).ConfigureAwait(false);
                 }
-                await SweepUnreadSmsAsync(portName).ConfigureAwait(false);
+                if (_serialPorts.ContainsKey(portName))
+                    await SweepUnreadSmsAsync(portName).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -6302,6 +6421,11 @@ public class GsmModemService : IGsmModemService
             sender = DecodeSmsSender(decoded.Sender);
         if (string.IsNullOrWhiteSpace(sender))
             sender = "Unknown";
+        DateTimeOffset? smsTimestampUtc = TryParseSmsTimestamp(
+            rawDirect,
+            out DateTimeOffset parsedSmsTimestamp)
+            ? parsedSmsTimestamp
+            : null;
 
         long generation = CurrentSmsGeneration(portName);
         string scope = TryGetSmsScope(portName, generation, out string simScope)
@@ -6351,7 +6475,8 @@ public class GsmModemService : IGsmModemService
                 portName,
                 sender,
                 decoded.Content,
-                deliveryId);
+                deliveryId,
+                smsTimestampUtc: smsTimestampUtc);
             if (!accepted)
             {
                 // The WAL now owns the only direct-delivery copy. Release this
@@ -6443,7 +6568,8 @@ public class GsmModemService : IGsmModemService
             portName,
             sender,
             content,
-            messageId);
+            messageId,
+            smsTimestampUtc: smsTimestampUtc);
         if (!deliveryAccepted)
         {
             // Every part is durable now, so release the volatile serial frame
@@ -8650,6 +8776,10 @@ public class GsmModemService : IGsmModemService
         session.EndedAt = DateTime.Now;
         IncomingCallEnded?.Invoke(this, session);
         ScheduleIncomingCallRecordingFinalization(portName);
+        // A call can interrupt CMGR/CMGL and consume the serial command lock.
+        // Start a bounded recovery sweep as soon as the call is over instead of
+        // waiting for the next 15/90-second background cycle.
+        ScheduleSafeUnreadSmsSweep(portName, "incoming-call-ended", 250);
         await Task.CompletedTask;
     }
 

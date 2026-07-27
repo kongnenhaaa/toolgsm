@@ -326,7 +326,13 @@
 
     private IEnumerable<SmsMessage> IncomingSms =>
         (Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>())
-            .OrderByDescending(x => DateTime.TryParse(x.ReceivedTime, out var t) ? t : DateTime.MinValue);
+            // ReceivedTime is display-only HH:mm:ss and has no date. Sorting it
+            // made yesterday's 20:47 SMS appear above today's 11:xx SMS.
+            // Prefer the carrier timestamp; legacy rows without it remain below
+            // timestamped messages and use their durable processing time only as
+            // a stable fallback.
+            .OrderByDescending(x => x.SmsTimestampUtc.HasValue)
+            .ThenByDescending(x => x.SmsTimestampUtc ?? x.ReceivedAtUtc);
 
     private int IncomingSmsCount => Vm.SmsMessages?.Count ?? 0;
 
@@ -921,8 +927,10 @@
 
     void DeleteSms(SmsMessage sms)
     {
-        Vm.SmsMessages?.Remove(sms);
-        Snackbar.Add("Đã xóa tin nhắn", Severity.Normal);
+        if (Vm.DeleteSmsHistoryItem(sms))
+            Snackbar.Add("Đã xóa tin nhắn khỏi lịch sử", Severity.Normal);
+        else
+            Snackbar.Add("Xóa tin nhắn thất bại; bản ghi vẫn được giữ lại", Severity.Warning);
     }
 
     async Task ClearHistory()
@@ -931,8 +939,10 @@
             "Xóa toàn bộ lịch sử tin nhắn tới?", yesText: "Xóa", cancelText: "Hủy");
         if (ok == true)
         {
-            Vm.SmsMessages?.Clear();
-            Snackbar.Add("Đã xóa lịch sử", Severity.Success);
+            if (Vm.ClearSmsHistory())
+                Snackbar.Add("Đã xóa vĩnh viễn lịch sử SMS", Severity.Success);
+            else
+                Snackbar.Add("Xóa lịch sử SMS thất bại", Severity.Error);
         }
     }
 

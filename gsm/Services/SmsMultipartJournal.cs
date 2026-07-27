@@ -27,6 +27,17 @@ internal sealed class SmsMultipartJournal
         bool RequiresSimCleanup,
         bool SimCleanupConfirmed);
 
+    internal sealed record StalledSnapshot(
+        string MessageId,
+        string Scope,
+        string PortName,
+        string Sender,
+        SmsConcatInfo Concatenation,
+        string Content,
+        int PresentParts,
+        DateTimeOffset LastUpdated,
+        bool PartialDeliveryAcknowledged);
+
     private sealed class Entry
     {
         public string Scope { get; set; } = string.Empty;
@@ -40,6 +51,7 @@ internal sealed class SmsMultipartJournal
         public int Total { get; set; }
         public DateTimeOffset LastUpdated { get; set; }
         public bool DeliveryAcknowledged { get; set; }
+        public bool PartialDeliveryAcknowledged { get; set; }
         public Dictionary<int, string> Parts { get; set; } = new();
         public Dictionary<int, string> PartIdentities { get; set; } = new();
         public HashSet<string> CleanedPartIdentities { get; set; } =
@@ -58,6 +70,7 @@ internal sealed class SmsMultipartJournal
             Total = Total,
             LastUpdated = LastUpdated,
             DeliveryAcknowledged = DeliveryAcknowledged,
+            PartialDeliveryAcknowledged = PartialDeliveryAcknowledged,
             Parts = Parts.ToDictionary(x => x.Key, x => x.Value),
             PartIdentities = PartIdentities.ToDictionary(x => x.Key, x => x.Value),
             CleanedPartIdentities = new HashSet<string>(
@@ -1308,6 +1321,101 @@ internal sealed class SmsMultipartJournal
                             .Where(sequence => !entry.Parts.ContainsKey(sequence)))
                     + $"; last={entry.LastUpdated:HH:mm:ss}")
                 .ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Returns incomplete multipart messages that have been waiting longer than
+    /// the caller's safety window. The SIM parts may already have been deleted
+    /// after they were durably journaled, so they must not be silently hidden
+    /// forever just because a carrier segment never arrives.
+    /// </summary>
+    internal IReadOnlyList<StalledSnapshot> GetStalledSnapshots(
+        TimeSpan olderThan,
+        DateTimeOffset now)
+    {
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            if (_loadFailed) return Array.Empty<StalledSnapshot>();
+
+            var snapshots = new List<StalledSnapshot>();
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, Entry> candidate in _entries
+                         .OrderBy(pair => pair.Value.LastUpdated))
+            {
+                if (visited.Contains(candidate.Key)) continue;
+
+                List<KeyValuePair<string, Entry>> group =
+                    ExactGroupLocked(candidate.Value);
+                if (group.Count == 0) group.Add(candidate);
+                foreach (KeyValuePair<string, Entry> pair in group)
+                    visited.Add(pair.Key);
+
+                Entry anchor = group
+                    .OrderBy(pair => pair.Value.LastUpdated)
+                    .First().Value;
+                Dictionary<int, string> parts = CombineParts(
+                    group.Select(pair => pair.Value));
+                if (anchor.DeliveryAcknowledged
+                    || anchor.PartialDeliveryAcknowledged
+                    || anchor.Total <= 0
+                    || parts.Count == 0
+                    || parts.Count >= anchor.Total
+                    || now - anchor.LastUpdated < olderThan)
+                {
+                    continue;
+                }
+
+                snapshots.Add(new StalledSnapshot(
+                    string.IsNullOrWhiteSpace(anchor.MessageId)
+                        ? MessageIdFor(anchor)
+                        : anchor.MessageId,
+                    anchor.Scope,
+                    anchor.LastPortName,
+                    anchor.Sender,
+                    new SmsConcatInfo(anchor.Reference, anchor.Total, 1),
+                    string.Concat(parts.OrderBy(pair => pair.Key)
+                        .Select(pair => pair.Value)),
+                    parts.Count,
+                    anchor.LastUpdated,
+                    anchor.PartialDeliveryAcknowledged));
+            }
+
+            return snapshots;
+        }
+    }
+
+    /// <summary>
+    /// Marks the one-time partial fallback as delivered. This is deliberately
+    /// separate from DeliveryAcknowledged: a late missing segment may still
+    /// complete the original message and must remain eligible for full replay.
+    /// </summary>
+    internal void MarkPartialDeliveryAcknowledged(string messageId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            KeyValuePair<string, Entry>[] matches = _entries
+                .Where(pair => string.Equals(
+                    pair.Value.MessageId,
+                    messageId,
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length == 0) return;
+
+            bool changed = false;
+            foreach (KeyValuePair<string, Entry> pair in matches)
+            {
+                if (!pair.Value.PartialDeliveryAcknowledged)
+                {
+                    pair.Value.PartialDeliveryAcknowledged = true;
+                    changed = true;
+                }
+            }
+
+            if (changed) SaveLocked();
         }
     }
 

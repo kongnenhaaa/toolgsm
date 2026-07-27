@@ -140,6 +140,10 @@ public sealed class GsmUssdService : IGsmUssdService
                             catch { /* Không che kết quả USSD chính. */ }
                             try { await _modem.SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, true); }
                             catch { /* Không che kết quả USSD chính. */ }
+                            // Một số EC20 giữ lại CUSD=0 sau khi RF/CS chuyển trạng thái.
+                            // Luôn khôi phục đường phát +CUSD về UART sau khi dọn phiên.
+                            try { await _modem.SendCommandAsync(portName, "AT+CUSD=1", 5000, true); }
+                            catch { /* Không che kết quả USSD chính. */ }
                             try { await _modem.SendCommandAsync(portName, "AT+CREG=2", 5000, true); }
                             catch { /* Polling COPS vẫn tiếp tục hoạt động. */ }
                         }
@@ -320,7 +324,47 @@ public sealed class GsmUssdService : IGsmUssdService
 
         await CommandAsync(session, "AT+CUSD=2", 5000, token);
         await _delay.WaitAsync(TimeSpan.FromMilliseconds(400), token);
+
+        // EC20 is most reliable when a stale session is cancelled first and
+        // the +CUSD presentation bit is enabled afterwards. Enabling before
+        // CUSD=2 can acknowledge the request but leave the next URC suppressed
+        // on some firmware revisions.
+        string presentationError = await EnsureUssdResultCodesEnabledAsync(session, token);
+        if (presentationError.Length > 0)
+            return new(presentationError, restoreAutomaticNetwork);
+
         return new(null, restoreAutomaticNetwork);
+    }
+
+    private async Task<string> EnsureUssdResultCodesEnabledAsync(
+        PortSessionLease session,
+        CancellationToken token)
+    {
+        // AT+CUSD? reports the presentation setting: 0 = suppress +CUSD URCs,
+        // 1 = forward them to the serial stream. It is not an active-session flag.
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            string enable = await CommandAsync(session, "AT+CUSD=1", 5000, token);
+            if (IsCommandError(enable))
+                return $"ERROR: Không bật được phát kết quả USSD (+CUSD): {enable.Trim()}";
+
+            string state = await CommandAsync(session, "AT+CUSD?", 5000, token);
+            if (Regex.IsMatch(state, @"\+CUSD:\s*1\b", RegexOptions.IgnoreCase))
+                return string.Empty;
+
+            // Firmware không trả +CUSD khi hỏi cấu hình thì vẫn được coi là
+            // tương thích nếu lệnh bật đã được ACK. Chỉ fail-closed khi modem
+            // xác nhận rõ ràng rằng URC đang bị tắt.
+            if (!Regex.IsMatch(state, @"\+CUSD:\s*0\b", RegexOptions.IgnoreCase))
+                return string.Empty;
+
+            if (attempt == 2)
+                return $"ERROR: Modem vẫn tắt phát URC USSD (+CUSD: 0; state={state.Trim()})";
+
+            await _delay.WaitAsync(TimeSpan.FromMilliseconds(150), token);
+        }
+
+        return "ERROR: Không xác minh được cấu hình phát kết quả USSD";
     }
 
     private async Task<(bool Registered, bool ChangedNetwork)> TryRecoverCsRegistrationAsync(

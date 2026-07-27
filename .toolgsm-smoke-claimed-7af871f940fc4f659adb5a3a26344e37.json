@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "requestId": "imei-ussd-batch-20260727-1255",
+  "confirmTelecomActions": true,
+  "scenario": "ImeiUssdBatch",
+  "portNames": [
+    "COM83", "COM84", "COM85", "COM86", "COM87", "COM88", "COM89", "COM90",
+    "COM91", "COM92", "COM93", "COM94", "COM95", "COM96", "COM97", "COM98",
+    "COM99", "COM100", "COM101", "COM102", "COM103", "COM104", "COM105", "COM106",
+    "COM107", "COM108", "COM109", "COM110", "COM111", "COM112", "COM113", "COM114"
+  ],
+  "expectedPortCount": 32,
+  "maxParallelPorts": 2,
+  "waveCooldownSeconds": 10,
+  "portWaitSeconds": 600,
+  "stablePortSeconds": 5,
+  "imeiWaitSeconds": 600,
+  "automaticUssdWaitSeconds": 900
+}

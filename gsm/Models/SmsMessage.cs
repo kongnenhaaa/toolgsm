@@ -6,6 +6,7 @@ public partial class SmsMessage : ObservableObject
 {
     public string DeliveryId { get; set; } = string.Empty;
     public DateTimeOffset ReceivedAtUtc { get; set; }
+    public DateTimeOffset? SmsTimestampUtc { get; set; }
     public string Sender { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
     public string DisplayContent =>

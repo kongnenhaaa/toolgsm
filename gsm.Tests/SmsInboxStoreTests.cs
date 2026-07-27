@@ -76,6 +76,58 @@ public sealed class SmsInboxStoreTests
     }
 
     [Fact]
+    public void Delete_RemovesRecordPermanentlyAcrossRestart()
+    {
+        string directory = TempDirectory();
+        try
+        {
+            var store = new SmsInboxStore(directory);
+            Assert.True(store.Append(Record("delete-me", "old")));
+            Assert.True(store.Append(Record("keep-me", "keep")));
+
+            Assert.Equal(1, store.Delete(["delete-me"]));
+            Assert.DoesNotContain(
+                store.GetRecent(10),
+                record => record.DeliveryId == "delete-me");
+            Assert.Single(store.GetRecent(10));
+
+            var afterRestart = new SmsInboxStore(directory);
+            Assert.DoesNotContain(
+                afterRestart.GetRecent(10),
+                record => record.DeliveryId == "delete-me");
+            Assert.Equal(1, afterRestart.Count);
+        }
+        finally
+        {
+            DeleteTempDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void Clear_RemovesAllDurableRecordsAcrossRestart()
+    {
+        string directory = TempDirectory();
+        try
+        {
+            var store = new SmsInboxStore(directory);
+            Assert.True(store.Append(Record("clear-one", "one")));
+            Assert.True(store.Append(Record("clear-two", "two")));
+
+            Assert.Equal(2, store.Clear());
+            Assert.Empty(store.GetRecent(10));
+            Assert.Equal(0, store.Count);
+
+            var afterRestart = new SmsInboxStore(directory);
+            Assert.Empty(afterRestart.GetRecent(10));
+            Assert.Equal(0, afterRestart.Count);
+        }
+        finally
+        {
+            DeleteTempDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void DuplicateDeliveryConflict_IsRejectedAfterRestart()
     {
         string directory = TempDirectory();

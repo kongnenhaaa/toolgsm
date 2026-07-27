@@ -28,6 +28,7 @@ public sealed class SautoInitializationSequenceTests
             "AT+CNMI=1,1,0,0,0",
             "AT+QCFG=\"nwscanmode\",0,1",
             "AT+QURCCFG=\"urcport\",\"uart1\"",
+            "AT+CUSD=1",
             "AT+CPIN?"
         ];
 
@@ -42,11 +43,13 @@ public sealed class SautoInitializationSequenceTests
         string[] expected111 =
         [
             "AT+CUSD=2",
+            "AT+CUSD=1",
             "AT+CUSD=1,\"*111#\",15"
         ];
         string[] expected101 =
         [
             "AT+CUSD=2",
+            "AT+CUSD=1",
             "AT+CUSD=1,\"*101#\",15"
         ];
 

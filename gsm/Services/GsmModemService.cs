@@ -3100,6 +3100,18 @@ public class GsmModemService : IGsmModemService
                     PortName = portName,
                     Data = "[NETWORK_SIM_HARD_RESET_OK] SIM READY sau reboot; quay lại dò COPS và *111."
                 });
+                string? preferredAfterHardReset =
+                    await TryPreferredOperatorSelectionAsync(
+                        portName,
+                        expectedCcid,
+                        ct);
+                if (preferredAfterHardReset != null)
+                {
+                    if (await VerifyExpectedCcidAsync()) return true;
+                    await HoldOfflineIfIdentityChangedAsync(
+                        "preferred-operator-hard-reset");
+                    return false;
+                }
                 return true;
             }
 
@@ -3167,6 +3179,18 @@ public class GsmModemService : IGsmModemService
                 PortName = portName,
                 Data = "[NETWORK_SIM_RECOVERY_OK] SIM READY; trả lại vòng dò COPS và *111 ngay."
             });
+            string? preferredAfterRecovery =
+                await TryPreferredOperatorSelectionAsync(
+                    portName,
+                    expectedCcid,
+                    ct);
+            if (preferredAfterRecovery != null)
+            {
+                if (await VerifyExpectedCcidAsync()) return true;
+                await HoldOfflineIfIdentityChangedAsync(
+                    "preferred-operator-recovery");
+                return false;
+            }
             return true;
         }
         catch (OperationCanceledException)
@@ -3200,6 +3224,54 @@ public class GsmModemService : IGsmModemService
         if (digits.StartsWith("898408", StringComparison.Ordinal)) return ["45208"];
         if (digits.StartsWith("898409", StringComparison.Ordinal)) return ["45209"];
         return [];
+    }
+
+    /// <summary>
+    /// Try the operator code associated with the current SIM before falling
+    /// back to automatic selection. A successful AT+COPS=... acknowledgement
+    /// is not enough; the modem must subsequently return a real +COPS result.
+    /// </summary>
+    private async Task<string?> TryPreferredOperatorSelectionAsync(
+        string portName,
+        string expectedCcid,
+        CancellationToken ct)
+    {
+        foreach (string operatorCode in GetOperatorCodesForCcid(expectedCcid))
+        {
+            string forced = await SendCommandAsync(
+                portName,
+                $"AT+COPS=1,2,\"{operatorCode}\"",
+                20000,
+                silent: true,
+                ct: ct);
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[NETWORK_OPERATOR_PREFERRED] mã {operatorCode}: {forced.Trim()}"
+            });
+            if (IsCommandFailure(forced)) continue;
+
+            for (int probe = 0; probe < 8; probe++)
+            {
+                await Task.Delay(1000, ct);
+                string cops = await SendCommandAsync(
+                    portName,
+                    "AT+COPS?",
+                    5000,
+                    silent: true,
+                    ct: ct);
+                if (!TryParseCopsResponse(cops, out _, out _)) continue;
+
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[NETWORK_OPERATOR_PREFERRED_OK] COPS đã đăng ký sau khi ép mã {operatorCode}."
+                });
+                return cops;
+            }
+        }
+
+        return null;
     }
 
     internal static bool NetworkRecoveryImeiMatches(
@@ -4431,6 +4503,7 @@ public class GsmModemService : IGsmModemService
             int cycles = 0;
             int waitingNoticeCount = 0;
             bool operatorReported = false;
+            bool preferredOperatorAttempted = false;
             int consecutiveCopsMissesAfterRegistration = 0;
             while (true)
             {
@@ -4572,6 +4645,54 @@ public class GsmModemService : IGsmModemService
                 if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
 
+                // This deployment uses VinaPhone SIMs. Prefer the PLMN bound
+                // to the current CCID once per registration session, then
+                // fall back to automatic selection if the modem rejects it
+                // or does not produce a real +COPS response.
+                if (!operatorReported && !preferredOperatorAttempted)
+                {
+                    preferredOperatorAttempted = true;
+                    string? preferredCops =
+                        await TryPreferredOperatorSelectionAsync(
+                            portName,
+                            normalizedExpectedCcid,
+                            token);
+                    if (TryParseCopsResponse(
+                            preferredCops,
+                            out _,
+                            out string preferredAct))
+                    {
+                        string preferredNetworkType =
+                            MapCopsAccessTechnology(preferredAct);
+                        if (!string.IsNullOrWhiteSpace(preferredNetworkType))
+                            LogMessage?.Invoke(this, new GsmDataEventArgs
+                            {
+                                PortName = portName,
+                                Data = $"[NETWORK_TYPE] {preferredNetworkType}"
+                            });
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = preferredCops!.Trim()
+                        });
+                        operatorReported = true;
+                        consecutiveCopsMissesAfterRegistration = 0;
+                        waitingNoticeCount = 0;
+                        cycles = 0;
+                        ClearNetworkSimRecoveryAttempts(portName);
+                        continue;
+                    }
+
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = "[NETWORK_OPERATOR_PREFERRED_FALLBACK] Không ép được nhà mạng; chuyển sang COPS tự động."
+                    });
+                    // Enter the existing automatic-selection branch on this
+                    // same pass instead of waiting for another 30 poll cycles.
+                    cycles = 30;
+                }
+
                 string? recoveryCreg = null;
                 string? recoveryCgreg = null;
                 string? recoveryCereg = null;
@@ -4646,6 +4767,7 @@ public class GsmModemService : IGsmModemService
                     // repeated, non-contention misses may re-enter recovery.
                     consecutiveCopsMissesAfterRegistration = 0;
                     operatorReported = false;
+                    preferredOperatorAttempted = false;
                     waitingNoticeCount = 0;
                     cycles = 30;
                     LogMessage?.Invoke(this, new GsmDataEventArgs

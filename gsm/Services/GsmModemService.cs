@@ -281,16 +281,20 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, bool> _simStackDisabledByTool = new();
     private readonly ConcurrentDictionary<string, int> _simRemovalEvidenceCounts = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _simRemovalEvidenceSince = new();
-    // Một số board không chạy vòng GlobalSimMonitor trong lúc đang polling mạng.
-    // Giữ một bộ xác nhận độc lập cho URC rút SIM để UI không phải chờ hết chu kỳ
-    // quét sóng dài (có thể lên tới hàng chục giây).
+    // GlobalSimMonitor chạy độc lập với vòng polling mạng. Bộ xác nhận này xử lý
+    // URC rút SIM ngay, còn vòng quét 1 giây là fallback cho board thiếu URC.
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _simRemovalConfirmationCts = new();
     private readonly ConcurrentDictionary<string, byte> _simRemovalWatchEnabled = new(StringComparer.OrdinalIgnoreCase);
     // CPIN/QSIMSTAT can report a short-lived absent state while the modem
     // changes CFUN or the CS/IMS domain. Require both consecutive probes and a
     // minimum elapsed window before clearing a live SIM from the UI.
-    private const int SimRemovalConfirmationCycles = 6;
-    private static readonly TimeSpan SimRemovalConfirmationWindow = TimeSpan.FromSeconds(5);
+    private const int SimRemovalConfirmationCycles = 3;
+    private static readonly TimeSpan SimRemovalConfirmationWindow = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan SimPresenceMonitorInitialDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan SimPresenceMonitorInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SimRemovalConfirmationDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan SimRemovalRecheckDelay = TimeSpan.FromMilliseconds(500);
+    private const int SimPresenceProbeTimeoutMs = 2000;
     // An offline SIM-stack restart (CFUN=0 -> CFUN=4) can temporarily report
     // CPIN NOT READY / QSIMSTAT=0 while the card is still inserted. During that
     // window, removal monitors must not mistake the transient state for a hot-swap.
@@ -3563,7 +3567,7 @@ public class GsmModemService : IGsmModemService
         {
             // Cho đúng yêu cầu hot-plug: sau 5 giây kể từ URC mất SIM thì xác minh
             // một lần và cập nhật UI ngay, không chờ vòng quét sóng kế tiếp.
-            await Task.Delay(TimeSpan.FromSeconds(5), token);
+            await Task.Delay(SimRemovalConfirmationDelay, token);
             if (token.IsCancellationRequested
                 || !_serialPorts.ContainsKey(portName)
                 || !_lastSimState.TryGetValue(portName, out bool wasPresent)
@@ -3614,7 +3618,7 @@ public class GsmModemService : IGsmModemService
             // NOT INSERTED/1,0 on every port. Re-read the independent signals
             // after a short settle window; only two consecutive absent probes may
             // turn off RF and enter the hot-plug loop.
-            await Task.Delay(TimeSpan.FromSeconds(2), token);
+            await Task.Delay(SimRemovalRecheckDelay, token);
             if (token.IsCancellationRequested
                 || !_serialPorts.ContainsKey(portName)
                 || !_lastSimState.TryGetValue(portName, out wasPresent)
@@ -4138,6 +4142,20 @@ public class GsmModemService : IGsmModemService
         return true;
     }
 
+    private void CancelPollingLoopForSimPresenceChange(string portName)
+    {
+        lock (_pollingCts)
+        {
+            if (_pollingCts.TryRemove(portName, out CancellationTokenSource? pollingCts))
+            {
+                try { pollingCts.Cancel(); } catch { }
+                try { pollingCts.Dispose(); } catch { }
+            }
+        }
+        _pollingExpectedIdentities.TryRemove(portName, out _);
+        _pendingNetworkPollingPorts.TryRemove(portName, out _);
+    }
+
     public void StartGlobalSimMonitor(string portName)
     {
         if (_suspendedBackgroundPorts.ContainsKey(portName)) return;
@@ -4156,19 +4174,26 @@ public class GsmModemService : IGsmModemService
 
         _ = Task.Run(async () =>
         {
-            // Chờ 20 giây để quá trình Initialize ban đầu hoàn tất, tránh xung đột
-            try { await Task.Delay(20000, token); } catch { return; }
+            // Bắt đầu sớm; các guard bên dưới bỏ qua đúng lúc modem còn khởi tạo.
+            try { await Task.Delay(SimPresenceMonitorInitialDelay, token); } catch { return; }
 
             while (!token.IsCancellationRequested)
             {
-                try { await Task.Delay(5000, token); } catch { break; } // Quét mỗi 5 giây
+                try { await Task.Delay(SimPresenceMonitorInterval, token); } catch { break; }
                 if (_suspendedBackgroundPorts.ContainsKey(portName)) continue;
                 if (!_serialPorts.ContainsKey(portName)) break;
                 if (IsCallInProgress(portName)) continue;
                 if (_rebootRecoveryInProgress.ContainsKey(portName)) continue;
-                if (_pollingCts.ContainsKey(portName) || _simInitInProgress.ContainsKey(portName)) continue;
+                if (_simInitInProgress.ContainsKey(portName)
+                    || _simInsertInProgress.ContainsKey(portName)
+                    || _commandTcs.ContainsKey(portName)) continue;
 
-                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
+                string cpin = await SendCommandAsync(
+                    portName,
+                    "AT+CPIN?",
+                    SimPresenceProbeTimeoutMs,
+                    silent: true,
+                    ct: token);
                 
                 // Nếu timeout (modem đang bận gọi điện) thì bỏ qua vòng lặp này
                 if (string.IsNullOrWhiteSpace(cpin)) continue;
@@ -4177,6 +4202,20 @@ public class GsmModemService : IGsmModemService
                 bool isSimPresent = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
                 bool isSimLocked = cpin.Contains("SIM PIN") || cpin.Contains("SIM PUK");
                 bool stackDisabledByTool = _simStackDisabledByTool.TryGetValue(portName, out bool stackDisabled) && stackDisabled;
+                bool hasSimStatusUrc = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true;
+                string qsimstat = hasSimStatusUrc
+                    ? await SendCommandAsync(
+                        portName,
+                        "AT+QSIMSTAT?",
+                        SimPresenceProbeTimeoutMs,
+                        silent: true,
+                        ct: token)
+                    : string.Empty;
+                bool sensorPresent = Regex.IsMatch(
+                    qsimstat,
+                    @"\+QSIMSTAT:\s*1\s*,\s*1",
+                    RegexOptions.IgnoreCase);
+                if (sensorPresent) isSimPresent = true;
                 // EC20C reports CPIN NOT READY / CME 10 while CFUN=0/4 even when the card is
                 // physically still inserted. Never turn that tool-induced radio transition into
                 // a physical-removal event; the unsolicited QSIMSTAT/CPIN handler will detect a
@@ -4184,17 +4223,35 @@ public class GsmModemService : IGsmModemService
                 bool removalUrcPending = _simRemovalEvidenceCounts.TryGetValue(portName, out int urcEvidence)
                     && urcEvidence > 0;
                 bool isSimRemoved = ShouldVerifySimRemoval(cpin, stackDisabledByTool, removalUrcPending);
+                if (!isSimPresent
+                    && !isSimRemoved
+                    && hasSimStatusUrc
+                    && Regex.IsMatch(
+                        qsimstat,
+                        @"\+QSIMSTAT:\s*1\s*,\s*0",
+                        RegexOptions.IgnoreCase))
+                {
+                    string cfun = await SendCommandAsync(
+                        portName,
+                        "AT+CFUN?",
+                        SimPresenceProbeTimeoutMs,
+                        silent: true,
+                        ct: token);
+                    isSimRemoved = IsConfirmedSimAbsentDuringPolling(
+                        cpin,
+                        qsimstat,
+                        "ERROR",
+                        cfun,
+                        stackDisabledByTool);
+                }
 
                 // CPIN/CME đơn lẻ không đủ kết luận SIM đã bị rút. Sau USSD hoặc lúc
                 // modem chuyển miền CS/IMS, một số EC20 trả CME 10 dù CCID vẫn đọc được.
                 // Xác minh thêm cảm biến và danh tính SIM trước khi tăng bằng chứng rút.
                 if (isSimRemoved)
                 {
-                    string qsimstat = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
-                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
-                        : string.Empty;
                     string liveCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
-                    if (Regex.IsMatch(qsimstat, @"\+QSIMSTAT:\s*1\s*,\s*1") || HasReadableCcid(liveCcid))
+                    if (sensorPresent || HasReadableCcid(liveCcid))
                     {
                         isSimPresent = true;
                         isSimRemoved = false;
@@ -4204,13 +4261,10 @@ public class GsmModemService : IGsmModemService
                 // Quectel sometimes returns generic ERROR when SIM is removed if CMEE=2 drops
                 if (!isSimPresent && !isSimRemoved && cpin.Contains("ERROR"))
                 {
-                    string qsimstat = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
-                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true)
-                        : string.Empty;
                     // QSIMSTAT=0 ở CFUN=4 không chứng minh SIM đã bị rút trên EC20C.
                     // Chỉ cập nhật PRESENT khi cảm biến báo chắc chắn; removal thật do URC
                     // hoặc CPIN NOT INSERTED đảm nhiệm.
-                    if (Regex.IsMatch(qsimstat, @"\+QSIMSTAT:\s*1\s*,\s*1"))
+                    if (sensorPresent)
                         isSimPresent = true;
                 }
 
@@ -4228,6 +4282,7 @@ public class GsmModemService : IGsmModemService
                 {
                     CancelSimRemovalConfirmation(portName);
                     ClearSimRemovalEvidence(portName);
+                    CancelPollingLoopForSimPresenceChange(portName);
                     // Guard: Nếu InitializeModemAsync đang chạy (trong 20s đầu) hoặc đang handle SIM khác → bỏ qua
                     if (_simInitInProgress.ContainsKey(portName)) continue;
 
@@ -4473,6 +4528,9 @@ public class GsmModemService : IGsmModemService
     {
         if (!_serialPorts.ContainsKey(portName)) return;
 
+        // A hot-plug event can arrive while the no-SIM or network polling loop
+        // still owns this COM. Stop that stale loop before reading the new SIM.
+        CancelPollingLoopForSimPresenceChange(portName);
         CancelSimRemovalConfirmation(portName);
 
         // Nếu SIM được cắm đúng lúc init đang chạy, chờ init kết thúc thay vì bỏ event;
@@ -4736,61 +4794,6 @@ public class GsmModemService : IGsmModemService
                 {
                     LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}" });
                     continue;
-                }
-
-                // StartGlobalSimMonitor deliberately yields while this active polling CTS owns
-                // the port. Therefore removal evidence must be completed here; otherwise an
-                // unsolicited QSIMSTAT/CPIN removal URC remains stuck at one evidence forever
-                // and the UI continues displaying the old SIM as Active.
-                bool stackDisabledByTool = _simStackDisabledByTool.TryGetValue(
-                    portName, out bool stackDisabled) && stackDisabled;
-                bool cpinReady = Regex.IsMatch(
-                    cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
-                if (IsSimRemovalWatchEnabled(portName)
-                    && !stackDisabledByTool && !cpinReady)
-                {
-                    string qsimstat = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
-                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true, ct: token)
-                        : string.Empty;
-                    string liveCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
-                    string cfun = await SendCommandAsync(
-                        portName, "AT+CFUN?", 3000, silent: true, ct: token);
-                    bool stillPresent = Regex.IsMatch(
-                        qsimstat, @"\+QSIMSTAT:\s*1\s*,\s*1", RegexOptions.IgnoreCase)
-                        || HasReadableCcid(liveCcid);
-
-                    if (stillPresent)
-                    {
-                        ClearSimRemovalEvidence(portName);
-                    }
-                    else if (IsConfirmedSimAbsentDuringPolling(
-                        cpin, qsimstat, liveCcid, cfun, stackDisabledByTool))
-                    {
-                        if (RegisterSimRemovalEvidence(portName))
-                        {
-                            ClearSimRemovalEvidence(portName);
-                            _lastSimState[portName] = false;
-                            SetSmsSimIdentity(portName, null);
-                            LogMessage?.Invoke(this, new GsmDataEventArgs
-                            {
-                                PortName = portName,
-                                Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (xác minh theo chu kỳ quét sóng)!"
-                            });
-                            await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true, ct: token);
-                            StartHotplugWaitLoop(portName);
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        // Evidence must be consecutive. A CFUN transition, timeout, or
-                        // contradictory probe restarts the delayed confirmation window.
-                        ClearSimRemovalEvidence(portName);
-                    }
-                }
-                else if (cpinReady)
-                {
-                    ClearSimRemovalEvidence(portName);
                 }
 
                 cycles++;

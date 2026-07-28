@@ -31,7 +31,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IGsmBackgroundSupervisor _backgroundSupervisor;
     private GsmBackgroundSupervisorContext? _backgroundSupervisorContext;
     private readonly Services.ImeiManagementService _imeiManagementService;
-    private readonly SmsInboxStore _smsInboxStore;
     private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
     private readonly gsm.Services.IFirebaseOtpService _firebaseOtpService = new gsm.Services.FirebaseOtpService();
     private const int MaxSmsMessagesInMemory = 5000;
@@ -1324,8 +1323,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IGsmUssdService ussdService,
         IGsmCallService callService,
         IGsmBackgroundSupervisor backgroundSupervisor,
-        ImeiManagementService imeiManagementService,
-        SmsInboxStore? smsInboxStore = null)
+        ImeiManagementService imeiManagementService)
     {
         FilteredPortsView = System.Windows.Data.CollectionViewSource.GetDefaultView(Ports);
         FilteredPortsView.Filter = o => 
@@ -1369,7 +1367,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _backgroundSupervisor = backgroundSupervisor;
         AppSettings = SettingsService.Current;
         _imeiManagementService = imeiManagementService;
-        _smsInboxStore = smsInboxStore ?? new SmsInboxStore();
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
         _modemService.PortDisconnected += ModemService_PortDisconnected;
@@ -1380,7 +1377,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _modemService.IncomingCallEnded += ModemService_IncomingCallEnded;
 
         InitializeHardware();
-        LoadSmsInbox();
         
         ConnectionSeries = new ISeries[]
         {
@@ -1740,47 +1736,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return $"{log.Time} {log.Level} {log.Message}";
     }
 
-    private void LoadSmsInbox()
-    {
-        foreach (SmsInboxRecord record in _smsInboxStore.GetRecent(MaxSmsMessagesInMemory))
-            InsertSmsMessageBounded(ToSmsMessage(record));
-        foreach (string warning in _smsInboxStore.RecoveryWarnings)
-            AddLog($"[SMS_INBOX_RECOVERY] {warning}", "WARN");
-    }
-
-    private bool TryPersistSms(
+    // SMS history is intentionally session-only. Do not load old records from
+    // disk and do not append new SMS records to a durable inbox.
+    private bool TryAddVolatileSms(
         SmsInboxRecord record,
         out SmsMessage? message)
     {
         message = null;
-        bool newlyCommitted;
-        try
-        {
-            newlyCommitted = _smsInboxStore.Append(record);
-        }
-        catch (Exception ex) when (ex is IOException
-                                   or UnauthorizedAccessException
-                                   or InvalidDataException
-                                   or JsonException
-                                   or NotSupportedException)
-        {
-            AddLog(
-                $"[{record.PortName}] [SMS_INBOX_PERSIST_FAILED] delivery={record.DeliveryId}: {ex.Message}. Giữ nguyên SMS trên SIM.",
-                "ERROR");
-            return false;
-        }
 
-        // A replay after restart is acknowledged by DeliveryId but must not
+        // A retry during this process must not duplicate the volatile row or
         // repeat sounds, webhooks, OTP history or carrier-state side effects.
-        if (!newlyCommitted)
+        if (SmsMessages.Any(existing =>
+                string.Equals(existing.DeliveryId, record.DeliveryId, StringComparison.Ordinal)))
             return true;
 
         message = ToSmsMessage(record);
-        if (!SmsMessages.Any(existing =>
-                string.Equals(existing.DeliveryId, record.DeliveryId, StringComparison.Ordinal)))
-        {
-            InsertSmsMessageBounded(message);
-        }
+        InsertSmsMessageBounded(message);
 
         return true;
     }
@@ -5719,8 +5690,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         "INFO");
                 }
 
-                // Commit every complete decoded SMS before the volatile UI inbox
-                // owns it and before GsmModemService may release its SIM slot.
+                // Put every complete decoded SMS into the current session before
+                // GsmModemService may release its SIM slot. SMS history is not
+                // written to disk.
                 if (!string.IsNullOrWhiteSpace(cleanContent))
                 {
                     DateTimeOffset receivedAtUtc = DateTimeOffset.UtcNow;
@@ -5731,7 +5703,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             senderPhone,
                             cleanContent)
                         : e.DeliveryId;
-                    var durableRecord = new SmsInboxRecord
+                    var smsRecord = new SmsInboxRecord
                     {
                         DeliveryId = deliveryId,
                         ReceivedAtUtc = receivedAtUtc,
@@ -5749,8 +5721,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         CallCount = "0",
                         ForwardContent = string.Empty
                     };
-                    if (!TryPersistSms(
-                            durableRecord,
+                    if (!TryAddVolatileSms(
+                            smsRecord,
                             out SmsMessage? newlyPersistedMessage))
                         return;
 
@@ -5759,7 +5731,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (newlyPersistedMessage == null)
                     {
                         AddLog(
-                            $"[{e.PortName}] [SMS_REPLAY_ACK] delivery={deliveryId}; inbox đã có, không phát lặp thông báo.",
+                            $"[{e.PortName}] [SMS_REPLAY_ACK] delivery={deliveryId}; phiên hiện tại đã có, không phát lặp thông báo.",
                             "INFO");
                         return;
                     }
@@ -6050,8 +6022,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
                 }
 
-                // Acknowledge only after the durable inbox and in-memory view own
-                // the decoded message. The modem retains it when persistence fails.
+                // Acknowledge only after the current session owns the decoded
+                // message. The modem may then release its SIM slot.
                 if (inboxRecorded)
                     e.DeliveryAccepted = true;
                 
@@ -6217,7 +6189,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             portName,
             senderPhone,
             content);
-        var durableRecord = new SmsInboxRecord
+        var smsRecord = new SmsInboxRecord
         {
             DeliveryId = deliveryId,
             ReceivedAtUtc = receivedAtUtc,
@@ -6231,7 +6203,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             CallCount = "0",
             ForwardContent = "Không"
         };
-        if (!TryPersistSms(durableRecord, out SmsMessage? newlyPersistedMessage)
+        if (!TryAddVolatileSms(smsRecord, out SmsMessage? newlyPersistedMessage)
             || newlyPersistedMessage == null)
             return;
 
@@ -8211,56 +8183,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (sms == null) return false;
 
-        try
-        {
-            // Call-history rows may not have a durable DeliveryId. They can be
-            // removed from the volatile UI directly; real SMS rows must first
-            // be removed from SmsInboxStore so they cannot return after reload.
-            if (!string.IsNullOrWhiteSpace(sms.DeliveryId))
-            {
-                int deleted = _smsInboxStore.Delete([sms.DeliveryId]);
-                if (deleted == 0)
-                {
-                    AddLog(
-                        $"[{sms.PortName}] Không tìm thấy SMS bền vững để xóa: {sms.DeliveryId}",
-                        "WARN");
-                    return false;
-                }
-            }
+        if (!SmsMessages.Remove(sms)) return false;
 
-            SmsMessages.Remove(sms);
-            OnPropertyChanged(nameof(FilteredSmsMessages));
-            OnPropertyChanged(nameof(SmsReceivedCount));
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException
-                                   or UnauthorizedAccessException
-                                   or InvalidDataException)
-        {
-            AddLog(
-                $"[{sms.PortName}] Xóa SMS khỏi lịch sử thất bại: {ex.Message}",
-                "ERROR");
-            return false;
-        }
+        OnPropertyChanged(nameof(FilteredSmsMessages));
+        OnPropertyChanged(nameof(SmsReceivedCount));
+        return true;
     }
 
     public bool ClearSmsHistory()
     {
-        try
-        {
-            _smsInboxStore.Clear();
-            SmsMessages.Clear();
-            OnPropertyChanged(nameof(FilteredSmsMessages));
-            OnPropertyChanged(nameof(SmsReceivedCount));
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException
-                                   or UnauthorizedAccessException
-                                   or InvalidDataException)
-        {
-            AddLog($"Xóa toàn bộ lịch sử SMS thất bại: {ex.Message}", "ERROR");
-            return false;
-        }
+        SmsMessages.Clear();
+        OnPropertyChanged(nameof(FilteredSmsMessages));
+        OnPropertyChanged(nameof(SmsReceivedCount));
+        return true;
     }
 
     [RelayCommand]

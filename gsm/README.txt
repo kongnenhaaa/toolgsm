@@ -57,6 +57,6 @@ GSM Pro là phần mềm chuyên nghiệp dùng để kết nối, điều khi�
 - otp_history.csv: File lưu trữ lịch sử nhận mã OTP.
 - system_log.txt: Nhật ký hoạt động của tool.
 - settings.json: Cấu hình cá nhân hóa (Settings).
-- sim_cache.json: Bộ nhớ đệm tự động ánh xạ Serial/CCID thẻ SIM với Số Điện Thoại để load nhanh ở các lần cắm sau.
+- imei_backup.xlsx: Chỉ lưu ánh xạ CCID/IMEI và PortName/IMEI; không lưu SĐT, số dư hoặc metadata thuê bao.
 
 ========================================================================

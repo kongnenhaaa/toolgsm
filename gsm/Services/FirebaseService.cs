@@ -808,25 +808,25 @@ namespace gsm.Services
                                     cmdId, portId, recipient, content, DateTime.UtcNow);
                                 _pendingOtpCommands[portId] = pendingOtp;
                                 finalResult = await ExecuteSmsAsync(portId, recipient, content);
-                                if (finalResult.Contains("ERROR") || finalResult.Contains("Timeout"))
+                                SmsSubmitDisposition disposition =
+                                    GsmSmsService.ClassifySubmitResult(finalResult);
+                                if (disposition == SmsSubmitDisposition.PayloadSubmittedUncertain)
                                 {
-                                    if (finalResult.Contains("Timeout"))
-                                    {
-                                        finalStatus = "maybe_sent";
-                                        RefreshPendingOtpWaitStart(portId, ref pendingOtp);
-                                    }
-                                    else
-                                    {
-                                        finalStatus = "failed";
-                                        _pendingOtpCommands.TryRemove(
-                                            new KeyValuePair<string, PendingWebOtpCommand>(portId, pendingOtp));
-                                    }
+                                    finalStatus = "maybe_sent";
+                                    RefreshPendingOtpWaitStart(portId, ref pendingOtp);
                                     finalError = GetHumanReadableError(finalResult);
                                 }
-                                else
+                                else if (disposition == SmsSubmitDisposition.Confirmed)
                                 {
                                     finalStatus = "sent";
                                     RefreshPendingOtpWaitStart(portId, ref pendingOtp);
+                                }
+                                else
+                                {
+                                    finalStatus = "failed";
+                                    finalError = GetHumanReadableError(finalResult);
+                                    _pendingOtpCommands.TryRemove(
+                                        new KeyValuePair<string, PendingWebOtpCommand>(portId, pendingOtp));
                                 }
                             }
                         }

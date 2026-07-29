@@ -43,7 +43,8 @@
                     @if (_isSending)
                     {
                         <MudIconButton Icon="@Icons.Material.Filled.Stop" Color="Color.Error" Size="Size.Small"
-                                       OnClick="StopImmediateSend" title="Dừng lệnh gửi ngay" />
+                                       OnClick="StopImmediateSend" Disabled="@_isStoppingSend"
+                                       title="Dừng các SMS chưa qua Ctrl+Z" />
                     }
                     <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
                                StartIcon="@Icons.Material.Filled.PlaylistAdd" OnClick="AddToQueue"
@@ -160,8 +161,9 @@
                 else
                 {
                     <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error"
-                               StartIcon="@Icons.Material.Filled.Stop" OnClick="StopQueue">
-                        ⏹ Dừng
+                               StartIcon="@Icons.Material.Filled.Stop" OnClick="StopQueue"
+                               Disabled="@_isStoppingQueue">
+                        @(_isStoppingQueue ? "Đang dừng..." : "⏹ Dừng")
                     </MudButton>
                     <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
                 }
@@ -299,6 +301,7 @@
     private HashSet<SimPort> _selectedPorts = new();
     private int _smsSubTab = 0;
     private bool _isSending = false;
+    private bool _isStoppingSend = false;
     private bool _isClearingSimSms = false;
     private CancellationTokenSource? _sendCts;
 
@@ -313,6 +316,7 @@
 
     // Queue
     private bool _isRunningQueue = false;
+    private bool _isStoppingQueue = false;
     private CancellationTokenSource? _queueCts;
 
     // ========== DATA ==========
@@ -396,7 +400,7 @@
     {
         "xong" or "done" or "success" or "otp_received" => Color.Success,
         "lỗi" or "failed" or "timeout" => Color.Error,
-        "đang gửi" or "running" or "sent" or "maybe_sent" => Color.Info,
+        "đang gửi" or "running" or "sent" or "maybe_sent" or "có thể đã gửi" => Color.Info,
         "chờ" or "pending" or "queued" => Color.Warning,
         _ => Color.Default
     };
@@ -479,10 +483,12 @@
 
         _sendCts?.Cancel();
         _sendCts?.Dispose();
-        _sendCts = new CancellationTokenSource();
-        CancellationToken token = _sendCts.Token;
+        var sendCts = new CancellationTokenSource();
+        _sendCts = sendCts;
+        CancellationToken token = sendCts.Token;
         _isSending = true;
-        int sent = 0, fail = 0;
+        _isStoppingSend = false;
+        int sent = 0, fail = 0, uncertain = 0;
         Snackbar.Add($"Đang gửi song song {totalSms} SMS trên {ports.Count} cổng...", Severity.Info);
 
         async Task SendForPortAsync(string port)
@@ -505,15 +511,28 @@
                 try
                 {
                     string res = await Vm.QueueSmsAsync(port, phone, _message, token);
-                    if (token.IsCancellationRequested && res.Contains("cancel", StringComparison.OrdinalIgnoreCase))
-                    {
-                        Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Chờ", "Đã dừng");
-                        break;
-                    }
-                    if (IsSmsSuccess(res))
+                    gsm.Services.SmsSubmitDisposition disposition =
+                        gsm.Services.GsmSmsService.ClassifySubmitResult(res);
+                    if (disposition == gsm.Services.SmsSubmitDisposition.Confirmed)
                     {
                         Vm.UpsertCommandQueue(commandId, port, "SMS", phone, _message, "Xong", res.Trim());
                         Interlocked.Increment(ref sent);
+                    }
+                    else if (disposition == gsm.Services.SmsSubmitDisposition.PayloadSubmittedUncertain)
+                    {
+                        Vm.UpsertCommandQueue(
+                            commandId, port, "SMS", phone, _message,
+                            "Có thể đã gửi",
+                            "Đã qua Ctrl+Z; không tự gửi lại. " + res.Trim());
+                        Interlocked.Increment(ref uncertain);
+                        if (token.IsCancellationRequested) break;
+                    }
+                    else if (disposition == gsm.Services.SmsSubmitDisposition.CancelledBeforePayload)
+                    {
+                        Vm.UpsertCommandQueue(
+                            commandId, port, "SMS", phone, _message,
+                            "Chờ", "Đã dừng trước Ctrl+Z; có thể gửi lại an toàn.");
+                        if (token.IsCancellationRequested) break;
                     }
                     else
                     {
@@ -546,20 +565,29 @@
         {
             bool cancelled = token.IsCancellationRequested;
             _isSending = false;
-            _sendCts?.Dispose();
-            _sendCts = null;
+            _isStoppingSend = false;
+            if (ReferenceEquals(_sendCts, sendCts))
+                _sendCts = null;
+            sendCts.Dispose();
             Snackbar.Add(cancelled
-                    ? $"Đã dừng gửi: {sent} thành công, {fail} lỗi"
-                    : $"Hoàn tất: {sent} thành công, {fail} lỗi",
-                fail == 0 ? Severity.Success : Severity.Warning);
+                    ? $"Đã dừng gửi: {sent} thành công, {uncertain} có thể đã gửi, {fail} lỗi"
+                    : $"Hoàn tất: {sent} thành công, {uncertain} có thể đã gửi, {fail} lỗi",
+                fail > 0 || uncertain > 0
+                    ? Severity.Warning
+                    : cancelled ? Severity.Info : Severity.Success);
             StateHasChanged();
         }
     }
 
     void StopImmediateSend()
     {
+        if (_sendCts == null || _sendCts.IsCancellationRequested) return;
+        _isStoppingSend = true;
         _sendCts?.Cancel();
-        Snackbar.Add("Đang dừng các lệnh gửi SMS...", Severity.Info);
+        Snackbar.Add(
+            "Đang dừng SMS chưa gửi; SMS đã qua Ctrl+Z sẽ được giữ ở trạng thái 'Có thể đã gửi'.",
+            Severity.Info);
+        StateHasChanged();
     }
 
     // ========== 3. THÊM VÀO HÀNG ĐỢI ==========
@@ -616,11 +644,13 @@
 
         _queueCts?.Cancel();
         _queueCts?.Dispose();
-        _queueCts = new CancellationTokenSource();
-        CancellationToken token = _queueCts.Token;
+        var queueCts = new CancellationTokenSource();
+        _queueCts = queueCts;
+        CancellationToken token = queueCts.Token;
         _isRunningQueue = true;
+        _isStoppingQueue = false;
 
-        int ok = 0, fail = 0;
+        int ok = 0, fail = 0, uncertain = 0;
 
         async Task RunPortQueueAsync(IEnumerable<CommandQueueItem> portItems)
         {
@@ -643,18 +673,28 @@
                 try
                 {
                     string res = await Vm.QueueSmsAsync(item.PortId, item.Recipient, item.Content, token);
-
-                    if (token.IsCancellationRequested && res.Contains("cancel", StringComparison.OrdinalIgnoreCase))
-                    {
-                        Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
-                            item.Recipient, item.Content, "Chờ", "Đã dừng");
-                        break;
-                    }
-                    if (IsSmsSuccess(res))
+                    gsm.Services.SmsSubmitDisposition disposition =
+                        gsm.Services.GsmSmsService.ClassifySubmitResult(res);
+                    if (disposition == gsm.Services.SmsSubmitDisposition.Confirmed)
                     {
                         Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
                             item.Recipient, item.Content, "Xong", res.Trim());
                         Interlocked.Increment(ref ok);
+                    }
+                    else if (disposition == gsm.Services.SmsSubmitDisposition.PayloadSubmittedUncertain)
+                    {
+                        Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
+                            item.Recipient, item.Content, "Có thể đã gửi",
+                            "Đã qua Ctrl+Z; không tự gửi lại. " + res.Trim());
+                        Interlocked.Increment(ref uncertain);
+                        if (token.IsCancellationRequested) break;
+                    }
+                    else if (disposition == gsm.Services.SmsSubmitDisposition.CancelledBeforePayload)
+                    {
+                        Vm.UpsertCommandQueue(item.CommandId, item.PortId, item.Type,
+                            item.Recipient, item.Content, "Chờ",
+                            "Đã dừng trước Ctrl+Z; có thể gửi lại an toàn.");
+                        if (token.IsCancellationRequested) break;
                     }
                     else
                     {
@@ -692,21 +732,30 @@
         {
             bool cancelled = token.IsCancellationRequested;
             _isRunningQueue = false;
-            _queueCts?.Dispose();
-            _queueCts = null;
+            _isStoppingQueue = false;
+            if (ReferenceEquals(_queueCts, queueCts))
+                _queueCts = null;
+            queueCts.Dispose();
             int waiting = SmsQueuePendingCount;
             Snackbar.Add(cancelled
-                    ? $"Đã dừng hàng đợi: {ok} thành công, {fail} lỗi, {waiting} còn chờ"
-                    : $"Hàng đợi xong: {ok} thành công, {fail} lỗi",
-                fail == 0 ? Severity.Success : Severity.Warning);
+                    ? $"Đã dừng hàng đợi: {ok} thành công, {uncertain} có thể đã gửi, {fail} lỗi, {waiting} còn chờ"
+                    : $"Hàng đợi xong: {ok} thành công, {uncertain} có thể đã gửi, {fail} lỗi",
+                fail > 0 || uncertain > 0
+                    ? Severity.Warning
+                    : cancelled ? Severity.Info : Severity.Success);
             StateHasChanged();
         }
     }
 
     void StopQueue()
     {
+        if (_queueCts == null || _queueCts.IsCancellationRequested) return;
+        _isStoppingQueue = true;
         _queueCts?.Cancel();
-        Snackbar.Add("Đang dừng hàng đợi...", Severity.Info);
+        Snackbar.Add(
+            "Đang dừng hàng đợi; SMS đã qua Ctrl+Z sẽ không được đưa lại về Chờ.",
+            Severity.Info);
+        StateHasChanged();
     }
 
     // ========== 5. RESET FAILED → CHỜ ==========
@@ -774,7 +823,17 @@
         try
         {
             string res = await Vm.QueueSmsAsync(port, sms.Sender, sms.Content);
-            if (!IsSmsSuccess(res))
+            gsm.Services.SmsSubmitDisposition disposition =
+                gsm.Services.GsmSmsService.ClassifySubmitResult(res);
+            if (disposition == gsm.Services.SmsSubmitDisposition.PayloadSubmittedUncertain)
+            {
+                string detail = "Đã qua Ctrl+Z; không tự gửi lại. " + res.Trim();
+                Vm.UpsertCommandQueue(
+                    commandId, port, "SMS", sms.Sender, sms.Content,
+                    "Có thể đã gửi", detail);
+                Snackbar.Add($"[{port}] SMS có thể đã gửi; không tự thử lại", Severity.Warning);
+            }
+            else if (disposition != gsm.Services.SmsSubmitDisposition.Confirmed)
             {
                 string error = res?.Trim() ?? "Không có phản hồi";
                 Vm.UpsertCommandQueue(commandId, port, "SMS", sms.Sender, sms.Content, "Lỗi", error);

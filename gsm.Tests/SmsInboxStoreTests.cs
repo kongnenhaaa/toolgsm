@@ -54,6 +54,40 @@ public sealed class SmsInboxStoreTests
     }
 
     [Fact]
+    public void ReplayOfSameSms_WithChangedUiMetadata_RemainsIdempotent()
+    {
+        string directory = TempDirectory();
+        try
+        {
+            SmsInboxRecord original = Record(
+                "stable-replayed-sim-record",
+                "Ma xac thuc cua ban la 340415");
+            var firstRun = new SmsInboxStore(directory);
+            Assert.True(firstRun.Append(original));
+
+            SmsInboxRecord replay = original with
+            {
+                ReceivedAtUtc = original.ReceivedAtUtc.AddMinutes(3),
+                PortName = "COM109",
+                ReceiverPhone = "",
+                Sender = "7712186788084",
+                Otp = "340415",
+                NetworkProvider = "UNKNOWN",
+                Status = "Đang xử lý"
+            };
+
+            var afterRestart = new SmsInboxStore(directory);
+            Assert.False(afterRestart.Append(replay));
+            Assert.Single(afterRestart.GetRecent(10));
+            Assert.Equal(1, CountPhysicalRecords(directory));
+        }
+        finally
+        {
+            DeleteTempDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void DuplicateDeliveryIdWithDifferentPayload_IsRejected()
     {
         string directory = TempDirectory();
@@ -68,6 +102,33 @@ public sealed class SmsInboxStoreTests
             Assert.Contains("Conflicting SMS payload", error.Message);
             Assert.Equal(1, store.Count);
             Assert.Equal(1, CountPhysicalRecords(directory));
+        }
+        finally
+        {
+            DeleteTempDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void DuplicatePhysicalCopies_AppearAsOneInboxRow()
+    {
+        string directory = TempDirectory();
+        try
+        {
+            var firstRun = new SmsInboxStore(directory);
+            Assert.True(firstRun.Append(
+                Record("physical-retry", "OTP cua ban la 077058")));
+            string path = Assert.Single(
+                Directory.EnumerateFiles(directory, "sms-inbox-*.jsonl"));
+
+            // Simulate an uncertain completed write followed by a durable retry.
+            string committedLine = File.ReadAllText(path);
+            File.AppendAllText(path, committedLine);
+
+            var afterRestart = new SmsInboxStore(directory);
+            Assert.Equal(1, afterRestart.Count);
+            Assert.Equal(2, CountPhysicalRecords(directory));
+            Assert.Single(afterRestart.GetRecent(10));
         }
         finally
         {
@@ -342,7 +403,8 @@ public sealed class SmsInboxStoreTests
 
             Assert.Equal(1, recovered.Count);
             Assert.Single(recovered.RecoveryWarnings);
-            Assert.Equal(2, recovered.GetRecent(10).Count);
+            SmsInboxRecord visible = Assert.Single(recovered.GetRecent(10));
+            Assert.Equal("first", visible.Content);
             Assert.False(recovered.Append(
                 Record("physical-conflict", "first")));
         }

@@ -7,10 +7,17 @@ namespace gsm.Tests.Fakes;
 public sealed class FakeGsmModemService : IGsmModemService
 {
     public void SetSmsSimIdentity(string portName, string? ccid) { }
+    public Task<IDisposable> HoldSmsReceiveMaintenanceUntilSautoReadyAsync(
+        string portName,
+        CancellationToken ct = default) =>
+        Task.FromResult<IDisposable>(new CallbackDisposable(static () => { }));
     public ConcurrentQueue<string> Commands { get; } = new();
+    public ConcurrentQueue<string> SautoWireWrites { get; } = new();
     public ConcurrentQueue<(string Port, string Phone, string Message)> SmsRequests { get; } = new();
     public ConcurrentQueue<(string Port, int BaudRate)> ReconnectRequests { get; } = new();
     public ConcurrentQueue<(string Port, string ExpectedCcid)> CcidVerifications { get; } = new();
+    public ConcurrentQueue<string> BackgroundSuspensions { get; } = new();
+    public ConcurrentQueue<string> BackgroundResumptions { get; } = new();
 
     public Func<string, string, Task<string>>? CommandHandler { get; set; }
     public Func<string, string, string, Task<string>>? SmsHandler { get; set; }
@@ -19,7 +26,8 @@ public sealed class FakeGsmModemService : IGsmModemService
     public Func<string, string, CancellationToken, Task<bool>>? CcidVerificationHandler { get; set; }
     public bool CallInProgress { get; set; }
     public QuectelModemProfile? ModemProfile { get; set; }
-
+    public string ObservedImei { get; set; } = string.Empty;
+    public string ObservedCcid { get; set; } = string.Empty;
 
     public event EventHandler<GsmDataEventArgs>? SmsReceived;
     public event EventHandler<GsmDataEventArgs>? LogMessage;
@@ -41,6 +49,143 @@ public sealed class FakeGsmModemService : IGsmModemService
         Commands.Enqueue($"{portName}:{command}");
         if (CommandHandler != null) return await CommandHandler(portName, command).WaitAsync(ct);
         return DefaultResponse(command);
+    }
+
+    private async Task<string> SendSautoCommandAsync(
+        string portName,
+        string command,
+        CancellationToken ct = default)
+    {
+        SautoWireWrites.Enqueue($"{portName}:{command}\r\n");
+        string logicalCommand = command.TrimEnd('\r', '\n', ' ');
+        string response = await SendCommandAsync(
+            portName,
+            logicalCommand,
+            silent: true,
+            ct: ct);
+        if (response.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase))
+            RaiseLog(portName, response);
+        return response;
+    }
+
+    public async Task<bool> EnterSautoAirplaneModeAsync(
+        string portName,
+        CancellationToken ct = default)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            string off = await SendCommandAsync(
+                portName,
+                "AT+CFUN=4",
+                silent: true,
+                ct: ct);
+            _ = off;
+            string state = await SendCommandAsync(
+                portName,
+                "AT+CFUN?",
+                silent: true,
+                ct: ct);
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                    state,
+                    @"\+CFUN:\s*4\b",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public async Task<SautoImeiChangeResult> ChangeSautoImeiAsync(
+        string portName,
+        string targetImei,
+        CancellationToken ct = default)
+    {
+        await SendCommandAsync(
+            portName,
+            $"AT+EGMR=1,7,\"{targetImei}\"",
+            silent: true,
+            ct: ct);
+
+        string response = await SendCommandAsync(
+            portName,
+            "AT+EGMR=0,7",
+            silent: true,
+            ct: ct);
+        string readImei = System.Text.RegularExpressions.Regex.Match(
+            response,
+            @"(?<!\d)\d{15}(?!\d)").Value;
+
+        if (!string.Equals(readImei, targetImei, StringComparison.Ordinal))
+            return new SautoImeiChangeResult(
+                string.IsNullOrEmpty(readImei) ? "ERROR" : readImei,
+                false);
+
+        await SendCommandAsync(
+            portName,
+            "AT+CFUN=1,1",
+            silent: true,
+            ct: ct);
+        return new SautoImeiChangeResult(readImei, true);
+    }
+
+    public async Task<string?> RunSautoManualUssdAsync(
+        string portName,
+        IReadOnlyList<string> stages,
+        CancellationToken ct = default)
+    {
+        string? lastResponse = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            await SendSautoCommandAsync(portName, "AT+CUSD=2", ct);
+            for (int stageIndex = 0; stageIndex < stages.Count; stageIndex++)
+            {
+                var response = new TaskCompletionSource<string>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                void OnLog(object? sender, GsmDataEventArgs e)
+                {
+                    if (e.PortName.Equals(
+                            portName,
+                            StringComparison.OrdinalIgnoreCase)
+                        && e.Data.Contains(
+                            "+CUSD:",
+                            StringComparison.OrdinalIgnoreCase)
+                        && e.Data.Contains(','))
+                    {
+                        response.TrySetResult(e.Data);
+                    }
+                }
+
+                LogMessage += OnLog;
+                try
+                {
+                    await SendSautoCommandAsync(
+                        portName,
+                        $"AT+CUSD=1,\"{stages[stageIndex]}\",15{Environment.NewLine}",
+                        ct);
+                    if (!response.Task.IsCompleted)
+                    {
+                        await Task.WhenAny(
+                            response.Task,
+                            Task.Delay(100, ct));
+                    }
+
+                    if (response.Task.IsCompletedSuccessfully)
+                    {
+                        lastResponse = await response.Task;
+                        if (stageIndex == stages.Count - 1)
+                            return lastResponse;
+                    }
+                }
+                finally
+                {
+                    LogMessage -= OnLog;
+                }
+            }
+        }
+
+        return lastResponse;
     }
 
     public Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false) =>
@@ -83,6 +228,8 @@ public sealed class FakeGsmModemService : IGsmModemService
         Task.CompletedTask;
 
     public bool IsCallInProgress(string portName) => CallInProgress;
+    public string GetObservedImei(string portName) => ObservedImei;
+    public string GetObservedCcid(string portName) => ObservedCcid;
     public QuectelModemProfile? GetModemProfile(string portName) => ModemProfile;
 
     public Task SweepUnreadSmsAsync(string portName) => Task.CompletedTask;
@@ -92,11 +239,6 @@ public sealed class FakeGsmModemService : IGsmModemService
         string portName,
         string expectedCcid,
         string expectedImei) { }
-    public void SetSimRemovalWatchEnabled(string portName, bool enabled) { }
-    public Task<bool> EnsureCsRegistrationForUssdAsync(
-        string portName,
-        CancellationToken ct = default) =>
-        Task.FromResult(true);
     public List<string> GetAvailablePorts() => ["COM1", "COM2"];
     public string ConnectAll(int baudRate = 115200) => "OK";
     public async Task<bool> ReconnectPortAsync(
@@ -114,9 +256,13 @@ public sealed class FakeGsmModemService : IGsmModemService
     public void DisconnectAll() { }
     public IDisposable SuspendPortBackgroundOperations(
         string portName,
-        bool preserveCurrentNetworkPollingForResume = true) => new NoopDisposable();
+        bool preserveCurrentNetworkPollingForResume = true)
+    {
+        BackgroundSuspensions.Enqueue(portName);
+        return new CallbackDisposable(
+            () => BackgroundResumptions.Enqueue(portName));
+    }
     public void StartHotplugWaitLoop(string portName) { }
-    public Task HandleSimInsertedAsync(string portName) => Task.CompletedTask;
     public Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
     public Task ReloadSimAsync(string portName) => Task.CompletedTask;
     public Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
@@ -146,9 +292,12 @@ public sealed class FakeGsmModemService : IGsmModemService
         _ => "OK"
     };
 
-    private sealed class NoopDisposable : IDisposable
+    private sealed class CallbackDisposable(Action callback) : IDisposable
     {
-        public void Dispose() { }
+        private Action? _callback = callback;
+
+        public void Dispose() =>
+            Interlocked.Exchange(ref _callback, null)?.Invoke();
     }
 }
 

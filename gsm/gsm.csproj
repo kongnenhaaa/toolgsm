@@ -9,7 +9,7 @@
     <RootNamespace>gsm</RootNamespace>
     <AssemblyName>ToolGSM</AssemblyName>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
-    <DefaultItemExcludes>$(DefaultItemExcludes);RegexTest\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);RegexTest\**;artifacts\**;gsm\**;logs\**;scratch\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

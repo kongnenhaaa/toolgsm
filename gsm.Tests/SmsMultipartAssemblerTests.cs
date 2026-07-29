@@ -432,6 +432,7 @@ public class SmsMultipartAssemblerTests
     public void Ec20DecimalAsciiSender_IsDecodedWithoutChangingPhoneNumbers()
     {
         Assert.Equal("VinaPhone", GsmModemService.DecodeSmsSender("861051109780104111110101"));
+        Assert.Equal("MyVNPT", GsmModemService.DecodeSmsSender("7712186788084"));
         Assert.Equal("84901234567", GsmModemService.DecodeSmsSender("84901234567"));
     }
 

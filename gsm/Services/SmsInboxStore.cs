@@ -171,16 +171,31 @@ public sealed class SmsInboxStore
                 return Array.Empty<SmsInboxRecord>();
 
             var result = new List<SmsInboxRecord>(Math.Min(count, 5000));
+            var seenDeliveryIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (string filePath in EnumerateInboxFiles(descending: true))
             {
-                int remaining = count - result.Count;
-                if (remaining == 0) break;
+                foreach (SmsInboxRecord record in ReadRecordsSafely(filePath).Reverse())
+                {
+                    // A power loss during Flush(true) can leave a complete but
+                    // uncertain line; retry then commits the same DeliveryId in
+                    // a recovery file. Keep both physical copies for recovery,
+                    // but expose exactly one inbox row. Also hide a conflicting
+                    // corrupt copy when the canonical fingerprint is known.
+                    if (_recentDeliveryFingerprints.TryGetValue(
+                            record.DeliveryId,
+                            out string? canonicalFingerprint)
+                        && !string.Equals(
+                            canonicalFingerprint,
+                            PayloadFingerprint(record),
+                            StringComparison.Ordinal))
+                        continue;
+                    if (!seenDeliveryIds.Add(record.DeliveryId))
+                        continue;
 
-                SmsInboxRecord[] newestFromFile = ReadRecordsSafely(filePath)
-                    .TakeLast(remaining)
-                    .Reverse()
-                    .ToArray();
-                result.AddRange(newestFromFile);
+                    result.Add(record);
+                    if (result.Count == count)
+                        return result;
+                }
             }
 
             return result;
@@ -540,12 +555,20 @@ public sealed class SmsInboxStore
         }
     }
 
-    private static string PayloadFingerprint(SmsInboxRecord record) =>
-        CreateDeliveryId(
-            record.PortName,
-            record.Sender,
-            record.Content,
-            record.Otp);
+    private static string PayloadFingerprint(SmsInboxRecord record)
+    {
+        // DeliveryId is transport-stable, while COM, sender representation,
+        // extracted OTP and UI metadata can legitimately change when the same
+        // still-stored SIM record is replayed after a restart or SIM move. Only
+        // the normalized carrier payload may turn an existing DeliveryId into a
+        // real conflict; otherwise the replay must be acknowledged idempotently.
+        string normalizedContent = record.Content
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Trim()
+            .Normalize(NormalizationForm.FormC);
+        return CreateDeliveryId("payload-v2", normalizedContent);
+    }
 
     private void MarkTornTail(string filePath, int lineNumber, string detail)
     {

@@ -10,7 +10,7 @@ public sealed class GsmOperationServicesTests
     private const string CcidB = "89840987654321098765";
 
     [Fact]
-    public async Task Sms_Success_PreservesVietnameseAndRestoresUcs2()
+    public async Task Sms_Success_PreservesVietnameseWithoutPostWorkflowCommands()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM5", CcidA);
@@ -23,7 +23,7 @@ public sealed class GsmOperationServicesTests
         var request = Assert.Single(modem.SmsRequests);
         Assert.Equal("COM5", request.Port);
         Assert.Equal("Tiếng Việt đẹp", request.Message);
-        Assert.Contains("COM5:AT+CSCS=\"UCS2\"", modem.Commands);
+        Assert.Empty(modem.Commands);
         Assert.False(sms.IsInProgress("COM5"));
     }
 
@@ -54,62 +54,57 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
-    public async Task Ussd_PreflightAndSend_RunAgainstFakeModem()
+    public async Task Ussd_ManualSequence_UsesOnlyCapturedSautoCommands()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM8", CcidA);
         var modem = new FakeGsmModemService();
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync("COM8", "*101#", 1);
+        string result = await ussd.SendAsync("COM8", "*101#");
 
         Assert.Contains("10000 VND", result);
-        Assert.Contains("COM8:AT+CPIN?", modem.Commands);
-        Assert.Contains("COM8:AT+CREG=0", modem.Commands);
-        Assert.Contains("COM8:AT+CREG?", modem.Commands);
-        Assert.Contains("COM8:AT+CMGF=0", modem.Commands);
-        Assert.Contains("COM8:AT+CSCS=\"UCS2\"", modem.Commands);
-        Assert.Contains("COM8:AT+CUSD=1,\"002A0031003000310023\"", modem.Commands);
-        Assert.Contains("COM8:AT+CMGF=1", modem.Commands);
-        Assert.Contains("COM8:AT+CREG=2", modem.Commands);
+        Assert.Equal(
+        [
+            "COM8:AT+CUSD=2",
+            "COM8:AT+CUSD=1,\"*101#\",15"
+        ], modem.Commands);
+        Assert.Equal(
+        [
+            "COM8:AT+CUSD=2\r\n",
+            "COM8:AT+CUSD=1,\"*101#\",15\r\n\r\n"
+        ], modem.SautoWireWrites);
+        Assert.Empty(modem.BackgroundSuspensions);
+        Assert.Empty(modem.BackgroundResumptions);
     }
 
     [Fact]
-    public async Task Ussd_LteWithoutCsRegistration_TemporarilyUsesPreferred3GThenRestoresAuto()
+    public async Task Ussd_101_DoesNotInjectRegistrationOrRatCommands()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM7", CcidA);
-        bool forced3G = false;
         var modem = new FakeGsmModemService
         {
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
-                "AT+CPIN?" => "+CPIN: READY\r\nOK",
-                "AT+CREG?" => forced3G ? "+CREG: 0,1\r\nOK" : "+CREG: 0,0\r\nOK",
-                "AT+COPS?" => "+COPS: 1,2,\"45201\",7\r\nOK",
-                _ when command.StartsWith("AT+COPS=1,2,\"45201\",2", StringComparison.Ordinal) =>
-                    SetForced3G(),
-                "AT+CUSD=1,\"002A0031003000310023\"" =>
+                "AT+CUSD=1,\"*101#\",15" =>
                     "+CUSD: 0,\"8000 VND\",15\r\nOK",
                 _ => "OK"
             })
         };
 
-        string SetForced3G()
-        {
-            forced3G = true;
-            return "OK";
-        }
-
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync("COM7", "*101#", 1);
+        string result = await ussd.SendAsync("COM7", "*101#");
 
         Assert.Contains("8000 VND", result);
-        Assert.Contains("COM7:AT+COPS=1,2,\"45201\",2", modem.Commands);
-        Assert.Contains("COM7:AT+COPS=0", modem.Commands);
+        Assert.DoesNotContain(modem.Commands, command =>
+            command.Contains("CPIN", StringComparison.OrdinalIgnoreCase)
+            || command.Contains("CREG", StringComparison.OrdinalIgnoreCase)
+            || command.Contains("COPS", StringComparison.OrdinalIgnoreCase)
+            || command.Contains("CFUN", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -139,16 +134,16 @@ public sealed class GsmOperationServicesTests
             };
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync("COM81", "*101#", 1);
+        string result = await ussd.SendAsync("COM81", "*101#");
 
         Assert.Contains("4321 VND", result);
         Assert.DoesNotContain("Modem accepted USSD", result, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task Ussd_BareOk_RetriesSameStableUcs2FlowUntilCusdArrives()
+    public async Task Ussd_BareOk_RetriesSameDirectSautoFlowUntilCusdArrives()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM24", CcidA);
@@ -157,10 +152,7 @@ public sealed class GsmOperationServicesTests
         {
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
-                "AT+CPIN?" => "+CPIN: READY\r\nOK",
-                "AT+CREG?" => "+CREG: 0,1\r\nOK",
-                "AT+CSQ" => "+CSQ: 20,99\r\nOK",
-                "AT+CUSD=1,\"002A0031003000310023\"" =>
+                "AT+CUSD=1,\"*101#\",15" =>
                     Interlocked.Increment(ref ussdAttempts) == 1
                         ? "OK"
                         : "+CUSD: 0,\"4321 VND\",15\r\nOK",
@@ -168,18 +160,18 @@ public sealed class GsmOperationServicesTests
             })
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync("COM24", "*101#", 3);
+        string result = await ussd.SendAsync("COM24", "*101#");
 
         Assert.Contains("4321 VND", result);
-        Assert.Equal(2, modem.Commands.Count(c => c == "COM24:AT+CUSD=1,\"002A0031003000310023\""));
-        Assert.Contains("COM24:AT+CUSD=2", modem.Commands);
+        Assert.Equal(2, modem.Commands.Count(c => c == "COM24:AT+CUSD=1,\"*101#\",15"));
+        Assert.Equal(2, modem.Commands.Count(c => c == "COM24:AT+CUSD=2"));
         Assert.DoesNotContain(modem.Commands, c => c.Contains("nwscanmode", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public async Task Ussd_CregUnsupported_DoesNotMistakeLteDataForCsRegistration()
+    public async Task Ussd_101_DoesNotProbeRegistrationBeforeCusd()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM25", CcidA);
@@ -187,27 +179,24 @@ public sealed class GsmOperationServicesTests
         {
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
-                "AT+CPIN?" => "+CPIN: READY\r\nOK",
-                "AT+CREG?" => "ERROR",
-                "AT+CEREG?" => "+CEREG: 0,1\r\nOK",
-                "AT+CSQ" => "+CSQ: 5,99\r\nOK",
                 _ when command.StartsWith("AT+CUSD=1", StringComparison.Ordinal) =>
                     "+CUSD: 0,\"12000 VND\",15\r\nOK",
                 _ => "OK"
             })
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync("COM25", "*101#", 1);
+        string result = await ussd.SendAsync("COM25", "*101#");
 
-        Assert.Contains("not registered on CS network", result, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(modem.Commands, c => c.StartsWith("COM25:AT+CUSD=1", StringComparison.Ordinal));
+        Assert.Contains("12000 VND", result);
+        Assert.Contains("COM25:AT+CUSD=1,\"*101#\",15", modem.Commands);
+        Assert.DoesNotContain("COM25:AT+CREG?", modem.Commands);
         Assert.DoesNotContain("COM25:AT+CEREG?", modem.Commands);
     }
 
     [Fact]
-    public async Task Ussd_SecondAttempt_DoesNotChangeRatAndRetriesUcs2()
+    public async Task Ussd_SecondAttempt_RepeatsOnlyDirectSautoSequence()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM26", CcidA);
@@ -217,11 +206,7 @@ public sealed class GsmOperationServicesTests
             ModemProfile = QuectelModemProfile.FromIdentity("Quectel", "EC20F", "test"),
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
-                "AT+CPIN?" => "+CPIN: READY\r\nOK",
-                "AT+CREG?" => "+CREG: 0,1\r\nOK",
-                "AT+CEREG?" => "+CEREG: 0,1\r\nOK",
-                "AT+CSQ" => "+CSQ: 20,99\r\nOK",
-                "AT+CUSD=1,\"002A0031003000310023\"" =>
+                "AT+CUSD=1,\"*101#\",15" =>
                     Interlocked.Increment(ref ussdAttempts) == 1
                         ? "OK"
                         : "+CUSD: 0,\"9000 VND\",15\r\nOK",
@@ -229,17 +214,34 @@ public sealed class GsmOperationServicesTests
             })
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync("COM26", "*101#", 3);
+        string result = await ussd.SendAsync("COM26", "*101#");
 
         Assert.Contains("9000 VND", result);
-        Assert.Equal(2, modem.Commands.Count(c => c == "COM26:AT+CUSD=1,\"002A0031003000310023\""));
+        Assert.Equal(2, modem.Commands.Count(c => c == "COM26:AT+CUSD=1,\"*101#\",15"));
+        Assert.Equal(2, modem.Commands.Count(c => c == "COM26:AT+CUSD=2"));
         Assert.DoesNotContain(modem.Commands, c => c.Contains("nwscanmode", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public async Task Ussd_CsqUnknown_DoesNotRejectRegisteredCsPort()
+    public async Task Ussd_111_UsesTheSameDirectSautoSequence()
+    {
+        using var sessions = new PortSessionRegistry();
+        sessions.Begin("COM29", CcidA);
+        var modem = new FakeGsmModemService();
+        using var sms = new GsmSmsService(
+            modem, sessions, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
+
+        string result = await ussd.SendAsync("COM29", "*111#");
+
+        Assert.Contains("10000 VND", result);
+        Assert.Contains("COM29:AT+CUSD=1,\"*111#\",15", modem.Commands);
+    }
+
+    [Fact]
+    public async Task Ussd_DoesNotProbeCsqBeforeSending()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM27", CcidA);
@@ -247,25 +249,22 @@ public sealed class GsmOperationServicesTests
         {
             CommandHandler = (_, command) => Task.FromResult(command switch
             {
-                "AT+CPIN?" => "+CPIN: READY\r\nOK",
-                "AT+CREG?" => "+CREG: 0,1\r\nOK",
-                "AT+CSQ" => "+CSQ: 99,99\r\nOK",
-                "AT+CUSD=1,\"002A0031003000310023\"" =>
+                "AT+CUSD=1,\"*101#\",15" =>
                     "+CUSD: 0,\"15000 VND\",15\r\nOK",
                 _ => "OK"
             })
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync("COM27", "*101#", 1);
+        string result = await ussd.SendAsync("COM27", "*101#");
 
         Assert.Contains("15000 VND", result);
-        Assert.Contains("COM27:AT+CSQ", modem.Commands);
+        Assert.DoesNotContain("COM27:AT+CSQ", modem.Commands);
     }
 
     [Fact]
-    public async Task Ussd_SimRemovedDuringCommand_ReturnsCancelledNotSuccess()
+    public async Task Ussd_SimRegistryChange_DoesNotAddASeparateConstraint()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM9", CcidA);
@@ -287,16 +286,15 @@ public sealed class GsmOperationServicesTests
             return "+CUSD: 0,\"SUCCESS\",15\r\nOK";
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        Task<string> operation = ussd.SendAsync("COM9", "*101#", 1);
+        Task<string> operation = ussd.SendAsync("COM9", "*101#");
         await entered.Task;
         sessions.Invalidate("COM9");
         release.SetResult();
         string result = await operation;
 
-        Assert.Contains("cancelled", result, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("SUCCESS", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SUCCESS", result, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -331,11 +329,11 @@ public sealed class GsmOperationServicesTests
             }
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
         using var firstCts = new CancellationTokenSource();
 
-        Task<string> first = ussd.SendAsync("COM17", "*101#", 1, firstCts.Token);
-        Task<string> second = ussd.SendAsync("COM18", "*101#", 1);
+        Task<string> first = ussd.SendAsync("COM17", "*101#", firstCts.Token);
+        Task<string> second = ussd.SendAsync("COM18", "*101#");
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
         firstCts.Cancel();
 
@@ -516,7 +514,7 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
-    public async Task Sms_ChannelRecoveryFailure_ReconnectsPortOnceWithoutResendingPayload()
+    public async Task Sms_ChannelRecoveryFailure_KeepsEstablishedPortOnlineWithoutResendingPayload()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM120", CcidA);
@@ -533,16 +531,15 @@ public sealed class GsmOperationServicesTests
 
         Assert.Equal(uncertainResult, result);
         Assert.Single(modem.SmsRequests);
-        var reconnect = Assert.Single(modem.ReconnectRequests);
-        Assert.Equal("COM120", reconnect.Port);
-        Assert.Equal(115200, reconnect.BaudRate);
+        Assert.Empty(modem.ReconnectRequests);
         Assert.Empty(delay.Delays);
-        Assert.Empty(modem.Commands);
+        Assert.Equal(["COM120"], modem.BackgroundSuspensions.ToArray());
+        Assert.Equal(["COM120"], modem.BackgroundResumptions.ToArray());
         Assert.False(sms.IsInProgress("COM120"));
     }
 
     [Fact]
-    public async Task Sms_ChannelRecoveryFailure_PreservesOriginalResultWhenReconnectFails()
+    public async Task Sms_ChannelRecoveryFailure_NeverInvokesReconnectHandler()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM121", CcidA);
@@ -563,7 +560,7 @@ public sealed class GsmOperationServicesTests
 
         Assert.Equal(uncertainResult, result);
         Assert.Single(modem.SmsRequests);
-        Assert.Single(modem.ReconnectRequests);
+        Assert.Empty(modem.ReconnectRequests);
     }
 
     [Fact]
@@ -797,10 +794,10 @@ public sealed class GsmOperationServicesTests
             }
         };
         using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
         Task<string>[] operations = Enumerable.Range(1, portCount)
-            .Select(i => ussd.SendAsync($"COM{i}", "*101#", 1))
+            .Select(i => ussd.SendAsync($"COM{i}", "*101#"))
             .ToArray();
 
         await allEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -811,7 +808,7 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
-    public async Task Sms_CharsetRestoreFailure_DoesNotHideSuccessfulSend()
+    public async Task Sms_DoesNotRunCharsetRestoreOutsideModemWorkflow()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM14", CcidA);
@@ -829,7 +826,7 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
-    public async Task Sms_Ec20c_RestoresPduReceiveModeAfterTextModeSend()
+    public async Task Sms_Ec20c_DoesNotRunPduRestoreOutsideModemWorkflow()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM34", CcidA);
@@ -841,37 +838,7 @@ public sealed class GsmOperationServicesTests
 
         await sms.SendAsync("COM34", "0912345678", "hello");
 
-        Assert.Contains("COM34:AT+CMGF=0", modem.Commands);
-        Assert.DoesNotContain("COM34:AT+CSMP=17,167,0,8", modem.Commands);
-    }
-
-    [Fact]
-    public async Task Ussd_CharsetRestoreFailure_DoesNotHideSuccessfulResult()
-    {
-        using var sessions = new PortSessionRegistry();
-        sessions.Begin("COM15", CcidA);
-        int charsetCalls = 0;
-        var modem = new FakeGsmModemService
-        {
-            CommandHandler = (_, command) => command switch
-            {
-                "AT+CSCS=\"UCS2\"" when Interlocked.Increment(ref charsetCalls) > 1 =>
-                    Task.FromException<string>(new IOException("restore failed")),
-                "AT+CSCS=\"UCS2\"" => Task.FromResult("OK"),
-                "AT+CPIN?" => Task.FromResult("+CPIN: READY\r\nOK"),
-                "AT+CREG?" => Task.FromResult("+CREG: 0,1\r\nOK"),
-                "AT+CSQ" => Task.FromResult("+CSQ: 20,99\r\nOK"),
-                _ when command.StartsWith("AT+CUSD=1", StringComparison.Ordinal) =>
-                    Task.FromResult("+CUSD: 0,\"25000 VND\",15\r\nOK"),
-                _ => Task.FromResult("OK")
-            }
-        };
-        using var sms = new GsmSmsService(modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(modem, sessions, sms, new ImmediateGsmOperationDelay());
-
-        string result = await ussd.SendAsync("COM15", "*101#", 1);
-
-        Assert.Contains("25000 VND", result);
+        Assert.Empty(modem.Commands);
     }
 
     [Fact]
@@ -919,7 +886,7 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
-    public async Task Ussd_PhysicalCcidMismatch_FailsBeforeCusd()
+    public async Task Ussd_DoesNotInjectPhysicalCcidProbeBeforeCusd()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM42", CcidA);
@@ -929,15 +896,13 @@ public sealed class GsmOperationServicesTests
         };
         using var sms = new GsmSmsService(
             modem, sessions, new ImmediateGsmOperationDelay());
-        using var ussd = new GsmUssdService(
-            modem, sessions, sms, new ImmediateGsmOperationDelay());
+        using var ussd = new GsmUssdService(modem);
 
-        string result = await ussd.SendAsync(
-            "COM42", "*101#", 1, expectedCcid: CcidA);
+        string result = await ussd.SendAsync("COM42", "*101#");
 
-        Assert.Contains("does not match", result, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(modem.Commands,
-            command => command.Contains("AT+CUSD=1", StringComparison.Ordinal));
+        Assert.Contains("10000 VND", result);
+        Assert.Empty(modem.CcidVerifications);
+        Assert.Contains("COM42:AT+CUSD=1,\"*101#\",15", modem.Commands);
     }
 
     [Fact]

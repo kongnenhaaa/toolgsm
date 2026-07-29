@@ -148,8 +148,9 @@
                         </MudButton>
                         @if (_isSpamming)
                         {
-                            <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="StopSpamSms" Size="Size.Medium">
-                                ⏹ Dừng Spam
+                            <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="StopSpamSms"
+                                       Disabled="@_isStoppingSpam" Size="Size.Medium">
+                                @(_isStoppingSpam ? "Đang dừng..." : "⏹ Dừng Spam")
                             </MudButton>
                         }
                     </MudStack>
@@ -290,6 +291,7 @@
     private int _spamDelay = 1500;
     private string _spamLog = "";
     private bool _isSpamming = false;
+    private bool _isStoppingSpam = false;
     private CancellationTokenSource? _spamCts;
 
     // Check Call
@@ -734,19 +736,22 @@
         _spamCts?.Cancel();
         _spamCts?.Dispose();
         _isSpamming = true;
-        _spamCts = new CancellationTokenSource();
+        _isStoppingSpam = false;
+        var spamCts = new CancellationTokenSource();
+        _spamCts = spamCts;
+        CancellationToken token = spamCts.Token;
         _spamLog = $"[{DateTime.Now:HH:mm:ss}] Bắt đầu spam {phones.Count} số × {ports.Count} cổng\n";
 
-        int sent = 0, fail = 0;
+        int sent = 0, fail = 0, uncertain = 0;
         try
         {
             foreach (var phone in phones)
             {
-                if (_spamCts.Token.IsCancellationRequested) break;
+                if (token.IsCancellationRequested) break;
 
                 foreach (var port in ports)
                 {
-                    if (_spamCts.Token.IsCancellationRequested) break;
+                    if (token.IsCancellationRequested) break;
 
                     try
                     {
@@ -757,16 +762,30 @@
                             continue;
                         }
 
-                        var res = await Vm.QueueSmsAsync(port, phone, _spamContent, _spamCts.Token);
-                        if (res.Contains("ERROR") || res.Contains("TIMEOUT"))
-                        {
-                            fail++;
-                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✗ {res.Trim()}\n";
-                        }
-                        else
+                        var res = await Vm.QueueSmsAsync(port, phone, _spamContent, token);
+                        gsm.Services.SmsSubmitDisposition disposition =
+                            gsm.Services.GsmSmsService.ClassifySubmitResult(res);
+                        if (disposition == gsm.Services.SmsSubmitDisposition.Confirmed)
                         {
                             sent++;
                             _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✓ OK\n";
+                        }
+                        else if (disposition == gsm.Services.SmsSubmitDisposition.PayloadSubmittedUncertain)
+                        {
+                            uncertain++;
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ⚠ Có thể đã gửi; không tự gửi lại\n";
+                            if (token.IsCancellationRequested) break;
+                        }
+                        else if (disposition == gsm.Services.SmsSubmitDisposition.CancelledBeforePayload
+                                 && token.IsCancellationRequested)
+                        {
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ⏹ Dừng trước Ctrl+Z\n";
+                            break;
+                        }
+                        else
+                        {
+                            fail++;
+                            _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✗ {res.Trim()}\n";
                         }
                     }
                     catch (Exception ex)
@@ -775,25 +794,38 @@
                         _spamLog += $"[{DateTime.Now:HH:mm:ss}] {port} → {phone} ✗ {ex.Message}\n";
                     }
                     StateHasChanged();
-                    await Task.Delay(_spamDelay, _spamCts.Token);
+                    await Task.Delay(_spamDelay, token);
                 }
             }
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
             _spamLog += $"[{DateTime.Now:HH:mm:ss}] Đã dừng bởi người dùng.\n";
         }
+        finally
+        {
+            _isSpamming = false;
+            _isStoppingSpam = false;
+            if (ReferenceEquals(_spamCts, spamCts))
+                _spamCts = null;
+            spamCts.Dispose();
+        }
 
-        _isSpamming = false;
-        _spamLog += $"\n[{DateTime.Now:HH:mm:ss}] ✅ Xong • Gửi: {sent} • Lỗi: {fail}\n";
-        Snackbar.Add($"Spam xong: {sent} OK, {fail} lỗi", fail == 0 ? Severity.Success : Severity.Warning);
+        _spamLog += $"\n[{DateTime.Now:HH:mm:ss}] ✅ Xong • Gửi: {sent} • Có thể đã gửi: {uncertain} • Lỗi: {fail}\n";
+        Snackbar.Add(
+            $"Spam xong: {sent} OK, {uncertain} có thể đã gửi, {fail} lỗi",
+            fail > 0 || uncertain > 0 ? Severity.Warning : token.IsCancellationRequested ? Severity.Info : Severity.Success);
     }
 
     void StopSpamSms()
     {
+        if (_spamCts == null || _spamCts.IsCancellationRequested) return;
+        _isStoppingSpam = true;
         _spamCts?.Cancel();
-        _isSpamming = false;
-        Snackbar.Add("Đã dừng spam", Severity.Normal);
+        Snackbar.Add(
+            "Đang dừng spam; SMS đã qua Ctrl+Z có thể vẫn được nhà mạng nhận.",
+            Severity.Info);
+        StateHasChanged();
     }
 
     // ========== 9. SPAM / CHECK GỌI ==========

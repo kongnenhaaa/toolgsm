@@ -164,18 +164,4 @@ public class QuectelModemProfileTests
             GsmModemService.IsTrustedNoVoiceCallSnapshot(response));
     }
 
-    [Theory]
-    [InlineData("+QCCID: 89840200011834605154\r\nOK", "89840200011834605154", true)]
-    [InlineData("+QCCID: 89840200011834605155\r\nOK", "89840200011834605154", false)]
-    [InlineData("ERROR", "89840200011834605154", false)]
-    [InlineData("+QCCID: 89840200011834605154", "898402123", false)]
-    public void PhysicalCcidProof_RequiresExactTwentyDigitMatch(
-        string response,
-        string expectedCcid,
-        bool expected)
-    {
-        Assert.Equal(expected,
-            GsmModemService.ResponseMatchesExpectedCcid(
-                response, expectedCcid));
-    }
 }

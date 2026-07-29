@@ -1,32 +1,29 @@
 using gsm.Models;
-using gsm.ViewModels;
-
 namespace gsm.Tests;
 
 public sealed class ImeiBackupMergeTests
 {
     [Fact]
-    public void ExistingOriginalImei_IsNeverOverwrittenByAppliedImei()
+    public void SimBackupEntry_ContainsOnlyCcidAndImei()
     {
-        var original = new SimBackupEntry
-        {
-            Ccid = "89840200011750541177",
-            Imei = "352054261826334",
-            SourceFile = "imei_backup.xlsx"
-        };
-        var applied = new SimBackupEntry
-        {
-            Ccid = original.Ccid,
-            Imei = "355008370781449",
-            PhoneNumber = "0942152795",
-            Status = "Active"
-        };
+        string[] properties = typeof(SimBackupEntry)
+            .GetProperties()
+            .Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
 
-        MainViewModel.MergeBackupEntryFirstWriteWins(original, applied);
+        Assert.Equal(["Ccid", "Imei"], properties);
+    }
 
-        Assert.Equal("352054261826334", original.Imei);
-        Assert.Equal("0942152795", original.PhoneNumber);
-        Assert.Equal("Active", original.Status);
-        Assert.Equal("imei_backup.xlsx", original.SourceFile);
+    [Fact]
+    public void ModemBackupEntry_ContainsOnlyPortNameAndImei()
+    {
+        string[] properties = typeof(ModemImeiBackupEntry)
+            .GetProperties()
+            .Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["Imei", "PortName"], properties);
     }
 }

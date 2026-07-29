@@ -7,75 +7,25 @@ namespace gsm.Tests;
 public sealed class SautoInitialLookupTests
 {
     [Theory]
-    [InlineData(null, StartupUssdModes.Balance101)]
-    [InlineData("", StartupUssdModes.Balance101)]
-    [InlineData("invalid", StartupUssdModes.Balance101)]
-    [InlineData("101", StartupUssdModes.Balance101)]
-    [InlineData("111", StartupUssdModes.Subscriber111)]
-    [InlineData("111_THEN_101", StartupUssdModes.Subscriber111ThenBalance101)]
-    public void StartupUssdMode_NormalizesToSupportedValue(
-        string? configured, string expected) =>
-        Assert.Equal(expected, StartupUssdModes.Normalize(configured));
-
-    [Theory]
-    [InlineData(StartupUssdModes.Balance101, false, true)]
-    [InlineData(StartupUssdModes.Subscriber111, true, false)]
-    [InlineData(StartupUssdModes.Subscriber111ThenBalance101, true, true)]
-    public void StartupUssdMode_SelectsOnlyConfiguredCommands(
-        string mode, bool includes111, bool includes101)
-    {
-        Assert.Equal(includes111, StartupUssdModes.Includes111(mode));
-        Assert.Equal(includes101, StartupUssdModes.Includes101(mode));
-        Assert.Equal(includes111, StartupUssdModes.GetCodes(mode).Contains("*111#"));
-        Assert.Equal(includes101, StartupUssdModes.GetCodes(mode).Contains("*101#"));
-    }
-
-    [Fact]
-    public void StartupUssdMode_DefaultsToOnly101()
-    {
-        var settings = new AppSettings();
-
-        Assert.Equal(StartupUssdModes.Balance101, settings.StartupUssdMode);
-        Assert.Equal(["*101#"], StartupUssdModes.GetCodes(settings.StartupUssdMode));
-    }
-
-    [Theory]
-    [InlineData("VinaPhone", "2G", 20, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "3G", 20, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "4G", 20, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "5G", 20, SimStatus.Active, true)]
-    [InlineData("Viettel", "3G", 20, SimStatus.Active, false)]
-    [InlineData("", "3G", 20, SimStatus.Active, false)]
-    [InlineData("VinaPhone", "", 20, SimStatus.Active, false)]
-    [InlineData("VinaPhone", "3G", 0, SimStatus.Active, true)]
-    // EC20 commonly returns CSQ=99 during the first seconds even though COPS has
-    // already registered. SAuto starts USSD from COPS; it does not wait a full
-    // signal-scan interval for CSQ to become measurable.
-    [InlineData("VinaPhone", "3G", 99, SimStatus.Active, true)]
-    [InlineData("VinaPhone", "3G", 20, SimStatus.WaitingAccept, false)]
-    public void Initial111_RunsAfterVinaPhoneCopsRegistration(
-        string provider, string networkType, int rssi, string status, bool expected)
-    {
-        var port = new SimPort
-        {
-            NetworkProvider = provider,
-            NetworkType = networkType,
-            SignalRssi = rssi,
-            Status = status
-        };
-
-        Assert.Equal(expected, MainViewModel.IsVinaNetworkReadyForInitialLookup(port));
-    }
-
-    [Theory]
     [InlineData("0", "2G")]
+    [InlineData("1", "GSM")]
     [InlineData("3", "2G")]
     [InlineData("2", "3G")]
     [InlineData("6", "3G")]
     [InlineData("7", "4G")]
-    [InlineData("9", "4G")]
+    [InlineData("9", "Unknown")]
     public void CopsAccessTechnology_MapsToUiNetworkType(string act, string expected) =>
-        Assert.Equal(expected, GsmModemService.MapCopsAccessTechnology(act));
+        Assert.Equal(expected, GsmModemService.MapSautoCopsAccessTechnology(act));
+
+    [Theory]
+    [InlineData("VinaPhone", "*111#")]
+    [InlineData("Viettel", "")]
+    [InlineData("MobiFone", "")]
+    [InlineData("Vietnamobile", "")]
+    [InlineData("VNSKY", "")]
+    [InlineData("45202", "")]
+    public void AutomaticCarrierUssd_UsesSautoMapping(string provider, string expected) =>
+        Assert.Equal(expected, GsmModemService.GetSautoAutomaticUssdCode(provider));
 
     [Theory]
     [InlineData("+CSQ: 30,99\r\nOK", 30, 97, "GOOD 30")]
@@ -117,22 +67,14 @@ public sealed class SautoInitialLookupTests
     }
 
     [Theory]
-    [InlineData("+CUSD: 1,\"TB:0912345678\",15", "", "", "", "", true)]
-    [InlineData("ERROR: Timeout", "", "+CUSD: 1,\"TB:0912345678\",15", "", "", true)]
-    [InlineData("ERROR: Timeout", "old", "new", "0911111111", "0911111111", false)]
-    [InlineData("ERROR: Timeout", "old", "old", "", "0912345678", true)]
-    [InlineData("ERROR: Timeout", "old", "old", "0912345678", "0912345678", false)]
-    [InlineData("+CUSD: 0,\"Dich vu hien khong san sang\",15", "old", "Dich vu hien khong san sang", "", "", false)]
-    [InlineData("ERROR: Timeout", "", "", "", "", false)]
-    public void Sauto111Retry_StopsOnlyForFreshResponseFromCurrentAttempt(
-        string commandResult,
-        string previousUssd,
-        string currentUssd,
-        string previousPhone,
-        string currentPhone,
-        bool expected) =>
-        Assert.Equal(expected, MainViewModel.HasFreshSautoUssdResponse(
-            commandResult, previousUssd, currentUssd, previousPhone, currentPhone));
+    [InlineData("TKKM: 25.000d", "25.000")]
+    [InlineData("Tai khoan khuyen mai 15000 VND", "15000")]
+    [InlineData("Khuyến mãi: 9,500đ", "9,500")]
+    [InlineData("SMS khuyen mai hom nay", "")]
+    public void UssdPromotionBalance_IsParsedOnlyFromLabeledCurrency(
+        string response,
+        string expected) =>
+        Assert.Equal(expected, MainViewModel.ExtractPromotionBalanceFromUssd(response));
 
     [Theory]
     [InlineData("354434778044431", "354434778044431", true)]
@@ -143,4 +85,20 @@ public sealed class SautoInitialLookupTests
     public void RefreshedSession_ResumesOnlyWithPreviouslyVerifiedImei(
         string currentImei, string verifiedImei, bool expected) =>
         Assert.Equal(expected, MainViewModel.IsVerifiedImeiResumeMatch(currentImei, verifiedImei));
+
+    [Theory]
+    [InlineData("351928119811880", "351928119811880", true)]
+    [InlineData("\r\n+EGMR: \"351928119811880\"\r\nOK", "351928119811880", true)]
+    [InlineData("351928119811880", "354147385996229", false)]
+    [InlineData("", "351928119811880", false)]
+    [InlineData("351928119811880", "", false)]
+    public void FirstCcidAfterNoSimCreate_UsesOnlyVerifiedPendingImei(
+        string currentImei,
+        string pendingImei,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            MainViewModel.IsPendingNoSimImeiHandoffMatch(
+                currentImei,
+                pendingImei));
 }

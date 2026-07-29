@@ -12,7 +12,8 @@ public sealed record DecodedSmsBody(
     SmsConcatInfo? Concatenation,
     bool WasHex = false,
     string? Sender = null,
-    bool RecoveredMislabelledUcs2 = false);
+    bool RecoveredMislabelledUcs2 = false,
+    DateTimeOffset? SmsTimestampUtc = null);
 
 /// <summary>
 /// Chuẩn hóa tên người gửi. Một số firmware EC20 trả người gửi chữ dưới dạng
@@ -32,11 +33,16 @@ internal static class SmsSenderText
         string value = sender?.Trim() ?? string.Empty;
         // Chỉ nhận kết quả có chữ: một chuỗi số thuần giải ra số thuần vẫn là
         // người gửi dạng số và không được biến đổi.
-        if (value.Length > 15
+        if (value.Length > 10
             && value.All(char.IsDigit)
             && TryDecodeDecimalAscii(value, out string decoded)
             && decoded.Length >= 2
-            && decoded.Any(char.IsLetter))
+            && decoded.Any(char.IsLetter)
+            // A normal MSISDN can occasionally be split into printable ASCII
+            // numbers by chance. Shorter decimal sender aliases are accepted
+            // only when the result is unmistakably a word (for example
+            // 77 121 86 78 80 84 = MyVNPT).
+            && (value.Length > 15 || decoded.All(char.IsLetter)))
         {
             return decoded;
         }
@@ -169,6 +175,11 @@ public static class SmsBodyDecoder
         {
             Content = NormalizeGsm7CompatibilityControls(decoded.Content)
         };
+        if (decoded.SmsTimestampUtc == null
+            && TryParseTextModeTimestamp(raw, out DateTimeOffset timestampUtc))
+        {
+            decoded = decoded with { SmsTimestampUtc = timestampUtc };
+        }
         return decoded.Concatenation == null && TryParseQcmgrConcat(raw, out var qcmgrConcat)
             ? decoded with { Concatenation = qcmgrConcat }
             : decoded;
@@ -198,6 +209,56 @@ public static class SmsBodyDecoder
             @"(?:^|\s)(?<pdu>[0-9A-F]{32,})\s*$",
             RegexOptions.IgnoreCase);
         return pdu.Success ? pdu.Groups["pdu"].Value : string.Empty;
+    }
+
+    private static bool TryParseTextModeTimestamp(
+        string raw,
+        out DateTimeOffset timestampUtc)
+    {
+        timestampUtc = default;
+        Match match = Regex.Match(
+            raw,
+            @"(?<stamp>\d{2}/\d{2}/\d{2},\d{2}:\d{2}:\d{2})(?<zone>[+-]\d{2})?",
+            RegexOptions.CultureInvariant);
+        if (!match.Success
+            || !DateTime.TryParseExact(
+                match.Groups["stamp"].Value,
+                "yy/MM/dd,HH:mm:ss",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out DateTime localTime))
+        {
+            return false;
+        }
+
+        TimeSpan offset;
+        if (match.Groups["zone"].Success
+            && int.TryParse(
+                match.Groups["zone"].Value,
+                System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out int quarterHours)
+            && Math.Abs(quarterHours) <= 56)
+        {
+            offset = TimeSpan.FromMinutes(quarterHours * 15);
+        }
+        else
+        {
+            offset = TimeZoneInfo.Local.GetUtcOffset(localTime);
+        }
+
+        try
+        {
+            timestampUtc = new DateTimeOffset(
+                    DateTime.SpecifyKind(localTime, DateTimeKind.Unspecified),
+                    offset)
+                .ToUniversalTime();
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     private static bool TryDecodeHex(
@@ -330,6 +391,12 @@ public static class SmsBodyDecoder
 
             p++; // PID
             byte dcs = pdu[p++];
+            DateTimeOffset? smsTimestampUtc =
+                TryDecodeServiceCentreTimestamp(
+                    pdu.AsSpan(p, 7),
+                    out DateTimeOffset parsedTimestampUtc)
+                ? parsedTimestampUtc
+                : null;
             p += 7; // service-centre timestamp
             int userDataLength = pdu[p++];
             if (p > pdu.Length) return false;
@@ -374,7 +441,13 @@ public static class SmsBodyDecoder
                 // correct. A strict structural check keeps valid packed GSM-7 on this branch.
                 if (TryDecodeMislabelledUcs2(userData, headerBytes, out string recoveredUcs2))
                 {
-                    decoded = new(recoveredUcs2, concat, true, sender, true);
+                    decoded = new(
+                        recoveredUcs2,
+                        concat,
+                        true,
+                        sender,
+                        true,
+                        smsTimestampUtc);
                     return true;
                 }
 
@@ -402,10 +475,72 @@ public static class SmsBodyDecoder
                 content = Encoding.Latin1.GetString(userData.Slice(headerBytes, byteCount));
             }
 
-            decoded = new(content.TrimEnd('\0'), concat, true, sender);
+            decoded = new(
+                content.TrimEnd('\0'),
+                concat,
+                true,
+                sender,
+                SmsTimestampUtc: smsTimestampUtc);
             return !string.IsNullOrWhiteSpace(decoded.Content);
         }
         catch { return false; }
+    }
+
+    private static bool TryDecodeServiceCentreTimestamp(
+        ReadOnlySpan<byte> value,
+        out DateTimeOffset timestampUtc)
+    {
+        timestampUtc = default;
+        if (value.Length != 7) return false;
+
+        static bool TryDecodeSwappedBcd(byte octet, out int number)
+        {
+            int tens = octet & 0x0F;
+            int ones = (octet >> 4) & 0x0F;
+            if (tens > 9 || ones > 9)
+            {
+                number = 0;
+                return false;
+            }
+            number = tens * 10 + ones;
+            return true;
+        }
+
+        if (!TryDecodeSwappedBcd(value[0], out int year)
+            || !TryDecodeSwappedBcd(value[1], out int month)
+            || !TryDecodeSwappedBcd(value[2], out int day)
+            || !TryDecodeSwappedBcd(value[3], out int hour)
+            || !TryDecodeSwappedBcd(value[4], out int minute)
+            || !TryDecodeSwappedBcd(value[5], out int second))
+        {
+            return false;
+        }
+
+        byte zone = value[6];
+        int zoneTens = zone & 0x07;
+        int zoneOnes = (zone >> 4) & 0x0F;
+        int quarterHours = zoneTens * 10 + zoneOnes;
+        if (zoneTens > 9 || zoneOnes > 9 || quarterHours > 56)
+            return false;
+        if ((zone & 0x08) != 0) quarterHours = -quarterHours;
+
+        try
+        {
+            var local = new DateTimeOffset(
+                2000 + year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                TimeSpan.FromMinutes(quarterHours * 15));
+            timestampUtc = local.ToUniversalTime();
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
     }
 
     private static bool TryDecodeMislabelledUcs2(

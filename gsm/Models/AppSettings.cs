@@ -2,43 +2,6 @@
 
 namespace gsm.Models;
 
-public static class StartupUssdModes
-{
-    public const string Balance101 = "101";
-    public const string Subscriber111 = "111";
-    public const string Subscriber111ThenBalance101 = "111_then_101";
-
-    public static string Normalize(string? mode) =>
-        mode?.Trim().ToLowerInvariant() switch
-        {
-            Subscriber111 => Subscriber111,
-            Subscriber111ThenBalance101 => Subscriber111ThenBalance101,
-            _ => Balance101
-        };
-
-    public static bool Includes101(string? mode) =>
-        Normalize(mode) is Balance101 or Subscriber111ThenBalance101;
-
-    public static bool Includes111(string? mode) =>
-        Normalize(mode) is Subscriber111 or Subscriber111ThenBalance101;
-
-    public static string[] GetCodes(string? mode) =>
-        Normalize(mode) switch
-        {
-            Subscriber111 => ["*111#"],
-            Subscriber111ThenBalance101 => ["*111#", "*101#"],
-            _ => ["*101#"]
-        };
-
-    public static string GetDescription(string? mode) =>
-        Normalize(mode) switch
-        {
-            Subscriber111 => "chỉ *111#",
-            Subscriber111ThenBalance101 => "*111# rồi *101# sau 10 giây",
-            _ => "chỉ *101#"
-        };
-}
-
 public class AppSettings
 {
     public bool DarkMode { get; set; } = false;
@@ -110,8 +73,6 @@ public class AppSettings
 
 
     // ========== IMEI BACKUP & RESTORE ==========
-    public bool BlockUnknownSims { get => BlockUnknown; set => BlockUnknown = value; }
-
     public bool EnableImeiRestore { get => AutoRestoreImei; set => AutoRestoreImei = value; }
     public bool EnableNewSimIntakeMode { get => NewSimIntake; set => NewSimIntake = value; }
 
@@ -145,12 +106,8 @@ public class AppSettings
     // Extra Settings from settings.json UI
     public bool NewSimIntake { get; set; } = true;
     public bool AutoRestoreImei { get; set; } = true;
-    public bool BlockUnknown { get; set; } = false;
     public bool AutoAccept { get; set; } = false;
     public int SignalScanIntervalSeconds { get; set; } = 15;
-    // Lệnh USSD tự động sau khi SIM đăng ký mạng. Mặc định chỉ chạy *101#.
-    public string StartupUssdMode { get; set; } = StartupUssdModes.Balance101;
-    public bool AutoCheckBalanceAfterSms { get; set; } = true;
     public bool TelegramOnCall { get; set; } = true;
     public bool TelegramOnError { get; set; } = true;
     public int BaudRate { get; set; } = 115200;

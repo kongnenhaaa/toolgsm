@@ -57,6 +57,106 @@ public class SmsReceiveFrameTests
     }
 
     [Fact]
+    public void TerminalArrivingAfterCompletedOkCannotLeakIntoNextCommand()
+    {
+        const string trailing =
+            "\r\n+CME ERROR: 264\r\n\r\n+CREG: 0\r\n";
+
+        string remaining =
+            GsmModemService.RemoveLeadingUnownedCommandResponseFrames(
+                trailing,
+                out IReadOnlyList<string> removed);
+
+        Assert.Equal(["+CME ERROR: 264"], removed);
+        Assert.Equal("\r\n+CREG: 0\r\n", remaining);
+    }
+
+    [Fact]
+    public void OrphanCleanupPreservesUrcAndAnythingAfterIt()
+    {
+        const string urcThenError =
+            "\r\n+CREG: 0\r\n\r\n+CME ERROR: 264\r\n";
+
+        string remaining =
+            GsmModemService.RemoveLeadingUnownedCommandResponseFrames(
+                urcThenError,
+                out IReadOnlyList<string> removed);
+
+        Assert.Empty(removed);
+        Assert.Equal(urcThenError, remaining);
+    }
+
+    [Fact]
+    public void EveryLeadingUnownedTerminalIsRemovedAsOneRxBoundary()
+    {
+        const string trailing =
+            "\r\nOK\r\n\r\n+CME ERROR: 264\r\n\r\n+CSQ: 31,99\r\n";
+
+        string remaining =
+            GsmModemService.RemoveLeadingUnownedCommandResponseFrames(
+                trailing,
+                out IReadOnlyList<string> removed);
+
+        Assert.Equal(["OK", "+CME ERROR: 264"], removed);
+        Assert.Equal("\r\n+CSQ: 31,99\r\n", remaining);
+    }
+
+    [Fact]
+    public void WriteOnlyPollingResponsesAreDrainedBeforeNextTransaction()
+    {
+        const string buffered =
+            "\r\n+CPIN: READY\r\n\r\nOK\r\n"
+            + "\r\n+CSQ: 31,99\r\n\r\nOK\r\n"
+            + "\r\n+CUSD: 0,\"TKC: 10000d\",15\r\n";
+
+        string remaining =
+            GsmModemService.RemoveLeadingUnownedCommandResponseFrames(
+                buffered,
+                out IReadOnlyList<string> removed);
+
+        Assert.Equal(["+CPIN+OK", "+CSQ+OK"], removed);
+        Assert.Equal(
+            "\r\n+CUSD: 0,\"TKC: 10000d\",15\r\n",
+            remaining);
+    }
+
+    [Fact]
+    public void UnownedCleanupNeverConsumesDirectSmsFrame()
+    {
+        const string directSms =
+            "\r\n+CMT: \"Shopee\",\"\",\"26/07/29,18:00:00+28\"\r\n"
+            + "Ma OTP 123456\r\n\r\nOK\r\n";
+
+        string remaining =
+            GsmModemService.RemoveLeadingUnownedCommandResponseFrames(
+                directSms,
+                out IReadOnlyList<string> removed);
+
+        Assert.Empty(removed);
+        Assert.Equal(directSms, remaining);
+    }
+
+    [Theory]
+    [InlineData("\r\n+CPIN: READY\r\n\r\nOK\r\n", "AT+CPMS?", false)]
+    [InlineData("\r\n+CSQ: 31,99\r\n\r\nOK\r\n", "AT+CFUN?", false)]
+    [InlineData("\r\n+CSQ: 31,99\r\n\r\nOK\r\n", "AT+COPS?", false)]
+    [InlineData("\r\n+CPMS: \"SM\",0,30,\"SM\",0,30,\"SM\",0,30\r\n\r\nOK\r\n", "AT+CPMS?", true)]
+    [InlineData("\r\n+CFUN: 4\r\n\r\nOK\r\n", "AT+CFUN?", true)]
+    [InlineData("\r\n+COPS: 0,0,\"VINAPHONE\",2\r\n\r\nOK\r\n", "AT+COPS?", true)]
+    public void QueryOnlyCompletesOnItsOwnPayload(
+        string frame,
+        string command,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            GsmModemService.CanTerminalFrameCompletePendingCommand(
+                frame,
+                "\r\nOK\r\n",
+                command));
+    }
+
+    [Fact]
     public void UnknownPendingCommandKeepsAcceptingCmsErrorSoNothingHangs()
     {
         Assert.False(GsmModemService.IsStaleCmsErrorTerminator(

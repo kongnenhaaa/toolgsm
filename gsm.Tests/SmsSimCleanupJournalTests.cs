@@ -212,6 +212,36 @@ public sealed class SmsSimCleanupJournalTests
             scope, "8", expected, read));
     }
 
+    [Fact]
+    public void DestructiveFingerprintGuard_AcceptsPduAndTextViewsOfSameSms()
+    {
+        const string scope = "ccid:89840200011775811480";
+        const string pdu =
+            "+CMGR: 0,,145\r\n"
+            + "06914819205033240BD153F41B5E2E030003627092907025829053E4135A2CEA404E74180E6A8741F8F018D44EBBD120D8ED06ABE140C4228818741E41CB2C881A4C8296C867D0E90235C3A0F11B844E97EB20767D0CA2CBDFEE33285603C1D175BA0BB4443E9D47D0189D0E83E665503B0C7287F320FB3B0D729FEBEF34688D0E8F59A07519340E83DCE8B01B644F97DDA029FA0D2F975D\r\n\r\nOK";
+        const string pduMarkedRead =
+            "+CMGR: 1,,145\r\n"
+            + "06914819205033240BD153F41B5E2E030003627092907025829053E4135A2CEA404E74180E6A8741F8F018D44EBBD120D8ED06ABE140C4228818741E41CB2C881A4C8296C867D0E90235C3A0F11B844E97EB20767D0CA2CBDFEE33285603C1D175BA0BB4443E9D47D0189D0E83E665503B0C7287F320FB3B0D729FEBEF34688D0E8F59A07519340E83DCE8B01B644F97DDA029FA0D2F975D\r\n\r\nOK";
+        const string text =
+            "+QCMGR: \"REC READ\",\"83104111112101101\",,\"26/07/29,09:07:52+28\"\r\n"
+            + "SHOPEE: Nhap ma xac minh 077058 DE DANG KY TAI KHOAN. Ma co hieu luc trong 15 phut. KHONG chia se ma nay voi nguoi khac, ke ca nhan vien Shopee.\r\n\r\nOK";
+
+        DecodedSmsBody decodedPdu = SmsBodyDecoder.Decode(pdu);
+        DecodedSmsBody decodedText = SmsBodyDecoder.Decode(text);
+        string expected = GsmModemService.BuildStoredSmsDeliveryId(
+            scope,
+            "0",
+            pdu);
+
+        Assert.Equal(decodedText.Content, decodedPdu.Content);
+        Assert.Equal(decodedText.SmsTimestampUtc, decodedPdu.SmsTimestampUtc);
+        Assert.NotEmpty(expected);
+        Assert.True(GsmModemService.StoredSmsMatchesExpectedIdentity(
+            scope, "0", expected, pduMarkedRead));
+        Assert.True(GsmModemService.StoredSmsMatchesExpectedIdentity(
+            scope, "0", expected, text));
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         public TemporaryDirectory()

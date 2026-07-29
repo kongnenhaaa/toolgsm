@@ -16,6 +16,14 @@ public interface IGsmSmsService : IDisposable
         string? expectedCcid = null);
 }
 
+public enum SmsSubmitDisposition
+{
+    Confirmed,
+    PayloadSubmittedUncertain,
+    CancelledBeforePayload,
+    FailedBeforePayload
+}
+
 public sealed class GsmSmsService : IGsmSmsService
 {
     private readonly IGsmModemService _modem;
@@ -38,6 +46,28 @@ public sealed class GsmSmsService : IGsmSmsService
 
     public bool IsInProgress(string portName) => InProgressPorts.ContainsKey(portName);
 
+    public static SmsSubmitDisposition ClassifySubmitResult(string? response)
+    {
+        string value = response ?? string.Empty;
+        // The Ctrl+Z marker is an irreversible boundary. It must win even if a
+        // later recovery probe appended an OK to the diagnostic text; otherwise
+        // the UI could report a false success or put the SMS back into retry.
+        if (value.Contains(
+                GsmModemService.SmsPayloadSubmittedMarker,
+                StringComparison.Ordinal))
+        {
+            return SmsSubmitDisposition.PayloadSubmittedUncertain;
+        }
+        if (IsSuccess(value))
+            return SmsSubmitDisposition.Confirmed;
+        if (value.Contains("cancel", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("đã dừng", StringComparison.OrdinalIgnoreCase))
+        {
+            return SmsSubmitDisposition.CancelledBeforePayload;
+        }
+        return SmsSubmitDisposition.FailedBeforePayload;
+    }
+
     public async Task<string> SendAsync(
         string portName,
         string phoneNumber,
@@ -54,7 +84,6 @@ public sealed class GsmSmsService : IGsmSmsService
         CancellationToken token = linkedCts.Token;
         var portLock = _portLocks.GetOrAdd(portName, _ => new SemaphoreSlim(1, 1));
         await portLock.WaitAsync(token);
-        bool reconnectPort = false;
         IDisposable? backgroundLease = null;
 
         try
@@ -94,20 +123,13 @@ public sealed class GsmSmsService : IGsmSmsService
                     // Preserve the irreversible Ctrl+Z boundary even when a SIM
                     // watcher invalidates the session before the modem replies.
                     // A durable incoming response may still prove acceptance;
-                    // this payload must never be retried.
-                    reconnectPort = RequiresPortReconnect(result);
+                    // this payload must never be retried. Keep the established
+                    // COM/SIM session online as SAuto does: an SMS-layer timeout
+                    // must not demote an otherwise healthy port to Connecting.
                     return result;
                 }
                 if (!IsCurrent(session)) return SessionChangedError;
                 if (IsSuccess(result)) return "Gửi thành công";
-                if (RequiresPortReconnect(result))
-                {
-                    // The payload may already have reached the carrier. Never resend it.
-                    // Reopen only this COM after the modem's in-place channel recovery
-                    // has failed, so later operations start from a clean serial session.
-                    reconnectPort = true;
-                    return result;
-                }
                 if (attempt >= 3 || !ShouldRetry(result)) return result;
 
                 await _delay.WaitAsync(TimeSpan.FromSeconds(2 * attempt), token);
@@ -123,70 +145,13 @@ public sealed class GsmSmsService : IGsmSmsService
         }
         finally
         {
-            try
-            {
-                // A failed SMS channel cannot be restored reliably with another charset
-                // command. Skip that work and perform one targeted COM reconnect instead.
-                if (!reconnectPort && IsCurrent(session))
-                {
-                    try
-                    {
-                        if (_modem.GetModemProfile(portName)?.IsQuectel == true)
-                            await _modem.SendCommandAsync(portName, "AT+CMGF=0", 5000, true);
-                        else
-                        {
-                            await _modem.SendCommandAsync(portName, "AT+CSCS=\"UCS2\"", 5000, true);
-                            await _modem.SendCommandAsync(portName, "AT+CSMP=17,167,0,8", 5000, true);
-                        }
-                    }
-                    catch
-                    {
-                        // Không che kết quả gửi chính; lần khởi tạo/poll kế tiếp sẽ đặt lại charset.
-                    }
-                }
-
-                if (reconnectPort
-                    && !ct.IsCancellationRequested
-                    && IsCurrent(session))
-                {
-                    try
-                    {
-                        // Use the caller lifetime rather than session.Token: reconnect
-                        // initialization intentionally replaces the old SIM session.
-                        await _modem.ReconnectPortAsync(portName, 115200, ct);
-                    }
-                    catch
-                    {
-                        // Preserve the original uncertain send result. A reconnect
-                        // failure must never turn into an automatic payload retry.
-                    }
-                }
-            }
-            finally
-            {
-                backgroundLease?.Dispose();
-                InProgressPorts.TryRemove(portName, out _);
-                portLock.Release();
-
-                // CMGS can leave a +CMTI notification queued while the modem is
-                // finishing the send. Read stored SMS immediately after the
-                // transaction instead of waiting for the periodic sweep.
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Task.Delay(750).ConfigureAwait(false);
-                        await _modem.SweepUnreadSmsAsync(portName)
-                            .ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        // The modem service owns the durable retry path; a
-                        // best-effort post-send sweep must never change the SMS
-                        // send result or fault the caller's task.
-                    }
-                });
-            }
+            // GsmModemService owns channel restoration while its foreground
+            // operation lease is still held. Do not send charset commands or
+            // start an SMS sweep here: either action could overlap the next
+            // queued call/USSD workflow on this COM.
+            backgroundLease?.Dispose();
+            InProgressPorts.TryRemove(portName, out _);
+            portLock.Release();
         }
     }
 
@@ -214,8 +179,11 @@ public sealed class GsmSmsService : IGsmSmsService
         _sessions.IsCurrent(session.PortName, session.Ccid, session.Epoch);
 
     private static bool IsSuccess(string response) =>
-        response.Contains("OK", StringComparison.OrdinalIgnoreCase)
-        || response.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase);
+        !response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+        && (response.Contains("thành công", StringComparison.OrdinalIgnoreCase)
+            || response.Contains("success", StringComparison.OrdinalIgnoreCase)
+            || response.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase)
+            || response.StartsWith("OK", StringComparison.OrdinalIgnoreCase));
 
     private static bool ShouldRetry(string response) =>
         response.Contains("Another command", StringComparison.OrdinalIgnoreCase)
@@ -224,9 +192,6 @@ public sealed class GsmSmsService : IGsmSmsService
         // duplicate SMS. Payload/final-response timeouts are intentionally not retried.
         || response.Contains("Timeout waiting for > prompt", StringComparison.OrdinalIgnoreCase)
         || response.Contains("Timeout configuring SMS", StringComparison.OrdinalIgnoreCase);
-
-    private static bool RequiresPortReconnect(string response) =>
-        response.Contains("SMS channel recovery failed", StringComparison.OrdinalIgnoreCase);
 
     private const string SessionChangedError = "ERROR: SIM session changed during SMS operation";
 }

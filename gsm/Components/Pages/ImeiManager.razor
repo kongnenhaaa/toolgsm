@@ -1,6 +1,5 @@
 @page "/imei"
 @inject MainViewModel Vm
-@inject ImeiManagementService ImeiService
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject IJSRuntime JS
@@ -154,21 +153,15 @@
         <!-- TAB 2: BACKUP DATABASE -->
         <MudTabPanel Text="Backup Database">
         <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow-x:auto; overflow-y:hidden; margin-top:12px;">
-            <MudTable Items="@_backupList" Hover="true" Dense="true" Elevation="0" Breakpoint="Breakpoint.None" Style="background:white; min-width:980px;">
+            <MudTable Items="@_backupList" Hover="true" Dense="true" Elevation="0" Breakpoint="Breakpoint.None" Style="background:white; min-width:520px;">
                 <HeaderContent>
                     <MudTh Style="min-width:230px; white-space: nowrap;">CCID</MudTh>
                     <MudTh Style="white-space: nowrap;">IMEI đã gán</MudTh>
-                    <MudTh Style="white-space: nowrap;">Lần đầu</MudTh>
-                    <MudTh Style="white-space: nowrap;">Lần cuối</MudTh>
-                    <MudTh Style="white-space: nowrap;">Số lần dùng</MudTh>
                     <MudTh Style="width:100px; white-space: nowrap;">Thao tác</MudTh>
                 </HeaderContent>
                 <RowTemplate>
                     <MudTd Style="@("font-family:monospace; font-size:16px; min-width:230px; white-space:nowrap; mso-number-format: '\\@';")">@context.Ccid</MudTd>
                     <MudTd Style="@("font-family:monospace; font-size:16px; font-weight:600; white-space: nowrap; mso-number-format: '\\@';")">@context.Imei</MudTd>
-                    <MudTd Style="font-size:16px; white-space: nowrap;">@context.FirstUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
-                    <MudTd Style="font-size:16px; white-space: nowrap;">@context.LastUsed.ToString("dd/MM/yyyy HH:mm")</MudTd>
-                    <MudTd Style="font-size:16px; white-space: nowrap;">@context.UseCount</MudTd>
                     <MudTd Style="white-space: nowrap;">
                         <MudStack Row="true" Spacing="0">
                             <MudTooltip Text="Copy IMEI">
@@ -289,9 +282,7 @@
             _backupList.Add(new ImeiBackupItem
             {
                 Ccid = entry.Ccid,
-                Imei = entry.Imei,
-                LastUsed = string.IsNullOrEmpty(entry.CreatedAt) ? DateTime.Now : (DateTime.TryParse(entry.CreatedAt, out var dt) ? dt : DateTime.Now),
-                UseCount = 1
+                Imei = entry.Imei
             });
         }
         _withBackupCount = Ports.Count(p => !string.IsNullOrEmpty(GetOriginalImei(p.Serial)));
@@ -585,8 +576,5 @@
     {
         public string Ccid { get; set; } = "";
         public string Imei { get; set; } = "";
-        public DateTime FirstUsed { get; set; }
-        public DateTime LastUsed { get; set; }
-        public int UseCount { get; set; }
     }
 }

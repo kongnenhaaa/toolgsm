@@ -51,6 +51,10 @@ internal sealed class PortReconnectCoordinator
     }
 }
 
+public readonly record struct SautoImeiChangeResult(
+    string ReadImei,
+    bool ResetRequested);
+
 public interface IGsmModemService
 {
     Task<string> SendCommandAsync(
@@ -58,6 +62,41 @@ public interface IGsmModemService
         string command,
         int timeoutMs = 5000,
         bool silent = false,
+        CancellationToken ct = default);
+    /// <summary>
+    /// Runs the SAuto airplane sequence and advances only after the shared RX
+    /// callback publishes a fresh +CFUN state report.
+    /// </summary>
+    Task<bool> EnterSautoAirplaneModeAsync(
+        string portName,
+        CancellationToken ct = default);
+    /// <summary>
+    /// Runs GSMController.ChangeImei while owning the UART continuously:
+    /// write slot 7, wait for the shared RX callback to publish the readback,
+    /// then send the CFUN reset without using terminal OK as a gate.
+    /// </summary>
+    Task<SautoImeiChangeResult> ChangeSautoImeiAsync(
+        string portName,
+        string targetImei,
+        CancellationToken ct = default);
+    /// <summary>
+    /// Returns the latest slot-7 IMEI already parsed by the SAuto receive loop.
+    /// This is a read-only memory lookup and does not transmit another AT command.
+    /// </summary>
+    string GetObservedImei(string portName);
+    /// <summary>
+    /// Returns the latest ICCID parsed by the SAuto receive loop. This is a
+    /// read-only memory lookup and does not transmit another AT command.
+    /// </summary>
+    string GetObservedCcid(string portName);
+    /// <summary>
+    /// Runs GSMController.USSDCheck with the SAuto lock boundary: each AT
+    /// command owns the UART only while it is written. The USSD stage advances
+    /// only when the modem publishes a +CUSD payload.
+    /// </summary>
+    Task<string?> RunSautoManualUssdAsync(
+        string portName,
+        IReadOnlyList<string> stages,
         CancellationToken ct = default);
     Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false);
     Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 15000, CancellationToken ct = default);
@@ -73,18 +112,18 @@ public interface IGsmModemService
         string expectedCcid,
         string expectedImei);
     /// <summary>
+    /// Stops the additional SMS maintenance layer before a SAuto IMEI workflow.
+    /// Normal SAuto RX handling remains active; maintenance is re-enabled only
+    /// after the post-reset automatic USSD stage has completed.
+    /// </summary>
+    Task<IDisposable> HoldSmsReceiveMaintenanceUntilSautoReadyAsync(
+        string portName,
+        CancellationToken ct = default);
+    /// <summary>
     /// Bật/tắt xác nhận rút SIM nhanh. Cờ được bật ngay khi CCID của phiên hiện
     /// tại đã được xác nhận, kể cả khi SIM còn đang chờ thao tác IMEI.
     /// </summary>
-    void SetSimRemovalWatchEnabled(string portName, bool enabled);
     void SetSmsSimIdentity(string portName, string? ccid);
-    /// <summary>
-    /// Ensures the circuit-switched registration required by USSD/calls.
-    /// LTE/EPS registration alone is not sufficient for AT+CUSD on EC20.
-    /// </summary>
-    Task<bool> EnsureCsRegistrationForUssdAsync(
-        string portName,
-        CancellationToken ct = default);
     List<string> GetAvailablePorts();
     string ConnectAll(int baudRate = 115200);
     Task<bool> ReconnectPortAsync(
@@ -97,7 +136,6 @@ public interface IGsmModemService
         string portName,
         bool preserveCurrentNetworkPollingForResume = true);
     void StartHotplugWaitLoop(string portName);
-    Task HandleSimInsertedAsync(string portName);
     Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default);
     Task ReloadSimAsync(string portName);
     Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default);
@@ -233,15 +271,98 @@ public class GsmModemService : IGsmModemService
         "AT+QURCCFG=\"urcport\",\"uart1\"",
         "AT+CMGF=1",
         "AT+CPMS=\"SM\",\"SM\",\"SM\"",
+        "AT+CMGD=1,4",
         "AT+CPMS=\"ME\",\"ME\",\"ME\"",
+        "AT+CMGD=1,4",
         "AT+CPMS=\"SM\",\"SM\",\"SM\"",
         "AT+CPMS?",
         "AT+CNMI=1,1,0,0,0",
         "AT+QCFG=\"nwscanmode\",0,1",
         "AT+QURCCFG=\"urcport\",\"uart1\"",
-        "AT+CUSD=1",
         "AT+CPIN?"
     ];
+
+    internal static IReadOnlyList<string> SautoInitial111CommandOrder { get; } =
+    [
+        "AT+CUSD=2",
+        "AT+CUSD=1,\"*111#\",15"
+    ];
+
+    internal static IReadOnlyList<string> SautoInitial101CommandOrder { get; } =
+    [
+        "AT+CUSD=2",
+        "AT+CUSD=1,\"*101#\",15"
+    ];
+
+    internal static IReadOnlyList<string> SautoNetworkPollingCommandOrder { get; } =
+    [
+        "AT+CPIN? \r",
+        "AT+CSQ \r",
+        "AT+COPS?"
+    ];
+
+    internal static TimeSpan SautoImeiResetGuardDelay { get; } =
+        TimeSpan.FromSeconds(10);
+
+    internal static TimeSpan SautoImeiWriteGuardDelay { get; } =
+        TimeSpan.FromMilliseconds(500);
+
+    internal const int SautoImeiReadMaxAttempts = 5;
+
+    internal static TimeSpan SautoImeiReadInitialDelay { get; } =
+        TimeSpan.FromMilliseconds(100);
+
+    internal static TimeSpan SautoImeiReadPollDelay { get; } =
+        TimeSpan.FromMilliseconds(100);
+
+    internal static TimeSpan SautoImeiReadTimeout { get; } =
+        TimeSpan.FromSeconds(12);
+
+    internal static TimeSpan SautoImeiReadRetryDelay { get; } =
+        TimeSpan.FromSeconds(1);
+
+    internal const int SautoAirplaneMaxAttempts = 5;
+
+    internal static TimeSpan SautoAirplanePreQueryDelay { get; } =
+        TimeSpan.FromSeconds(1);
+
+    internal static TimeSpan SautoAirplaneResponsePollDelay { get; } =
+        TimeSpan.FromMilliseconds(200);
+
+    internal static TimeSpan SautoAirplaneResponseTimeout { get; } =
+        TimeSpan.FromSeconds(10);
+
+    // Acknowledged USSD requests are asynchronous. VinaPhone may deliver the
+    // +CUSD several seconds after OK; wait for the actual payload instead of
+    // declaring failure and forcing the user to Refresh the port.
+    internal static TimeSpan SautoManualUssdResponseTimeout { get; } =
+        TimeSpan.FromSeconds(30);
+
+    internal static TimeSpan SautoAirplaneRetryDelay { get; } =
+        TimeSpan.FromSeconds(1);
+
+    internal static TimeSpan SautoDataPortStepDelay { get; } =
+        TimeSpan.FromMilliseconds(100);
+
+    internal static TimeSpan SautoNetworkRecheckInterval { get; } =
+        TimeSpan.FromSeconds(2);
+
+    internal static TimeSpan SautoDataPortLoopDelay { get; } =
+        TimeSpan.FromMilliseconds(400);
+
+    internal static IReadOnlyList<string> SmsReceiveRestoreCommandOrder { get; } =
+    [
+        "AT+CMGF=1",
+        "AT+CSCS=\"GSM\"",
+        "AT+CPMS=\"SM\",\"SM\",\"SM\"",
+        "AT+CNMI=1,1,0,0,0"
+    ];
+
+    internal const string SmsReceiveWatchdogCommand = "AT+CMGL=\"ALL\"";
+    internal static TimeSpan SmsReceiveWatchdogInterval { get; } =
+        TimeSpan.FromSeconds(60);
+    internal static TimeSpan SmsReceiveWatchdogTurnGap { get; } =
+        TimeSpan.FromSeconds(1);
 
     private readonly ConcurrentDictionary<string, SerialPort> _serialPorts = new();
     private readonly ConcurrentDictionary<string, gsm.Models.IncomingCallSession> _incomingCalls = new();
@@ -249,6 +370,7 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, IncomingCallRecordingState> _incomingCallRecordings =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _semaphores = new();
+    private readonly PortOperationCoordinator _foregroundOperations = new();
     private readonly ConcurrentDictionary<string, StringBuilder> _portBuffers = new();
     private readonly ConcurrentDictionary<string, object> _portBufferLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _commandTcs = new();
@@ -264,63 +386,109 @@ public class GsmModemService : IGsmModemService
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _pollingCts = new();
     private sealed record NetworkPollingIdentity(string Ccid, string Imei);
+    private sealed record SautoNetworkState(
+        string Ccid,
+        string Carrier,
+        string NetworkType,
+        bool AutomaticUssdCompleted,
+        DateTimeOffset LastAutomaticUssdAttemptUtc);
+    private sealed record SmsReceiveMaintenanceGate(
+        string Ccid,
+        long Generation);
+
+    private sealed class SautoReceiveState
+    {
+        public object Sync { get; } = new();
+        public StringBuilder LineBuffer { get; } = new();
+        public long Revision { get; set; }
+        public long CfunRevision { get; set; }
+        public long UssdRevision { get; set; }
+        public bool SimReady { get; set; }
+        public bool SimLocked { get; set; }
+        public bool ReadyTransitionPending { get; set; }
+        public bool RestartRequired { get; set; }
+        public int? CfunMode { get; set; }
+        public string CpinResponse { get; set; } = string.Empty;
+        public string Imei { get; set; } = string.Empty;
+        public string Ccid { get; set; } = string.Empty;
+        public string Carrier { get; set; } = string.Empty;
+        public string NetworkType { get; set; } = string.Empty;
+        public string CsqResponse { get; set; } = string.Empty;
+        public string CopsResponse { get; set; } = string.Empty;
+        public string UssdResponse { get; set; } = string.Empty;
+        public string Manufacturer { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
+        public string Firmware { get; set; } = string.Empty;
+    }
+
+    private sealed record SautoReceiveSnapshot(
+        long Revision,
+        long CfunRevision,
+        long UssdRevision,
+        bool SimReady,
+        bool SimLocked,
+        bool RestartRequired,
+        int? CfunMode,
+        string CpinResponse,
+        string Imei,
+        string Ccid,
+        string Carrier,
+        string NetworkType,
+        string CsqResponse,
+        string CopsResponse,
+        string UssdResponse,
+        string Manufacturer,
+        string Model,
+        string Firmware);
 
     private readonly ConcurrentDictionary<string, NetworkPollingIdentity> _pollingExpectedIdentities =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _keepAliveCts = new();
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _portHealthCts = new();
-    private readonly ConcurrentDictionary<string, byte> _portHealthRecoveryOwners = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, int> _portHealthFailureCounts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _simMonitorCts = new();
+    private readonly ConcurrentDictionary<string, SautoNetworkState> _sautoNetworkStates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SautoReceiveState> _sautoReceiveStates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _sautoReceiveSignals =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _sautoRestartOwners =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _sautoImeiChangePorts =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, Guid> _sautoResettingPorts =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _sautoInitializingPorts =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, int> _suspendedBackgroundPorts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, NetworkPollingIdentity> _pendingNetworkPollingPorts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly object _backgroundOperationSync = new();
-    private readonly ConcurrentDictionary<string, bool> _lastSimState = new();
-    private readonly ConcurrentDictionary<string, bool> _simStackDisabledByTool = new();
-    private readonly ConcurrentDictionary<string, int> _simRemovalEvidenceCounts = new();
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _simRemovalEvidenceSince = new();
     // GlobalSimMonitor chạy độc lập với vòng polling mạng. Bộ xác nhận này xử lý
     // URC rút SIM ngay, còn vòng quét 1 giây là fallback cho board thiếu URC.
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _simRemovalConfirmationCts = new();
-    private readonly ConcurrentDictionary<string, byte> _simRemovalWatchEnabled = new(StringComparer.OrdinalIgnoreCase);
     // CPIN/QSIMSTAT can report a short-lived absent state while the modem
     // changes CFUN or the CS/IMS domain. Require both consecutive probes and a
     // minimum elapsed window before clearing a live SIM from the UI.
-    private const int SimRemovalConfirmationCycles = 3;
-    private static readonly TimeSpan SimRemovalConfirmationWindow = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan SimPresenceMonitorInitialDelay = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan SimPresenceMonitorInterval = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan SimRemovalConfirmationDelay = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan SimRemovalRecheckDelay = TimeSpan.FromMilliseconds(500);
-    private const int SimPresenceProbeTimeoutMs = 2000;
     // An offline SIM-stack restart (CFUN=0 -> CFUN=4) can temporarily report
     // CPIN NOT READY / QSIMSTAT=0 while the card is still inserted. During that
     // window, removal monitors must not mistake the transient state for a hot-swap.
-    private readonly ConcurrentDictionary<string, byte> _rebootRecoveryInProgress = new();
     // A modem can keep reporting CSQ while the SIM stack itself is wedged.
     // Keep this recovery per COM and bounded so a CME 13 cannot spin an
     // unbounded CFUN/COPS loop or stall all other ports.
-    private readonly ConcurrentDictionary<string, byte> _networkSimRecoveryOwners = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, int> _networkSimRecoveryAttempts = new(StringComparer.OrdinalIgnoreCase);
-    private const int MaxNetworkSimRecoveryAttempts = 3;
-    private const int MaxNetworkSimRecoveryAttemptsWithHardReset = MaxNetworkSimRecoveryAttempts + 1;
-    private const int MaxNetworkSimRecoveryAttemptsWithManualOperator = MaxNetworkSimRecoveryAttemptsWithHardReset + 1;
-    private const int MaxNetworkRegistrationRecoveryPassesBeforeReopen = 6;
-    internal const int NetworkLossConfirmationMisses = 3;
     /// <summary>Guard chống race condition: đánh dấu port đang trong quá trình khởi tạo SIM đầu tiên.</summary>
-    private readonly ConcurrentDictionary<string, bool> _simInitInProgress = new();
-    private readonly ConcurrentDictionary<string, bool> _simInsertInProgress = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _portLifetimeCts = new();
     private readonly PortReconnectCoordinator _portReconnects = new();
     private readonly object _connectLock = new object();
-    private static readonly TimeSpan PortReconnectDelay = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan PortReconnectDelay = TimeSpan.FromSeconds(1);
 
 
     public bool IsCallInProgress(string portName) =>
         _outgoingCallOperations.ContainsKey(portName)
         || (_activeCalls.TryGetValue(portName, out bool active) && active);
+
+    public string GetObservedImei(string portName) =>
+        GetSautoReceiveSnapshot(portName).Imei;
+
+    public string GetObservedCcid(string portName) =>
+        GetSautoReceiveSnapshot(portName).Ccid;
 
     public QuectelModemProfile? GetModemProfile(string portName) =>
         _modemProfiles.TryGetValue(portName, out var profile) ? profile : null;
@@ -370,8 +538,6 @@ public class GsmModemService : IGsmModemService
                     _pendingNetworkPollingPorts[portName] = pollingIdentity;
                 CancelLoop(_pollingCts, portName);
                 _pollingExpectedIdentities.TryRemove(portName, out _);
-                CancelLoop(_keepAliveCts, portName);
-                CancelLoop(_simMonitorCts, portName);
             }
 
             // IMEI mutation is a fail-closed boundary.  A polling request that
@@ -428,6 +594,156 @@ public class GsmModemService : IGsmModemService
         private Action? _release = release;
 
         public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
+    }
+
+    private async Task<IDisposable> AcquireForegroundOperationAsync(
+        string portName,
+        string operation,
+        CancellationToken ct)
+    {
+        AtCommandTraceLogger.State(
+            portName,
+            $"FOREGROUND_WAIT;operation={operation}");
+        IDisposable lease = await _foregroundOperations
+            .AcquireAsync(portName, ct)
+            .ConfigureAwait(false);
+        AtCommandTraceLogger.State(
+            portName,
+            $"FOREGROUND_BEGIN;operation={operation}");
+        return new BackgroundOperationLease(() =>
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"FOREGROUND_END;operation={operation}");
+            lease.Dispose();
+        });
+    }
+
+    /// <summary>
+    /// Returns a COM to command mode before another foreground workflow starts.
+    /// Progress is gated by terminal modem responses, not by guessed cooldowns:
+    /// ESC leaves a stale CMGS prompt, AT proves command mode, CLCC proves there
+    /// is no voice call, and CUSD=2 closes an earlier USSD session.
+    /// </summary>
+    private async Task<bool> PrepareForegroundChannelAsync(
+        string portName,
+        string nextOperation,
+        CancellationToken ct)
+    {
+        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
+            || serialPort == null
+            || !_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"FOREGROUND_CLEANUP_FAILED;next={nextOperation};reason=PORT_NOT_OPEN");
+            return false;
+        }
+
+        // ESC has no terminal response.  Keep it under the command semaphore,
+        // then use acknowledged AT probes to prove that the modem left CMGS mode.
+        await semaphore.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!serialPort.IsOpen) return false;
+            AtCommandTraceLogger.Tx(portName, "<ESC>");
+            serialPort.Write(new byte[] { 27 }, 0, 1);
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+
+        bool commandModeReady = false;
+        string lastProbe = string.Empty;
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            lastProbe = await SendCommandAsync(
+                portName,
+                "AT",
+                3000,
+                silent: true,
+                ct: ct).ConfigureAwait(false);
+            if (IsCleanSmsRecoveryProbe(lastProbe))
+            {
+                commandModeReady = true;
+                break;
+            }
+        }
+
+        if (!commandModeReady)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"FOREGROUND_CLEANUP_FAILED;next={nextOperation};step=COMMAND_MODE;result={GetSautoResponseOutcome(lastProbe)}");
+            return false;
+        }
+
+        // Do not issue ATH when CLCC already proves that there is no voice call.
+        // Data-mode CLCC entries are not voice sessions and are intentionally kept.
+        string clcc = await SendCommandAsync(
+            portName,
+            "AT+CLCC",
+            3000,
+            silent: true,
+            ct: ct).ConfigureAwait(false);
+        bool voiceIdle = IsTrustedNoVoiceCallSnapshot(clcc);
+        if (!voiceIdle)
+        {
+            for (int attempt = 1; attempt <= 3 && !voiceIdle; attempt++)
+            {
+                await SendCommandAsync(
+                    portName,
+                    attempt == 1 ? "ATH" : "AT+CHUP",
+                    3000,
+                    silent: true,
+                    ct: ct).ConfigureAwait(false);
+                clcc = await SendCommandAsync(
+                    portName,
+                    "AT+CLCC",
+                    3000,
+                    silent: true,
+                    ct: ct).ConfigureAwait(false);
+                voiceIdle = IsTrustedNoVoiceCallSnapshot(clcc);
+            }
+        }
+
+        if (!voiceIdle)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"FOREGROUND_CLEANUP_FAILED;next={nextOperation};step=VOICE_IDLE;result={Regex.Replace(clcc.Trim(), @"\s+", " ")}");
+            return false;
+        }
+
+        string cancelUssd = await SendCommandAsync(
+            portName,
+            "AT+CUSD=2",
+            3000,
+            silent: true,
+            ct: ct).ConfigureAwait(false);
+        if (!IsSautoOkResponse(cancelUssd))
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"FOREGROUND_CLEANUP_FAILED;next={nextOperation};step=USSD_CANCEL;result={GetSautoResponseOutcome(cancelUssd)}");
+            return false;
+        }
+
+        string finalProbe = await SendCommandAsync(
+            portName,
+            "AT",
+            3000,
+            silent: true,
+            ct: ct).ConfigureAwait(false);
+        bool ready = IsCleanSmsRecoveryProbe(finalProbe);
+        AtCommandTraceLogger.State(
+            portName,
+            ready
+                ? $"FOREGROUND_CLEAN;next={nextOperation};sms=IDLE;voice=IDLE;ussd=IDLE"
+                : $"FOREGROUND_CLEANUP_FAILED;next={nextOperation};step=FINAL_PROBE;result={GetSautoResponseOutcome(finalProbe)}");
+        return ready;
     }
 
     internal static bool ShouldPreserveNetworkPollingOnSuspension(
@@ -551,6 +867,32 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _smsSweepLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _smsSweepRetryOwners =
         new(StringComparer.OrdinalIgnoreCase);
+    // A single owner performs the sweep, but every new request is retained here.
+    // Previously TryAdd(owner)==false silently discarded the newer request. That
+    // let an SMS remain in modem storage until another +CMTI happened to arrive.
+    private readonly ConcurrentDictionary<string, long> _smsSweepPendingDueTicks =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _smsSweepPendingReasons =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _smsReceiveWatchdogSchedulerSync = new();
+    private CancellationTokenSource? _smsReceiveWatchdogSchedulerCts;
+    private Task? _smsReceiveWatchdogSchedulerTask;
+    private int _smsReceiveWatchdogCursor;
+    private readonly ConcurrentDictionary<string, long> _smsReceiveWatchdogLastProbeTicks =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Every periodic or recovery CMGL scan across all physical COM ports owns
+    // this one gate. With 64 ports the modem never receives a 64-command burst.
+    private readonly SemaphoreSlim _smsScanTurnGate = new(1, 1);
+    private long _smsScanTurnCompletedTick;
+    private readonly ConcurrentDictionary<string, SmsReceiveMaintenanceGate> _smsReceiveMaintenanceIdentities =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Every IMEI flow or SIM identity change advances this generation. An old
+    // network loop may still publish a late +CUSD after cancellation; it must
+    // never unlock SMS maintenance for the new SAuto lifecycle on the same COM.
+    private readonly ConcurrentDictionary<string, long> _smsReceiveMaintenanceGenerations =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _smsReceiveMaintenanceActivationOwners =
+        new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DateTime> _smsRetryLogAt = new();
     private readonly ConcurrentDictionary<string, int> _smsReadRetryAttempts = new();
     // Value 1 = one read is queued/running; value 2 = the same SIM index was
@@ -671,6 +1013,15 @@ public class GsmModemService : IGsmModemService
         }
         if (networkIdentityChanged)
         {
+            _sautoNetworkStates.TryRemove(portName, out _);
+            UpdateSautoReceiveState(
+                portName,
+                static state =>
+                {
+                    state.Carrier = string.Empty;
+                    state.NetworkType = string.Empty;
+                    state.CopsResponse = string.Empty;
+                });
             _networkIdentityGenerations.AddOrUpdate(
                 portName, 1, static (_, current) => current + 1);
             InvalidateNetworkRecoveryForIdentityChange(portName);
@@ -698,6 +1049,7 @@ public class GsmModemService : IGsmModemService
                                               or InvalidDataException)
                 {
                     _smsSimIdentities.TryRemove(portName, out _);
+                    InvalidateSmsReceiveMaintenance(portName);
                     InvalidateSmsQueueGeneration(portName);
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
@@ -712,28 +1064,460 @@ public class GsmModemService : IGsmModemService
 
         if (changed)
         {
+            InvalidateSmsReceiveMaintenance(portName);
             InvalidateSmsQueueGeneration(portName);
-            if (!string.IsNullOrWhiteSpace(normalized))
+        }
+        else if (string.IsNullOrWhiteSpace(normalized))
+        {
+            _smsReceiveMaintenanceIdentities.TryRemove(portName, out _);
+            StopSmsReceiveWatchdog(portName);
+        }
+        else if (IsSmsReceiveMaintenanceEnabled(portName))
+        {
+            EnsureSmsReceiveWatchdog(portName);
+        }
+    }
+
+    public async Task<IDisposable> HoldSmsReceiveMaintenanceUntilSautoReadyAsync(
+        string portName,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+        InvalidateSmsReceiveMaintenance(portName);
+        IDisposable lifecycleLease = await AcquireForegroundOperationAsync(
+                portName,
+                "SAUTO_IMEI_LIFECYCLE",
+                ct)
+            .ConfigureAwait(false);
+
+        // A reader that had already passed its gate may have owned the
+        // foreground coordinator first. Invalidate once more after acquiring
+        // the lease so every reader queued behind this lifecycle must re-check.
+        long generation = InvalidateSmsReceiveMaintenance(portName);
+        AtCommandTraceLogger.State(
+            portName,
+            $"SMS_MAINTENANCE_HELD;reason=SAUTO_IMEI_FLOW;generation={generation};next=AUTOMATIC_USSD_COMPLETE_AND_UART_RELEASED");
+        return lifecycleLease;
+    }
+
+    private long CurrentSmsReceiveMaintenanceGeneration(string portName) =>
+        _smsReceiveMaintenanceGenerations.GetOrAdd(portName, 0);
+
+    private long InvalidateSmsReceiveMaintenance(string portName)
+    {
+        long generation = _smsReceiveMaintenanceGenerations.AddOrUpdate(
+            portName,
+            1,
+            static (_, current) => unchecked(current + 1));
+        _smsReceiveMaintenanceIdentities.TryRemove(portName, out _);
+        StopSmsReceiveWatchdog(portName);
+        return generation;
+    }
+
+    internal static bool CanOpenSmsReceiveMaintenanceGate(
+        long expectedGeneration,
+        long currentGeneration,
+        string? expectedCcid,
+        string? smsCcid,
+        string? networkCcid,
+        bool automaticUssdCompleted)
+    {
+        return automaticUssdCompleted
+            && expectedGeneration == currentGeneration
+            && !string.IsNullOrWhiteSpace(expectedCcid)
+            && string.Equals(expectedCcid, smsCcid, StringComparison.Ordinal)
+            && string.Equals(expectedCcid, networkCcid, StringComparison.Ordinal);
+    }
+
+    private bool CanOpenSmsReceiveMaintenanceGate(
+        string portName,
+        string expectedCcid,
+        long expectedGeneration)
+    {
+        _smsSimIdentities.TryGetValue(portName, out string? smsCcid);
+        _networkSimIdentities.TryGetValue(portName, out string? networkCcid);
+        bool completed = _sautoNetworkStates.TryGetValue(
+                portName, out SautoNetworkState? networkState)
+            && string.Equals(
+                networkState.Ccid,
+                expectedCcid,
+                StringComparison.Ordinal)
+            && networkState.AutomaticUssdCompleted;
+        return CanOpenSmsReceiveMaintenanceGate(
+            expectedGeneration,
+            CurrentSmsReceiveMaintenanceGeneration(portName),
+            expectedCcid,
+            smsCcid,
+            networkCcid,
+            completed);
+    }
+
+    private bool IsSmsReceiveMaintenanceEnabled(string portName)
+    {
+        return _smsReceiveMaintenanceIdentities.TryGetValue(
+                portName,
+                out SmsReceiveMaintenanceGate? gate)
+            && CanOpenSmsReceiveMaintenanceGate(
+                portName,
+                gate.Ccid,
+                gate.Generation);
+    }
+
+    private void EnableSmsReceiveMaintenanceAfterSauto(
+        string portName,
+        string expectedCcid,
+        long expectedGeneration,
+        string reason)
+    {
+        string normalized = Regex.Match(
+            expectedCcid ?? string.Empty,
+            @"(?<!\d)89\d{16,20}(?!\d)").Value;
+        if (string.IsNullOrWhiteSpace(normalized)
+            || !CanOpenSmsReceiveMaintenanceGate(
+                portName,
+                normalized,
+                expectedGeneration))
+            return;
+
+        string activationKey =
+            $"{portName}\u001f{expectedGeneration}";
+        if (!_smsReceiveMaintenanceActivationOwners.TryAdd(
+                activationKey,
+                0))
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
             {
-                string scope = $"ccid:{normalized}";
-                ScheduleCompletedMultipartReplay(scope, portName);
-                _ = Task.Run(async () =>
+                if (!_portLifetimeCts.TryGetValue(
+                        portName,
+                        out CancellationTokenSource? lifetime)
+                    || lifetime.IsCancellationRequested
+                    || !_semaphores.TryGetValue(
+                        portName,
+                        out SemaphoreSlim? semaphore))
+                    return;
+
+                // This request is raised from inside DataPort's UART critical
+                // section. Acquiring the same semaphore here is the condition
+                // that proves the completed *111# owner has actually released
+                // the COM; no guessed post-USSD millisecond delay is used.
+                await semaphore.WaitAsync(lifetime.Token).ConfigureAwait(false);
+                bool opened = false;
+                bool firstEnable = false;
+                try
                 {
-                    try
-                    {
-                        await Task.Delay(250).ConfigureAwait(false);
-                        await SweepUnreadSmsAsync(portName).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[SMS_IDENTITY_SWEEP_RETRY] {ex.Message}"
-                        });
-                    }
+                    if (!CanOpenSmsReceiveMaintenanceGate(
+                            portName,
+                            normalized,
+                            expectedGeneration))
+                        return;
+
+                    var nextGate = new SmsReceiveMaintenanceGate(
+                        normalized,
+                        expectedGeneration);
+                    firstEnable =
+                        !_smsReceiveMaintenanceIdentities.TryGetValue(
+                            portName,
+                            out SmsReceiveMaintenanceGate? current)
+                        || current != nextGate;
+                    _smsReceiveMaintenanceIdentities[portName] = nextGate;
+                    opened = true;
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+
+                if (!opened || !IsSmsReceiveMaintenanceEnabled(portName))
+                    return;
+
+                if (firstEnable)
+                {
+                    AtCommandTraceLogger.State(
+                        portName,
+                        $"SMS_MAINTENANCE_ENABLED;ccid={normalized};generation={expectedGeneration};reason={reason};after=SAUTO_AUTO_USSD_AND_UART_RELEASE");
+                }
+
+                EnsureSmsReceiveWatchdog(portName);
+                ScheduleSafeUnreadSmsSweep(
+                    portName,
+                    $"sauto-post-ussd:{reason}");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            finally
+            {
+                _smsReceiveMaintenanceActivationOwners.TryRemove(
+                    activationKey,
+                    out _);
+            }
+        });
+    }
+
+    private void EnsureSmsReceiveWatchdog(string portName)
+    {
+        if (!_portLifetimeCts.TryGetValue(
+                portName, out CancellationTokenSource? lifetime)
+            || lifetime.IsCancellationRequested)
+            return;
+
+        bool newlyRegistered = _smsReceiveWatchdogLastProbeTicks.TryAdd(
+            portName,
+            Environment.TickCount64);
+        lock (_smsReceiveWatchdogSchedulerSync)
+        {
+            if (_smsReceiveWatchdogSchedulerCts is { } existing
+                && !existing.IsCancellationRequested
+                && _smsReceiveWatchdogSchedulerTask is { IsCompleted: false })
+            {
+                if (newlyRegistered)
+                    LogSmsReceiveWatchdogRegistration(portName);
+                return;
+            }
+
+            _smsReceiveWatchdogSchedulerCts?.Dispose();
+            var scheduler = new CancellationTokenSource();
+            _smsReceiveWatchdogSchedulerCts = scheduler;
+            _smsReceiveWatchdogSchedulerTask =
+                RunSmsReceiveWatchdogSchedulerAsync(scheduler);
+        }
+
+        if (newlyRegistered)
+            LogSmsReceiveWatchdogRegistration(portName);
+    }
+
+    private void LogSmsReceiveWatchdogRegistration(string portName) =>
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = $"[SMS_WATCHDOG_REGISTERED] mode=ROUND_ROBIN; per_port_min={SmsReceiveWatchdogInterval.TotalSeconds:0}s; turn_gap={SmsReceiveWatchdogTurnGap.TotalSeconds:0}s."
+        });
+
+    private void StopSmsReceiveWatchdog(string portName)
+    {
+        _smsReceiveWatchdogLastProbeTicks.TryRemove(portName, out _);
+        CancellationTokenSource? schedulerToCancel = null;
+        lock (_smsReceiveWatchdogSchedulerSync)
+        {
+            bool anyEnabledPort = _smsReceiveMaintenanceIdentities.Keys.Any(
+                IsSmsReceiveMaintenanceEnabled);
+            if (!anyEnabledPort)
+                schedulerToCancel = _smsReceiveWatchdogSchedulerCts;
+        }
+        try { schedulerToCancel?.Cancel(); } catch { }
+    }
+
+    private void StopAllSmsReceiveWatchdogs()
+    {
+        CancellationTokenSource? scheduler;
+        lock (_smsReceiveWatchdogSchedulerSync)
+            scheduler = _smsReceiveWatchdogSchedulerCts;
+        try { scheduler?.Cancel(); } catch { }
+        _smsReceiveWatchdogLastProbeTicks.Clear();
+    }
+
+    internal static int GetSmsReceiveWatchdogPortOrder(string? portName)
+    {
+        Match match = Regex.Match(
+            portName ?? string.Empty,
+            @"(\d+)$",
+            RegexOptions.CultureInvariant);
+        return match.Success
+               && int.TryParse(match.Groups[1].Value, out int number)
+            ? number
+            : int.MaxValue;
+    }
+
+    private bool CanRunSmsScanTurn(string portName)
+    {
+        return _serialPorts.TryGetValue(portName, out SerialPort? serialPort)
+            && serialPort.IsOpen
+            && _smsSimIdentities.ContainsKey(portName)
+            && IsSmsReceiveMaintenanceEnabled(portName)
+            && !_suspendedBackgroundPorts.ContainsKey(portName)
+            && !IsCallInProgress(portName)
+            && !_sautoInitializingPorts.ContainsKey(portName)
+            && !_sautoImeiChangePorts.ContainsKey(portName)
+            && !_sautoResettingPorts.ContainsKey(portName);
+    }
+
+    private async Task<IDisposable> AcquireSmsScanTurnAsync(
+        CancellationToken token)
+    {
+        await _smsScanTurnGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            long lastCompleted = Volatile.Read(
+                ref _smsScanTurnCompletedTick);
+            long gapMilliseconds = checked(
+                (long)SmsReceiveWatchdogTurnGap.TotalMilliseconds);
+            long elapsed = Environment.TickCount64 - lastCompleted;
+            if (lastCompleted != 0 && elapsed < gapMilliseconds)
+            {
+                await Task.Delay(
+                        TimeSpan.FromMilliseconds(gapMilliseconds - elapsed),
+                        token)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            _smsScanTurnGate.Release();
+            throw;
+        }
+
+        return new BackgroundOperationLease(() =>
+        {
+            Volatile.Write(
+                ref _smsScanTurnCompletedTick,
+                Environment.TickCount64);
+            _smsScanTurnGate.Release();
+        });
+    }
+
+    private async Task RunSmsReceiveWatchdogSchedulerAsync(
+        CancellationTokenSource scheduler)
+    {
+        CancellationToken token = scheduler.Token;
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                string[] ports = _smsReceiveMaintenanceIdentities.Keys
+                    .Where(IsSmsReceiveMaintenanceEnabled)
+                    .OrderBy(GetSmsReceiveWatchdogPortOrder)
+                    .ThenBy(static port => port, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                if (ports.Length == 0)
+                {
+                    await Task.Delay(SmsReceiveWatchdogTurnGap, token)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                long now = Environment.TickCount64;
+                long intervalMilliseconds = checked(
+                    (long)SmsReceiveWatchdogInterval.TotalMilliseconds);
+                string? selectedPort = null;
+                int start = Math.Abs(_smsReceiveWatchdogCursor) % ports.Length;
+                for (int offset = 0; offset < ports.Length; offset++)
+                {
+                    int index = (start + offset) % ports.Length;
+                    string candidate = ports[index];
+                    long lastProbe = _smsReceiveWatchdogLastProbeTicks.GetOrAdd(
+                        candidate,
+                        now);
+                    if (now - lastProbe < intervalMilliseconds)
+                        continue;
+
+                    selectedPort = candidate;
+                    _smsReceiveWatchdogCursor = (index + 1) % ports.Length;
+                    _smsReceiveWatchdogLastProbeTicks[candidate] = now;
+                    break;
+                }
+
+                if (selectedPort == null)
+                {
+                    await Task.Delay(SmsReceiveWatchdogTurnGap, token)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                await ProbeStoredSmsForWatchdogAsync(selectedPort, token)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            lock (_smsReceiveWatchdogSchedulerSync)
+            {
+                if (ReferenceEquals(
+                        _smsReceiveWatchdogSchedulerCts,
+                        scheduler))
+                {
+                    _smsReceiveWatchdogSchedulerCts = null;
+                    _smsReceiveWatchdogSchedulerTask = null;
+                    _smsReceiveWatchdogCursor = 0;
+                }
+            }
+            scheduler.Dispose();
+        }
+    }
+
+    private async Task ProbeStoredSmsForWatchdogAsync(
+        string portName,
+        CancellationToken token)
+    {
+        if (!CanRunSmsScanTurn(portName))
+            return;
+
+        try
+        {
+            using IDisposable scanTurn =
+                await AcquireSmsScanTurnAsync(token).ConfigureAwait(false);
+            if (!CanRunSmsScanTurn(portName))
+                return;
+
+            using IDisposable foregroundLease =
+                await AcquireForegroundOperationAsync(
+                        portName,
+                        "SMS_WATCHDOG_ROUND_ROBIN",
+                        token)
+                    .ConfigureAwait(false);
+            if (!CanRunSmsScanTurn(portName))
+                return;
+
+            string response = await SendCommandAsync(
+                    portName,
+                    SmsReceiveWatchdogCommand,
+                    timeoutMs: 5000,
+                    silent: true,
+                    ct: token)
+                .ConfigureAwait(false);
+            string safeResponse = response ?? string.Empty;
+            int storedCount = Regex.Matches(
+                    safeResponse,
+                    @"\+CMGL:\s*\d+",
+                    RegexOptions.IgnoreCase)
+                .Select(match => match.Value)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+            if (storedCount > 0)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_WATCHDOG_DRAIN] mode=ROUND_ROBIN; phát hiện {storedCount} slot dù không cần +CMTI; đã chuyển vào hàng đợi đọc."
                 });
             }
+            else if (IsCommandFailure(safeResponse)
+                     && !safeResponse.Contains(
+                         "Another command",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                ScheduleSafeUnreadSmsSweep(
+                    portName,
+                    "watchdog-receive-mode-repair",
+                    initialDelayMs: 1000);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[SMS_WATCHDOG_RETRY] mode=ROUND_ROBIN; {ex.Message}"
+            });
         }
     }
 
@@ -756,80 +1540,6 @@ public class GsmModemService : IGsmModemService
             _pollingExpectedIdentities.TryRemove(portName, out _);
             _pendingNetworkPollingPorts.TryRemove(portName, out _);
         }
-        _rebootRecoveryInProgress.TryRemove(portName, out _);
-
-        string prefix = portName + "\u001f";
-        foreach (string key in _networkSimRecoveryAttempts.Keys)
-        {
-            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                _networkSimRecoveryAttempts.TryRemove(key, out _);
-        }
-    }
-
-    internal bool CancelNetworkPollingForIdentityReverification(
-        string portName,
-        string expectedCcid,
-        string expectedImei,
-        string reason)
-    {
-        CancellationTokenSource? pollingCts = null;
-        lock (_backgroundOperationSync)
-        {
-            if (!_pollingExpectedIdentities.TryGetValue(
-                    portName, out NetworkPollingIdentity? currentIdentity)
-                || !NetworkPollingIdentitiesMatch(
-                    currentIdentity.Ccid,
-                    currentIdentity.Imei,
-                    expectedCcid,
-                    expectedImei))
-            {
-                return false;
-            }
-
-            _pollingExpectedIdentities.TryRemove(portName, out _);
-            _pendingNetworkPollingPorts.TryRemove(portName, out _);
-            lock (_pollingCts)
-            {
-                _pollingCts.TryRemove(portName, out pollingCts);
-            }
-        }
-
-        if (pollingCts != null)
-        {
-            try { pollingCts.Cancel(); } catch { }
-            pollingCts.Dispose();
-        }
-
-        LogMessage?.Invoke(this, new GsmDataEventArgs
-        {
-            PortName = portName,
-            Data = $"[NETWORK_REOPEN_REQUIRED] reason=identity-reverify; expected_ccid={expectedCcid}; expected_imei={expectedImei}; {reason}"
-        });
-        return true;
-    }
-
-    private void ClearNetworkSimRecoveryAttempts(string portName)
-    {
-        string prefix = portName + "\u001f";
-        foreach (string key in _networkSimRecoveryAttempts.Keys)
-        {
-            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                _networkSimRecoveryAttempts.TryRemove(key, out _);
-        }
-        // Backward-compatible cleanup for entries created by an older build.
-        _networkSimRecoveryAttempts.TryRemove(portName, out _);
-    }
-
-    private void ClearNetworkSimRecoveryState(string portName)
-    {
-        ClearNetworkSimRecoveryAttempts(portName);
-        string prefix = portName + "\u001f";
-        foreach (string key in _networkSimRecoveryOwners.Keys)
-        {
-            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                _networkSimRecoveryOwners.TryRemove(key, out _);
-        }
-        _networkSimRecoveryOwners.TryRemove(portName, out _);
     }
 
     private long CurrentSmsGeneration(string portName) =>
@@ -1227,7 +1937,11 @@ public class GsmModemService : IGsmModemService
                 {
                     await Task.Delay(250).ConfigureAwait(false);
                     if (IsCurrentSmsGeneration(port, generation))
-                        await SweepUnreadSmsAsync(port).ConfigureAwait(false);
+                    {
+                        ScheduleSafeUnreadSmsSweep(
+                            port,
+                            "sms-queue-writer-recovery");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -1249,6 +1963,18 @@ public class GsmModemService : IGsmModemService
         await foreach (string msgIndex in state.Queue.Reader.ReadAllAsync(token))
         {
             if (!IsCurrentSmsGeneration(port, state.Generation)) break;
+
+            // Preserve the +CMTI index, but do not emit CMGR/QCMGR while the
+            // captured SAuto IMEI -> reset -> automatic *111# lifecycle owns
+            // this COM. The queued index resumes as soon as that RX milestone
+            // enables SMS maintenance for the same CCID.
+            while (!IsSmsReceiveMaintenanceEnabled(port))
+            {
+                if (!IsCurrentSmsGeneration(port, state.Generation))
+                    return;
+                await Task.Delay(100, token).ConfigureAwait(false);
+            }
+
             // A CMGR can fail while another AT command owns this COM. Keep the
             // SIM index claimed and schedule it again instead of dropping it.
             bool completed = false;
@@ -1428,12 +2154,13 @@ public class GsmModemService : IGsmModemService
         var tcs = new TaskCompletionSource<string>(
             command,
             TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commandTcs.TryAdd(portName, tcs))
+        if (!TryBeginCommandTransaction(portName, tcs))
             return "ERROR: Another command is already in progress";
 
         try
         {
             if (!serialPort.IsOpen) return "ERROR: Port not open";
+            AtCommandTraceLogger.Tx(portName, command + "\r\n");
             serialPort.Write(command + "\r\n");
             try
             {
@@ -1445,6 +2172,7 @@ public class GsmModemService : IGsmModemService
             catch (TimeoutException)
             {
                 tcs.TrySetCanceled();
+                AtCommandTraceLogger.Timeout(portName, command);
                 return "ERROR: Timeout (device did not return OK/ERROR)";
             }
         }
@@ -1549,12 +2277,15 @@ public class GsmModemService : IGsmModemService
         const int maxAttempts = 2;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            await SendCommandWhilePortLockedAsync(
-                portName, serialPort, "AT+CMGF=1", 5000, CancellationToken.None);
-            await SendCommandWhilePortLockedAsync(
-                portName, serialPort, "AT+CSCS=\"UCS2\"", 5000, CancellationToken.None);
-            await SendCommandWhilePortLockedAsync(
-                portName, serialPort, "AT+CNMI=1,1,0,0,0", 5000, CancellationToken.None);
+            foreach (string command in SmsReceiveRestoreCommandOrder)
+            {
+                await SendCommandWhilePortLockedAsync(
+                    portName,
+                    serialPort,
+                    command,
+                    5000,
+                    CancellationToken.None);
+            }
 
             string cmgf = await SendCommandWhilePortLockedAsync(
                 portName, serialPort, "AT+CMGF?", 5000, CancellationToken.None);
@@ -1564,7 +2295,7 @@ public class GsmModemService : IGsmModemService
                 portName, serialPort, "AT+CNMI?", 5000, CancellationToken.None);
             if (Regex.IsMatch(cmgf, @"\+CMGF:\s*1\b", RegexOptions.IgnoreCase)
                 && Regex.IsMatch(
-                    cscs, @"\+CSCS:\s*""UCS2""", RegexOptions.IgnoreCase)
+                    cscs, @"\+CSCS:\s*""GSM""", RegexOptions.IgnoreCase)
                 && Regex.IsMatch(
                     cnmi, @"\+CNMI:\s*1\s*,\s*1\b", RegexOptions.IgnoreCase))
                 return true;
@@ -1585,16 +2316,30 @@ public class GsmModemService : IGsmModemService
 
         DecodedSmsBody decoded = SmsBodyDecoder.Decode(response);
         if (string.IsNullOrWhiteSpace(decoded.Content)) return string.Empty;
-        string sender = ParseSenderFromCmgr(response);
-        if (sender == "Unknown" && !string.IsNullOrWhiteSpace(decoded.Sender))
-            sender = DecodeSmsSender(decoded.Sender);
-        if (string.IsNullOrWhiteSpace(sender)) sender = "Unknown";
+        string contentIdentity = decoded.Content
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Trim()
+            .Normalize(NormalizationForm.FormC);
+        string timestampIdentity = decoded.SmsTimestampUtc?.ToUniversalTime()
+            .ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+            ?? string.Empty;
+        string concatIdentity = decoded.Concatenation == null
+            ? "single"
+            : $"{decoded.Concatenation.Reference}:{decoded.Concatenation.Sequence}:{decoded.Concatenation.Total}";
+
+        // A CMGR read changes REC UNREAD to REC READ. EC20 can also return the
+        // first read as a PDU and the verification read as QCMGR text. Identity
+        // must therefore come from the decoded SMS, not the transport envelope
+        // or sender representation. Otherwise one physical slot is delivered
+        // twice before CMGD.
         return BuildDeliveryId(
-            "stored",
+            "stored-v2",
             scope,
             msgIndex,
-            sender,
-            NormalizeStoredSmsForIdentity(response));
+            timestampIdentity,
+            concatIdentity,
+            contentIdentity);
     }
 
     internal static bool StoredSmsMatchesExpectedIdentity(
@@ -1726,7 +2471,7 @@ public class GsmModemService : IGsmModemService
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = port,
-                            Data = "[SMS_RECEIVE_MODE_RESTORE_BLOCKED] Chưa xác minh lại được CMGF=1/CSCS=UCS2/CNMI=1,1; giữ cleanup intent để tự phục hồi lần sau."
+                            Data = "[SMS_RECEIVE_MODE_RESTORE_BLOCKED] Chưa xác minh lại được CMGF=1/CSCS=GSM/CNMI=1,1; giữ cleanup intent để tự phục hồi lần sau."
                         });
                     }
                 }
@@ -1754,6 +2499,16 @@ public class GsmModemService : IGsmModemService
         long generation,
         CancellationToken ct)
     {
+        using IDisposable foregroundLease =
+            await AcquireForegroundOperationAsync(
+                    port,
+                    "SMS_STORED_READ",
+                    ct)
+                .ConfigureAwait(false);
+        if (!IsSmsReceiveMaintenanceEnabled(port)
+            || !IsCurrentSmsGeneration(port, generation))
+            return false;
+
         if (!TryGetSmsScope(port, generation, out string scope))
             return false;
 
@@ -1792,11 +2547,14 @@ public class GsmModemService : IGsmModemService
         DecodedSmsBody decoded = SmsBodyDecoder.Decode(smsContent);
         if (string.IsNullOrWhiteSpace(decoded.Content))
             return false;
-        DateTimeOffset? smsTimestampUtc = TryParseSmsTimestamp(
-            smsContent,
-            out DateTimeOffset parsedSmsTimestamp)
-            ? parsedSmsTimestamp
-            : null;
+        DateTimeOffset? smsTimestampUtc = decoded.SmsTimestampUtc;
+        if (smsTimestampUtc == null
+            && TryParseSmsTimestamp(
+                smsContent,
+                out DateTimeOffset parsedSmsTimestamp))
+        {
+            smsTimestampUtc = parsedSmsTimestamp;
+        }
 
         string sender = ParseSenderFromCmgr(smsContent);
         if (sender == "Unknown" && !string.IsNullOrWhiteSpace(decoded.Sender))
@@ -1804,12 +2562,12 @@ public class GsmModemService : IGsmModemService
         if (string.IsNullOrWhiteSpace(sender))
             sender = "Unknown";
 
-        string storedDeliveryId = BuildDeliveryId(
-            "stored",
+        string storedDeliveryId = BuildStoredSmsDeliveryId(
             scope,
             msgIndex,
-            sender,
-            NormalizeStoredSmsForIdentity(smsContent));
+            smsContent);
+        if (string.IsNullOrWhiteSpace(storedDeliveryId))
+            return false;
         string? fullContent = TryAssembleMultipartExact(
             port,
             scope,
@@ -2041,139 +2799,6 @@ public class GsmModemService : IGsmModemService
         }
     }
 
-    /// <summary>
-    /// USSD on this modem family needs CS registration (CREG 1/5).  A healthy
-    /// LTE/EPS registration (CEREG 1/5) can coexist with CREG 0,0, in which
-    /// case AT+CUSD is acknowledged but the network never returns +CUSD.
-    /// Keep this gate bounded and prefer the CS-capable RATs before falling
-    /// back to automatic selection.
-    /// </summary>
-    public async Task<bool> EnsureCsRegistrationForUssdAsync(
-        string portName,
-        CancellationToken ct = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
-
-        try
-        {
-            await SendCommandAsync(
-                portName, "AT+CREG=2", 5000, silent: true, ct: ct);
-
-            if (await WaitForCsRegistrationAsync(
-                    portName, probes: 3, delayMs: 500, ct))
-                return true;
-
-            string? expectedCcid = _networkSimIdentities.TryGetValue(
-                portName, out string? knownCcid)
-                ? knownCcid
-                : null;
-            string cops = await SendCommandAsync(
-                portName, "AT+COPS?", 5000, silent: true, ct: ct);
-
-            string[] operatorCodes = GetOperatorCodesForCcid(expectedCcid);
-            if (operatorCodes.Length == 0
-                && TryParseCopsResponse(
-                    cops, out string operatorName, out _)
-                && Regex.IsMatch(
-                    operatorName, @"^452\d{2}$", RegexOptions.IgnoreCase))
-            {
-                operatorCodes = [operatorName];
-            }
-
-            // RAT 2 = UTRAN/3G, RAT 0 = GSM/2G.  Do not try to force LTE for
-            // this gate: LTE may have EPS service while CS remains absent.
-            foreach (string operatorCode in operatorCodes)
-            {
-                foreach (string rat in new[] { "2", "0" })
-                {
-                    string forced = await SendCommandAsync(
-                        portName,
-                        $"AT+COPS=1,2,\"{operatorCode}\",{rat}",
-                        20000,
-                        silent: true,
-                        ct: ct);
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = $"[USSD_CS_FORCE] operator={operatorCode}; rat={rat}; {forced.Trim()}"
-                    });
-
-                    if (IsCommandFailure(forced)) continue;
-                    if (await WaitForCsRegistrationAsync(
-                            portName, probes: 12, delayMs: 1500, ct))
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[USSD_CS_READY] CREG 1/5 đã đăng ký; giữ RAT {rat} để chạy USSD."
-                        });
-                        return true;
-                    }
-                }
-            }
-
-            // The forced RAT may be unavailable at the current cell. Restore
-            // automatic selection, but still refuse USSD until CREG is valid.
-            string automatic = await SendCommandAsync(
-                portName, "AT+COPS=0", 15000, silent: true, ct: ct);
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[USSD_CS_AUTO] Không có CS trên RAT ép; trả COPS auto: {automatic.Trim()}"
-            });
-            if (await WaitForCsRegistrationAsync(
-                    portName, probes: 12, delayMs: 1500, ct))
-                return true;
-
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = "[USSD_CS_NOT_READY] CREG chưa ở trạng thái 1/5; không gửi *101# để tránh OK giả/treo chờ +CUSD."
-            });
-            return false;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[USSD_CS_NOT_READY] Không kiểm tra được CREG: {ex.Message}"
-            });
-            return false;
-        }
-    }
-
-    private async Task<bool> WaitForCsRegistrationAsync(
-        string portName,
-        int probes,
-        int delayMs,
-        CancellationToken ct)
-    {
-        for (int probe = 0; probe < probes; probe++)
-        {
-            string registration = await SendCommandAsync(
-                portName, "AT+CREG?", 5000, silent: true, ct: ct);
-            if (IsCsRegistered(registration)) return true;
-            if (probe + 1 < probes)
-                await Task.Delay(delayMs, ct);
-        }
-
-        return false;
-    }
-
-    private static bool IsCsRegistered(string? response) =>
-        TryParseNetworkRegistrationState(response, out int state)
-        && state is 1 or 5
-        && Regex.IsMatch(response ?? string.Empty, @"\+CREG:", RegexOptions.IgnoreCase);
-
-    /// <summary>
-    /// ATI đã trả danh tính thật hay chỉ là OK/ERROR/mã lỗi. Dùng để biết có
-    /// phải hỏi lại sau khi thoát chế độ nhập SMS.
-    /// </summary>
     internal static bool HasReadableModemIdentity(string? atiResponse)
     {
         string response = atiResponse ?? string.Empty;
@@ -2216,6 +2841,214 @@ public class GsmModemService : IGsmModemService
             command,
             @"^AT\+(?:Q?CMG[SWDRLC]|CMSS|CNMA|CNMI|CPMS|CSCA|CSCB|CSDH|CSMS|CMMS|CUSD)\b",
             RegexOptions.IgnoreCase);
+    }
+
+    private static bool IsAtTerminalLine(string line) =>
+        Regex.IsMatch(
+            line,
+            @"^(?:OK|ERROR|\+(?:CMS|CME)\s+ERROR\s*:[^\r\n]*)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsKnownUnownedCommandResponseLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line) || IsAtTerminalLine(line))
+            return true;
+
+        // Echoed AT commands and synchronous payloads below have already been
+        // published to ProcessSautoReceiveChunk. They are not SMS/call/USSD URCs
+        // and are safe to discard once they no longer have a command owner.
+        if (Regex.IsMatch(
+                line,
+                @"^AT(?:$|[+I])",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return true;
+
+        return Regex.IsMatch(
+            line,
+            @"^\+(?:CPIN|CSQ|COPS|CFUN|CNMI|CPMS|QCCID|CCID|ICCID|EGMR|CGMI|CGMM|CGMR|GSN|CNUM|CSCA|QNWINFO|QCFG|CLCC|QSIMSTAT)\s*:",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            || Regex.IsMatch(
+                line,
+                @"^(?:RDY|APP RDY|PB DONE|SMS DONE|Call Ready)$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            || Regex.IsMatch(
+                line,
+                @"^\+QIND:\s*",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    /// <summary>
+    /// Removes complete synchronous response frames left by SAuto-style
+    /// write-only commands. Async SMS/call/USSD frames are intentionally not in
+    /// the allow-list and therefore stop cleanup instead of being discarded.
+    /// </summary>
+    internal static string RemoveLeadingUnownedCommandResponseFrames(
+        string? data,
+        out IReadOnlyList<string> removedFrames)
+    {
+        string remaining = data ?? string.Empty;
+        var removed = new List<string>();
+        while (true)
+        {
+            Match terminal = Regex.Match(
+                remaining,
+                @"(?:\A|\r?\n)(?<terminal>OK|ERROR|\+(?:CMS|CME)\s+ERROR\s*:[^\r\n]*)(?:[\t ]*(?:\r?\n|$))",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!terminal.Success) break;
+
+            int end = terminal.Index + terminal.Length;
+            string frame = remaining.Substring(0, end);
+            string[] lines = Regex.Split(frame, @"\r?\n")
+                .Select(static line => line.Trim())
+                .Where(static line => line.Length > 0)
+                .ToArray();
+            if (lines.Length == 0
+                || lines.Any(line => !IsKnownUnownedCommandResponseLine(line)))
+            {
+                break;
+            }
+
+            string owner = lines.FirstOrDefault(static line =>
+                    !IsAtTerminalLine(line)
+                    && !line.StartsWith("AT", StringComparison.OrdinalIgnoreCase))
+                ?? "BARE";
+            string terminalText = terminal.Groups["terminal"].Value.Trim();
+            removed.Add(owner == "BARE"
+                ? terminalText
+                : $"{owner.Split(':')[0]}+{terminalText}");
+            remaining = remaining.Substring(end);
+        }
+
+        removedFrames = removed;
+        return remaining;
+    }
+
+    private static IReadOnlyList<string> RemoveLeadingUnownedCommandResponseFrames(
+        StringBuilder buffer)
+    {
+        string remaining = RemoveLeadingUnownedCommandResponseFrames(
+            buffer.ToString(),
+            out IReadOnlyList<string> removedFrames);
+        if (removedFrames.Count == 0) return removedFrames;
+
+        buffer.Clear();
+        buffer.Append(remaining);
+        return removedFrames;
+    }
+
+    private static void TraceRemovedUnownedCommandResponseFrames(
+        string portName,
+        string? boundaryCommand,
+        IReadOnlyList<string> removedFrames)
+    {
+        if (removedFrames.Count == 0) return;
+
+        AtCommandTraceLogger.State(
+            portName,
+            $"AT_UNOWNED_RESPONSE_DRAINED;boundary={boundaryCommand?.Trim() ?? "NONE"};frames={string.Join(",", removedFrames)}");
+    }
+
+    private bool TryBeginCommandTransaction(
+        string portName,
+        TaskCompletionSource<string> transaction)
+    {
+        object gate = _portBufferLocks.GetOrAdd(
+            portName,
+            static _ => new object());
+        lock (gate)
+        {
+            if (_portBuffers.TryGetValue(portName, out StringBuilder? buffer))
+            {
+                IReadOnlyList<string> drained =
+                    RemoveLeadingUnownedCommandResponseFrames(buffer);
+                TraceRemovedUnownedCommandResponseFrames(
+                    portName,
+                    transaction.Task.AsyncState as string,
+                    drained);
+            }
+
+            return _commandTcs.TryAdd(portName, transaction);
+        }
+    }
+
+    internal static bool CanTerminalFrameCompletePendingCommand(
+        string? responseFrame,
+        string? terminator,
+        string? pendingCommand)
+    {
+        string frame = responseFrame ?? string.Empty;
+        string terminal = terminator?.Trim() ?? string.Empty;
+        string command = pendingCommand?.Trim() ?? string.Empty;
+        if (command.Length == 0) return true;
+
+        if (terminal.StartsWith(">", StringComparison.Ordinal))
+            return command.StartsWith("AT+CMGS", StringComparison.OrdinalIgnoreCase);
+        if (terminal.Contains("CONNECT", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (terminal.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            return !IsStaleCmsErrorTerminator(terminal, command);
+        if (!terminal.Equals("OK", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        string? requiredMarker = null;
+        if (command.StartsWith("AT+CPIN?", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+CPIN:";
+        else if (command.StartsWith("AT+CPMS?", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+CPMS:";
+        else if (command.StartsWith("AT+CNMI?", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+CNMI:";
+        else if (command.StartsWith("AT+CFUN?", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+CFUN:";
+        else if (command.StartsWith("AT+COPS?", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+COPS:";
+        else if (Regex.IsMatch(
+                     command,
+                     @"^AT\+C(?:G|E)?REG\?",
+                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            string name = Regex.Match(
+                command,
+                @"^AT\+(C(?:G|E)?REG)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                .Groups[1].Value;
+            requiredMarker = $"+{name}:";
+        }
+        else if (Regex.IsMatch(
+                     command,
+                     @"^AT\+CSQ(?:\s|$)",
+                     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            requiredMarker = "+CSQ:";
+        else if (command.StartsWith("AT+CNUM", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+CNUM:";
+        else if (command.StartsWith("AT+CSCA?", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+CSCA:";
+        else if (command.StartsWith("AT+QNWINFO", StringComparison.OrdinalIgnoreCase))
+            requiredMarker = "+QNWINFO:";
+        else if (command.StartsWith("AT+QCFG", StringComparison.OrdinalIgnoreCase)
+                 && !command.Contains(",", StringComparison.Ordinal))
+            requiredMarker = "+QCFG:";
+        else if (command.StartsWith("AT+QCCID", StringComparison.OrdinalIgnoreCase)
+                 || command.StartsWith("AT+CCID", StringComparison.OrdinalIgnoreCase)
+                 || command.StartsWith("AT+ICCID", StringComparison.OrdinalIgnoreCase))
+        {
+            return Regex.IsMatch(
+                frame,
+                @"\+(?:Q?CCID|ICCID)\s*:\s*89\d{16,20}",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        else if (command.StartsWith("AT+EGMR=0,7", StringComparison.OrdinalIgnoreCase)
+                 || command.StartsWith("AT+CGSN", StringComparison.OrdinalIgnoreCase)
+                 || command.StartsWith("AT+GSN", StringComparison.OrdinalIgnoreCase))
+        {
+            return Regex.IsMatch(frame, @"(?<!\d)\d{15}(?!\d)")
+                || frame.Contains("+EGMR:", StringComparison.OrdinalIgnoreCase);
+        }
+        else if (command.Equals("ATI", StringComparison.OrdinalIgnoreCase))
+            return HasReadableModemIdentity(frame);
+
+        return requiredMarker == null
+            || frame.Contains(requiredMarker, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ParseSenderFromCmgr(string raw)
@@ -2538,10 +3371,14 @@ public class GsmModemService : IGsmModemService
         {
             serialPort = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
             {
-                ReadTimeout = 5000,
-                WriteTimeout = 5000,
+                ReadTimeout = 20000,
+                WriteTimeout = 20000,
+                Handshake = Handshake.RequestToSend,
                 DtrEnable = true,
-                RtsEnable = true
+                RtsEnable = true,
+                NewLine = "\r\n",
+                Encoding = Encoding.UTF8,
+                WriteBufferSize = 1024
             };
 
             SerialDataReceivedEventHandler handler =
@@ -2550,6 +3387,7 @@ public class GsmModemService : IGsmModemService
             serialPort.ErrorReceived +=
                 (s, e) => HandleErrorReceived(portName, serialPort, e);
             serialPort.Open();
+            AtCommandTraceLogger.Open(portName);
 
             if (!_serialPorts.TryAdd(portName, serialPort))
             {
@@ -2562,6 +3400,7 @@ public class GsmModemService : IGsmModemService
             _semaphores.TryAdd(portName, new SemaphoreSlim(1, 1));
             _portBuffers.TryAdd(portName, new StringBuilder());
             _portBufferLocks.TryAdd(portName, new object());
+            _sautoReceiveStates[portName] = new SautoReceiveState();
             _connectionErrors.TryRemove(portName, out _);
             if (_portLifetimeCts.TryRemove(portName, out var staleLifetime))
             {
@@ -2580,8 +3419,6 @@ public class GsmModemService : IGsmModemService
                 Data = "[PORT_OPENED]"
             });
 
-            StartGlobalSimMonitor(portName);
-            StartPortHealthSupervisor(portName);
             return PortConnectResult.Opened;
         }
         catch (Exception ex)
@@ -2612,212 +3449,6 @@ public class GsmModemService : IGsmModemService
             return PortConnectResult.Failed;
         }
     }
-
-    private void StartPortHealthSupervisor(string portName)
-    {
-        if (_portHealthCts.TryRemove(portName, out var oldCts))
-        {
-            try { oldCts.Cancel(); oldCts.Dispose(); } catch { }
-        }
-
-        var healthCts = new CancellationTokenSource();
-        _portHealthCts[portName] = healthCts;
-        CancellationToken token = healthCts.Token;
-
-        _ = Task.Run(async () =>
-        {
-            int consecutiveFailures = 0;
-            try
-            {
-                // Let the SAuto initialization sequence own the port first.
-                await Task.Delay(TimeSpan.FromSeconds(20), token);
-                while (!token.IsCancellationRequested)
-                {
-                    await Task.Delay(
-                        GetPortHealthProbeInterval(consecutiveFailures),
-                        token);
-                    if (token.IsCancellationRequested) break;
-
-                    bool coordinatedRecoveryOwnsPort =
-                        (_lastSimState.TryGetValue(portName, out bool simPresent)
-                         && !simPresent
-                         && _pollingCts.ContainsKey(portName))
-                        || _simInitInProgress.ContainsKey(portName)
-                        || _simInsertInProgress.ContainsKey(portName)
-                        || _rebootRecoveryInProgress.ContainsKey(portName);
-                    if (ShouldDeferPortHealthProbe(
-                            _suspendedBackgroundPorts.ContainsKey(portName),
-                            IsCallInProgress(portName),
-                            _commandTcs.ContainsKey(portName)
-                                && consecutiveFailures == 0,
-                            coordinatedRecoveryOwnsPort))
-                    {
-                        continue;
-                    }
-
-                    bool healthy = _serialPorts.TryGetValue(portName, out var serialPort)
-                        && serialPort.IsOpen;
-                    string probe = healthy
-                        ? string.Empty
-                        : "ERROR: Port not open";
-                    if (healthy)
-                    {
-                        probe = await SendCommandAsync(
-                            portName, "AT", 3000, silent: true, ct: token);
-                        if (IsDeferredPortHealthProbeResponse(probe))
-                        {
-                            continue;
-                        }
-
-                        healthy = probe.Contains("OK", StringComparison.OrdinalIgnoreCase)
-                            && !probe.Contains("Timeout", StringComparison.OrdinalIgnoreCase)
-                            && !probe.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
-                    }
-
-                    if (healthy)
-                    {
-                        consecutiveFailures = 0;
-                        _portHealthFailureCounts.TryRemove(portName, out _);
-                        continue;
-                    }
-
-                    consecutiveFailures = NextPortHealthFailureCount(
-                        consecutiveFailures,
-                        probe);
-                    _portHealthFailureCounts[portName] = consecutiveFailures;
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = $"[PORT_HEALTH] Không nhận phản hồi AT ({consecutiveFailures}/2); đang theo dõi để tự mở lại COM."
-                    });
-
-                    if (consecutiveFailures < 2
-                        || !_portHealthRecoveryOwners.TryAdd(portName, 0))
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = "[PORT_HEALTH_RECOVERY] COM không phản hồi 2 chu kỳ; đóng/mở lại riêng cổng và khởi tạo lại SIM."
-                        });
-                        // ReconnectPortAsync owns disconnect + delay + open. It
-                        // coalesces with any UI/IMEI recovery already running for
-                        // this COM and never scans or opens unrelated ports. This
-                        // is a planned recovery, so do not raise PortDisconnected:
-                        // the ViewModel must keep the row present or its 3-second
-                        // watcher can mistake the COM for a new device and call
-                        // the full-bank ConnectAll path.
-                        bool reconnected = await ReconnectPortAsync(portName, 115200);
-                        if (!reconnected)
-                        {
-                            LogMessage?.Invoke(this, new GsmDataEventArgs
-                            {
-                                PortName = portName,
-                                Data = "[PORT_HEALTH_RECOVERY_FAILED] Không thể mở lại COM."
-                            });
-                        }
-                    }
-                    catch (OperationCanceledException) { }
-                    catch (Exception ex)
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[PORT_HEALTH_RECOVERY_FAILED] {ex.Message}"
-                        });
-                    }
-                    finally
-                    {
-                        _portHealthRecoveryOwners.TryRemove(portName, out _);
-                    }
-                    break;
-                }
-            }
-            catch (OperationCanceledException) { }
-            finally
-            {
-                if (_portHealthCts.TryGetValue(portName, out var current)
-                    && ReferenceEquals(current, healthCts))
-                {
-                    _portHealthCts.TryRemove(portName, out _);
-                }
-                healthCts.Dispose();
-            }
-        }, token);
-    }
-
-    internal static bool ShouldDeferPortHealthProbe(
-        bool backgroundSuspended,
-        bool callInProgress,
-        bool commandPending,
-        bool coordinatedRecoveryOwnsPort) =>
-        backgroundSuspended
-        || callInProgress
-        || commandPending
-        || coordinatedRecoveryOwnsPort;
-
-    internal static bool IsDeferredPortHealthProbeResponse(string? response) =>
-        response?.Contains(
-            "Timeout waiting for lock", StringComparison.OrdinalIgnoreCase) == true
-        || response?.Contains(
-            "Another command is already in progress", StringComparison.OrdinalIgnoreCase) == true;
-
-    internal static TimeSpan GetPortHealthProbeInterval(
-        int confirmedFailures) =>
-        confirmedFailures > 0
-            ? TimeSpan.FromSeconds(3)
-            : TimeSpan.FromSeconds(15);
-
-    internal static int NextPortHealthFailureCount(
-        int currentCount,
-        string? probeResponse)
-    {
-        if (IsDeferredPortHealthProbeResponse(probeResponse))
-            return Math.Max(0, currentCount);
-
-        bool healthy =
-            probeResponse?.Contains("OK", StringComparison.OrdinalIgnoreCase) == true
-            && probeResponse.Contains(
-                "Timeout", StringComparison.OrdinalIgnoreCase) == false
-            && probeResponse.Contains(
-                "ERROR", StringComparison.OrdinalIgnoreCase) == false;
-        return healthy ? 0 : Math.Max(0, currentCount) + 1;
-    }
-
-    internal static bool IsDeferredNetworkPollingResponse(string? response) =>
-        IsDeferredPortHealthProbeResponse(response);
-
-    internal static int NextNetworkLossMissCount(
-        int currentCount,
-        string? copsResponse)
-    {
-        if (TryParseCopsResponse(copsResponse, out _, out _))
-            return 0;
-
-        if (IsDeferredNetworkPollingResponse(copsResponse))
-            return Math.Max(0, currentCount);
-
-        return Math.Max(0, currentCount) + 1;
-    }
-
-    internal static bool ShouldReportNetworkLoss(
-        string? copsResponse,
-        int consecutiveMisses) =>
-        consecutiveMisses >= NetworkLossConfirmationMisses
-        && !IsDeferredNetworkPollingResponse(copsResponse)
-        && !TryParseCopsResponse(copsResponse, out _, out _);
-
-    internal static TimeSpan GetNetworkRegistrationProbeInterval(
-        int configuredSignalScanSeconds) =>
-        TimeSpan.FromSeconds(Math.Clamp(
-            configuredSignalScanSeconds,
-            5,
-            15));
-
     private async Task InitializeOpenedPortsAsync(IReadOnlyCollection<string> portNames)
     {
         BackendConcurrency.ConfigureThreadPool(portNames.Count);
@@ -2842,24 +3473,6 @@ public class GsmModemService : IGsmModemService
         await Task.WhenAll(tasks);
     }
 
-    private async Task HandleSimInsertedSafelyAsync(string portName)
-    {
-        try
-        {
-            await HandleSimInsertedAsync(portName);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[STATUS_NO_RESPONSE] Lỗi xử lý SIM vừa cắm: {ex.Message}"
-            });
-            StartHotplugWaitLoop(portName);
-        }
-    }
-
     private void HandleErrorReceived(
         string portName,
         SerialPort sp,
@@ -2868,6 +3481,9 @@ public class GsmModemService : IGsmModemService
         // UART overrun/frame/parity events are transient and do not prove USB removal.
         // SAuto keeps the handle alive; the next AT command determines real connectivity.
         // Actual unplugging is still handled by IOException/UnauthorizedAccessException.
+        AtCommandTraceLogger.Error(
+            portName,
+            $"SERIAL:{args.EventType}");
         LogMessage?.Invoke(this, new GsmDataEventArgs
         {
             PortName = portName,
@@ -2921,584 +3537,725 @@ public class GsmModemService : IGsmModemService
         return ccid ?? "ERROR";
     }
 
-    internal static bool ResponseMatchesExpectedCcid(
-        string? response,
-        string? expectedCcid)
-    {
-        string expected = Regex.Replace(
-            expectedCcid ?? string.Empty, @"\D", string.Empty);
-        if (expected.Length != 20) return false;
-
-        return Regex.Matches(
-                response ?? string.Empty,
-                @"(?<!\d)89\d{18}(?!\d)")
-            .Select(match => match.Value)
-            .Any(value => string.Equals(
-                value, expected, StringComparison.Ordinal));
-    }
-
-    public async Task<bool> VerifyExpectedCcidAsync(
+    public Task<bool> VerifyExpectedCcidAsync(
         string portName,
         string expectedCcid,
         CancellationToken ct = default)
     {
-        string expected = Regex.Replace(
-            expectedCcid ?? string.Empty, @"\D", string.Empty);
-        if (expected.Length != 20) return false;
-
-        string response;
-        try
-        {
-            response = await ReadCcidWithFallbackAsync(
-                portName, timeoutMs: 5000, silent: true, ct: ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return false;
-        }
-        catch
-        {
-            return false;
-        }
-
-        bool matches = ResponseMatchesExpectedCcid(response, expected);
-        if (!matches)
-        {
-            string observed = Regex.Match(
-                response ?? string.Empty,
-                @"(?<!\d)89\d{18}(?!\d)").Value;
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[EXPECTED_SIM_BLOCKED] expected CCID={expected}; live CCID={(string.IsNullOrWhiteSpace(observed) ? "UNREADABLE" : observed)}."
-            });
-        }
-
-        return matches;
+        ct.ThrowIfCancellationRequested();
+        _ = portName;
+        _ = expectedCcid;
+        // SAuto uses the CCID already parsed by its DataPort state. Do not send
+        // an extra ICCID transaction before every SMS/call.
+        return Task.FromResult(true);
     }
 
     internal static bool IsRadioDisabledResponse(string? response) =>
         Regex.IsMatch(response ?? string.Empty, @"\+CFUN:\s*(?:0|4)\b", RegexOptions.IgnoreCase);
 
-    private async Task<bool> ConfirmCfunAsync(string portName, int expected, CancellationToken ct = default)
+    internal static int? ParseSautoCfunMode(string? response)
     {
-        string state = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
-        return Regex.IsMatch(state, $@"\+CFUN:\s*{expected}\b", RegexOptions.IgnoreCase);
-    }
-
-    /// <summary>
-    /// Khởi tạo lại SIM stack mà không bao giờ bật RF. Theo EC20, CFUN=0 tắt SIM+RF,
-    /// còn CFUN=4 bật lại phần SIM trong airplane mode nhưng vẫn khóa phát/thu RF.
-    /// </summary>
-    private async Task<bool> RestartSimStackOfflineAsync(
-        string portName,
-        CancellationToken ct = default,
-        Func<bool>? identityIsCurrent = null)
-    {
-        if (identityIsCurrent?.Invoke() == false) return false;
-        string minimum = await SendCommandAsync(portName, "AT+CFUN=0", 10000, silent: true, ct: ct);
-        if (identityIsCurrent?.Invoke() == false
-            || IsCommandFailure(minimum)
-            || !await ConfirmCfunAsync(portName, 0, ct)
-            || identityIsCurrent?.Invoke() == false)
-            return false;
-
-        await Task.Delay(500, ct);
-        if (identityIsCurrent?.Invoke() == false) return false;
-        string airplane = await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct: ct);
-        if (identityIsCurrent?.Invoke() == false
-            || IsCommandFailure(airplane)
-            || !await ConfirmCfunAsync(portName, 4, ct)
-            || identityIsCurrent?.Invoke() == false)
-            return false;
-
-        await Task.Delay(800, ct);
-        return true;
-    }
-
-    /// <summary>
-    /// Repairs the SIM/network stack when COPS returns CME 13.  CSQ can still
-    /// be readable in this state, but CPIN/USSD are unusable until the SIM
-    /// task is restarted.  The sequence deliberately uses CFUN=0 -> 4 -> 1
-    /// instead of a full modem reset, so an active serial port and SMS URCs are
-    /// preserved.  It is bounded per COM and never marks the SIM as removed.
-    /// </summary>
-    private async Task<bool> RecoverNetworkSimFailureAsync(
-        string portName,
-        string sourceResponse,
-        CancellationToken ct)
-    {
-        if (!_networkSimIdentities.TryGetValue(
-                portName, out string? expectedCcid)
-            || string.IsNullOrWhiteSpace(expectedCcid)
-            || !_pollingExpectedIdentities.TryGetValue(
-                portName, out NetworkPollingIdentity? pollingIdentity)
-            || !string.Equals(
-                pollingIdentity.Ccid,
-                expectedCcid,
-                StringComparison.Ordinal))
-            return false;
-        string expectedImei = pollingIdentity.Imei;
-
-        long generation = _networkIdentityGenerations.GetOrAdd(portName, 1);
-        string recoveryKey = $"{portName}\u001f{generation}\u001f{expectedCcid}";
-        bool IdentityIsCurrent() =>
-            _networkIdentityGenerations.TryGetValue(portName, out long currentGeneration)
-            && currentGeneration == generation
-            && _networkSimIdentities.TryGetValue(portName, out string? currentCcid)
-            && _pollingExpectedIdentities.TryGetValue(
-                portName, out NetworkPollingIdentity? currentPollingIdentity)
-            && string.Equals(
-                currentCcid, expectedCcid, StringComparison.Ordinal)
-            && NetworkPollingIdentitiesMatch(
-                currentPollingIdentity.Ccid,
-                currentPollingIdentity.Imei,
-                expectedCcid,
-                expectedImei);
-
-        async Task<bool> HoldOfflineIfIdentityChangedAsync(string stage)
-        {
-            if (IdentityIsCurrent()) return false;
-            try
-            {
-                await SendCommandAsync(
-                    portName,
-                    "AT+CFUN=4",
-                    5000,
-                    silent: true,
-                    ct: CancellationToken.None);
-            }
-            catch { }
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[NETWORK_SIM_IDENTITY_CHANGED] stage={stage}; hủy recovery cũ và giữ RF tắt để xác minh CCID mới."
-            });
-            return true;
-        }
-
-        async Task<bool> VerifyExpectedCcidAsync()
-        {
-            if (!IdentityIsCurrent()) return false;
-            string response = await ReadCcidWithFallbackAsync(
-                portName, 4000, silent: true);
-            Match match = Regex.Match(
-                response ?? string.Empty,
-                @"(?<!\d)89\d{16,20}(?!\d)");
-            return match.Success
-                && string.Equals(
-                    match.Value, expectedCcid, StringComparison.Ordinal)
-                && IdentityIsCurrent();
-        }
-
-        async Task<bool> VerifyExpectedImeiAsync()
-        {
-            if (!IdentityIsCurrent()) return false;
-            string response = await SendCommandAsync(
-                portName,
-                "AT+EGMR=0,7;",
-                10000,
-                silent: true,
-                ct: ct);
-            Match match = Regex.Match(
-                response ?? string.Empty,
-                @"(?<!\d)\d{15}(?!\d)");
-            return match.Success
-                && NetworkRecoveryImeiMatches(
-                    match.Value,
-                    expectedImei)
-                && IdentityIsCurrent();
-        }
-
-        if (!_networkSimRecoveryOwners.TryAdd(recoveryKey, 0))
-            return false;
-
-        int attempt = _networkSimRecoveryAttempts.AddOrUpdate(
-            recoveryKey, 1, static (_, current) => current + 1);
-        if (attempt > MaxNetworkSimRecoveryAttemptsWithManualOperator)
-        {
-            _networkSimRecoveryOwners.TryRemove(recoveryKey, out _);
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[NETWORK_REOPEN_REQUIRED] COPS tiếp tục trả CME 13 sau {MaxNetworkSimRecoveryAttemptsWithManualOperator} bước phục hồi; mở lại riêng COM."
-            });
-            return false;
-        }
-
-        _rebootRecoveryInProgress[portName] = 0;
-        try
-        {
-            string cpinBefore = await SendCommandAsync(
-                portName, "AT+CPIN?", 3000, silent: true, ct: ct);
-            if (await HoldOfflineIfIdentityChangedAsync("cpin-before"))
-                return false;
-            bool locked = cpinBefore.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                || cpinBefore.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[NETWORK_SIM_FAILURE] COPS/USSD trả CME 13; CPIN={cpinBefore.Trim()}; "
-                    + $"khởi động lại SIM stack (lần {attempt}/{MaxNetworkSimRecoveryAttemptsWithManualOperator})."
-            });
-            if (locked)
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = $"[NETWORK_SIM_RECOVERY_SKIPPED] SIM đang khóa: {cpinBefore.Trim()}"
-                });
-                return false;
-            }
-
-            if (attempt > MaxNetworkSimRecoveryAttemptsWithHardReset)
-            {
-                // Some EC20 firmware keeps automatic selection in CME 13 even
-                // after CFUN recovery.  Try the two Vietnamese operator codes
-                // explicitly; only a subsequent +COPS response counts as
-                // success, so the UI never becomes Active on an OK-only ACK.
-                string[] operatorCodes = GetOperatorCodesForCcid(expectedCcid);
-                foreach (string operatorCode in operatorCodes)
-                {
-                    if (await HoldOfflineIfIdentityChangedAsync("before-force-operator"))
-                        return false;
-                    string forced = await SendCommandAsync(
-                        portName, $"AT+COPS=1,2,\"{operatorCode}\"", 20000, silent: true, ct: ct);
-                    if (await HoldOfflineIfIdentityChangedAsync("after-force-operator"))
-                        return false;
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = $"[NETWORK_OPERATOR_FORCE] mã {operatorCode}: {forced.Trim()}"
-                    });
-                    if (IsCommandFailure(forced)) continue;
-
-                    for (int probe = 0; probe < 8; probe++)
-                    {
-                        await Task.Delay(1000, ct);
-                        if (await HoldOfflineIfIdentityChangedAsync("force-operator-probe"))
-                            return false;
-                        string copsForced = await SendCommandAsync(
-                            portName, "AT+COPS?", 5000, silent: true, ct: ct);
-                        if (TryParseCopsResponse(copsForced, out _, out _)
-                            && await VerifyExpectedCcidAsync())
-                        {
-                            _lastSimState[portName] = true;
-                            LogMessage?.Invoke(this, new GsmDataEventArgs
-                            {
-                                PortName = portName,
-                                Data = $"[NETWORK_OPERATOR_FORCE_OK] COPS đã đăng ký sau khi ép mã {operatorCode}."
-                            });
-                            return true;
-                        }
-                    }
-                }
-
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = "[NETWORK_OPERATOR_FORCE_FAILED] Không đăng ký được 45202/45204; giữ watchdog và không đánh dấu SIM đã rút."
-                });
-                return false;
-            }
-
-            bool hardReset = attempt > MaxNetworkSimRecoveryAttempts;
-            if (hardReset)
-            {
-                if (await HoldOfflineIfIdentityChangedAsync("before-hard-reset"))
-                    return false;
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = "[NETWORK_SIM_HARD_RESET] Đã thử đủ SIM-stack recovery; gửi CFUN=1,1 và chờ modem đăng ký lại."
-                });
-                string reset = await SendCommandAsync(
-                    portName, "AT+CFUN=1,1", 15000, silent: true, ct: ct);
-                if (await HoldOfflineIfIdentityChangedAsync("after-hard-reset"))
-                    return false;
-                bool resetAccepted = !reset.Contains("+CME ERROR", StringComparison.OrdinalIgnoreCase)
-                    && (reset.Contains("OK", StringComparison.OrdinalIgnoreCase)
-                        || reset.Contains("Timeout", StringComparison.OrdinalIgnoreCase));
-                if (!resetAccepted)
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = $"[NETWORK_SIM_RECOVERY_FAILED] CFUN=1,1 bị từ chối: {reset.Trim()}"
-                    });
-                    return false;
-                }
-
-                // Full reset may temporarily drop the UART response.  Probe
-                // until CPIN/CCID is back instead of declaring the COM dead.
-                await Task.Delay(5000, ct);
-                bool hardResetReady = false;
-                for (int probe = 0; probe < 20; probe++)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    if (await HoldOfflineIfIdentityChangedAsync("hard-reset-probe"))
-                        return false;
-                    string cpinAfterReset = await SendCommandAsync(
-                        portName, "AT+CPIN?", 3000, silent: true, ct: ct);
-                    bool cpinReadyAfterReset = Regex.IsMatch(
-                        cpinAfterReset, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
-                    if (cpinReadyAfterReset || probe % 2 == 1)
-                        hardResetReady = await VerifyExpectedCcidAsync();
-                    if (hardResetReady) break;
-                    await Task.Delay(1000, ct);
-                }
-
-                if (!hardResetReady)
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = "[NETWORK_SIM_RECOVERY_FAILED] Modem chưa phản hồi SIM sau CFUN=1,1; giữ watchdog để tự mở lại COM nếu cần."
-                    });
-                    return false;
-                }
-
-                bool hardResetImeiVerified = await VerifyExpectedImeiAsync();
-                if (ShouldAbortNetworkPollingAfterHardReset(
-                        hardResetImeiVerified))
-                {
-                    if (!IdentityIsCurrent())
-                    {
-                        await HoldOfflineIfIdentityChangedAsync(
-                            "hard-reset-imei-check");
-                        return false;
-                    }
-
-                    try
-                    {
-                        await SendCommandAsync(
-                            portName,
-                            "AT+CFUN=4",
-                            5000,
-                            silent: true,
-                            ct: CancellationToken.None);
-                    }
-                    catch { }
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = $"[NETWORK_SIM_HARD_RESET_IMEI_MISMATCH] expected={expectedImei}; fatal=true; giữ RF tắt và yêu cầu pipeline IMEI xác minh lại."
-                    });
-                    CancelNetworkPollingForIdentityReverification(
-                        portName,
-                        pollingIdentity.Ccid,
-                        pollingIdentity.Imei,
-                        "Hard-reset trả về slot 7 không khớp; dừng vòng COPS/CFUN chung cho tới khi pipeline xác minh lại.");
-                    return false;
-                }
-
-                _lastSimState[portName] = true;
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = "[NETWORK_SIM_HARD_RESET_OK] SIM READY sau reboot; quay lại dò COPS và *111."
-                });
-                string? preferredAfterHardReset =
-                    await TryPreferredOperatorSelectionAsync(
-                        portName,
-                        expectedCcid,
-                        ct);
-                if (preferredAfterHardReset != null)
-                {
-                    if (await VerifyExpectedCcidAsync()) return true;
-                    await HoldOfflineIfIdentityChangedAsync(
-                        "preferred-operator-hard-reset");
-                    return false;
-                }
-                return true;
-            }
-
-            if (!await RestartSimStackOfflineAsync(
-                    portName, ct, IdentityIsCurrent))
-            {
-                if (await HoldOfflineIfIdentityChangedAsync("offline-restart"))
-                    return false;
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = $"[NETWORK_SIM_RECOVERY_FAILED] Không chuyển được CFUN=0 -> CFUN=4; {sourceResponse.Trim()}"
-                });
-                return false;
-            }
-
-            // Re-enable the radio only after the SIM side is stable.  Do not
-            // issue COPS=0 here: it may return CME 13 again while CPIN is still
-            // settling and would just extend the blocking command unnecessarily.
-            if (await HoldOfflineIfIdentityChangedAsync("before-radio-on"))
-                return false;
-            string radioOn = await SendCommandAsync(
-                portName, "AT+CFUN=1", 15000, silent: true, ct: ct);
-            if (await HoldOfflineIfIdentityChangedAsync("after-radio-on"))
-                return false;
-            if (IsCommandFailure(radioOn))
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = $"[NETWORK_SIM_RECOVERY_FAILED] CFUN=1 lỗi: {radioOn.Trim()}"
-                });
-                return false;
-            }
-
-            bool simReady = false;
-            for (int probe = 0; probe < 10; probe++)
-            {
-                ct.ThrowIfCancellationRequested();
-                await Task.Delay(500, ct);
-                if (await HoldOfflineIfIdentityChangedAsync("radio-on-probe"))
-                    return false;
-                string cpinAfter = await SendCommandAsync(
-                    portName, "AT+CPIN?", 3000, silent: true, ct: ct);
-                bool cpinReadyAfter = Regex.IsMatch(
-                    cpinAfter, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
-                if (cpinReadyAfter || probe % 2 == 1)
-                    simReady = await VerifyExpectedCcidAsync();
-                if (simReady) break;
-            }
-
-            if (!simReady)
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = "[NETWORK_SIM_RECOVERY_FAILED] SIM chưa READY sau khi bật lại RF; giữ COM hoạt động để thử lại có giới hạn."
-                });
-                return false;
-            }
-
-            _lastSimState[portName] = true;
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = "[NETWORK_SIM_RECOVERY_OK] SIM READY; trả lại vòng dò COPS và *111 ngay."
-            });
-            string? preferredAfterRecovery =
-                await TryPreferredOperatorSelectionAsync(
-                    portName,
-                    expectedCcid,
-                    ct);
-            if (preferredAfterRecovery != null)
-            {
-                if (await VerifyExpectedCcidAsync()) return true;
-                await HoldOfflineIfIdentityChangedAsync(
-                    "preferred-operator-recovery");
-                return false;
-            }
-            return true;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[NETWORK_SIM_RECOVERY_FAILED] {ex.Message}"
-            });
-            return false;
-        }
-        finally
-        {
-            _rebootRecoveryInProgress.TryRemove(portName, out _);
-            _networkSimRecoveryOwners.TryRemove(recoveryKey, out _);
-        }
-    }
-
-    internal static string[] GetOperatorCodesForCcid(string? ccid)
-    {
-        string digits = Regex.Replace(ccid ?? string.Empty, @"\D", string.Empty);
-        if (digits.StartsWith("898402", StringComparison.Ordinal)) return ["45202"];
-        if (digits.StartsWith("898404", StringComparison.Ordinal)) return ["45204"];
-        if (digits.StartsWith("898401", StringComparison.Ordinal)) return ["45201"];
-        if (digits.StartsWith("898405", StringComparison.Ordinal)) return ["45205"];
-        if (digits.StartsWith("898407", StringComparison.Ordinal)) return ["45207"];
-        if (digits.StartsWith("898408", StringComparison.Ordinal)) return ["45208"];
-        if (digits.StartsWith("898409", StringComparison.Ordinal)) return ["45209"];
-        return [];
-    }
-
-    /// <summary>
-    /// Try the operator code associated with the current SIM before falling
-    /// back to automatic selection. A successful AT+COPS=... acknowledgement
-    /// is not enough; the modem must subsequently return a real +COPS result.
-    /// </summary>
-    private async Task<string?> TryPreferredOperatorSelectionAsync(
-        string portName,
-        string expectedCcid,
-        CancellationToken ct)
-    {
-        foreach (string operatorCode in GetOperatorCodesForCcid(expectedCcid))
-        {
-            string forced = await SendCommandAsync(
-                portName,
-                $"AT+COPS=1,2,\"{operatorCode}\"",
-                20000,
-                silent: true,
-                ct: ct);
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[NETWORK_OPERATOR_PREFERRED] mã {operatorCode}: {forced.Trim()}"
-            });
-            if (IsCommandFailure(forced)) continue;
-
-            for (int probe = 0; probe < 8; probe++)
-            {
-                await Task.Delay(1000, ct);
-                string cops = await SendCommandAsync(
-                    portName,
-                    "AT+COPS?",
-                    5000,
-                    silent: true,
-                    ct: ct);
-                if (!TryParseCopsResponse(cops, out _, out _)) continue;
-
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = $"[NETWORK_OPERATOR_PREFERRED_OK] COPS đã đăng ký sau khi ép mã {operatorCode}."
-                });
-                return cops;
-            }
-        }
-
-        return null;
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            @"\+CFUN:\s*(\d+)",
+            RegexOptions.IgnoreCase);
+        return match.Success
+               && int.TryParse(match.Groups[1].Value, out int mode)
+            ? mode
+            : null;
     }
 
     internal static bool NetworkRecoveryImeiMatches(
         string? observedImei,
         string? expectedImei) =>
-        ImeiManagementService.IsUsableObservedImei(observedImei)
-        && ImeiManagementService.IsValidImei(
-            ImeiManagementService.ToCanonicalImei(expectedImei))
-        && ImeiManagementService.AreEquivalentImei(
+        ImeiManagementService.AreEquivalentImei(
             observedImei,
             expectedImei);
 
-    internal static bool ShouldAbortNetworkPollingAfterHardReset(
-        bool exactImeiVerified) => !exactImeiVerified;
+    internal static bool RequiresSautoControllerRestart(string? cpinResponse)
+    {
+        string response = cpinResponse ?? string.Empty;
+        return response.Contains("CPIN: NOT READY", StringComparison.OrdinalIgnoreCase)
+            || (response.Contains("+CME ERROR: 10", StringComparison.OrdinalIgnoreCase)
+                && !response.Contains("+CME ERROR: 100", StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static bool IsSautoCpinReadyResponse(string? response) =>
+        IsSautoOkResponse(response)
+        && (response?.Contains(
+                "+CPIN: READY",
+                StringComparison.OrdinalIgnoreCase) ?? false);
+
+    internal static bool IsSautoSimAbsentResponse(string? response)
+    {
+        string value = response ?? string.Empty;
+        return value.Contains(
+                "+CME ERROR: 13",
+                StringComparison.OrdinalIgnoreCase)
+            || value.Contains(
+                "SIM NOT INSERTED",
+                StringComparison.OrdinalIgnoreCase)
+            || value.Contains(
+                "+CPIN: NOT INSERTED",
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task SendEscapeWithoutResponseAsync(
+        string portName,
+        CancellationToken ct)
+    {
+        if (!EnsurePortOpen(portName, out SerialPort? sp) || sp == null)
+            throw new IOException($"Không mở được {portName} để gửi ESC.");
+        if (!_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
+            throw new IOException($"Không tìm thấy khóa UART của {portName}.");
+
+        await semaphore.WaitAsync(ct);
+        try
+        {
+            AtCommandTraceLogger.Tx(portName, "<ESC>");
+            sp.Write("\u001b");
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+    }
+
+    public async Task<bool> EnterSautoAirplaneModeAsync(
+        string portName,
+        CancellationToken ct = default)
+    {
+        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
+            || serialPort == null)
+        {
+            return false;
+        }
+        if (!_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
+            return false;
+
+        // GSMController.airplane() calls sendAT separately for each command.
+        // Therefore the DataPort loop may acquire this COM during the 1-second
+        // guard or the RX wait, exactly as seen in the SAuto duplex capture.
+        for (int attempt = 1; attempt <= SautoAirplaneMaxAttempts; attempt++)
+        {
+            long cfunRevisionAtAttemptStart =
+                GetSautoReceiveSnapshot(portName).CfunRevision;
+            UpdateSautoReceiveState(
+                portName,
+                static state => state.CfunMode = null);
+
+            await SendSautoWriteOnlyAsync(
+                portName,
+                serialPort,
+                semaphore,
+                "AT+CFUN=4" + Environment.NewLine,
+                ct);
+
+            await Task.Delay(SautoAirplanePreQueryDelay, ct);
+
+            await SendSautoWriteOnlyAsync(
+                portName,
+                serialPort,
+                semaphore,
+                "AT+CFUN?" + Environment.NewLine,
+                ct);
+
+            int? reportedMode = await WaitForFreshSautoCfunModeAsync(
+                portName,
+                cfunRevisionAtAttemptStart,
+                ct);
+            if (reportedMode == 4)
+            {
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SAUTO_CFUN_CONFIRMED;attempt={attempt}/{SautoAirplaneMaxAttempts};mode=4;source=RX");
+                return true;
+            }
+
+            AtCommandTraceLogger.State(
+                portName,
+                $"SAUTO_STEP_HOLD;step=CFUN_QUERY_4;attempt={attempt}/{SautoAirplaneMaxAttempts};mode={(reportedMode?.ToString() ?? "NO_REPORT")};next_retry_seconds=1");
+            await Task.Delay(SautoAirplaneRetryDelay, ct);
+        }
+
+        return false;
+    }
+
+    private async Task<bool> EnterSautoAirplaneModeWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        bool sendEc20CnmiCallback,
+        CancellationToken ct)
+    {
+        for (int attempt = 1; attempt <= SautoAirplaneMaxAttempts; attempt++)
+        {
+            long cfunRevisionAtAttemptStart =
+                GetSautoReceiveSnapshot(portName).CfunRevision;
+            UpdateSautoReceiveState(
+                portName,
+                static state => state.CfunMode = null);
+
+            // GSMController.airplane() uses sendAT, which is write-only. A bare
+            // OK must never complete this state transition: only the shared RX
+            // callback seeing a fresh +CFUN report can release the step.
+            await WriteSautoCommandWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CFUN=4" + Environment.NewLine,
+                ct);
+
+            // On EC20, SAuto's asynchronous ATI callback publishes this command
+            // while airplane() is inside its one-second guard interval.
+            if (sendEc20CnmiCallback && attempt == 1)
+            {
+                await WriteSautoCommandWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+CNMI=1,1,0,0,0\r",
+                    ct);
+            }
+
+            await Task.Delay(SautoAirplanePreQueryDelay, ct);
+
+            await WriteSautoCommandWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CFUN?" + Environment.NewLine,
+                ct);
+
+            int? reportedMode = await WaitForFreshSautoCfunModeAsync(
+                portName,
+                cfunRevisionAtAttemptStart,
+                ct);
+            if (reportedMode == 4)
+            {
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SAUTO_CFUN_CONFIRMED;attempt={attempt}/{SautoAirplaneMaxAttempts};mode=4;source=RX");
+                return true;
+            }
+
+            AtCommandTraceLogger.State(
+                portName,
+                $"SAUTO_STEP_HOLD;step=CFUN_QUERY_4;attempt={attempt}/{SautoAirplaneMaxAttempts};mode={(reportedMode?.ToString() ?? "NO_REPORT")};next_retry_seconds=1");
+            await Task.Delay(SautoAirplaneRetryDelay, ct);
+        }
+
+        return false;
+    }
+
+    private async Task<int?> WaitForFreshSautoCfunModeAsync(
+        string portName,
+        long revisionAtAttemptStart,
+        CancellationToken ct)
+    {
+        int pollMilliseconds =
+            checked((int)SautoAirplaneResponsePollDelay.TotalMilliseconds);
+        int remainingMilliseconds =
+            checked((int)SautoAirplaneResponseTimeout.TotalMilliseconds);
+
+        while (remainingMilliseconds > 0)
+        {
+            SautoReceiveSnapshot snapshot =
+                GetSautoReceiveSnapshot(portName);
+            if (snapshot.CfunRevision > revisionAtAttemptStart)
+                return snapshot.CfunMode;
+
+            remainingMilliseconds -= pollMilliseconds;
+            await Task.Delay(SautoAirplaneResponsePollDelay, ct);
+        }
+
+        SautoReceiveSnapshot finalSnapshot =
+            GetSautoReceiveSnapshot(portName);
+        return finalSnapshot.CfunRevision > revisionAtAttemptStart
+            ? finalSnapshot.CfunMode
+            : null;
+    }
+
+    public async Task<SautoImeiChangeResult> ChangeSautoImeiAsync(
+        string portName,
+        string targetImei,
+        CancellationToken ct = default)
+    {
+        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
+            || serialPort == null)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"IMEI_CHANGE:{targetImei}: Port not open");
+            return new SautoImeiChangeResult(string.Empty, false);
+        }
+
+        if (!_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"IMEI_CHANGE:{targetImei}: Semaphore missing");
+            return new SautoImeiChangeResult(string.Empty, false);
+        }
+
+        string readImei = "ERROR";
+        bool resetRequested = false;
+        bool needAirplane = false;
+
+        await semaphore.WaitAsync(ct);
+        _sautoImeiChangePorts[portName] = 0;
+        try
+        {
+            // GSMController.ChangeImei writes slot 7 directly and deliberately
+            // ignores the terminal OK. The only progression evidence is the
+            // IMEI later published by HandlePort from AT+EGMR=0,7.
+            WriteSautoRawWhileLocked(
+                portName,
+                serialPort,
+                $"AT+EGMR=1,7,\"{targetImei}\"{Environment.NewLine}",
+                ct);
+            AtCommandTraceLogger.State(
+                portName,
+                $"SAUTO_IMEI_WRITE_SENT;target={targetImei};next=RX_READBACK;guard_ms=500");
+            await Task.Delay(SautoImeiWriteGuardDelay, ct);
+
+            UpdateSautoReceiveState(
+                portName,
+                static state => state.Imei = string.Empty);
+
+            for (int attempt = 1;
+                 attempt <= SautoImeiReadMaxAttempts;
+                 attempt++)
+            {
+                WriteSautoRawWhileLocked(
+                    portName,
+                    serialPort,
+                    $"AT+EGMR=0,7{Environment.NewLine}",
+                    ct);
+                await Task.Delay(SautoImeiReadInitialDelay, ct);
+
+                int remainingMilliseconds = checked(
+                    (int)SautoImeiReadTimeout.TotalMilliseconds);
+                int pollMilliseconds = checked(
+                    (int)SautoImeiReadPollDelay.TotalMilliseconds);
+                while (remainingMilliseconds > 0)
+                {
+                    string observedImei =
+                        GetSautoReceiveSnapshot(portName).Imei;
+                    if (!string.IsNullOrWhiteSpace(observedImei))
+                    {
+                        readImei = observedImei;
+                        break;
+                    }
+
+                    remainingMilliseconds -= pollMilliseconds;
+                    await Task.Delay(SautoImeiReadPollDelay, ct);
+                }
+
+                if (!string.Equals(
+                        readImei,
+                        "ERROR",
+                        StringComparison.Ordinal))
+                {
+                    AtCommandTraceLogger.State(
+                        portName,
+                        $"SAUTO_IMEI_READBACK;attempt={attempt}/{SautoImeiReadMaxAttempts};imei={readImei};source=RX");
+                    break;
+                }
+
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SAUTO_STEP_HOLD;step=EGMR_READBACK;attempt={attempt}/{SautoImeiReadMaxAttempts};next_retry_seconds=1");
+                await Task.Delay(SautoImeiReadRetryDelay, ct);
+            }
+
+            if (!string.Equals(
+                    readImei,
+                    targetImei,
+                    StringComparison.Ordinal))
+            {
+                needAirplane = true;
+            }
+            else
+            {
+                Guid resetGeneration = Guid.NewGuid();
+                _sautoResettingPorts[portName] = resetGeneration;
+                try
+                {
+                    // ResetModemAsync uses SerialPort.Write and then sleeps for
+                    // ten seconds. It does not wait for OK/RDY/CPIN.
+                    WriteSautoRawWhileLocked(
+                        portName,
+                        serialPort,
+                        $"AT+CFUN=1,1{Environment.NewLine}",
+                        ct);
+                    resetRequested = true;
+                    AtCommandTraceLogger.State(
+                        portName,
+                        "SAUTO_RESET_SENT;command=AT+CFUN=1,1;terminal_gate=OFF;guard_seconds=10");
+                    await Task.Delay(SautoImeiResetGuardDelay, ct);
+                }
+                finally
+                {
+                    RemoveSautoResetGeneration(
+                        portName,
+                        resetGeneration);
+                }
+
+                UpdateSautoReceiveState(
+                    portName,
+                    static state =>
+                    {
+                        state.RestartRequired = false;
+                        state.CpinResponse = string.Empty;
+                        state.Carrier = string.Empty;
+                        state.NetworkType = string.Empty;
+                        state.CsqResponse = string.Empty;
+                        state.CopsResponse = string.Empty;
+                    });
+                _sautoNetworkStates.TryRemove(portName, out _);
+            }
+        }
+        finally
+        {
+            _sautoImeiChangePorts.TryRemove(portName, out _);
+            semaphore.Release();
+        }
+
+        // This is the final needAirplane branch in ChangeImei. It executes only
+        // after releasing the ChangeImei UART ownership, exactly like SAuto.
+        if (needAirplane)
+            await EnterSautoAirplaneModeAsync(portName, ct);
+
+        return new SautoImeiChangeResult(readImei, resetRequested);
+    }
+
+    private void RemoveSautoResetGeneration(
+        string portName,
+        Guid resetGeneration)
+    {
+        if (_sautoResettingPorts.TryGetValue(
+                portName,
+                out Guid currentGeneration)
+            && currentGeneration == resetGeneration)
+        {
+            _sautoResettingPorts.TryRemove(portName, out _);
+        }
+    }
+
+    private async Task<SautoInitializationResult> RunSautoInitializationSequenceAsync(
+        string portName,
+        CancellationToken ct)
+    {
+        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
+            || serialPort == null)
+        {
+            throw new IOException(
+                $"Không mở được {portName} để khởi tạo modem.");
+        }
+        if (!_semaphores.TryGetValue(
+                portName,
+                out SemaphoreSlim? semaphore))
+        {
+            throw new IOException(
+                $"Không tìm thấy khóa UART của {portName}.");
+        }
+
+        await semaphore.WaitAsync(ct);
+        _sautoInitializingPorts[portName] = 0;
+        try
+        {
+            AtCommandTraceLogger.Tx(portName, "<ESC>");
+            serialPort.Write(
+                new byte[] { 27 },
+                0,
+                1);
+
+            // ESC has no terminal response. SAuto gives the modem command
+            // parser one guard interval before ATI; without it EC20 ignores
+            // the first ATI and every port enters an artificial timeout/retry.
+            await Task.Delay(TimeSpan.FromMilliseconds(600), ct);
+            // Never discard inbound UART bytes here: a +CMTI or direct +CMT may
+            // arrive during the startup guard. Feed every pending byte through
+            // the normal durable receive parser before issuing ATI.
+            if (serialPort.BytesToRead > 0)
+                HandleDataReceived(portName, serialPort);
+            serialPort.DiscardOutBuffer();
+            AtCommandTraceLogger.State(
+                portName,
+                "SAUTO_START_GUARD_DONE;rx=preserved;next=ATI");
+
+            string atiResponse = string.Empty;
+            for (int attempt = 1; attempt <= 5; attempt++)
+            {
+                try
+                {
+                    atiResponse =
+                        await WriteSautoCommandForResponseWhileLockedAsync(
+                            portName,
+                            serialPort,
+                            "ATI \r",
+                            TimeSpan.FromSeconds(3),
+                            ct);
+                }
+                catch (TimeoutException exception)
+                {
+                    AtCommandTraceLogger.State(
+                        portName,
+                        $"SAUTO_STEP_HOLD;step=ATI_IDENTITY;attempt={attempt}/5;result=TIMEOUT;message={exception.Message}");
+                    continue;
+                }
+
+                if (IsSautoOkResponse(atiResponse)
+                    && HasReadableModemIdentity(atiResponse))
+                {
+                    break;
+                }
+
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SAUTO_STEP_HOLD;step=ATI_IDENTITY;attempt={attempt}/5;result={GetSautoResponseOutcome(atiResponse)}");
+                atiResponse = string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(atiResponse))
+            {
+                throw new TimeoutException(
+                    $"{portName} không trả danh tính ATI hợp lệ sau 5 phản hồi/thời hạn.");
+            }
+            SautoReceiveSnapshot identity =
+                GetSautoReceiveSnapshot(portName);
+            bool isEc20 =
+                atiResponse.Contains(
+                    "EC20",
+                    StringComparison.OrdinalIgnoreCase)
+                || identity.Model.Contains(
+                    "EC20",
+                    StringComparison.OrdinalIgnoreCase)
+                || identity.Firmware.Contains(
+                    "EC20",
+                    StringComparison.OrdinalIgnoreCase);
+
+            if (isEc20)
+            {
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+CPMS=\"ME\",\"SM\",\"MT\"\r",
+                    TimeSpan.FromSeconds(10),
+                    ct);
+            }
+
+            bool radioLocked =
+                await EnterSautoAirplaneModeWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    sendEc20CnmiCallback: isEc20,
+                    ct);
+
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+EGMR=0,7; \r",
+                TimeSpan.FromSeconds(12),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CNMI? \r",
+                TimeSpan.FromSeconds(10),
+                ct);
+
+            if (isEc20)
+            {
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+CSCS=\"GSM\"\r",
+                    TimeSpan.FromSeconds(10),
+                    ct);
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+QURCCFG=\"urcport\",\"uart1\"\r",
+                    TimeSpan.FromSeconds(10),
+                    ct);
+            }
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CMGF=1\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CPMS=\"SM\",\"SM\",\"SM\"\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CMGD=1,4\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CPMS=\"ME\",\"ME\",\"ME\"\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CMGD=1,4\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CPMS=\"SM\",\"SM\",\"SM\"\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CPMS?\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+            await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                "AT+CNMI=1,1,0,0,0\r",
+                TimeSpan.FromSeconds(10),
+                ct);
+
+            if (isEc20)
+            {
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+QCFG=\"nwscanmode\",0,1",
+                    TimeSpan.FromSeconds(10),
+                    ct);
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+QURCCFG=\"urcport\",\"uart1\"",
+                    TimeSpan.FromSeconds(10),
+                    ct);
+            }
+
+            UpdateSautoReceiveState(
+                portName,
+                static state =>
+                {
+                    state.SimReady = false;
+                    state.SimLocked = false;
+                    state.ReadyTransitionPending = false;
+                    state.CpinResponse = string.Empty;
+                });
+            string initialCpinResponse =
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+CPIN?",
+                    TimeSpan.FromSeconds(10),
+                    ct);
+            UpdateSautoReceiveState(
+                portName,
+                state =>
+                    state.CpinResponse = initialCpinResponse);
+
+            SautoReceiveSnapshot snapshot =
+                GetSautoReceiveSnapshot(portName);
+            QuectelModemProfile profile =
+                QuectelModemProfile.FromIdentity(
+                    snapshot.Manufacturer,
+                    snapshot.Model,
+                    snapshot.Firmware);
+            _modemProfiles[portName] = profile;
+            _portVendors[portName] = profile.IsQuectel
+                ? "QUECTEL"
+                : snapshot.Manufacturer.ToUpperInvariant();
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[MODEM_PROFILE] manufacturer={profile.Manufacturer}; model={profile.Model}; firmware={profile.Firmware}; capabilities={profile.CapabilityText}"
+            });
+
+            return new SautoInitializationResult(
+                profile,
+                snapshot.Imei,
+                snapshot.CpinResponse,
+                radioLocked);
+        }
+        finally
+        {
+            _sautoInitializingPorts.TryRemove(portName, out _);
+            semaphore.Release();
+        }
+    }
+
+    private async Task InitializeModemCoreAsync(
+        string portName,
+        CancellationToken ct)
+    {
+        SautoInitializationResult result = await RunSautoInitializationSequenceAsync(
+            portName,
+            ct);
+        if (!result.RadioLocked)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[STATUS_NO_RESPONSE] SAuto không xác nhận được CFUN=4 sau 5 lần; tiếp tục DataPort."
+            });
+        }
+
+        string cleanImei = Regex.Match(
+            result.ImeiResponse,
+            @"(?<!\d)\d{15}(?!\d)").Value;
+        if (!string.IsNullOrWhiteSpace(cleanImei))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[PARSE_IMEI] {cleanImei}"
+            });
+        }
+
+        string cpinResponse = result.CpinResponse;
+        if (RequiresSautoControllerRestart(cpinResponse))
+        {
+            return;
+        }
+
+        SautoReceiveSnapshot state = GetSautoReceiveSnapshot(portName);
+        bool simReady = state.SimReady;
+        if (!simReady)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[NO_SIM_READY] imei={cleanImei}"
+            });
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[WAITING_FOR_SIM] Không đọc được SIM"
+            });
+        }
+
+        StartHotplugWaitLoop(
+            portName,
+            simReady,
+            completeInitialProbe: true);
+    }
 
     private async Task InitializeModemAsync(string portName, CancellationToken ct)
     {
-        // Guard: Đánh dấu cổng đang trong quá trình khởi tạo, ngăn GlobalSimMonitor gọi HandleSimInsertedAsync song song
-        _simInitInProgress[portName] = true;
         try
         {
             await InitializeModemCoreAsync(portName, ct);
         }
         catch (OperationCanceledException) { }
-        finally
-        {
-            if (!ct.IsCancellationRequested)
-                _simInitInProgress.TryRemove(portName, out _);
-        }
     }
 
 
@@ -3511,824 +4268,47 @@ public class GsmModemService : IGsmModemService
         !IsCommandFailure(response)
         && Regex.IsMatch(response, @"(?<!\d)89\d{16,20}(?!\d)");
 
-    private void ClearSimRemovalEvidence(string portName)
-    {
-        _simRemovalEvidenceCounts.TryRemove(portName, out _);
-        _simRemovalEvidenceSince.TryRemove(portName, out _);
-    }
-
-    private void CancelSimRemovalConfirmation(string portName)
-    {
-        if (_simRemovalConfirmationCts.TryRemove(portName, out var cts))
-        {
-            try { cts.Cancel(); } catch { }
-            try { cts.Dispose(); } catch { }
-        }
-    }
-
-    public void SetSimRemovalWatchEnabled(string portName, bool enabled)
-    {
-        if (string.IsNullOrWhiteSpace(portName)) return;
-
-        if (enabled)
-        {
-            _simRemovalWatchEnabled[portName] = 0;
-            ClearSimRemovalEvidence(portName);
-            return;
-        }
-
-        _simRemovalWatchEnabled.TryRemove(portName, out _);
-        CancelSimRemovalConfirmation(portName);
-        ClearSimRemovalEvidence(portName);
-    }
-
-    private bool IsSimRemovalWatchEnabled(string portName) =>
-        _simRemovalWatchEnabled.ContainsKey(portName);
-
-    private void ScheduleSimRemovalConfirmation(string portName)
-    {
-        if (!IsSimRemovalWatchEnabled(portName)
-            || !_lastSimState.TryGetValue(portName, out bool wasPresent)
-            || !wasPresent)
-            return;
-
-        CancelSimRemovalConfirmation(portName);
-        var cts = new CancellationTokenSource();
-        _simRemovalConfirmationCts[portName] = cts;
-        _ = ConfirmSimRemovalAfterDelayAsync(portName, cts);
-    }
-
-    private async Task ConfirmSimRemovalAfterDelayAsync(
-        string portName,
-        CancellationTokenSource confirmationCts)
-    {
-        CancellationToken token = confirmationCts.Token;
-        try
-        {
-            // Cho đúng yêu cầu hot-plug: sau 5 giây kể từ URC mất SIM thì xác minh
-            // một lần và cập nhật UI ngay, không chờ vòng quét sóng kế tiếp.
-            await Task.Delay(SimRemovalConfirmationDelay, token);
-            if (token.IsCancellationRequested
-                || !_serialPorts.ContainsKey(portName)
-                || !_lastSimState.TryGetValue(portName, out bool wasPresent)
-                || !wasPresent
-                || _suspendedBackgroundPorts.ContainsKey(portName)
-                || _rebootRecoveryInProgress.ContainsKey(portName)
-                || _simStackDisabledByTool.TryGetValue(portName, out bool stackDisabled) && stackDisabled)
-                return;
-
-            string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true, ct: token)
-                ?? string.Empty;
-            string cpinText = cpin ?? string.Empty;
-
-            string qsimstat = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
-                ? (await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true, ct: token)
-                    ?? string.Empty)
-                : string.Empty;
-            string liveCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true)
-                ?? string.Empty;
-            string cfun = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true, ct: token)
-                ?? string.Empty;
-            string qsimText = qsimstat ?? string.Empty;
-            string ccidText = liveCcid ?? string.Empty;
-            string cfunText = cfun ?? string.Empty;
-
-            bool cpinPresent = Regex.IsMatch(
-                cpinText, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
-                || cpinText.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                || cpinText.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-            bool sensorPresent = Regex.IsMatch(
-                qsimText, @"\+QSIMSTAT:\s*1\s*,\s*1", RegexOptions.IgnoreCase);
-            bool sensorAbsent = Regex.IsMatch(
-                qsimText, @"\+QSIMSTAT:\s*1\s*,\s*0", RegexOptions.IgnoreCase);
-            bool ccidPresent = HasReadableCcid(ccidText);
-            bool explicitNotInserted = cpinText.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase);
-            bool radioActive = Regex.IsMatch(cfunText, @"\+CFUN:\s*1\b", RegexOptions.IgnoreCase);
-            bool sensorProbeAvailable = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true;
-            bool confirmedAbsent = !cpinPresent && !sensorPresent && !ccidPresent
-                && (sensorProbeAvailable
-                    ? sensorAbsent && (explicitNotInserted || IsConfirmedSimAbsentDuringPolling(
-                        cpinText, qsimText, ccidText, cfunText, stackDisabledByTool: false))
-                    : explicitNotInserted && radioActive);
-
-            if (!confirmedAbsent) return;
-
-            // A single CPIN/QSIMSTAT removal result is not enough. During a
-            // CFUN/IMS transition several EC20 firmware versions briefly report
-            // NOT INSERTED/1,0 on every port. Re-read the independent signals
-            // after a short settle window; only two consecutive absent probes may
-            // turn off RF and enter the hot-plug loop.
-            await Task.Delay(SimRemovalRecheckDelay, token);
-            if (token.IsCancellationRequested
-                || !_serialPorts.ContainsKey(portName)
-                || !_lastSimState.TryGetValue(portName, out wasPresent)
-                || !wasPresent
-                || _suspendedBackgroundPorts.ContainsKey(portName)
-                || _rebootRecoveryInProgress.ContainsKey(portName)
-                || _simStackDisabledByTool.TryGetValue(portName, out stackDisabled) && stackDisabled)
-                return;
-
-            string cpinSecond = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true, ct: token)
-                ?? string.Empty;
-            string qsimSecond = sensorProbeAvailable
-                ? (await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true, ct: token)
-                    ?? string.Empty)
-                : string.Empty;
-            string ccidSecond = await ReadCcidWithFallbackAsync(portName, 4000, silent: true)
-                ?? string.Empty;
-            string cfunSecond = await SendCommandAsync(portName, "AT+CFUN?", 3000, silent: true, ct: token)
-                ?? string.Empty;
-            bool secondCpinPresent = Regex.IsMatch(
-                cpinSecond, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
-                || cpinSecond.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                || cpinSecond.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-            bool secondSensorPresent = Regex.IsMatch(
-                qsimSecond, @"\+QSIMSTAT:\s*1\s*,\s*1", RegexOptions.IgnoreCase);
-            bool secondSensorAbsent = Regex.IsMatch(
-                qsimSecond, @"\+QSIMSTAT:\s*1\s*,\s*0", RegexOptions.IgnoreCase);
-            bool secondCcidPresent = HasReadableCcid(ccidSecond);
-            bool secondExplicitNotInserted = cpinSecond.Contains(
-                "NOT INSERTED", StringComparison.OrdinalIgnoreCase);
-            bool secondRadioActive = Regex.IsMatch(
-                cfunSecond, @"\+CFUN:\s*1\b", RegexOptions.IgnoreCase);
-            bool confirmedSecondAbsent = !secondCpinPresent
-                && !secondSensorPresent
-                && !secondCcidPresent
-                && (sensorProbeAvailable
-                    ? secondSensorAbsent && (secondExplicitNotInserted
-                        || IsConfirmedSimAbsentDuringPolling(
-                            cpinSecond, qsimSecond, ccidSecond, cfunSecond, stackDisabledByTool: false))
-                    : secondExplicitNotInserted && secondRadioActive);
-            if (!confirmedSecondAbsent) return;
-
-            // Tách task xác nhận khỏi dictionary trước khi phát log. MainViewModel
-            // sẽ vô hiệu hóa cờ khi nhận WAITING_FOR_SIM; không được hủy chính task
-            // đang gửi CFUN=4 và khởi động vòng chờ SIM.
-            if (_simRemovalConfirmationCts.TryGetValue(portName, out var currentConfirmation)
-                && ReferenceEquals(currentConfirmation, confirmationCts))
-                _simRemovalConfirmationCts.TryRemove(portName, out _);
-            _lastSimState[portName] = false;
-            SetSmsSimIdentity(portName, null);
-            ClearSimRemovalEvidence(portName);
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (xác nhận sau 5 giây)."
-            });
-            await SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true, ct: token);
-            StartHotplugWaitLoop(portName);
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (Exception ex)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[SIM_REMOVAL_CONFIRM_ERROR] Không xác nhận được SIM sau 5 giây: {ex.Message}"
-            });
-        }
-        finally
-        {
-            if (_simRemovalConfirmationCts.TryGetValue(portName, out var current)
-                && ReferenceEquals(current, confirmationCts))
-                _simRemovalConfirmationCts.TryRemove(portName, out _);
-            try { confirmationCts.Dispose(); } catch { }
-        }
-    }
-
-    private bool RegisterSimRemovalEvidence(string portName)
-    {
-        DateTimeOffset since = _simRemovalEvidenceSince.GetOrAdd(
-            portName, _ => DateTimeOffset.UtcNow);
-        int evidence = _simRemovalEvidenceCounts.AddOrUpdate(
-            portName, 1, (_, old) => old + 1);
-        return evidence >= SimRemovalConfirmationCycles
-            && DateTimeOffset.UtcNow - since >= SimRemovalConfirmationWindow;
-    }
-
-    internal static bool ShouldVerifySimRemoval(
-        string cpin,
-        bool stackDisabledByTool,
-        bool removalUrcPending)
-    {
-        if (stackDisabledByTool) return false;
-        bool explicitNotInserted = cpin.Contains("NOT INSERTED", StringComparison.OrdinalIgnoreCase);
-        bool transientNotReady = cpin.Contains("NOT READY", StringComparison.OrdinalIgnoreCase)
-            || cpin.Contains("ERROR: 10", StringComparison.OrdinalIgnoreCase)
-            || cpin.Contains("ERROR: 13", StringComparison.OrdinalIgnoreCase)
-            || cpin.Contains("ERROR: 14", StringComparison.OrdinalIgnoreCase);
-        return explicitNotInserted || (transientNotReady && removalUrcPending);
-    }
-
-    internal static bool IsConfirmedSimAbsentDuringPolling(
-        string cpin,
-        string qsimstat,
-        string ccid,
-        string cfun,
-        bool stackDisabledByTool)
-    {
-        if (stackDisabledByTool || IsRadioDisabledResponse(cfun)) return false;
-
-        bool cpinPresent = Regex.IsMatch(
-            cpin ?? string.Empty, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase)
-            || (cpin?.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase) ?? false)
-            || (cpin?.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase) ?? false);
-        bool sensorPresent = Regex.IsMatch(
-            qsimstat ?? string.Empty,
-            @"\+QSIMSTAT:\s*1\s*,\s*1",
-            RegexOptions.IgnoreCase);
-        if (cpinPresent || sensorPresent || HasReadableCcid(ccid)) return false;
-
-        bool explicitlyNotInserted = cpin?.Contains(
-            "NOT INSERTED", StringComparison.OrdinalIgnoreCase) ?? false;
-        if (explicitlyNotInserted) return true;
-
-        // NOT READY/CME ERROR alone can be transient while the CS/IMS domain changes.
-        // During the active RF polling cycle it becomes reliable removal evidence only
-        // when CFUN is still 1 and the physical SIM sensor independently reports absent.
-        bool radioActive = Regex.IsMatch(
-            cfun ?? string.Empty, @"\+CFUN:\s*1\b", RegexOptions.IgnoreCase);
-        bool sensorAbsent = Regex.IsMatch(
-            qsimstat ?? string.Empty,
-            @"\+QSIMSTAT:\s*1\s*,\s*0",
-            RegexOptions.IgnoreCase);
-        bool cpinUnavailable = (cpin?.Contains("NOT READY", StringComparison.OrdinalIgnoreCase) ?? false)
-            || (cpin?.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ?? false)
-            || string.IsNullOrWhiteSpace(cpin);
-        return radioActive && sensorAbsent && cpinUnavailable;
-    }
-
-    private async Task SendEscapeWithoutResponseAsync(string portName, CancellationToken ct)
-    {
-        if (!EnsurePortOpen(portName, out var sp) || sp == null)
-            throw new IOException($"Không mở được {portName} để gửi ESC.");
-        if (!_semaphores.TryGetValue(portName, out var semaphore))
-            throw new IOException($"Không có khóa serial cho {portName}.");
-
-        await semaphore.WaitAsync(ct);
-        try
-        {
-            sp.Write("\u001b");
-        }
-        finally
-        {
-            semaphore.Release();
-        }
-    }
-
-    private async Task ReopenSerialHandleBetweenSautoPassesAsync(
-        string portName,
-        CancellationToken ct)
-    {
-        if (!_serialPorts.TryGetValue(portName, out SerialPort? sp)
-            || !_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
-            return;
-
-        await semaphore.WaitAsync(ct);
-        try
-        {
-            if (sp.IsOpen) sp.Close();
-            if (_portBuffers.TryGetValue(portName, out StringBuilder? buffer))
-            {
-                object bufferGate = _portBufferLocks.GetOrAdd(portName, static _ => new object());
-                lock (bufferGate) buffer.Clear();
-            }
-            await Task.Delay(100, ct);
-            sp.Open();
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            // Không loại COM khỏi bảng. Lượt kế tiếp/EnsurePortOpen sẽ thử lại,
-            // giống SAuto giữ cổng lỗi riêng thay vì làm mất cả hàng.
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[SAUTO_REOPEN_RETRY] Chưa mở lại được handle: {ex.Message}"
-            });
-        }
-        finally
-        {
-            semaphore.Release();
-        }
-    }
-
-    private async Task<SautoInitializationResult> RunSautoInitializationSequenceAsync(
-        string portName,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-
-        await SendEscapeWithoutResponseAsync(portName, ct);
-        await Task.Delay(100, ct);
-
-        string ati = await SendCommandAsync(portName, "ATI", 5000, silent: true, ct: ct);
-        if (!HasReadableModemIdentity(ati))
-        {
-            // Modem có thể còn ở chế độ nhập payload SMS của lượt gửi trước, khi
-            // đó chính ký tự của ATI bị nuốt làm nội dung tin. ESC lần nữa với
-            // khoảng chờ dài hơn rồi hỏi lại, nếu không profile sẽ rỗng và cổng
-            // mất các nhánh riêng cho Quectel cho tới lần mở lại sau.
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[MODEM_IDENTITY_RETRY] ATI chưa trả danh tính ({ati.Trim()}); thoát chế độ nhập SMS rồi hỏi lại."
-            });
-            await SendEscapeWithoutResponseAsync(portName, ct);
-            await Task.Delay(500, ct);
-            ati = await SendCommandAsync(portName, "ATI", 5000, silent: true, ct: ct);
-        }
-        await SendCommandAsync(portName, "AT+CPMS=\"ME\",\"SM\",\"MT\"", 5000, silent: true, ct: ct);
-        await Task.Delay(100, ct);
-
-        string cfun4 = await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct: ct);
-        await Task.Delay(100, ct);
-        await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 5000, silent: true, ct: ct);
-        await Task.Delay(200, ct);
-        string cfunState = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
-
-        bool radioLocked = !IsCommandFailure(cfun4)
-            && Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", RegexOptions.IgnoreCase);
-        if (!radioLocked)
-        {
-            await Task.Delay(200, ct);
-            cfun4 = await SendCommandAsync(portName, "AT+CFUN=4", 10000, silent: true, ct: ct);
-            cfunState = await SendCommandAsync(portName, "AT+CFUN?", 5000, silent: true, ct: ct);
-            radioLocked = !IsCommandFailure(cfun4)
-                && Regex.IsMatch(cfunState, @"\+CFUN:\s*4\b", RegexOptions.IgnoreCase);
-        }
-
-        if (!radioLocked)
-        {
-            return new SautoInitializationResult(
-                QuectelModemProfile.FromIdentity(string.Empty, string.Empty, string.Empty),
-                "ERROR",
-                "ERROR",
-                false);
-        }
-
-        await Task.Delay(200, ct);
-        string imei = await SendCommandAsync(portName, "AT+EGMR=0,7;", 10000, silent: true, ct: ct);
-        await Task.Delay(100, ct);
-        await SendCommandAsync(portName, "AT+CNMI?", 5000, silent: true, ct: ct);
-        await SendCommandAsync(portName, "AT+CSCS=\"GSM\"", 5000, silent: true, ct: ct);
-        await Task.Delay(150, ct);
-        await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true, ct: ct);
-        await Task.Delay(150, ct);
-        await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true, ct: ct);
-        await Task.Delay(150, ct);
-        await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, ct: ct);
-        await Task.Delay(200, ct);
-        await SendCommandAsync(portName, "AT+CPMS=\"ME\",\"ME\",\"ME\"", 5000, silent: true, ct: ct);
-        await Task.Delay(200, ct);
-        await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, ct: ct);
-        await SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, ct: ct);
-        await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 5000, silent: true, ct: ct);
-        await Task.Delay(150, ct);
-
-        // SAuto only sets AUTO RAT here; it does not inject IMS into the no-SIM loop.
-        await SendCommandAsync(portName, "AT+QCFG=\"nwscanmode\",0,1", 3000, silent: true, ct: ct);
-
-        await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true, ct: ct);
-        await Task.Delay(500, ct);
-        // Keep USSD result-code presentation enabled after every modem/SIM
-        // initialization. Without this, the modem can accept CUSD but suppress
-        // the +CUSD URC on the serial stream.
-        await SendCommandAsync(portName, "AT+CUSD=1", 5000, silent: true, ct: ct);
-        string cpin = await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true, ct: ct);
-
-        string model = Regex.Match(ati, @"\b(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}\b", RegexOptions.IgnoreCase).Value;
-        var profile = QuectelModemProfile.FromIdentity(
-            ati.Contains("Quectel", StringComparison.OrdinalIgnoreCase) ? "Quectel" : string.Empty,
-            model,
-            ati);
-        _portVendors[portName] = profile.Manufacturer.ToUpperInvariant();
-        _modemProfiles[portName] = profile;
-        return new SautoInitializationResult(profile, imei, cpin, true);
-    }
-
-    private async Task InitializeModemCoreAsync(string portName, CancellationToken ct)
-    {
-        SautoInitializationResult result = await RunSautoInitializationSequenceAsync(portName, ct);
-        if (!result.RadioLocked)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = "[STATUS_NO_RESPONSE] Không xác nhận được CFUN=4 theo chuỗi SAuto."
-            });
-            return;
-        }
-
-        LogMessage?.Invoke(this, new GsmDataEventArgs
-        {
-            PortName = portName,
-            Data = $"[MODEM_PROFILE] manufacturer={result.Profile.Manufacturer}; model={result.Profile.Model}; firmware={result.Profile.FirmwareRevision}; capabilities={result.Profile.CapabilityText}; quirks={result.Profile.QuirkText}"
-        });
-
-        string cleanImei = Regex.Match(result.ImeiResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
-        if (!string.IsNullOrWhiteSpace(cleanImei))
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
-
-        string cpinResponse = result.CpinResponse;
-        bool simLocked = cpinResponse.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                      || cpinResponse.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-        bool simReady = Regex.IsMatch(
-            cpinResponse, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
-        if (simLocked)
-        {
-            _lastSimState[portName] = false;
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpinResponse.Trim()}" });
-            return;
-        }
-
-        string ccid = simReady
-            ? await ReadCcidWithFallbackAsync(
-                portName, 5000, silent: true, ct: ct)
-            : "ERROR";
-        if (ShouldAttemptStartupOfflineSimRecovery(cpinResponse, ccid))
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = "[SIM_STARTUP_OFFLINE_RECOVERY] CPIN/CCID chưa sẵn sàng; khởi tạo lại SIM bằng CFUN=0 -> CFUN=4, RF vẫn khóa."
-            });
-
-            if (await RestartSimStackOfflineAsync(portName, ct))
-            {
-                for (int attempt = 1; attempt <= 4; attempt++)
-                {
-                    cpinResponse = await SendCommandAsync(
-                        portName, "AT+CPIN?", 5000, silent: true, ct: ct);
-                    simLocked = cpinResponse.Contains(
-                            "SIM PIN", StringComparison.OrdinalIgnoreCase)
-                        || cpinResponse.Contains(
-                            "SIM PUK", StringComparison.OrdinalIgnoreCase);
-                    if (simLocked) break;
-
-                    ccid = await ReadCcidWithFallbackAsync(
-                        portName, 5000, silent: true, ct: ct);
-                    if (HasReadableCcid(ccid))
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[SIM_STARTUP_OFFLINE_RECOVERED] SIM READY sau {attempt} lượt; RF giữ ở CFUN=4."
-                        });
-                        break;
-                    }
-
-                    if (attempt < 4)
-                        await Task.Delay(750, ct);
-                }
-            }
-        }
-
-        if (simLocked)
-        {
-            _lastSimState[portName] = false;
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[STATUS_SIM_LOCKED] {cpinResponse.Trim()}"
-            });
-            return;
-        }
-
-        if (HasReadableCcid(ccid))
-        {
-            _lastSimState[portName] = true;
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid.Replace("OK", "").Trim()}" });
-            return;
-        }
-
-        _lastSimState[portName] = false;
-        LogMessage?.Invoke(this, new GsmDataEventArgs
-        {
-            PortName = portName,
-            Data = $"[NO_SIM_READY] imei={cleanImei}"
-        });
-        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Không đọc được SIM" });
-        StartHotplugWaitLoop(portName);
-    }
-
-    internal static bool ShouldAttemptStartupOfflineSimRecovery(
-        string? cpinResponse,
-        string? ccidResponse)
-    {
-        string cpin = cpinResponse ?? string.Empty;
-        bool simLocked = cpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-            || cpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase);
-        return !simLocked && !HasReadableCcid(ccidResponse ?? string.Empty);
-    }
-
     public async Task ReloadSimAsync(string portName)
     {
-        if (!_serialPorts.ContainsKey(portName)) return;
-        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[INFO] Đang khởi tạo lại SIM stack ở chế độ khóa RF..." });
-
-        if (!await RestartSimStackOfflineAsync(portName))
-            throw new InvalidOperationException("Không thể khởi tạo lại SIM stack an toàn bằng CFUN=0 -> CFUN=4");
+        await ReconnectPortAsync(portName, 115200);
     }
 
-    public async Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default)
+    public Task<bool> ReloadAndResumeSimAsync(
+        string portName,
+        CancellationToken ct = default) =>
+        ReconnectPortAsync(portName, 115200, ct);
+
+    public async Task<bool> ReinitializeSettingsAsync(
+        string portName,
+        CancellationToken ct = default)
     {
         if (!_serialPorts.ContainsKey(portName)) return false;
-        if (!_rebootRecoveryInProgress.TryAdd(portName, 0)) return false;
-
-        try
-        {
-            await ReloadSimAsync(portName);
-
-            // Không reboot CFUN=1,1: EC20 sẽ trở lại full functionality và có thể attach
-            // trước khi danh tính được xác minh. Chỉ cấu hình lại trong CFUN=4.
-            if (!await ReinitializeSettingsAsync(portName, ct)) return false;
-
-            bool simReady = false;
-            for (int attempt = 0; attempt < 45; attempt++)
-            {
-                ct.ThrowIfCancellationRequested();
-                if (!_serialPorts.ContainsKey(portName)) return false;
-
-                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true, ct: ct);
-                if (cpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                    || cpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase))
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}"
-                    });
-                    return false;
-                }
-
-                simReady = cpin.Contains("READY", StringComparison.OrdinalIgnoreCase)
-                    && !cpin.Contains("NOT READY", StringComparison.OrdinalIgnoreCase);
-                if (!simReady)
-                {
-                    string qsim = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true
-                        ? await SendCommandAsync(portName, "AT+QSIMSTAT?", 3000, silent: true, ct: ct)
-                        : string.Empty;
-                    simReady = Regex.IsMatch(qsim, @"\+QSIMSTAT:\s*1\s*,\s*1");
-
-                    // SIM_DET có thể không được nối hoặc dùng polarity khác trên bo 32/64
-                    // cổng. CCID đọc được là bằng chứng mạnh hơn CPIN NOT READY tạm thời.
-                    if (!simReady && attempt % 3 == 2)
-                    {
-                        string ccid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
-                        simReady = HasReadableCcid(ccid);
-                    }
-                }
-                if (simReady) break;
-
-                // NOT READY/CME 10 có thể xuất hiện khi SIM stack vừa chuyển 0 -> 4.
-                await Task.Delay(1500, ct);
-            }
-
-            if (!simReady) return false;
-
-            _lastSimState[portName] = true;
-            // RF/SIM recovery can reset the CUSD presentation bit independently
-            // of the rest of the modem configuration.
-            await SendCommandAsync(portName, "AT+CUSD=1", 5000, silent: true, ct: ct);
-        }
-        finally
-        {
-            _rebootRecoveryInProgress.TryRemove(portName, out _);
-        }
-
-        // Re-enter the normal identity pipeline (CCID -> IMEI -> configuration) only
-        // after the modem and SIM are both ready.
-        await HandleSimInsertedAsync(portName);
+        await InitializeModemCoreAsync(portName, ct);
         return true;
     }
+    public void StartHotplugWaitLoop(string portName) =>
+        StartHotplugWaitLoop(
+            portName,
+            simReadyInitially: false,
+            completeInitialProbe: false);
 
-    public async Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default)
-    {
-        // Chờ modem boot lên (AT trả về OK)
-        bool ready = false;
-        for (int attempt = 0; attempt < 20; attempt++)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
-            string ping = await SendCommandAsync(portName, "AT", 3000, silent: true);
-            if (!ping.Contains("Timeout") && !ping.Contains("ERROR"))
-            {
-                ready = true;
-                break;
-            }
-            await Task.Delay(1500, ct);
-        }
-
-        if (!ready) 
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "ERROR: Modem đã bị rút trong lúc khởi động lại." });
-            return false;
-        }
-
-        // [SECURITY CRITICAL] Thực thi đúng 100% chuỗi lệnh khởi tạo chuẩn từ SAuto
-        await SendEscapeWithoutResponseAsync(portName, ct);
-        await Task.Delay(100, ct);
-        // CMGD thuộc vòng no-SIM đã capture. Khi đang cấu hình một SIM thật,
-        // SAuto đi thẳng sang boot/network; không được xóa SMS vừa đến của SIM.
-        foreach (string cmd in SautoInitializationCommandOrder
-            .Skip(1)
-            .Where(cmd => !cmd.StartsWith("AT+CMGD=", StringComparison.OrdinalIgnoreCase)))
-        {
-            ct.ThrowIfCancellationRequested();
-            await SendCommandAsync(portName, cmd, 5000, silent: true, ct: ct);
-        }
-
-        return true;
-    }
-
-    private void CancelPollingLoopForSimPresenceChange(string portName)
-    {
-        lock (_pollingCts)
-        {
-            if (_pollingCts.TryRemove(portName, out CancellationTokenSource? pollingCts))
-            {
-                try { pollingCts.Cancel(); } catch { }
-                try { pollingCts.Dispose(); } catch { }
-            }
-        }
-        _pollingExpectedIdentities.TryRemove(portName, out _);
-        _pendingNetworkPollingPorts.TryRemove(portName, out _);
-    }
-
-    public void StartGlobalSimMonitor(string portName)
+    private void StartHotplugWaitLoop(
+        string portName,
+        bool simReadyInitially,
+        bool completeInitialProbe)
     {
         if (_suspendedBackgroundPorts.ContainsKey(portName)) return;
 
-        CancellationToken token;
-        lock (_simMonitorCts)
-        {
-            if (_simMonitorCts.TryGetValue(portName, out var oldCts))
+        // A completed CFUN=1,1 starts a fresh DataPort cycle. A CME 10 /
+        // CPIN NOT READY flag from the previous modem lifetime must not make
+        // this new hot-plug loop exit before it can query CPIN and ICCID.
+        UpdateSautoReceiveState(
+            portName,
+            static state =>
             {
-                try { oldCts.Cancel(); oldCts.Dispose(); } catch {}
-            }
-            var newCts = new CancellationTokenSource();
-            _simMonitorCts[portName] = newCts;
-            token = newCts.Token;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            // Bắt đầu sớm; các guard bên dưới bỏ qua đúng lúc modem còn khởi tạo.
-            try { await Task.Delay(SimPresenceMonitorInitialDelay, token); } catch { return; }
-
-            while (!token.IsCancellationRequested)
-            {
-                try { await Task.Delay(SimPresenceMonitorInterval, token); } catch { break; }
-                if (_suspendedBackgroundPorts.ContainsKey(portName)) continue;
-                if (!_serialPorts.ContainsKey(portName)) break;
-                if (IsCallInProgress(portName)) continue;
-                if (_rebootRecoveryInProgress.ContainsKey(portName)) continue;
-                if (_simInitInProgress.ContainsKey(portName)
-                    || _simInsertInProgress.ContainsKey(portName)
-                    || _commandTcs.ContainsKey(portName)) continue;
-
-                string cpin = await SendCommandAsync(
-                    portName,
-                    "AT+CPIN?",
-                    SimPresenceProbeTimeoutMs,
-                    silent: true,
-                    ct: token);
-                
-                // Nếu timeout (modem đang bận gọi điện) thì bỏ qua vòng lặp này
-                if (string.IsNullOrWhiteSpace(cpin)) continue;
-
-                // Do not use Contains("READY"): it also matches "+CPIN: NOT READY".
-                bool isSimPresent = Regex.IsMatch(cpin, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase);
-                bool isSimLocked = cpin.Contains("SIM PIN") || cpin.Contains("SIM PUK");
-                bool stackDisabledByTool = _simStackDisabledByTool.TryGetValue(portName, out bool stackDisabled) && stackDisabled;
-                bool hasSimStatusUrc = GetModemProfile(portName)?.Supports(ModemCapability.SimStatusUrc) == true;
-                string qsimstat = hasSimStatusUrc
-                    ? await SendCommandAsync(
-                        portName,
-                        "AT+QSIMSTAT?",
-                        SimPresenceProbeTimeoutMs,
-                        silent: true,
-                        ct: token)
-                    : string.Empty;
-                bool sensorPresent = Regex.IsMatch(
-                    qsimstat,
-                    @"\+QSIMSTAT:\s*1\s*,\s*1",
-                    RegexOptions.IgnoreCase);
-                if (sensorPresent) isSimPresent = true;
-                // EC20C reports CPIN NOT READY / CME 10 while CFUN=0/4 even when the card is
-                // physically still inserted. Never turn that tool-induced radio transition into
-                // a physical-removal event; the unsolicited QSIMSTAT/CPIN handler will detect a
-                // real removal once the SIM stack is enabled again.
-                bool removalUrcPending = _simRemovalEvidenceCounts.TryGetValue(portName, out int urcEvidence)
-                    && urcEvidence > 0;
-                bool isSimRemoved = ShouldVerifySimRemoval(cpin, stackDisabledByTool, removalUrcPending);
-                if (!isSimPresent
-                    && !isSimRemoved
-                    && hasSimStatusUrc
-                    && Regex.IsMatch(
-                        qsimstat,
-                        @"\+QSIMSTAT:\s*1\s*,\s*0",
-                        RegexOptions.IgnoreCase))
-                {
-                    string cfun = await SendCommandAsync(
-                        portName,
-                        "AT+CFUN?",
-                        SimPresenceProbeTimeoutMs,
-                        silent: true,
-                        ct: token);
-                    isSimRemoved = IsConfirmedSimAbsentDuringPolling(
-                        cpin,
-                        qsimstat,
-                        "ERROR",
-                        cfun,
-                        stackDisabledByTool);
-                }
-
-                // CPIN/CME đơn lẻ không đủ kết luận SIM đã bị rút. Sau USSD hoặc lúc
-                // modem chuyển miền CS/IMS, một số EC20 trả CME 10 dù CCID vẫn đọc được.
-                // Xác minh thêm cảm biến và danh tính SIM trước khi tăng bằng chứng rút.
-                if (isSimRemoved)
-                {
-                    string liveCcid = await ReadCcidWithFallbackAsync(portName, 4000, silent: true);
-                    if (sensorPresent || HasReadableCcid(liveCcid))
-                    {
-                        isSimPresent = true;
-                        isSimRemoved = false;
-                    }
-                }
-
-                // Quectel sometimes returns generic ERROR when SIM is removed if CMEE=2 drops
-                if (!isSimPresent && !isSimRemoved && cpin.Contains("ERROR"))
-                {
-                    // QSIMSTAT=0 ở CFUN=4 không chứng minh SIM đã bị rút trên EC20C.
-                    // Chỉ cập nhật PRESENT khi cảm biến báo chắc chắn; removal thật do URC
-                    // hoặc CPIN NOT INSERTED đảm nhiệm.
-                    if (sensorPresent)
-                        isSimPresent = true;
-                }
-
-                _lastSimState.TryGetValue(portName, out bool lastState);
-
-                if (isSimLocked)
-                {
-                    ClearSimRemovalEvidence(portName);
-                    _lastSimState[portName] = false;
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}" });
-                    continue;
-                }
-
-                if (isSimPresent && !lastState)
-                {
-                    CancelSimRemovalConfirmation(portName);
-                    ClearSimRemovalEvidence(portName);
-                    CancelPollingLoopForSimPresenceChange(portName);
-                    // Guard: Nếu InitializeModemAsync đang chạy (trong 20s đầu) hoặc đang handle SIM khác → bỏ qua
-                    if (_simInitInProgress.ContainsKey(portName)) continue;
-
-                    _lastSimState[portName] = true;
-                    _ = HandleSimInsertedSafelyAsync(portName);
-                }
-                else if (isSimPresent)
-                {
-                    CancelSimRemovalConfirmation(portName);
-                    ClearSimRemovalEvidence(portName);
-                }
-                else if (isSimRemoved && lastState && IsSimRemovalWatchEnabled(portName))
-                {
-                    // Require consecutive, identity-confirmed removal cycles over
-                    // a real elapsed window. This filters the transient QSIMSTAT=0
-                    // wave emitted by some GSM boards during RF/IMS changes.
-                    if (!RegisterSimRemovalEvidence(portName)) continue;
-                    ClearSimRemovalEvidence(portName);
-                    _lastSimState[portName] = false;
-                    SetSmsSimIdentity(portName, null);
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] SIM đã bị rút ra (Quét nền)!" });
-                    _ = SendCommandAsync(portName, "AT+CFUN=4", 3000, silent: true);
-                    StartHotplugWaitLoop(portName);
-                }
-                else if (isSimRemoved && lastState)
-                {
-                    // Chỉ bật theo dõi rút SIM sau khi kế hoạch USSD tự động đã hoàn tất.
-                    ClearSimRemovalEvidence(portName);
-                }
-                
-                if (!_lastSimState.ContainsKey(portName) && (isSimPresent || isSimRemoved))
-                {
-                    _lastSimState[portName] = isSimPresent;
-                }
-            }
-        });
-    }
-
-    public void StartHotplugWaitLoop(string portName)
-    {
-        if (_suspendedBackgroundPorts.ContainsKey(portName)) return;
-
-        if (_keepAliveCts.TryRemove(portName, out var oldKeepAlive))
-        {
-            try { oldKeepAlive.Cancel(); oldKeepAlive.Dispose(); } catch { }
-        }
+                state.RestartRequired = false;
+                state.CpinResponse = string.Empty;
+            });
 
         CancellationTokenSource loopCts;
         lock (_pollingCts)
@@ -4348,145 +4328,200 @@ public class GsmModemService : IGsmModemService
 
         _ = Task.Run(async () =>
         {
-            int recoverableStackPasses = 0;
+            bool simReady = simReadyInitially;
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = "[WAITING_FOR_SIM] Đang chờ SIM theo chuỗi khởi tạo SAuto; RF giữ ở CFUN=4"
+                Data = "[WAITING_FOR_SIM] Đang chờ SIM theo vòng DataPort của SAuto"
             });
+
+            if (completeInitialProbe)
+            {
+                try
+                {
+                    await SendSautoCommandForResponseAsync(
+                        portName,
+                        "AT+EGMR=0,7; \r",
+                        TimeSpan.FromSeconds(12),
+                        token);
+                    simReady = GetSautoReceiveSnapshot(portName).SimReady;
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
 
             while (IsCurrentLoop() && _serialPorts.ContainsKey(portName))
             {
                 try
                 {
-                    // The captured SAuto no-SIM loop starts a fresh initialization pass
-                    // roughly once per nine seconds. The sequence itself accounts for
-                    // most of that interval; one second separates consecutive passes.
-                    await Task.Delay(1000, token);
-                    SautoInitializationResult result = await RunSautoInitializationSequenceAsync(portName, token);
-                    if (!result.RadioLocked)
+                    if (!EnsurePortOpen(
+                            portName,
+                            out SerialPort? hotplugPort)
+                        || hotplugPort == null
+                        || !_semaphores.TryGetValue(
+                            portName,
+                            out SemaphoreSlim? hotplugSemaphore))
                     {
-                        await ReopenSerialHandleBetweenSautoPassesAsync(portName, token);
-                        continue;
+                        break;
                     }
 
-                    string imei = Regex.Match(result.ImeiResponse ?? string.Empty, @"(?<!\d)\d{15}(?!\d)").Value;
-                    if (!string.IsNullOrEmpty(imei))
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {imei}" });
-
-                    if (result.CpinResponse.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                        || result.CpinResponse.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase))
+                    await hotplugSemaphore.WaitAsync(token);
+                    try
                     {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {result.CpinResponse.Trim()}" });
-                        continue;
-                    }
+                        SautoReceiveSnapshot beforeProbe =
+                            GetSautoReceiveSnapshot(portName);
+                        if (beforeProbe.RestartRequired) break;
+                        simReady = beforeProbe.SimReady;
 
-                    if (!Regex.IsMatch(result.CpinResponse, @"\+CPIN:\s*READY\b", RegexOptions.IgnoreCase))
-                    {
-                        if (IsOfflineRecoverableSimStackResponse(
-                                result.CpinResponse))
+                        if (!simReady)
                         {
-                            recoverableStackPasses++;
-                            if (ShouldRunHotplugOfflineRecovery(
-                                    recoverableStackPasses))
-                            {
-                                LogMessage?.Invoke(this, new GsmDataEventArgs
+                            UpdateSautoReceiveState(
+                                portName,
+                                static state =>
                                 {
-                                    PortName = portName,
-                                    Data = $"[SIM_HOTPLUG_OFFLINE_RECOVERY] CPIN chưa sẵn sàng lượt {recoverableStackPasses}; thử CFUN=0 -> CFUN=4, RF vẫn khóa."
+                                    state.SimReady = false;
+                                    state.SimLocked = false;
+                                    state.ReadyTransitionPending = false;
+                                    state.Ccid = string.Empty;
+                                    state.CpinResponse = string.Empty;
                                 });
+                            string cpinResponse =
+                                await WriteSautoCommandForResponseWhileLockedAsync(
+                                    portName,
+                                    hotplugPort,
+                                    "AT+CPIN?",
+                                    TimeSpan.FromSeconds(10),
+                                    token);
 
-                                if (await RestartSimStackOfflineAsync(
-                                        portName, token))
+                            SautoReceiveSnapshot afterCpin =
+                                GetSautoReceiveSnapshot(portName);
+                            if (afterCpin.RestartRequired) break;
+                            simReady =
+                                IsSautoCpinReadyResponse(cpinResponse)
+                                && afterCpin.SimReady;
+                            bool simAbsent =
+                                IsSautoSimAbsentResponse(cpinResponse);
+                            if (!simReady && !simAbsent)
+                            {
+                                AtCommandTraceLogger.State(
+                                    portName,
+                                    $"SAUTO_STEP_HOLD;step=CPIN_DECISION;result={GetSautoResponseOutcome(cpinResponse)}");
+                                continue;
+                            }
+
+                            string imeiResponse =
+                                await WriteSautoCommandForResponseWhileLockedAsync(
+                                    portName,
+                                    hotplugPort,
+                                    "AT+EGMR=0,7; \r",
+                                    TimeSpan.FromSeconds(12),
+                                    token);
+                            bool imeiAccepted =
+                                IsSautoOkResponse(imeiResponse)
+                                && Regex.IsMatch(
+                                    imeiResponse,
+                                    @"(?<!\d)\d{15}(?!\d)");
+                            if (!imeiAccepted)
+                            {
+                                AtCommandTraceLogger.State(
+                                    portName,
+                                    $"SAUTO_STEP_HOLD;step=READ_IMEI;result={GetSautoResponseOutcome(imeiResponse)}");
+                            }
+
+                            if (simReady
+                                && imeiAccepted
+                                && string.IsNullOrWhiteSpace(
+                                    GetSautoReceiveSnapshot(portName).Ccid))
+                            {
+                                string ccidResponse =
+                                    await WriteSautoCommandForResponseWhileLockedAsync(
+                                        portName,
+                                        hotplugPort,
+                                        "AT+ICCID \r",
+                                        TimeSpan.FromSeconds(10),
+                                        token);
+                                if (!HasReadableCcid(ccidResponse))
                                 {
-                                    string recoveredCcid = string.Empty;
-                                    for (int attempt = 1; attempt <= 4; attempt++)
-                                    {
-                                        string recoveredCpin =
-                                            await SendCommandAsync(
-                                                portName,
-                                                "AT+CPIN?",
-                                                5000,
-                                                silent: true,
-                                                ct: token);
-                                        if (recoveredCpin.Contains(
-                                                "SIM PIN",
-                                                StringComparison.OrdinalIgnoreCase)
-                                            || recoveredCpin.Contains(
-                                                "SIM PUK",
-                                                StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            LogMessage?.Invoke(this, new GsmDataEventArgs
-                                            {
-                                                PortName = portName,
-                                                Data = $"[STATUS_SIM_LOCKED] {recoveredCpin.Trim()}"
-                                            });
-                                            break;
-                                        }
-
-                                        recoveredCcid =
-                                            await ReadCcidWithFallbackAsync(
-                                                portName,
-                                                5000,
-                                                silent: true,
-                                                ct: token);
-                                        if (HasReadableCcid(recoveredCcid))
-                                            break;
-                                        if (attempt < 4)
-                                            await Task.Delay(750, token);
-                                    }
-
-                                    if (HasReadableCcid(recoveredCcid))
-                                    {
-                                        _lastSimState[portName] = true;
-                                        CancelSimRemovalConfirmation(portName);
-                                        string recoveredCcidDigits = Regex.Match(
-                                            recoveredCcid,
-                                            @"(?<!\d)89\d{16,20}(?!\d)").Value;
-                                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                                        {
-                                            PortName = portName,
-                                            Data = $"[SIM_HOTPLUG_OFFLINE_RECOVERED] CCID={recoveredCcidDigits}; RF giữ ở CFUN=4."
-                                        });
-                                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                                        {
-                                            PortName = portName,
-                                            Data = $"[PARSE_CCID] {recoveredCcidDigits}"
-                                        });
-                                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                                        {
-                                            PortName = portName,
-                                            Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận SIM sau phục hồi offline có giới hạn"
-                                        });
-                                        break;
-                                    }
+                                    AtCommandTraceLogger.State(
+                                        portName,
+                                        $"SAUTO_STEP_HOLD;step=READ_ICCID;result={GetSautoResponseOutcome(ccidResponse)}");
                                 }
+                            }
+
+                            SautoReceiveSnapshot completed =
+                                GetSautoReceiveSnapshot(portName);
+                            if (imeiAccepted
+                                && completed.SimReady
+                                && !string.IsNullOrWhiteSpace(completed.Imei)
+                                && !string.IsNullOrWhiteSpace(completed.Ccid))
+                            {
+                                break;
                             }
                         }
                         else
                         {
-                            recoverableStackPasses = 0;
+                            UpdateSautoReceiveState(
+                                portName,
+                                static state =>
+                                    state.CpinResponse = string.Empty);
+                            string cpinResponse =
+                                await WriteSautoCommandForResponseWhileLockedAsync(
+                                    portName,
+                                    hotplugPort,
+                                    "AT+CPIN? \r",
+                                    TimeSpan.FromSeconds(10),
+                                    token);
+
+                            SautoReceiveSnapshot afterCpin =
+                                GetSautoReceiveSnapshot(portName);
+                            if (afterCpin.RestartRequired) break;
+                            simReady =
+                                IsSautoCpinReadyResponse(cpinResponse)
+                                && afterCpin.SimReady;
+                            bool imeiReady =
+                                !string.IsNullOrWhiteSpace(afterCpin.Imei);
+                            if (simReady && !imeiReady)
+                            {
+                                string imeiResponse =
+                                    await WriteSautoCommandForResponseWhileLockedAsync(
+                                        portName,
+                                        hotplugPort,
+                                        "AT+EGMR=0,7; \r",
+                                        TimeSpan.FromSeconds(12),
+                                        token);
+                                imeiReady =
+                                    IsSautoOkResponse(imeiResponse)
+                                    && Regex.IsMatch(
+                                        imeiResponse,
+                                        @"(?<!\d)\d{15}(?!\d)");
+                            }
+
+                            if (simReady
+                                && imeiReady
+                                && string.IsNullOrWhiteSpace(afterCpin.Ccid))
+                            {
+                                string ccidResponse =
+                                    await WriteSautoCommandForResponseWhileLockedAsync(
+                                        portName,
+                                        hotplugPort,
+                                        "AT+ICCID \r",
+                                        TimeSpan.FromSeconds(10),
+                                        token);
+                                if (HasReadableCcid(ccidResponse)
+                                    && !string.IsNullOrWhiteSpace(
+                                        GetSautoReceiveSnapshot(portName).Ccid))
+                                {
+                                    break;
+                                }
+                            }
                         }
-
-                        await ReopenSerialHandleBetweenSautoPassesAsync(portName, token);
-                        continue;
                     }
-
-                    recoverableStackPasses = 0;
-                    string ccidResponse = await ReadCcidWithFallbackAsync(
-                        portName, 5000, silent: true, ct: token);
-                    if (!HasReadableCcid(ccidResponse))
+                    finally
                     {
-                        await ReopenSerialHandleBetweenSautoPassesAsync(portName, token);
-                        continue;
+                        hotplugSemaphore.Release();
                     }
-
-                    _lastSimState[portName] = true;
-                    CancelSimRemovalConfirmation(portName);
-                    string ccid = Regex.Match(ccidResponse, @"\d{18,22}").Value;
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid}" });
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận SIM theo chuỗi SAuto" });
-                    break;
                 }
                 catch (OperationCanceledException)
                 {
@@ -4494,129 +4529,18 @@ public class GsmModemService : IGsmModemService
                 }
                 catch (Exception ex)
                 {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[WAITING_FOR_SIM] Lặp khởi tạo lỗi: {ex.Message}" });
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = $"[WAITING_FOR_SIM] Lặp DataPort lỗi: {ex.Message}"
+                    });
                 }
-            }
 
-            // Keep the lease in the dictionary while MainViewModel verifies/writes IMEI.
-            // StartPollingNetwork or a restarted hot-plug loop will atomically replace it;
-            // meanwhile the global monitor cannot inject extra AT commands into the trace.
-        });
+                try { await Task.Delay(400, token); }
+                catch (OperationCanceledException) { break; }
+            }
+        }, token);
     }
-
-    internal static bool IsOfflineRecoverableSimStackResponse(
-        string? cpinResponse)
-    {
-        string response = cpinResponse ?? string.Empty;
-        if (response.Contains(
-                "NOT INSERTED", StringComparison.OrdinalIgnoreCase)
-            || Regex.IsMatch(response, @"\+CME ERROR:\s*10\b"))
-            return false;
-
-        return response.Contains("NOT READY", StringComparison.OrdinalIgnoreCase)
-            || Regex.IsMatch(response, @"\+CME ERROR:\s*13\b");
-    }
-
-    internal static bool ShouldRunHotplugOfflineRecovery(
-        int consecutiveRecoverablePasses) =>
-        consecutiveRecoverablePasses == 1
-        || (consecutiveRecoverablePasses > 1
-            && consecutiveRecoverablePasses % 3 == 0);
-
-
-    public async Task HandleSimInsertedAsync(string portName)
-    {
-        if (!_serialPorts.ContainsKey(portName)) return;
-
-        // A hot-plug event can arrive while the no-SIM or network polling loop
-        // still owns this COM. Stop that stale loop before reading the new SIM.
-        CancelPollingLoopForSimPresenceChange(portName);
-        CancelSimRemovalConfirmation(portName);
-
-        // Nếu SIM được cắm đúng lúc init đang chạy, chờ init kết thúc thay vì bỏ event;
-        // bỏ event ở đây sẽ làm _lastSimState=true và không còn transition kế tiếp.
-        for (int i = 0; i < 30 && _simInitInProgress.ContainsKey(portName); i++)
-        {
-            if (!_serialPorts.ContainsKey(portName)) return;
-            await Task.Delay(1000);
-        }
-        if (_simInitInProgress.ContainsKey(portName))
-        {
-            _lastSimState[portName] = false;
-            return;
-        }
-        if (!_simInsertInProgress.TryAdd(portName, true)) return;
-
-        try
-        {
-            // [SECURITY FIX] Tắt radio NGAY LẬP TỨC khi phát hiện SIM hot-plug,
-            // trước cả delay và CPIN check — ngăn modem kịp đăng ký mạng với IMEI gốc.
-            // VNPT/carrier ghi nhận IMEI trong vòng ~0.5s kể từ khi modem attach mạng.
-            await SendCommandAsync(portName, "AT+CFUN=4", 5000, silent: true);
-
-            // Đợi SIM khởi động đủ để phản hồi CPIN (ngắn hơn trước vì radio đã tắt)
-            await Task.Delay(1000);
-
-            string cpinState = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-            if (cpinState.Contains("SIM PIN") || cpinState.Contains("SIM PUK"))
-            {
-                _lastSimState[portName] = false;
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpinState.Trim()}" });
-                return;
-            }
-
-        // Đọc IMEI hiện tại (radio đã tắt, IMEI đọc từ NV)
-            string currentImei = await SendCommandAsync(portName, "AT+EGMR=0,7;", 5000, silent: true);
-            string cleanImei = "";
-            if (!string.IsNullOrWhiteSpace(currentImei) && !currentImei.Contains("ERROR"))
-            {
-                cleanImei = Regex.Match(currentImei, @"(?<!\d)\d{15}(?!\d)").Value;
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_IMEI] {cleanImei}" });
-            }
-
-            // EC20F không phải firmware nào cũng trả cùng một lệnh ở CFUN=4.
-            // Thử QCCID -> ICCID -> CRSM trước, rồi reset riêng SIM stack bằng 0 -> 4
-            // và thử lại. RF không bao giờ được bật trong giai đoạn nhận diện này.
-            string pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
-            bool hasSim = HasReadableCcid(pollResp);
-
-            if (!hasSim && await RestartSimStackOfflineAsync(portName))
-            {
-                for (int attempt = 0; attempt < 4 && !hasSim; attempt++)
-                {
-                    cpinState = await SendCommandAsync(portName, "AT+CPIN?", 4000, silent: true);
-                    pollResp = await ReadCcidWithFallbackAsync(portName, 5000, silent: true);
-                    hasSim = HasReadableCcid(pollResp);
-                    if (!hasSim && attempt < 3)
-                        await Task.Delay(750);
-                }
-            }
-
-            if (hasSim)
-            {
-                string ccid = Regex.Match(pollResp, @"(?<!\d)89\d{16,20}(?!\d)").Value;
-                _lastSimState[portName] = true;
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[PARSE_CCID] {ccid}" });
-
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận diện SIM; RF giữ tắt và chờ thao tác IMEI."
-                });
-            }
-            else
-            {
-                _lastSimState[portName] = false;
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[WAITING_FOR_SIM] Không đọc được SIM (Lỗi phần cứng hoặc SIM hỏng)" });
-                StartHotplugWaitLoop(portName);
-            }
-        }
-        finally
-        {
-            _simInsertInProgress.TryRemove(portName, out _);
-        }
-    }
-
     private bool IsNetworkSimIdentityCurrent(
         string portName,
         string expectedCcid) =>
@@ -4687,23 +4611,18 @@ public class GsmModemService : IGsmModemService
         if (string.IsNullOrWhiteSpace(normalizedExpectedCcid)
             || !ImeiManagementService.IsValidImei(normalizedExpectedImei))
             return;
+
         var expectedIdentity = new NetworkPollingIdentity(
             normalizedExpectedCcid,
             normalizedExpectedImei);
+        long smsReceiveMaintenanceGeneration =
+            CurrentSmsReceiveMaintenanceGeneration(portName);
+        CancellationTokenSource loopCts;
 
-        CancellationToken token;
         lock (_backgroundOperationSync)
         {
-            if (!IsNetworkSimIdentityCurrent(
-                    portName, normalizedExpectedCcid))
-            {
-                LogMessage?.Invoke(this, new GsmDataEventArgs
-                {
-                    PortName = portName,
-                    Data = $"[NETWORK_POLL_BLOCKED] expected_ccid={normalizedExpectedCcid}; phiên SIM đã thay đổi trước khi polling bắt đầu."
-                });
+            if (!IsNetworkSimIdentityCurrent(portName, normalizedExpectedCcid))
                 return;
-            }
 
             if (_suspendedBackgroundPorts.ContainsKey(portName))
             {
@@ -4714,413 +4633,371 @@ public class GsmModemService : IGsmModemService
             _pendingNetworkPollingPorts.TryRemove(portName, out _);
             lock (_pollingCts)
             {
-                if (_pollingCts.TryGetValue(portName, out var oldCts))
+                if (_pollingCts.TryGetValue(portName, out CancellationTokenSource? oldCts))
                 {
-                    try { oldCts.Cancel(); oldCts.Dispose(); } catch {}
+                    try { oldCts.Cancel(); } catch { }
+                    oldCts.Dispose();
                 }
-                var newCts = new CancellationTokenSource();
-                _pollingCts[portName] = newCts;
+
+                loopCts = new CancellationTokenSource();
+                _pollingCts[portName] = loopCts;
                 _pollingExpectedIdentities[portName] = expectedIdentity;
-                token = newCts.Token;
             }
         }
 
-        // Recovery sweep is independent from network/operator detection. +CMTI can be lost
-        // while a long AT command is running or while the USB serial driver reconnects.
-        // CMGL=ALL also recovers multipart segments already marked REC READ by CMGR before
-        // a restart. Delay the first bulk sweep until SAuto's CPIN/CSQ/COPS/USSD startup
-        // window has completed; live +CMTI/+CMT is still processed immediately.
+        CancellationToken token = loopCts.Token;
+        string carrier = string.Empty;
+        string networkType = string.Empty;
+        bool automaticUssdCompleted = false;
+        DateTimeOffset lastNetworkCheckUtc = DateTimeOffset.MinValue;
+        DateTimeOffset lastAutomaticUssdAttemptUtc = DateTimeOffset.MinValue;
+        long lastObservedUssdRevision =
+            GetSautoReceiveSnapshot(portName).UssdRevision;
+        if (_sautoNetworkStates.TryGetValue(portName, out SautoNetworkState? cached)
+            && string.Equals(cached.Ccid, normalizedExpectedCcid, StringComparison.Ordinal))
+        {
+            carrier = cached.Carrier;
+            networkType = cached.NetworkType;
+            automaticUssdCompleted = cached.AutomaticUssdCompleted;
+            lastAutomaticUssdAttemptUtc =
+                cached.LastAutomaticUssdAttemptUtc;
+        }
+
+        if (automaticUssdCompleted)
+        {
+            EnableSmsReceiveMaintenanceAfterSauto(
+                portName,
+                normalizedExpectedCcid,
+                smsReceiveMaintenanceGeneration,
+                "cached-automatic-ussd-complete");
+        }
+
         _ = Task.Run(async () =>
         {
-            bool firstSweep = true;
             while (!token.IsCancellationRequested
                    && _serialPorts.ContainsKey(portName)
-                   && IsNetworkPollingIdentityCurrent(
-                       portName, expectedIdentity))
+                   && IsNetworkPollingIdentityCurrent(portName, expectedIdentity))
             {
                 try
                 {
-                    await Task.Delay(
-                        firstSweep ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(15),
-                        token);
-                    firstSweep = false;
-                    if (!token.IsCancellationRequested && !IsCallInProgress(portName))
-                        await SweepUnreadSmsAsync(portName);
-                }
-                catch (OperationCanceledException) { break; }
-                catch (Exception ex)
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[SWEEP] Lỗi quét bù SMS: {ex.Message}" });
-                }
-            }
-        }, token);
+                    if (!EnsurePortOpen(
+                            portName,
+                            out SerialPort? networkPort)
+                        || networkPort == null
+                        || !_semaphores.TryGetValue(
+                            portName,
+                            out SemaphoreSlim? networkSemaphore))
+                    {
+                        break;
+                    }
 
-        // Tạo luồng ngầm chờ thiết bị đăng ký mạng thành công để lấy nhà mạng (Tránh việc AT+COPS? chạy quá sớm lúc chưa có sóng)
-        // Lặp vô hạn cho đến khi có mạng hoặc cổng bị rút
-        _ = Task.Run(async () =>
-        {
-            int cycles = 0;
-            int waitingNoticeCount = 0;
-            bool operatorReported = false;
-            bool preferredOperatorAttempted = false;
-            int consecutiveCopsMissesAfterRegistration = 0;
-            while (true)
-            {
-                try
-                {
-                    await Task.Delay(
-                        operatorReported
-                            ? GetNetworkRegistrationProbeInterval(
-                                SettingsService.Current.SignalScanIntervalSeconds)
-                            : TimeSpan.FromMilliseconds(500),
-                        token);
+                    await networkSemaphore.WaitAsync(token);
+                    try
+                    {
+                        // This is GSMController.DataPort: sendAT is write-only,
+                        // then the receive callback updates simReady/networkGSM.
+                        // Do not turn terminal OK/ERROR into extra progression
+                        // gates that SAuto does not have.
+                        await WriteSautoCommandWhileLockedAsync(
+                            portName,
+                            networkPort,
+                            SautoNetworkPollingCommandOrder[0],
+                            token);
+                        await Task.Delay(SautoDataPortStepDelay, token);
+
+                        SautoReceiveSnapshot afterCpin =
+                            GetSautoReceiveSnapshot(portName);
+                        if (afterCpin.RestartRequired)
+                        {
+                            _sautoNetworkStates.TryRemove(portName, out _);
+                            break;
+                        }
+
+                        if (!afterCpin.SimReady)
+                        {
+                            AtCommandTraceLogger.State(
+                                portName,
+                                $"SAUTO_STEP_HOLD;step=CPIN_READY;result={GetSautoResponseOutcome(afterCpin.CpinResponse)}");
+                        }
+                        else
+                        {
+                            await WriteSautoCommandWhileLockedAsync(
+                                portName,
+                                networkPort,
+                                SautoNetworkPollingCommandOrder[1],
+                                token);
+                            await Task.Delay(SautoDataPortStepDelay, token);
+
+                            SautoReceiveSnapshot afterCsq =
+                                GetSautoReceiveSnapshot(portName);
+                            if (IsSautoCarrierRegistered(afterCsq.Carrier))
+                            {
+                                carrier = afterCsq.Carrier;
+                                networkType = afterCsq.NetworkType;
+                            }
+
+                            if (ShouldQuerySautoNetwork(
+                                    carrier,
+                                    DateTimeOffset.UtcNow,
+                                    lastNetworkCheckUtc))
+                            {
+                                await WriteSautoCommandWhileLockedAsync(
+                                    portName,
+                                    networkPort,
+                                    SautoNetworkPollingCommandOrder[2],
+                                    token);
+                                await Task.Delay(
+                                    SautoDataPortStepDelay,
+                                    token);
+                                lastNetworkCheckUtc = DateTimeOffset.UtcNow;
+
+                                SautoReceiveSnapshot afterCops =
+                                    GetSautoReceiveSnapshot(portName);
+                                carrier = afterCops.Carrier;
+                                networkType = afterCops.NetworkType;
+                                if (IsSautoCarrierRegistered(carrier))
+                                {
+                                    _sautoNetworkStates[portName] =
+                                        new SautoNetworkState(
+                                            normalizedExpectedCcid,
+                                            carrier,
+                                            networkType,
+                                            AutomaticUssdCompleted:
+                                                automaticUssdCompleted,
+                                            LastAutomaticUssdAttemptUtc:
+                                                lastAutomaticUssdAttemptUtc);
+                                    LogMessage?.Invoke(
+                                        this,
+                                        new GsmDataEventArgs
+                                        {
+                                            PortName = portName,
+                                            Data =
+                                                $"[SAUTO_NETWORK_READY] ccid={normalizedExpectedCcid}; carrier={carrier}; type={networkType}"
+                                        });
+                                }
+                                else
+                                {
+                                    AtCommandTraceLogger.State(
+                                        portName,
+                                        $"SAUTO_STEP_HOLD;step=COPS_REGISTERED;result={GetSautoResponseOutcome(afterCops.CopsResponse)};next_retry_seconds=2");
+                                }
+                            }
+
+                            // A COPS response can arrive just after the 100 ms
+                            // receive window. SAuto observes the shared field on
+                            // the next statement/loop, so synchronize it here too.
+                            SautoReceiveSnapshot latestUssdState =
+                                GetSautoReceiveSnapshot(portName);
+                            if (!IsSautoCarrierRegistered(carrier)
+                                && IsSautoCarrierRegistered(
+                                    latestUssdState.Carrier))
+                            {
+                                carrier = latestUssdState.Carrier;
+                                networkType = latestUssdState.NetworkType;
+                            }
+
+                            if (!automaticUssdCompleted
+                                && latestUssdState.UssdRevision
+                                    > lastObservedUssdRevision
+                                && IsSautoAutomatic111Completion(
+                                    latestUssdState.UssdResponse))
+                            {
+                                automaticUssdCompleted = true;
+                                _sautoNetworkStates[portName] =
+                                    new SautoNetworkState(
+                                        normalizedExpectedCcid,
+                                        carrier,
+                                        networkType,
+                                        AutomaticUssdCompleted: true,
+                                        LastAutomaticUssdAttemptUtc:
+                                            lastAutomaticUssdAttemptUtc);
+                                EnableSmsReceiveMaintenanceAfterSauto(
+                                    portName,
+                                    normalizedExpectedCcid,
+                                    smsReceiveMaintenanceGeneration,
+                                    "late-111-rx");
+                            }
+                            lastObservedUssdRevision = Math.Max(
+                                lastObservedUssdRevision,
+                                latestUssdState.UssdRevision);
+
+                            if (!automaticUssdCompleted
+                                && IsSautoCarrierRegistered(carrier))
+                            {
+                                string automaticUssd =
+                                    GetSautoAutomaticUssdCode(carrier);
+                                if (string.IsNullOrWhiteSpace(
+                                        automaticUssd))
+                                {
+                                    automaticUssdCompleted = true;
+                                    _sautoNetworkStates[portName] =
+                                        new SautoNetworkState(
+                                            normalizedExpectedCcid,
+                                            carrier,
+                                            networkType,
+                                            AutomaticUssdCompleted: true,
+                                            LastAutomaticUssdAttemptUtc:
+                                                lastAutomaticUssdAttemptUtc);
+                                    EnableSmsReceiveMaintenanceAfterSauto(
+                                        portName,
+                                        normalizedExpectedCcid,
+                                        smsReceiveMaintenanceGeneration,
+                                        "carrier-has-no-automatic-ussd");
+                                }
+                                else if (DateTimeOffset.UtcNow
+                                             - lastAutomaticUssdAttemptUtc
+                                         >= TimeSpan.FromSeconds(30))
+                                {
+                                    lastAutomaticUssdAttemptUtc =
+                                        DateTimeOffset.UtcNow;
+                                    AtCommandTraceLogger.State(
+                                        portName,
+                                        $"SAUTO_AUTO_USSD_BEGIN;ccid={normalizedExpectedCcid};carrier={carrier};code={automaticUssd}");
+                                    string ussdResult =
+                                        await RunSautoAutomaticUssdWhileLockedAsync(
+                                            portName,
+                                            networkPort,
+                                            automaticUssd,
+                                            token);
+                                    SautoReceiveSnapshot afterAutomaticUssd =
+                                        GetSautoReceiveSnapshot(portName);
+                                    automaticUssdCompleted =
+                                        IsSautoAutomatic111Completion(ussdResult)
+                                        || (afterAutomaticUssd.UssdRevision
+                                                > lastObservedUssdRevision
+                                            && IsSautoAutomatic111Completion(
+                                                afterAutomaticUssd
+                                                    .UssdResponse));
+                                    lastObservedUssdRevision =
+                                        afterAutomaticUssd.UssdRevision;
+                                    _sautoNetworkStates[portName] =
+                                        new SautoNetworkState(
+                                            normalizedExpectedCcid,
+                                            carrier,
+                                            networkType,
+                                            AutomaticUssdCompleted:
+                                                automaticUssdCompleted,
+                                            LastAutomaticUssdAttemptUtc:
+                                                lastAutomaticUssdAttemptUtc);
+                                    AtCommandTraceLogger.State(
+                                        portName,
+                                        $"SAUTO_AUTO_USSD_SEQUENCE_DONE;code={automaticUssd};phone_found={automaticUssdCompleted};result={GetSautoResponseOutcome(ussdResult)}");
+                                    LogMessage?.Invoke(
+                                        this,
+                                        new GsmDataEventArgs
+                                        {
+                                            PortName = portName,
+                                            Data =
+                                                $"[SAUTO_AUTO_USSD_RESULT] ccid={normalizedExpectedCcid}; carrier={carrier}; code={automaticUssd}; phone_found={automaticUssdCompleted}; result={GetSautoResponseOutcome(ussdResult)}; cusd={ussdResult.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase)}"
+                                        });
+                                    if (!automaticUssdCompleted)
+                                    {
+                                        AtCommandTraceLogger.State(
+                                            portName,
+                                            $"SAUTO_AUTO_USSD_WAITING;code={automaticUssd};next_retry_seconds=30");
+                                    }
+                                    else
+                                    {
+                                        EnableSmsReceiveMaintenanceAfterSauto(
+                                            portName,
+                                            normalizedExpectedCcid,
+                                            smsReceiveMaintenanceGeneration,
+                                            "111-rx-complete");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        networkSemaphore.Release();
+                    }
                 }
-                catch (TaskCanceledException)
+                catch (OperationCanceledException)
                 {
                     break;
                 }
-
-                if (token.IsCancellationRequested) break;
-                if (!IsNetworkPollingIdentityCurrent(
-                        portName, expectedIdentity)) break;
-                if (!_serialPorts.ContainsKey(portName)) break; // Cổng đã bị rút
-                if (IsCallInProgress(portName)) continue;
-
-                // CPIN is a guard, not the network critical path. Keep its
-                // timeout bounded so a slow reboot cannot postpone COPS/USSD.
-                string cpin = await SendCommandAsync(portName, "AT+CPIN?", 3000, silent: true, ct: token);
-                if (cpin.Contains("SIM PIN", StringComparison.OrdinalIgnoreCase)
-                    || cpin.Contains("SIM PUK", StringComparison.OrdinalIgnoreCase))
+                catch (Exception ex)
                 {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[STATUS_SIM_LOCKED] {cpin.Trim()}" });
-                    continue;
-                }
-
-                cycles++;
-                // Poll registration every active pass, capped at 15 seconds.
-                // The separate signal supervisor owns CSQ updates, so replacing
-                // the old four-CSQ/one-COPS cadence does not add per-port traffic.
-                string copsStr = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true, ct: token);
-                if (TryParseCopsResponse(copsStr, out _, out string act))
-                {
-                    string netType = MapCopsAccessTechnology(act);
-                    if (!string.IsNullOrWhiteSpace(netType))
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_TYPE] {netType}" });
-                    
-                    // Lấy mạng thành công, nhả sự kiện ra để ViewModel bắt và tự động chạy USSD
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = copsStr.Trim() });
-                    operatorReported = true;
-                    consecutiveCopsMissesAfterRegistration = 0;
-                    waitingNoticeCount = 0;
-                    ClearNetworkSimRecoveryAttempts(portName);
-                    continue;
-                }
-
-                // A local lock/command-contention result means AT+COPS? never
-                // reached the modem. It is not evidence that registration was
-                // lost, so keep the verified Active state and retry COPS on the
-                // next network scan instead of starting COPS/CFUN recovery.
-                if (IsDeferredNetworkPollingResponse(copsStr))
-                {
-                    cycles = operatorReported ? 4 : Math.Min(cycles, 4);
-                    continue;
-                }
-
-                // +CME ERROR: 13 is a SIM-stack failure, not a weak-signal
-                // result.  Recover it before repeatedly issuing COPS=0; CSQ may
-                // still look healthy while CPIN and *111 are completely dead.
-                if (copsStr.Contains("+CME ERROR: 13", StringComparison.OrdinalIgnoreCase))
-                {
-                    bool recovered = await RecoverNetworkSimFailureAsync(
-                        portName, copsStr, token);
-                    cycles = 0;
-                    if (recovered)
-                    {
-                        consecutiveCopsMissesAfterRegistration = 0;
-                        continue;
-                    }
-                }
-
-                // Only probe CSQ after a COPS miss. A slow CSQ response must not
-                // postpone the first network registration/USSD attempt.
-                await Task.Delay(100, token);
-                string csqStr = await SendCommandAsync(
-                    portName, "AT+CSQ", 2000, silent: true, ct: token);
-                if (csqStr.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csqStr.Trim() });
-
-                // This deployment uses VinaPhone SIMs. Prefer the PLMN bound
-                // to the current CCID once per registration session, then
-                // fall back to automatic selection if the modem rejects it
-                // or does not produce a real +COPS response.
-                if (!operatorReported && !preferredOperatorAttempted)
-                {
-                    preferredOperatorAttempted = true;
-                    string? preferredCops =
-                        await TryPreferredOperatorSelectionAsync(
-                            portName,
-                            normalizedExpectedCcid,
-                            token);
-                    if (TryParseCopsResponse(
-                            preferredCops,
-                            out _,
-                            out string preferredAct))
-                    {
-                        string preferredNetworkType =
-                            MapCopsAccessTechnology(preferredAct);
-                        if (!string.IsNullOrWhiteSpace(preferredNetworkType))
-                            LogMessage?.Invoke(this, new GsmDataEventArgs
-                            {
-                                PortName = portName,
-                                Data = $"[NETWORK_TYPE] {preferredNetworkType}"
-                            });
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = preferredCops!.Trim()
-                        });
-                        operatorReported = true;
-                        consecutiveCopsMissesAfterRegistration = 0;
-                        waitingNoticeCount = 0;
-                        cycles = 0;
-                        ClearNetworkSimRecoveryAttempts(portName);
-                        continue;
-                    }
-
                     LogMessage?.Invoke(this, new GsmDataEventArgs
                     {
                         PortName = portName,
-                        Data = "[NETWORK_OPERATOR_PREFERRED_FALLBACK] Không ép được nhà mạng; chuyển sang COPS tự động."
-                    });
-                    // Enter the existing automatic-selection branch on this
-                    // same pass instead of waiting for another 30 poll cycles.
-                    cycles = 30;
-                }
-
-                string? recoveryCreg = null;
-                string? recoveryCgreg = null;
-                string? recoveryCereg = null;
-                if (operatorReported)
-                {
-                    consecutiveCopsMissesAfterRegistration =
-                        NextNetworkLossMissCount(
-                            consecutiveCopsMissesAfterRegistration,
-                            copsStr);
-
-                    // Before changing the UI, confirm that no registration
-                    // domain still reports home/roaming service. Some EC20
-                    // firmware temporarily omits the COPS operator while CREG,
-                    // CGREG or CEREG remains valid.
-                    recoveryCreg = await SendCommandAsync(
-                        portName, "AT+CREG?", 4000, silent: true, ct: token);
-                    recoveryCgreg = await SendCommandAsync(
-                        portName, "AT+CGREG?", 4000, silent: true, ct: token);
-                    recoveryCereg = await SendCommandAsync(
-                        portName, "AT+CEREG?", 4000, silent: true, ct: token);
-                    string confirmedNetworkType =
-                        ResolveRegisteredFallbackNetworkType(
-                            recoveryCreg,
-                            recoveryCgreg,
-                            recoveryCereg);
-                    if (!string.IsNullOrWhiteSpace(confirmedNetworkType))
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[NETWORK_FALLBACK] type={confirmedNetworkType}; CREG/CGREG/CEREG vẫn đăng ký trong lúc COPS tạm thời không trả nhà mạng."
-                        });
-                        consecutiveCopsMissesAfterRegistration = 0;
-                        waitingNoticeCount = 0;
-                        cycles = 0;
-                        ClearNetworkSimRecoveryAttempts(portName);
-                        continue;
-                    }
-
-                    if (IsDeferredNetworkPollingResponse(recoveryCreg)
-                        || IsDeferredNetworkPollingResponse(recoveryCgreg)
-                        || IsDeferredNetworkPollingResponse(recoveryCereg))
-                    {
-                        cycles = 4;
-                        continue;
-                    }
-
-                    bool explicitlyUnregistered =
-                        AreAllRegistrationDomainsExplicitlyUnregistered(
-                            recoveryCreg,
-                            recoveryCgreg,
-                            recoveryCereg);
-                    if (!explicitlyUnregistered
-                        && !ShouldReportNetworkLoss(
-                            copsStr,
-                            consecutiveCopsMissesAfterRegistration))
-                    {
-                        // Inconclusive transport/modem misses are debounced.
-                        // Explicit unregistered states bypass the debounce and
-                        // start recovery on this same pass.
-                        cycles = 4;
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[NETWORK_PROBE_RETRY] COPS chưa xác nhận ({consecutiveCopsMissesAfterRegistration}/{NetworkLossConfirmationMisses}); giữ Active và kiểm tra lại."
-                        });
-                        continue;
-                    }
-
-                    // COPS disappeared after a previously healthy registration.
-                    // Explicit loss is recovered immediately; otherwise only
-                    // repeated, non-contention misses may re-enter recovery.
-                    consecutiveCopsMissesAfterRegistration = 0;
-                    operatorReported = false;
-                    preferredOperatorAttempted = false;
-                    waitingNoticeCount = 0;
-                    cycles = 30;
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = explicitlyUnregistered
-                            ? "[NETWORK_LOST] COPS và CREG/CGREG/CEREG xác nhận mất đăng ký; khôi phục ngay."
-                            : "[NETWORK_LOST] COPS không phản hồi qua nhiều lần xác minh; bắt đầu khôi phục đăng ký mạng."
+                        Data = $"[NETWORK_WAITING] {ex.Message}"
                     });
                 }
 
-                // Nếu modem có CSQ nhưng không tự hoàn tất COPS, khởi động lại
-                // auto-selection giống SAuto. Sau vài lần không thành công, thực
-                // hiện detach/attach riêng COM; nếu vẫn kẹt thì cycle RF ngắn để
-                // không để COM lặp dò COPS vô hạn với radio ở trạng thái nửa sống.
-                if (cycles >= 30)
-                {
-                    waitingNoticeCount++;
-                    string creg = recoveryCreg ?? await SendCommandAsync(
-                        portName, "AT+CREG?", 4000, silent: true, ct: token);
-                    string cgreg = recoveryCgreg ?? await SendCommandAsync(
-                        portName, "AT+CGREG?", 4000, silent: true, ct: token);
-                    string cereg = recoveryCereg ?? await SendCommandAsync(
-                        portName, "AT+CEREG?", 4000, silent: true, ct: token);
-                    string registeredType = ResolveRegisteredFallbackNetworkType(
-                        creg, cgreg, cereg);
-                    if (!string.IsNullOrWhiteSpace(registeredType))
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[NETWORK_FALLBACK] type={registeredType}; CREG/CGREG/CEREG đã đăng ký nhưng COPS không trả tên nhà mạng."
-                        });
-                        operatorReported = true;
-                        waitingNoticeCount = 0;
-                        ClearNetworkSimRecoveryAttempts(portName);
-                        continue;
-                    }
-
-                    string copsAuto;
-                    string recoveryAction = "auto-select";
-                    if (waitingNoticeCount % 3 == 0)
-                    {
-                        string detach = await SendCommandAsync(
-                            portName, "AT+COPS=2", 5000, silent: true, ct: token);
-                        // EC20 needs a short SIM detach settle window. 300 ms
-                        // can make the immediate COPS=0 return CME 13 even
-                        // though CPIN is READY; let the modem finish detach.
-                        await Task.Delay(1500, token);
-                        copsAuto = await SendCommandAsync(
-                            portName, "AT+COPS=0", 15000, silent: true, ct: token);
-                        recoveryAction = $"detach/attach ({detach.Trim()})";
-
-                        if (waitingNoticeCount % 6 == 0)
-                        {
-                            string rfOff = await SendCommandAsync(
-                                portName, "AT+CFUN=4", 8000, silent: true, ct: token);
-                            await Task.Delay(500, token);
-                            string rfOn = await SendCommandAsync(
-                                portName, "AT+CFUN=1", 15000, silent: true, ct: token);
-                            recoveryAction += $"; RF cycle ({rfOff.Trim()} -> {rfOn.Trim()})";
-                        }
-                    }
-                    else
-                    {
-                        copsAuto = await SendCommandAsync(
-                            portName, "AT+COPS=0", 15000, silent: true, ct: token);
-                    }
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = csqStr.Contains(
-                            "+CSQ:", StringComparison.OrdinalIgnoreCase)
-                            ? $"[NETWORK_RECOVERY] COPS chưa trả nhà mạng nhưng CSQ vừa xác nhận; {recoveryAction} (lần {waitingNoticeCount}): {copsAuto.Trim()}"
-                            : $"[NETWORK_RECOVERY] COPS và CSQ đều chưa xác nhận; {recoveryAction} (lần {waitingNoticeCount}): {copsAuto.Trim()}"
-                    });
-                    if (copsAuto.Contains("+CME ERROR: 13", StringComparison.OrdinalIgnoreCase))
-                    {
-                        await RecoverNetworkSimFailureAsync(
-                            portName, copsAuto, token);
-                    }
-                    if (ShouldRequestNetworkReopen(waitingNoticeCount))
-                    {
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = $"[NETWORK_REOPEN_REQUIRED] Đã thử {waitingNoticeCount} lượt auto-select/detach/RF nhưng chưa có COPS; mở lại riêng COM."
-                        });
-                        break;
-                    }
-                    cycles = 0;
-                    continue;
-                }
+                try { await Task.Delay(SautoDataPortLoopDelay, token); }
+                catch (OperationCanceledException) { break; }
             }
         }, token);
     }
-
-    internal static bool ShouldRequestNetworkReopen(int recoveryPasses) =>
-        recoveryPasses >= MaxNetworkRegistrationRecoveryPassesBeforeReopen;
-
-    internal static string ResolveRegisteredFallbackNetworkType(
-        string? creg,
-        string? cgreg,
-        string? cereg)
+    internal static string ResolveSautoCarrier(string? response)
     {
-        if (IsNetworkRegistered(cereg)) return "4G";
-        if (IsNetworkRegistered(cgreg)) return "3G";
-        if (IsNetworkRegistered(creg)) return "2G";
-        return string.Empty;
+        string value = (response ?? string.Empty).ToUpperInvariant();
+        if (value.Contains("VIETTEL", StringComparison.Ordinal)) return "VIETTEL";
+        if (value.Contains("MOBIFONE", StringComparison.Ordinal)) return "MOBIFONE";
+        if (value.Contains("VINAPHONE", StringComparison.Ordinal)) return "VINAPHONE";
+        if (value.Contains("VIETNAMOBILE", StringComparison.Ordinal)) return "VIETNAMOBILE";
+        if (value.Contains("VNSKY", StringComparison.Ordinal)) return "VNSKY";
+        return "No Signal";
     }
 
-    internal static string MapCopsAccessTechnology(string? act) => act?.Trim() switch
-    {
-        "0" or "1" or "3" or "8" => "2G",
-        "2" or "4" or "5" or "6" => "3G",
-        "7" or "9" => "4G",
-        _ => string.IsNullOrWhiteSpace(act) || act == "?" ? string.Empty : $"Unknown({act.Trim()})"
-    };
+    internal static bool IsSautoCarrierRegistered(string? carrier) =>
+        !string.IsNullOrWhiteSpace(carrier)
+        && !string.Equals(
+            carrier,
+            "No Signal",
+            StringComparison.OrdinalIgnoreCase);
 
-    internal static bool IsNetworkRegistered(string? response)
+    internal static bool ShouldQuerySautoNetwork(
+        string? carrier,
+        DateTimeOffset nowUtc,
+        DateTimeOffset lastCheckUtc) =>
+        !IsSautoCarrierRegistered(carrier)
+        && nowUtc - lastCheckUtc > SautoNetworkRecheckInterval;
+
+    internal static string GetSautoAutomaticUssdCode(string? carrier)
     {
-        return TryParseNetworkRegistrationState(response, out int state)
-            && state is 1 or 5;
+        string value = carrier?.Trim().ToUpperInvariant() ?? string.Empty;
+        return value switch
+        {
+            "VINAPHONE" => "*111#",
+            _ => string.Empty
+        };
     }
 
-    internal static bool TryParseNetworkRegistrationState(
-        string? response,
-        out int state)
-    {
-        state = -1;
-        if (string.IsNullOrWhiteSpace(response)) return false;
-        Match match = Regex.Match(
-            response,
-            @"\+(?:C|CG|CE)REG:\s*(?:\d+\s*,\s*)?(?<stat>\d+)",
+    internal static bool IsSautoSuccessfulUssdResponse(
+        string? response) =>
+        !Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+(?:CME|CMS) ERROR:|\bERROR\b",
+            RegexOptions.IgnoreCase)
+        && Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+CUSD:\s*[01](?:\s*,|\s*(?:\r?\n|$))",
             RegexOptions.IgnoreCase);
-        return match.Success
-            && int.TryParse(match.Groups["stat"].Value, out state);
-    }
 
-    internal static bool AreAllRegistrationDomainsExplicitlyUnregistered(
-        string? creg,
-        string? cgreg,
-        string? cereg) =>
-        TryParseNetworkRegistrationState(creg, out int csState)
-        && TryParseNetworkRegistrationState(cgreg, out int psState)
-        && TryParseNetworkRegistrationState(cereg, out int epsState)
-        && csState is not (1 or 5)
-        && psState is not (1 or 5)
-        && epsState is not (1 or 5);
+    internal static bool ContainsSautoPhoneNumber(string? response) =>
+        Regex.IsMatch(
+            response ?? string.Empty,
+            @"(?<!\d)(?:0\d{9}|84\d{9})(?!\d)",
+            RegexOptions.CultureInvariant);
+
+    internal static bool IsSautoAutomatic111Completion(string? response) =>
+        HasSautoManualUssdPayloadForStage(response, "*111#")
+        && ContainsSautoPhoneNumber(response);
+
+    internal static string MapSautoCopsAccessTechnology(string? act) => act?.Trim() switch
+    {
+        "" or null => "...",
+        "0" => "2G",
+        "1" => "GSM",
+        "2" => "3G",
+        "3" => "2G",
+        "4" or "5" or "6" => "3G",
+        "7" => "4G",
+        _ => "Unknown"
+    };
 
     internal static bool TryParseCopsResponse(
         string? response, out string operatorName, out string accessTechnology)
@@ -5144,71 +5021,6 @@ public class GsmModemService : IGsmModemService
             : string.Empty;
         return !string.IsNullOrWhiteSpace(operatorName);
     }
-
-    public void StartKeepAliveLoop(string portName)
-    {
-        CancellationToken token;
-        lock (_keepAliveCts)
-        {
-            if (_keepAliveCts.TryGetValue(portName, out var oldCts))
-            {
-                try { oldCts.Cancel(); oldCts.Dispose(); } catch {}
-            }
-            var newCts = new CancellationTokenSource();
-            _keepAliveCts[portName] = newCts;
-            token = newCts.Token;
-        }
-
-        _ = Task.Run(async () =>
-        {
-            while (true)
-            {
-                try
-                {
-                    await Task.Delay(90000, token); // 90 giây
-                }
-                catch (TaskCanceledException)
-                {
-                    break;
-                }
-
-                if (token.IsCancellationRequested) break;
-                if (!_serialPorts.ContainsKey(portName)) break;
-                if (IsCallInProgress(portName)) continue;
-                
-                await SendCommandAsync(portName, "AT+CPIN?", 5000, silent: true);
-                await SendCommandAsync(portName, "AT+CREG?", 5000, silent: true);
-                string csq = await SendCommandAsync(portName, "AT+CSQ", 5000, silent: true);
-                if (csq.Contains("+CSQ:", StringComparison.OrdinalIgnoreCase))
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = csq.Trim() });
-
-                string cops = await SendCommandAsync(portName, "AT+COPS?", 5000, silent: true);
-                if (TryParseCopsResponse(cops, out _, out string act))
-                {
-                    string netType = MapCopsAccessTechnology(act);
-                    if (!string.IsNullOrWhiteSpace(netType))
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_TYPE] {netType}" });
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = cops.Trim() });
-                }
-                
-                // Sweep bù (quét tin nhắn kẹt định kỳ)
-                await SweepUnreadSmsAsync(portName);
-                /*
-                string cmglCommand = GetModemProfile(portName)?.IsQuectel == true ? "AT+CMGL=4" : "AT+CMGL=\"ALL\"";
-                string cmgl = await SendCommandAsync(portName, cmglCommand, 25000, silent: true);
-                if (!string.IsNullOrWhiteSpace(cmgl) && !cmgl.Contains("ERROR") && cmgl.Contains("+CMGL:"))
-                {
-                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "[SWEEP] Vét được tin nhắn chưa đọc từ SIM!" });
-                    // HandleDataReceived already extracts every +CMGL index and routes each stored
-                    // message through QCMGR/CMGR + the exact multipart assembler. Emitting the raw
-                    // CMGL response here a second time bypassed that assembler and produced duplicate,
-                    // cut SMS entries in the UI/Telegram pipeline.
-                }
-                */
-            }
-        }, token);
-    }
-
     public async Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile)
     {
         if (!_portVendors.TryGetValue(portName, out var v) || !v.Contains("QUECTEL"))
@@ -5229,8 +5041,9 @@ public class GsmModemService : IGsmModemService
                 sp.DataReceived -= handler;
             }
 
+            AtCommandTraceLogger.Tx(portName, $"AT+QFOPEN=\"{remoteFile}\",2");
             sp.Write($"AT+QFOPEN=\"{remoteFile}\",2\r");
-            
+
             string res = await ReadUntilAsync(sp, "OK", 3000);
             if (string.IsNullOrWhiteSpace(res)) return string.Empty;
 
@@ -5239,11 +5052,12 @@ public class GsmModemService : IGsmModemService
             int handleId = int.Parse(match.Groups[1].Value);
 
             using var fs = new FileStream(localFile, FileMode.Create, FileAccess.Write);
-            
+
             while(true)
             {
+                AtCommandTraceLogger.Tx(portName, $"AT+QFREAD={handleId},4096");
                 sp.Write($"AT+QFREAD={handleId},4096\r");
-                
+
                 string line = "";
                 bool eof = false;
                 DateTime start = DateTime.Now;
@@ -5257,6 +5071,8 @@ public class GsmModemService : IGsmModemService
                     }
                     else await Task.Delay(10);
                 }
+                if (!string.IsNullOrEmpty(line))
+                    AtCommandTraceLogger.Rx(portName, line);
                 if (eof) break;
 
                 start = DateTime.Now;
@@ -5272,6 +5088,8 @@ public class GsmModemService : IGsmModemService
                     }
                     else await Task.Delay(5);
                 }
+                if (!string.IsNullOrEmpty(lenStr))
+                    AtCommandTraceLogger.Rx(portName, $"{lenStr}\r\n");
 
                 if (!int.TryParse(lenStr, out int bytesToRead) || bytesToRead <= 0) break;
 
@@ -5286,15 +5104,20 @@ public class GsmModemService : IGsmModemService
                     }
                     else await Task.Delay(5);
                 }
+                AtCommandTraceLogger.Rx(
+                    portName,
+                    $"[FILE_PAYLOAD bytes={total}]");
                 fs.Write(buf, 0, total);
 
                 await ReadUntilAsync(sp, "OK", 1000);
             }
 
+            AtCommandTraceLogger.Tx(portName, $"AT+QFCLOSE={handleId}");
             sp.Write($"AT+QFCLOSE={handleId}\r");
             await ReadUntilAsync(sp, "OK", 1000);
-            
+
             // Delete file from RAM to free up memory
+            AtCommandTraceLogger.Tx(portName, $"AT+QFDEL=\"{remoteFile}\"");
             sp.Write($"AT+QFDEL=\"{remoteFile}\"\r");
             await ReadUntilAsync(sp, "OK", 1000);
 
@@ -5346,6 +5169,9 @@ public class GsmModemService : IGsmModemService
                 sp.DataReceived -= handler;
             }
 
+            AtCommandTraceLogger.Tx(
+                portName,
+                $"AT+QFUPL=\"{remoteFile}\",{fileSize},{uploadTimeoutSeconds}");
             sp.Write($"AT+QFUPL=\"{remoteFile}\",{fileSize},{uploadTimeoutSeconds}\r");
 
             // Read until "CONNECT" is received
@@ -5364,6 +5190,7 @@ public class GsmModemService : IGsmModemService
                 }
             }
             interceptedSerialText += resp;
+            if (!string.IsNullOrEmpty(resp)) AtCommandTraceLogger.Rx(portName, resp);
             if (!resp.Contains("CONNECT", StringComparison.OrdinalIgnoreCase)) return false;
 
             // Write raw bytes
@@ -5373,6 +5200,7 @@ public class GsmModemService : IGsmModemService
                 int bytesRead = 0;
                 while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length)) > 0)
                 {
+                    AtCommandTraceLogger.Tx(portName, $"[FILE_PAYLOAD bytes={bytesRead}]");
                     sp.Write(buffer, 0, bytesRead);
                     await Task.Delay(15); // Short delay to prevent buffer overrun
                 }
@@ -5394,6 +5222,7 @@ public class GsmModemService : IGsmModemService
                 }
             }
             interceptedSerialText += finalResp;
+            if (!string.IsNullOrEmpty(finalResp)) AtCommandTraceLogger.Rx(portName, finalResp);
 
             foreach (Match cmti in Regex.Matches(
                 interceptedSerialText,
@@ -6075,20 +5904,84 @@ public class GsmModemService : IGsmModemService
         string reason,
         int initialDelayMs = 0)
     {
+        long requestedDue = Environment.TickCount64
+            + Math.Max(0, initialDelayMs);
+        _smsSweepPendingDueTicks.AddOrUpdate(
+            portName,
+            requestedDue,
+            (_, currentDue) => Math.Min(currentDue, requestedDue));
+        _smsSweepPendingReasons[portName] = reason;
+
+        // The captured SAuto IMEI lifecycle owns the COM through reset,
+        // CPIN/CSQ/COPS and automatic *111#. Keep recovery requests pending,
+        // but never emit CMGL or receive-mode repair commands before that RX
+        // milestone has completed for this exact CCID.
+        if (!IsSmsReceiveMaintenanceEnabled(portName))
+            return;
+
+        // One worker per COM is enough, but a request arriving while that worker
+        // exists remains in _smsSweepPendingDueTicks and is never discarded.
         if (!_smsSweepRetryOwners.TryAdd(portName, 0)) return;
         _ = Task.Run(async () =>
         {
             try
             {
-                if (initialDelayMs > 0)
-                    await Task.Delay(initialDelayMs).ConfigureAwait(false);
                 DateTime reportAfter = DateTime.UtcNow.AddMinutes(2);
                 while (_serialPorts.ContainsKey(portName))
                 {
+                    if (!IsSmsReceiveMaintenanceEnabled(portName))
+                        break;
+
+                    if (!_smsSweepPendingDueTicks.TryGetValue(
+                            portName, out long dueTick))
+                        break;
+
+                    long remainingMs = dueTick - Environment.TickCount64;
+                    if (remainingMs > 0)
+                    {
+                        // Poll the deadline in short slices so a newer urgent
+                        // request can shorten an older 30-second deferred sweep.
+                        await Task.Delay((int)Math.Min(remainingMs, 250))
+                            .ConfigureAwait(false);
+                        continue;
+                    }
+
+                    if (!_smsSweepPendingDueTicks.TryRemove(
+                            new KeyValuePair<string, long>(portName, dueTick)))
+                        continue;
+
                     bool busy = _commandTcs.ContainsKey(portName)
                         || _suspendedBackgroundPorts.ContainsKey(portName)
-                        || IsCallInProgress(portName);
-                    if (!busy) break;
+                        || IsCallInProgress(portName)
+                        || _sautoInitializingPorts.ContainsKey(portName)
+                        || _sautoImeiChangePorts.ContainsKey(portName)
+                        || _sautoResettingPorts.ContainsKey(portName);
+                    if (!busy)
+                    {
+                        // Any request that arrived while waiting for this COM is
+                        // covered by the sweep about to run. A request arriving
+                        // after this removal remains pending for the next pass.
+                        _smsSweepPendingDueTicks.TryRemove(portName, out _);
+                        string sweepReason = _smsSweepPendingReasons.TryRemove(
+                            portName, out string? latestReason)
+                                ? latestReason
+                                : reason;
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[SMS_RECEIVE_RECOVERY] reason={sweepReason}; khôi phục chế độ nhận và vét SMS đang lưu trong modem."
+                        });
+                        await SweepUnreadSmsAsync(portName).ConfigureAwait(false);
+                        reportAfter = DateTime.UtcNow.AddMinutes(2);
+                        continue;
+                    }
+
+                    // Keep the request live while a foreground workflow/reset is
+                    // using the COM; it will be retried as soon as that owner exits.
+                    _smsSweepPendingDueTicks.AddOrUpdate(
+                        portName,
+                        Environment.TickCount64 + 250,
+                        static (_, currentDue) => currentDue);
 
                     if (DateTime.UtcNow >= reportAfter)
                     {
@@ -6100,10 +5993,8 @@ public class GsmModemService : IGsmModemService
                         reportAfter = DateTime.UtcNow.AddMinutes(2);
                     }
 
-                    await Task.Delay(500).ConfigureAwait(false);
+                    await Task.Delay(250).ConfigureAwait(false);
                 }
-                if (_serialPorts.ContainsKey(portName))
-                    await SweepUnreadSmsAsync(portName).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -6116,6 +6007,17 @@ public class GsmModemService : IGsmModemService
             finally
             {
                 _smsSweepRetryOwners.TryRemove(portName, out _);
+                // Close the race where a request is inserted after the loop's
+                // final check but before this owner flag is released.
+                if (_serialPorts.ContainsKey(portName)
+                    && _smsSweepPendingDueTicks.ContainsKey(portName))
+                {
+                    string pendingReason = _smsSweepPendingReasons.TryGetValue(
+                        portName, out string? latestReason)
+                            ? latestReason
+                            : reason;
+                    ScheduleSafeUnreadSmsSweep(portName, pendingReason);
+                }
             }
         });
     }
@@ -6754,12 +6656,538 @@ public class GsmModemService : IGsmModemService
         {
             if (sp.BytesToRead > 0)
             {
-                current += sp.ReadExisting();
+                string chunk = sp.ReadExisting();
+                current += chunk;
+                if (!string.IsNullOrEmpty(chunk))
+                    AtCommandTraceLogger.Rx(sp.PortName, chunk);
                 if (current.Contains(keyword)) return current;
             }
             await Task.Delay(10);
         }
         return current;
+    }
+
+    private SautoReceiveSnapshot GetSautoReceiveSnapshot(string portName)
+    {
+        SautoReceiveState state = _sautoReceiveStates.GetOrAdd(
+            portName,
+            static _ => new SautoReceiveState());
+        lock (state.Sync)
+        {
+            return new SautoReceiveSnapshot(
+                state.Revision,
+                state.CfunRevision,
+                state.UssdRevision,
+                state.SimReady,
+                state.SimLocked,
+                state.RestartRequired,
+                state.CfunMode,
+                state.CpinResponse,
+                state.Imei,
+                state.Ccid,
+                state.Carrier,
+                state.NetworkType,
+                state.CsqResponse,
+                state.CopsResponse,
+                state.UssdResponse,
+                state.Manufacturer,
+                state.Model,
+                state.Firmware);
+        }
+    }
+
+    private void SignalSautoReceiveStateChanged(string portName)
+    {
+        SemaphoreSlim signal = _sautoReceiveSignals.GetOrAdd(
+            portName,
+            static _ => new SemaphoreSlim(0, 1));
+        if (signal.CurrentCount == 0)
+        {
+            try { signal.Release(); }
+            catch (SemaphoreFullException) { }
+        }
+    }
+
+    private async Task<SautoReceiveSnapshot?> WaitForSautoReceiveStateAsync(
+        string portName,
+        Func<SautoReceiveSnapshot, bool> condition,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        using var timeoutCts =
+            CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+        SemaphoreSlim signal = _sautoReceiveSignals.GetOrAdd(
+            portName,
+            static _ => new SemaphoreSlim(0, 1));
+
+        try
+        {
+            while (true)
+            {
+                SautoReceiveSnapshot snapshot =
+                    GetSautoReceiveSnapshot(portName);
+                if (condition(snapshot))
+                    return snapshot;
+
+                await signal.WaitAsync(timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    private void UpdateSautoReceiveState(
+        string portName,
+        Action<SautoReceiveState> update)
+    {
+        SautoReceiveState state = _sautoReceiveStates.GetOrAdd(
+            portName,
+            static _ => new SautoReceiveState());
+        lock (state.Sync)
+            update(state);
+    }
+
+    internal static bool IsSmsStorageReadyUrc(string? line) =>
+        Regex.IsMatch(
+            line ?? string.Empty,
+            @"^(?:\+QIND:\s*)?""?SMS\s+(?:DONE|READY)""?$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsRegisteredSmsCarrier(string? carrier) =>
+        !string.IsNullOrWhiteSpace(carrier)
+        && !carrier.Equals("No Signal", StringComparison.OrdinalIgnoreCase)
+        && !carrier.Equals("Unknown", StringComparison.OrdinalIgnoreCase);
+
+    private void ProcessSautoReceiveChunk(string portName, string chunk)
+    {
+        if (string.IsNullOrEmpty(chunk)) return;
+
+        SautoReceiveState state = _sautoReceiveStates.GetOrAdd(
+            portName,
+            static _ => new SautoReceiveState());
+        var publishedEvents = new List<string>();
+        bool queueReadyTransition = false;
+        bool runEc20AtiCallback = false;
+        bool runCnmiCorrection = false;
+        bool runCallReadyCallback = false;
+        bool runSmsStorageReadyRecovery = false;
+        bool runNetworkRegisteredSmsRecovery = false;
+        bool stateChanged = false;
+        string restartReason = string.Empty;
+
+        lock (state.Sync)
+        {
+            state.LineBuffer.Append(chunk);
+            while (true)
+            {
+                int newlineIndex = IndexOf(
+                    state.LineBuffer,
+                    '\n');
+                if (newlineIndex < 0) break;
+
+                string line = state.LineBuffer
+                    .ToString(0, newlineIndex + 1)
+                    .Trim('\r', '\n', ' ');
+                state.LineBuffer.Remove(0, newlineIndex + 1);
+                if (line.Length == 0) continue;
+                state.Revision++;
+                stateChanged = true;
+
+                if (line.Contains(
+                        "CPIN: READY",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    bool becameReady = !state.SimReady;
+                    state.CpinResponse = line;
+                    state.SimReady = true;
+                    state.SimLocked = false;
+                    state.RestartRequired = false;
+                    if (becameReady)
+                    {
+                        state.Ccid = string.Empty;
+                        // SAuto sends ESC only on the NOT-READY -> READY edge.
+                        // Keep it pending until the CPIN command owner still holding
+                        // the per-COM semaphore can send it. Writing ESC directly from
+                        // DataReceived races the next EGMR/ICCID command and was seen
+                        // dropping that command's response on all 32 ports.
+                        state.ReadyTransitionPending =
+                            !_sautoResettingPorts.ContainsKey(portName);
+                        queueReadyTransition = true;
+                    }
+                }
+                else if (line.Contains(
+                             "CPIN: NOT READY",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    state.CpinResponse = line;
+                    state.SimReady = false;
+                    state.ReadyTransitionPending = false;
+                    state.RestartRequired = true;
+                    restartReason = line;
+                }
+                else if (line.Contains(
+                             "CPIN: SIM PIN",
+                             StringComparison.OrdinalIgnoreCase)
+                         || line.Contains(
+                             "CPIN: SIM PUK",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    state.CpinResponse = line;
+                    state.SimReady = false;
+                    state.SimLocked = true;
+                    state.ReadyTransitionPending = false;
+                    publishedEvents.Add($"[STATUS_SIM_LOCKED] {line}");
+                }
+
+                if (RequiresSautoControllerRestart(line)
+                    && !line.Contains(
+                        "CPIN: NOT READY",
+                        StringComparison.OrdinalIgnoreCase)
+                    && !_sautoImeiChangePorts.ContainsKey(portName))
+                {
+                    state.SimReady = false;
+                    state.ReadyTransitionPending = false;
+                    state.RestartRequired = true;
+                    restartReason = line;
+                }
+
+                int? cfunMode = ParseSautoCfunMode(line);
+                if (cfunMode.HasValue)
+                {
+                    state.CfunMode = cfunMode.Value;
+                    state.CfunRevision++;
+                }
+
+                if (line.Contains(
+                    "+EGMR:",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    string imei = Regex.Match(
+                        line,
+                        @"(?<!\d)\d{15}(?!\d)").Value;
+                    if (!string.IsNullOrWhiteSpace(imei)
+                        && !string.Equals(
+                            state.Imei,
+                            imei,
+                            StringComparison.Ordinal))
+                    {
+                        state.Imei = imei;
+                        publishedEvents.Add($"[PARSE_IMEI] {imei}");
+                    }
+                }
+
+                Match iccid = Regex.Match(
+                    line,
+                    @"\+?(?:ICCID|QCCID):\s*(89\d{16,20})",
+                    RegexOptions.IgnoreCase);
+                if (iccid.Success && state.SimReady)
+                {
+                    string value = iccid.Groups[1].Value;
+                    if (!string.Equals(
+                        state.Ccid,
+                        value,
+                        StringComparison.Ordinal))
+                    {
+                        state.Ccid = value;
+                        publishedEvents.Add($"[PARSE_CCID] {value}");
+                        publishedEvents.Add(
+                            "[STATUS_HOTPLUG_SIM_DETECTED] Đã nhận SIM theo vòng DataPort của SAuto");
+                    }
+                }
+
+                if (line.Contains(
+                    "+CSQ:",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    bool signalChanged = !string.Equals(
+                        state.CsqResponse,
+                        line,
+                        StringComparison.Ordinal);
+                    state.CsqResponse = line;
+                    // SAuto updates the grid only when the RSSI value changes.
+                    // The complete TX/RX stream remains in at_commands.log, while
+                    // identical polling samples no longer flood system_log/UI.
+                    if (state.SimReady && signalChanged)
+                        publishedEvents.Add(line);
+                }
+
+                if (line.Contains(
+                    "+COPS:",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    string previousCarrier = state.Carrier;
+                    state.CopsResponse = line;
+                    state.Carrier = ResolveSautoCarrier(line);
+                    if (!IsRegisteredSmsCarrier(previousCarrier)
+                        && IsRegisteredSmsCarrier(state.Carrier))
+                    {
+                        runNetworkRegisteredSmsRecovery = true;
+                    }
+                    _ = TryParseCopsResponse(
+                        line,
+                        out _,
+                        out string accessTechnology);
+                    state.NetworkType =
+                        MapSautoCopsAccessTechnology(accessTechnology);
+                    publishedEvents.Add(
+                        $"[NETWORK_TYPE] {state.NetworkType}");
+                    publishedEvents.Add(line);
+                }
+
+                if (line.Contains(
+                    "+CUSD:",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    state.UssdResponse = line;
+                    state.UssdRevision++;
+                }
+
+                if (line.Contains(
+                    "QUECTEL",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    state.Manufacturer = "Quectel";
+                }
+
+                Match revision = Regex.Match(
+                    line,
+                    @"^Revision:\s*(?<firmware>.+)$",
+                    RegexOptions.IgnoreCase);
+                if (revision.Success)
+                {
+                    state.Firmware =
+                        revision.Groups["firmware"].Value.Trim();
+                    runEc20AtiCallback = state.Firmware.Contains(
+                        "EC20",
+                        StringComparison.OrdinalIgnoreCase);
+                }
+                else if (Regex.IsMatch(
+                    line,
+                    @"^(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}$",
+                    RegexOptions.IgnoreCase))
+                {
+                    state.Model = line;
+                }
+
+                Match cnmi = Regex.Match(
+                    line,
+                    @"\+CNMI:\s*\d+\s*,\s*(\d+)",
+                    RegexOptions.IgnoreCase);
+                if (cnmi.Success
+                    && !string.Equals(
+                        cnmi.Groups[1].Value,
+                        "1",
+                        StringComparison.Ordinal))
+                {
+                    runCnmiCorrection = true;
+                }
+
+                if (line.Contains(
+                        "+CUSD: 1",
+                        StringComparison.OrdinalIgnoreCase)
+                    || line.Contains(
+                        "Call Ready",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    runCallReadyCallback = true;
+                }
+
+                if (IsSmsStorageReadyUrc(line))
+                    runSmsStorageReadyRecovery = true;
+            }
+
+            if (state.LineBuffer.Length > 8192)
+                state.LineBuffer.Remove(0, state.LineBuffer.Length - 4096);
+        }
+
+        if (stateChanged)
+            SignalSautoReceiveStateChanged(portName);
+
+        foreach (string data in publishedEvents)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = data
+            });
+        }
+
+        bool initializing =
+            _sautoInitializingPorts.ContainsKey(portName);
+        if (runEc20AtiCallback && !initializing)
+            QueueSautoEc20AtiCallback(portName);
+        if (runCnmiCorrection && !initializing)
+            QueueSautoCnmiCorrection(portName);
+        if (queueReadyTransition)
+            QueueSautoReadyTransition(portName);
+        if (runCallReadyCallback)
+            QueueSautoCallReadyCallback(portName);
+
+        if (runSmsStorageReadyRecovery
+            || runNetworkRegisteredSmsRecovery)
+        {
+            ScheduleSafeUnreadSmsSweep(
+                portName,
+                runSmsStorageReadyRecovery
+                    ? "modem-sms-storage-ready"
+                    : "network-registered",
+                initialDelayMs: 250);
+        }
+
+        if (!string.IsNullOrWhiteSpace(restartReason))
+            QueueSautoControllerRestart(portName, restartReason);
+    }
+
+    private void QueueSautoReadyTransition(string portName)
+    {
+        if (GetSautoReceiveSnapshot(portName).SimReady)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[STATUS_SIM_READY] Đã nhận SIM; DataPort đang đọc CCID."
+            });
+        }
+    }
+
+    private void QueueSautoCallReadyCallback(string portName)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                SautoReceiveSnapshot? ready =
+                    await WaitForSautoReceiveStateAsync(
+                        portName,
+                        snapshot =>
+                            !_sautoImeiChangePorts.ContainsKey(portName),
+                        TimeSpan.FromSeconds(10),
+                        CancellationToken.None);
+                if (ready != null)
+                {
+                    await SendSautoCommandForResponseAsync(
+                        portName,
+                        "AT+CNMI?",
+                        TimeSpan.FromSeconds(10),
+                        CancellationToken.None);
+                }
+            }
+            catch
+            {
+                // HandlePort treats the Call Ready/+CUSD callback as best effort.
+            }
+        });
+    }
+
+    private void QueueSautoEc20AtiCallback(string portName)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await SendSautoCommandForResponseAsync(
+                    portName,
+                    "AT+CPMS=\"ME\",\"SM\",\"MT\"\r",
+                    TimeSpan.FromSeconds(10),
+                    CancellationToken.None);
+                await SendSautoCommandForResponseAsync(
+                    portName,
+                    "AT+CNMI=1,1,0,0,0\r",
+                    TimeSpan.FromSeconds(10),
+                    CancellationToken.None);
+            }
+            catch
+            {
+                // GSMController.HandlePort also treats this ATI callback as
+                // best effort and lets DataPort continue independently.
+            }
+        });
+    }
+
+    private void QueueSautoCnmiCorrection(string portName)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                string correction =
+                    await SendSautoCommandForResponseAsync(
+                    portName,
+                    "AT+CNMI=1,1,0,0,0",
+                    TimeSpan.FromSeconds(10),
+                    CancellationToken.None);
+                if (IsSautoOkResponse(correction))
+                {
+                    await SendSautoCommandForResponseAsync(
+                        portName,
+                        "AT+CNMI?",
+                        TimeSpan.FromSeconds(10),
+                        CancellationToken.None);
+                }
+            }
+            catch
+            {
+            }
+        });
+    }
+
+    private void QueueSautoControllerRestart(
+        string portName,
+        string reason)
+    {
+        if (!_sautoRestartOwners.TryAdd(portName, 0)) return;
+
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data =
+                $"[WAITING_FOR_SIM] SAuto nhận {reason.Trim()} và mở lại riêng cổng."
+        });
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (_sautoRestartOwners.ContainsKey(portName))
+                {
+                    bool reconnected = await ReconnectPortAsync(
+                        portName,
+                        115200,
+                        CancellationToken.None);
+                    if (!reconnected)
+                        break;
+
+                    SautoReceiveSnapshot state =
+                        GetSautoReceiveSnapshot(portName);
+                    if (!RequiresSautoControllerRestart(
+                            state.CpinResponse))
+                    {
+                        break;
+                    }
+
+                    AtCommandTraceLogger.State(
+                        portName,
+                        $"SAUTO_CONTROLLER_RESTART_REPEAT;result={GetSautoResponseOutcome(state.CpinResponse)}");
+                }
+            }
+            finally
+            {
+                _sautoRestartOwners.TryRemove(portName, out _);
+            }
+        });
+    }
+
+    private static int IndexOf(StringBuilder value, char target)
+    {
+        for (int index = 0; index < value.Length; index++)
+        {
+            if (value[index] == target) return index;
+        }
+
+        return -1;
     }
 
     private void HandleDataReceived(string portName, SerialPort sp)
@@ -6787,15 +7215,21 @@ public class GsmModemService : IGsmModemService
                 chunk += sp.ReadExisting();
             }
 
+            if (!string.IsNullOrEmpty(chunk))
+            {
+                AtCommandTraceLogger.Rx(portName, chunk);
+                ProcessSautoReceiveChunk(portName, chunk);
+            }
+
             bool idleBufferRetry = chunk.Length == 0;
             if (!_portBuffers.TryGetValue(portName, out var buffer)) return;
             // A scheduled direct-CMT retry may intentionally run with no new
             // serial bytes while a complete frame is still in the buffer.
             if (string.IsNullOrWhiteSpace(chunk) && buffer.Length == 0) return;
             if (!string.IsNullOrEmpty(chunk)) buffer.Append(chunk);
-            
+
             string currentData = buffer.ToString();
-            
+
             // Buffer giới hạn 32 KB — đủ chứa cả PDU SMS Unicode dài nhất (thường < 600 hex chars/phần)
             // Không reset buffer khi còn dữ liệu hợp lệ đang được xử lý. Chỉ reset khi thực sự overflow.
             if (buffer.Length > 32000)
@@ -7045,7 +7479,7 @@ public class GsmModemService : IGsmModemService
                 buffer.Replace("NO ANSWER", "");
                 currentData = buffer.ToString();
             }
-            
+
             // ---------------------------------------------------------
             // 1.3. BẮT TÍN HIỆU PHÍM BẤM DTMF (+QTONEDET)
             // ---------------------------------------------------------
@@ -7075,88 +7509,10 @@ public class GsmModemService : IGsmModemService
                             dtmfChar = ((char)asciiVal).ToString();
                         }
                     }
-                    
+
                     DtmfReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = dtmfChar });
                     buffer.Replace(dtmfMatch.Value, "");
                     currentData = buffer.ToString();
-                }
-            }
-
-            // ---------------------------------------------------------
-            // 1.4. BẮT RÚT SIM VÀ CẮM SIM (HOT-PLUG)
-            // ---------------------------------------------------------
-            string pendingSimCommand = _commandTcs.TryGetValue(portName, out var pendingSimTcs)
-                ? pendingSimTcs.Task.AsyncState as string ?? string.Empty
-                : string.Empty;
-            bool isQsimQueryResponse = pendingSimCommand.StartsWith("AT+QSIMSTAT?", StringComparison.OrdinalIgnoreCase);
-            bool isCpinQueryResponse = pendingSimCommand.StartsWith("AT+CPIN?", StringComparison.OrdinalIgnoreCase);
-
-            if (currentData.Contains("+QSIMSTAT: 1,1") && !isQsimQueryResponse)
-            {
-                buffer.Replace("+QSIMSTAT: 1,1", "");
-                currentData = buffer.ToString();
-                CancelSimRemovalConfirmation(portName);
-                
-                _lastSimState.TryGetValue(portName, out bool lastState);
-                if (!lastState)
-                {
-                    _lastSimState[portName] = true;
-                    // Khởi động luồng đọc CCID và IMEI, sau đó báo UI
-                    _ = HandleSimInsertedSafelyAsync(portName);
-                }
-            }
-
-            bool stackDisabledByTool = _simStackDisabledByTool.TryGetValue(portName, out bool stackDisabled) && stackDisabled;
-            // NOT READY is a normal transient response on EC20 during CFUN/IMS
-            // changes. Only NOT INSERTED is strong unsolicited removal evidence;
-            // the periodic monitor will independently verify weaker QSIMSTAT=0.
-            bool hasUnsolicitedCpinRemoval = !stackDisabledByTool && !isCpinQueryResponse
-                && currentData.Contains("+CPIN: NOT INSERTED");
-            bool hasUnsolicitedQsimRemoval = !stackDisabledByTool && !isQsimQueryResponse && currentData.Contains("+QSIMSTAT: 1,0");
-            if (hasUnsolicitedCpinRemoval || hasUnsolicitedQsimRemoval)
-            {
-                if (_rebootRecoveryInProgress.ContainsKey(portName))
-                {
-                    buffer.Replace("+CPIN: NOT READY", "");
-                    buffer.Replace("+CPIN: NOT INSERTED", "");
-                    buffer.Replace("+QSIMSTAT: 1,0", "");
-                    currentData = buffer.ToString();
-                }
-                else
-                {
-                    buffer.Replace("+CPIN: NOT READY", "");
-                    buffer.Replace("+CPIN: NOT INSERTED", "");
-                    buffer.Replace("+QSIMSTAT: 1,0", "");
-                    currentData = buffer.ToString();
-
-                // AT+QSIMSTAT? cũng trả "+QSIMSTAT: 1,0" như response. Chỉ xử lý rút SIM
-                // khi trạng thái trước đó thực sự là có SIM; nếu không sẽ tự restart polling
-                // mỗi 2 giây và không bao giờ chạy được probe CFUN=1.
-                    _lastSimState.TryGetValue(portName, out bool wasPresent);
-                    if (wasPresent)
-                    {
-                        // QSIMSTAT=0 is only a probe on some GSM boards (and can
-                        // be inverted/transient). Do not spend a confirmation cycle
-                        // on it; the polling monitor will re-read CPIN/QSIMSTAT/CCID.
-                        if (hasUnsolicitedCpinRemoval)
-                            RegisterSimRemovalEvidence(portName);
-                        else
-                        {
-                            // Mark only that a probe needs verification. The
-                            // confirmation counter is advanced by full polling
-                            // cycles, not by every unsolicited URC.
-                            _simRemovalEvidenceSince.TryAdd(portName, DateTimeOffset.UtcNow);
-                            _simRemovalEvidenceCounts.TryAdd(portName, 1);
-                        }
-                        ScheduleSimRemovalConfirmation(portName);
-                        LogMessage?.Invoke(this, new GsmDataEventArgs
-                        {
-                            PortName = portName,
-                            Data = hasUnsolicitedCpinRemoval
-                                ? "[SIM_REMOVAL_PENDING] Modem báo mất SIM; đang xác minh lại trước khi đổi trạng thái."
-                                : "[SIM_REMOVAL_PROBE] QSIMSTAT báo SIM chưa sẵn sàng; giữ dữ liệu và chờ xác minh CCID."
-                        });
-                    }
                 }
             }
 
@@ -7182,8 +7538,18 @@ public class GsmModemService : IGsmModemService
                             PortName = portName,
                             Data = ussdData.Trim()
                         });
-                        t.TrySetResult(currentData.Substring(0, match.Index + match.Length).Trim());
-                        buffer.Remove(0, match.Index + match.Length);
+                        int completionEnd = match.Index + match.Length;
+                        string completion = currentData
+                            .Substring(0, completionEnd)
+                            .Trim();
+                        buffer.Remove(0, completionEnd);
+                        IReadOnlyList<string> orphanFrames =
+                            RemoveLeadingUnownedCommandResponseFrames(buffer);
+                        TraceRemovedUnownedCommandResponseFrames(
+                            portName,
+                            c,
+                            orphanFrames);
+                        t.TrySetResult(completion);
                     }
                     else
                     {
@@ -7215,22 +7581,25 @@ public class GsmModemService : IGsmModemService
                 while (true)
                 {
                     match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?|>\s*|\r?\nCONNECT\r?\n?)");
-                    if (!match.Success
-                        || !IsStaleCmsErrorTerminator(match.Value, pendingCommand))
+                    if (!match.Success) break;
+
+                    int candidateEnd = match.Index + match.Length;
+                    string candidate = currentData.Substring(0, candidateEnd);
+                    if (CanTerminalFrameCompletePendingCommand(
+                            candidate,
+                            match.Value,
+                            pendingCommand))
                     {
                         break;
                     }
 
-                    // +CMS ERROR của một lệnh SMS đã bỏ dở có thể về muộn, đúng
-                    // lúc lệnh khác đang chờ. Nhận nó làm phản hồi sẽ làm lệnh
-                    // đó "trả lời" bằng mã lỗi SMS (đã thấy profile modem rỗng
-                    // vì lý do này). Cắt đoạn rác và tiếp tục chờ phản hồi thật.
-                    LogMessage?.Invoke(this, new GsmDataEventArgs
-                    {
-                        PortName = portName,
-                        Data = $"[AT_STALE_CMS_ERROR] Bỏ qua '{match.Value.Trim()}' về muộn khi đang chờ '{pendingCommand?.Trim()}'."
-                    });
-                    buffer.Remove(match.Index, match.Length);
+                    // SAuto's write-only poller can leave CPIN/CSQ/COPS frames
+                    // behind. The next transaction must not consume those as its
+                    // own response merely because they end in OK/ERROR.
+                    AtCommandTraceLogger.State(
+                        portName,
+                        $"AT_RESPONSE_NOT_FOR_PENDING;waiting={pendingCommand?.Trim() ?? "UNKNOWN"};observed={match.Value.Trim()}");
+                    buffer.Remove(0, candidateEnd);
                     currentData = buffer.ToString();
                 }
                 if (match.Success)
@@ -7249,32 +7618,59 @@ public class GsmModemService : IGsmModemService
                             !currentData.Contains("+CMS ERROR"))
                         {
                             int ackEndIndex = match.Index + match.Length;
-                            tcs.TrySetResult(currentData.Substring(0, ackEndIndex));
+                            string completion = currentData.Substring(
+                                0,
+                                ackEndIndex);
                             buffer.Remove(0, ackEndIndex);
+                            IReadOnlyList<string> orphanFrames =
+                                RemoveLeadingUnownedCommandResponseFrames(buffer);
                             currentData = buffer.ToString();
+                            TraceRemovedUnownedCommandResponseFrames(
+                                portName,
+                                cmd,
+                                orphanFrames);
+                            tcs.TrySetResult(completion);
                             ackOnlyCompleted = true;
                         }
 
                         // VNSKY có lỗi gửi "+CME ERROR: 100" trước "+CUSD:"
                         if (!ackOnlyCompleted && currentData.Contains("+CME ERROR: 100"))
                         {
-                            buffer.Replace("+CME ERROR: 100", ""); 
+                            buffer.Replace("+CME ERROR: 100", "");
                             currentData = buffer.ToString();
                         }
                         else if (!ackOnlyCompleted)
                         {
                             int endIndex = match.Index + match.Length;
-                            tcs.TrySetResult(currentData.Substring(0, endIndex));
+                            string completion = currentData.Substring(
+                                0,
+                                endIndex);
                             buffer.Remove(0, endIndex);
+                            IReadOnlyList<string> orphanFrames =
+                                RemoveLeadingUnownedCommandResponseFrames(buffer);
                             currentData = buffer.ToString();
+                            TraceRemovedUnownedCommandResponseFrames(
+                                portName,
+                                cmd,
+                                orphanFrames);
+                            tcs.TrySetResult(completion);
                         }
                     }
                     else
                     {
                         int endIndex = match.Index + match.Length;
-                        tcs.TrySetResult(currentData.Substring(0, endIndex));
+                        string completion = currentData.Substring(
+                            0,
+                            endIndex);
                         buffer.Remove(0, endIndex);
+                        IReadOnlyList<string> orphanFrames =
+                            RemoveLeadingUnownedCommandResponseFrames(buffer);
                         currentData = buffer.ToString();
+                        TraceRemovedUnownedCommandResponseFrames(
+                            portName,
+                            pendingCommand,
+                            orphanFrames);
+                        tcs.TrySetResult(completion);
                     }
                 }
                 }
@@ -7293,14 +7689,18 @@ public class GsmModemService : IGsmModemService
                 else
                 {
                 // Chỉ xóa bộ đệm khi thiết bị nhả rác có chữ OK/ERROR chuẩn
-                var match = Regex.Match(currentData, @"(?:\r?\nOK\r?\n?|\r?\nERROR\r?\n?|\+CMS ERROR:[^\r\n]*\r?\n?|\+CME ERROR:[^\r\n]*\r?\n?|>\s*)");
-                if (match.Success)
+                IReadOnlyList<string> orphanFrames =
+                    RemoveLeadingUnownedCommandResponseFrames(buffer);
+                if (orphanFrames.Count > 0)
                 {
-                    buffer.Remove(0, match.Index + match.Length);
+                    TraceRemovedUnownedCommandResponseFrames(
+                        portName,
+                        boundaryCommand: null,
+                        orphanFrames);
                     currentData = buffer.ToString();
                 }
                 // Nếu bị nhiễu sóng, dữ liệu rác dồn quá nhiều thì xóa để chống tràn RAM
-                else if (currentData.Length > 2000) 
+                else if (currentData.Length > 2000)
                 {
                     buffer.Clear();
                     currentData = "";
@@ -7327,10 +7727,7 @@ public class GsmModemService : IGsmModemService
     public void DisconnectAll()
     {
         foreach (var cts in _pollingCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
-        foreach (var cts in _keepAliveCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
-        foreach (var cts in _portHealthCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
-        foreach (var cts in _simMonitorCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
-        foreach (var cts in _simRemovalConfirmationCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
+        StopAllSmsReceiveWatchdogs();
         foreach (var cts in _portLifetimeCts.Values) { try { cts.Cancel(); cts.Dispose(); } catch { } }
         foreach (var pending in _commandTcs.Values)
             pending.TrySetResult("ERROR: Port disconnected");
@@ -7338,8 +7735,10 @@ public class GsmModemService : IGsmModemService
         {
             try
             {
+                bool wasOpen = kvp.Value.IsOpen;
                 kvp.Value.Close();
                 kvp.Value.Dispose();
+                if (wasOpen) AtCommandTraceLogger.Close(kvp.Key);
             }
             catch { }
         }
@@ -7356,21 +7755,13 @@ public class GsmModemService : IGsmModemService
         _pollingCts.Clear();
         _pollingExpectedIdentities.Clear();
         _pendingNetworkPollingPorts.Clear();
-        _keepAliveCts.Clear();
-        _portHealthCts.Clear();
-        _portHealthRecoveryOwners.Clear();
-        _portHealthFailureCounts.Clear();
-        _simMonitorCts.Clear();
-        _simRemovalConfirmationCts.Clear();
-        _simRemovalWatchEnabled.Clear();
-        _lastSimState.Clear();
-        _simRemovalEvidenceCounts.Clear();
-        _simRemovalEvidenceSince.Clear();
-        _rebootRecoveryInProgress.Clear();
-        _networkSimRecoveryOwners.Clear();
-        _networkSimRecoveryAttempts.Clear();
-        _simInitInProgress.Clear();
-        _simInsertInProgress.Clear();
+        _sautoNetworkStates.Clear();
+        _sautoReceiveStates.Clear();
+        _sautoReceiveSignals.Clear();
+        _sautoRestartOwners.Clear();
+        _sautoImeiChangePorts.Clear();
+        _sautoResettingPorts.Clear();
+        _sautoInitializingPorts.Clear();
         _portLifetimeCts.Clear();
         _dataReceivedHandlers.Clear();
         _isDownloading.Clear();
@@ -7390,6 +7781,12 @@ public class GsmModemService : IGsmModemService
         _smsReadRetryAttempts.Clear();
         _smsSweepLocks.Clear();
         _smsSweepRetryOwners.Clear();
+        _smsSweepPendingDueTicks.Clear();
+        _smsSweepPendingReasons.Clear();
+        _smsReceiveWatchdogLastProbeTicks.Clear();
+        _smsReceiveMaintenanceIdentities.Clear();
+        _smsReceiveMaintenanceGenerations.Clear();
+        _smsReceiveMaintenanceActivationOwners.Clear();
         _smsSimIdentities.Clear();
         _networkSimIdentities.Clear();
         _networkIdentityGenerations.Clear();
@@ -7403,6 +7800,7 @@ public class GsmModemService : IGsmModemService
 
     public void Disconnect(string portName)
     {
+        InvalidateSmsReceiveMaintenance(portName);
         _networkSimIdentities.TryRemove(portName, out _);
         _networkIdentityGenerations.TryRemove(portName, out _);
         InvalidateNetworkRecoveryForIdentityChange(portName);
@@ -7421,23 +7819,19 @@ public class GsmModemService : IGsmModemService
         {
             try { lifetimeCts.Cancel(); lifetimeCts.Dispose(); } catch { }
         }
-        if (_portHealthCts.TryRemove(portName, out var healthCts))
-        {
-            try { healthCts.Cancel(); healthCts.Dispose(); } catch { }
-        }
-        _portHealthRecoveryOwners.TryRemove(portName, out _);
-        _portHealthFailureCounts.TryRemove(portName, out _);
         if (_serialPorts.TryGetValue(portName, out var sp))
         {
             try
             {
+                bool wasOpen = sp.IsOpen;
                 sp.Close();
                 sp.Dispose();
+                if (wasOpen) AtCommandTraceLogger.Close(portName);
             }
             catch { }
             _serialPorts.TryRemove(portName, out _);
         }
-        
+
         if (_semaphores.TryGetValue(portName, out var sem))
         {
             // Không Dispose ngay: một SendCommandAsync đang kết thúc có thể còn Release().
@@ -7456,43 +7850,26 @@ public class GsmModemService : IGsmModemService
             {
                 try { pCts.Cancel(); pCts.Dispose(); } catch {}
             }
-            if (_keepAliveCts.TryRemove(portName, out var kCts))
-            {
-                try { kCts.Cancel(); kCts.Dispose(); } catch {}
-            }
-            if (_simMonitorCts.TryRemove(portName, out var smCts))
-            {
-                try { smCts.Cancel(); smCts.Dispose(); } catch {}
-            }
-            _lastSimState.TryRemove(portName, out _);
-            ClearSimRemovalEvidence(portName);
-            _rebootRecoveryInProgress.TryRemove(portName, out _);
-            ClearNetworkSimRecoveryState(portName);
-            _simInitInProgress.TryRemove(portName, out _);
-            _simInsertInProgress.TryRemove(portName, out _);
         }
 
         _portBuffers.TryRemove(portName, out _);
         _portBufferLocks.TryRemove(portName, out _);
+        _sautoNetworkStates.TryRemove(portName, out _);
+        _sautoReceiveStates.TryRemove(portName, out _);
+        _sautoReceiveSignals.TryRemove(portName, out _);
+        _sautoImeiChangePorts.TryRemove(portName, out _);
+        _sautoResettingPorts.TryRemove(portName, out _);
+        _sautoInitializingPorts.TryRemove(portName, out _);
 
         // Dọn cancellation state kể cả khi kết nối bị lỗi giữa chừng trước lúc tạo semaphore.
         if (_pollingCts.TryRemove(portName, out var polling)) { try { polling.Cancel(); polling.Dispose(); } catch { } }
-        if (_keepAliveCts.TryRemove(portName, out var keepAlive)) { try { keepAlive.Cancel(); keepAlive.Dispose(); } catch { } }
-        if (_portHealthCts.TryRemove(portName, out var health)) { try { health.Cancel(); health.Dispose(); } catch { } }
-        if (_simMonitorCts.TryRemove(portName, out var simMonitor)) { try { simMonitor.Cancel(); simMonitor.Dispose(); } catch { } }
-        _simRemovalWatchEnabled.TryRemove(portName, out _);
-        CancelSimRemovalConfirmation(portName);
-        _lastSimState.TryRemove(portName, out _);
-        ClearSimRemovalEvidence(portName);
-        _rebootRecoveryInProgress.TryRemove(portName, out _);
-        ClearNetworkSimRecoveryState(portName);
-        _simInitInProgress.TryRemove(portName, out _);
-        _simInsertInProgress.TryRemove(portName, out _);
         if (_smsSweepLocks.TryRemove(portName, out _))
         {
             // Do not dispose here: a sweep already holding this lock may still
             // execute its finally/Release after the COM is disconnected.
         }
+        _smsSweepPendingDueTicks.TryRemove(portName, out _);
+        _smsSweepPendingReasons.TryRemove(portName, out _);
     }
 
     private bool EnsurePortOpen(string portName, out SerialPort? sp)
@@ -7503,8 +7880,12 @@ public class GsmModemService : IGsmModemService
             try
             {
                 sp.Open();
-                if (sp.IsOpen) return true;
-                
+                if (sp.IsOpen)
+                {
+                    AtCommandTraceLogger.Open(portName);
+                    return true;
+                }
+
                 // NẾU Open() KHÔNG throw lỗi nhưng IsOpen VẪN false (Lỗi driver Windows ảo)
                 Disconnect(portName);
                 PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Lỗi ngầm: Không thể mở cổng dù driver không báo lỗi!" });
@@ -7524,6 +7905,664 @@ public class GsmModemService : IGsmModemService
         return false;
     }
 
+    private static void WriteSautoRawWhileLocked(
+        string portName,
+        SerialPort serialPort,
+        string data,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!serialPort.IsOpen)
+            throw new IOException($"Port {portName} is not open.");
+
+        AtCommandTraceLogger.Tx(portName, data);
+        serialPort.Write(data);
+    }
+
+    private static async Task WriteSautoCommandWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        string command,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!serialPort.IsOpen)
+        {
+            AtCommandTraceLogger.Error(portName, $"WRITE:{command}: Port not open");
+            return;
+        }
+
+        Task writeTask = Task.Run(() =>
+        {
+            AtCommandTraceLogger.Tx(
+                portName,
+                command + serialPort.NewLine);
+            serialPort.WriteLine(command);
+        });
+
+        Task completed = await Task.WhenAny(
+            writeTask,
+            Task.Delay(TimeSpan.FromSeconds(3), ct));
+        if (ReferenceEquals(completed, writeTask))
+        {
+            await writeTask;
+            return;
+        }
+
+        ct.ThrowIfCancellationRequested();
+        AtCommandTraceLogger.Timeout(portName, $"WRITE:{command}");
+        try
+        {
+            if (serialPort.IsOpen)
+            {
+                serialPort.Close();
+                AtCommandTraceLogger.Close(portName);
+            }
+        }
+        catch (Exception ex)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"WRITE_TIMEOUT_CLOSE:{command}: {ex.Message}");
+        }
+
+        try
+        {
+            await writeTask;
+        }
+        catch (Exception ex)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"WRITE_TIMEOUT_TASK:{command}: {ex.Message}");
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        try
+        {
+            if (!serialPort.IsOpen)
+            {
+                serialPort.Open();
+                AtCommandTraceLogger.Open(portName);
+            }
+        }
+        catch (Exception ex)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"WRITE_TIMEOUT_REOPEN:{command}: {ex.Message}");
+        }
+    }
+
+    private async Task<string> WriteSautoCommandForResponseWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        string command,
+        TimeSpan timeout,
+        CancellationToken ct,
+        bool appendConfiguredNewLine = true)
+    {
+        string logicalCommand = command.TrimEnd('\r', '\n', ' ');
+        var response = new TaskCompletionSource<string>(
+            logicalCommand,
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!TryBeginCommandTransaction(portName, response))
+            return "ERROR: Another command is already in progress";
+
+        try
+        {
+            if (appendConfiguredNewLine)
+            {
+                await WriteSautoCommandWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    command,
+                    ct);
+            }
+            else
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!serialPort.IsOpen)
+                    return "ERROR: Port not open";
+                AtCommandTraceLogger.Tx(portName, command);
+                serialPort.Write(command);
+            }
+
+            try
+            {
+                string result = await response.Task.WaitAsync(timeout, ct);
+                if (logicalCommand.Equals(
+                        "AT+CPIN?",
+                        StringComparison.OrdinalIgnoreCase)
+                    && IsSautoCpinReadyResponse(result))
+                {
+                    await CompleteSautoReadyTransitionWhileLockedAsync(
+                        portName,
+                        serialPort,
+                        ct);
+                }
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SAUTO_STEP_RESULT;command={logicalCommand};result={GetSautoResponseOutcome(result)}");
+                return result.Trim();
+            }
+            catch (TimeoutException)
+            {
+                response.TrySetCanceled();
+                AtCommandTraceLogger.Timeout(
+                    portName,
+                    $"RESPONSE:{logicalCommand}");
+                throw new TimeoutException(
+                    $"GSM không trả terminal frame cho '{logicalCommand}' trong {timeout.TotalSeconds:0.#} giây.");
+            }
+        }
+        finally
+        {
+            if (_commandTcs.TryGetValue(portName, out var current)
+                && ReferenceEquals(current, response))
+            {
+                _commandTcs.TryRemove(portName, out _);
+            }
+        }
+    }
+
+    private async Task CompleteSautoReadyTransitionWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        CancellationToken ct)
+    {
+        SautoReceiveState state = _sautoReceiveStates.GetOrAdd(
+            portName,
+            static _ => new SautoReceiveState());
+        bool shouldSendEsc;
+        lock (state.Sync)
+        {
+            shouldSendEsc = state.ReadyTransitionPending
+                && !_sautoResettingPorts.ContainsKey(portName);
+            state.ReadyTransitionPending = false;
+        }
+
+        if (!shouldSendEsc) return;
+
+        ct.ThrowIfCancellationRequested();
+        if (!serialPort.IsOpen)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                "CPIN_READY_ESC: Port not open");
+            return;
+        }
+
+        AtCommandTraceLogger.Tx(portName, "<ESC>");
+        serialPort.Write(new byte[] { 27 }, 0, 1);
+
+        // ESC has no terminal frame. This is the same guard interval used by
+        // SAuto before it allows the DataPort loop to send EGMR/ICCID next.
+        await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
+        AtCommandTraceLogger.State(
+            portName,
+            "SAUTO_SIM_READY_TRANSITION;esc=sent;next=GSM_RESPONSE_CHAIN");
+    }
+
+    private async Task<string> SendSautoCommandForResponseAsync(
+        string portName,
+        string command,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
+            || serialPort == null)
+        {
+            return "ERROR: Port not open";
+        }
+
+        if (!_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
+            return "ERROR: Semaphore missing";
+
+        await semaphore.WaitAsync(ct);
+        try
+        {
+            return await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                command,
+                timeout,
+                ct);
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+    }
+
+    private static async Task SendSautoWriteOnlyAsync(
+        string portName,
+        SerialPort serialPort,
+        SemaphoreSlim semaphore,
+        string command,
+        CancellationToken ct)
+    {
+        await semaphore.WaitAsync(ct);
+        try
+        {
+            // This is GSMController.sendAT: release the per-COM lock as soon as
+            // SerialPort.WriteLine completes. OK/ERROR is not a USSD gate.
+            await WriteSautoCommandWhileLockedAsync(
+                portName,
+                serialPort,
+                command,
+                ct);
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+    }
+
+    internal static bool HasSautoManualUssdPayloadForStage(
+        string? response,
+        string stage)
+    {
+        string value = response ?? string.Empty;
+        if (!Regex.IsMatch(
+                value,
+                @"\+CUSD:\s*\d+\s*,",
+                RegexOptions.IgnoreCase))
+            return false;
+
+        string normalizedStage = stage.Trim();
+        // VinaPhone's automatic *111# menu and manual *101# balance response
+        // can arrive close together.  Do not let a late *111# menu complete a
+        // *101# waiter (the exact race observed after Refresh on COM89/98/99).
+        if (string.Equals(normalizedStage, "*101#", StringComparison.Ordinal))
+            return Regex.IsMatch(value, @"\+CUSD:\s*0\s*,", RegexOptions.IgnoreCase);
+        if (string.Equals(normalizedStage, "*111#", StringComparison.Ordinal))
+            return Regex.IsMatch(value, @"\+CUSD:\s*1\s*,", RegexOptions.IgnoreCase);
+
+        return true;
+    }
+
+    private static string GetSautoResponseOutcome(string? response)
+    {
+        string value = response ?? string.Empty;
+        Match error = Regex.Match(
+            value,
+            @"\+(?:CME|CMS) ERROR:[^\r\n]*|\bERROR\b",
+            RegexOptions.IgnoreCase);
+        if (error.Success)
+            return error.Value.Trim();
+        if (Regex.IsMatch(value, @"(?:^|\r?\n)OK(?:\r?\n|$)"))
+            return "OK";
+        return string.IsNullOrWhiteSpace(value) ? "EMPTY" : "DATA";
+    }
+
+    private static bool IsSautoOkResponse(string? response) =>
+        Regex.IsMatch(
+            response ?? string.Empty,
+            @"(?:^|\r?\n)OK(?:\r?\n|$)")
+        && !Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+(?:CME|CMS) ERROR:|\bERROR\b",
+            RegexOptions.IgnoreCase);
+
+    private async Task<bool> SetAndConfirmRfFunctionalModeAsync(
+        string portName,
+        string operation,
+        int expectedMode,
+        CancellationToken ct)
+    {
+        string command = $"AT+CFUN={expectedMode}";
+        int commandTimeoutMs = expectedMode == 1 ? 15000 : 10000;
+        string lastCommandResponse = string.Empty;
+        string lastQueryResponse = string.Empty;
+
+        for (int attempt = 1;
+             attempt <= SautoAirplaneMaxAttempts;
+             attempt++)
+        {
+            lastCommandResponse = await SendCommandAsync(
+                portName,
+                command,
+                commandTimeoutMs,
+                silent: true,
+                ct: ct).ConfigureAwait(false);
+            AtCommandTraceLogger.State(
+                portName,
+                IsSautoOkResponse(lastCommandResponse)
+                    ? $"{operation}_RF_COMMAND_ACK;command={command};attempt={attempt}/{SautoAirplaneMaxAttempts}"
+                    : $"{operation}_RF_STEP_HOLD;step=CFUN{expectedMode}_ACK;attempt={attempt}/{SautoAirplaneMaxAttempts};result={GetSautoResponseOutcome(lastCommandResponse)};action=VERIFY_STATE");
+
+            // OK acknowledges receipt, not completion of the RF transition.
+            // Query only after the SAuto guard and advance solely on +CFUN: n.
+            await Task.Delay(SautoAirplanePreQueryDelay, ct)
+                .ConfigureAwait(false);
+            lastQueryResponse = await SendCommandAsync(
+                portName,
+                "AT+CFUN?",
+                5000,
+                silent: true,
+                ct: ct).ConfigureAwait(false);
+            int? mode = ParseSautoCfunMode(lastQueryResponse);
+            if (IsSautoOkResponse(lastQueryResponse)
+                && mode == expectedMode)
+            {
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"{operation}_RF_CFUN_CONFIRMED;mode={expectedMode};attempt={attempt}/{SautoAirplaneMaxAttempts}");
+                return true;
+            }
+
+            AtCommandTraceLogger.State(
+                portName,
+                $"{operation}_RF_STEP_HOLD;step=CFUN_QUERY_{expectedMode};attempt={attempt}/{SautoAirplaneMaxAttempts};mode={(mode?.ToString() ?? "NO_REPORT")};result={GetSautoResponseOutcome(lastQueryResponse)};action=RETRY_{command}");
+            if (attempt < SautoAirplaneMaxAttempts)
+            {
+                await Task.Delay(SautoAirplaneRetryDelay, ct)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        AtCommandTraceLogger.Error(
+            portName,
+            $"{operation}_RF_RECOVERY_FAILED;step=CFUN{expectedMode};command_result={GetSautoResponseOutcome(lastCommandResponse)};query_result={GetSautoResponseOutcome(lastQueryResponse)}");
+        return false;
+    }
+
+    private async Task<bool> RecoverSautoRadioServiceAsync(
+        string portName,
+        string operation,
+        string reason,
+        CancellationToken ct)
+    {
+        AtCommandTraceLogger.State(
+            portName,
+            $"{operation}_RF_RECOVERY_BEGIN;reason={reason}");
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = $"[{operation}_RF_RECOVERY] Đang khởi động lại riêng dịch vụ RF của cổng ({reason})."
+        });
+
+        string cancelUssd = await SendCommandAsync(
+            portName,
+            "AT+CUSD=2",
+            5000,
+            silent: true,
+            ct: ct).ConfigureAwait(false);
+        if (!IsSautoOkResponse(cancelUssd))
+        {
+            // Some firmware returns ERROR when no USSD session is open. That is
+            // already a terminal answer; RF cycling is still the deterministic
+            // way to clear the service, so do not abort recovery here.
+            AtCommandTraceLogger.State(
+                portName,
+                $"{operation}_RF_STEP_HOLD;step=CUSD2;result={GetSautoResponseOutcome(cancelUssd)};action=CONTINUE_CFUN4");
+        }
+        else
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"{operation}_RF_COMMAND_ACK;command=AT+CUSD=2");
+        }
+
+        if (!await SetAndConfirmRfFunctionalModeAsync(
+                portName,
+                operation,
+                expectedMode: 4,
+                ct).ConfigureAwait(false))
+            return false;
+
+        if (!await SetAndConfirmRfFunctionalModeAsync(
+                portName,
+                operation,
+                expectedMode: 1,
+                ct).ConfigureAwait(false))
+            return false;
+
+        for (int attempt = 1; attempt <= 15; attempt++)
+        {
+            string cops = await SendCommandAsync(
+                portName,
+                "AT+COPS?",
+                5000,
+                silent: true,
+                ct: ct).ConfigureAwait(false);
+            if (IsSautoOkResponse(cops)
+                && TryParseCopsResponse(cops, out _, out _))
+            {
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"{operation}_RF_RECOVERY_READY;cops_attempt={attempt}");
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[{operation}_RF_RECOVERY] Mạng đã đăng ký lại; cổng đã sẵn sàng."
+                });
+                return true;
+            }
+
+            AtCommandTraceLogger.State(
+                portName,
+                $"{operation}_RF_STEP_HOLD;step=COPS_REGISTERED;attempt={attempt}/15;result={GetSautoResponseOutcome(cops)}");
+
+            if (attempt < 15)
+                await Task.Delay(TimeSpan.FromSeconds(1), ct)
+                    .ConfigureAwait(false);
+        }
+
+        AtCommandTraceLogger.Error(
+            portName,
+            $"{operation}_RF_RECOVERY_FAILED;step=COPS_REGISTERED");
+        return false;
+    }
+
+    private async Task<string> RunSautoAutomaticUssdWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        string ussdCode,
+        CancellationToken ct)
+    {
+        long ussdRevision =
+            GetSautoReceiveSnapshot(portName).UssdRevision;
+
+        // Exact GSMController.runUSSD sequence: keep the UART lock for the
+        // whole sequence, but never gate progress on OK/ERROR/CME. The modem's
+        // asynchronous +CUSD is parsed independently by HandleDataReceived.
+        await WriteSautoCommandWhileLockedAsync(
+            portName,
+            serialPort,
+            "AT+CUSD=2",
+            ct);
+        await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        await WriteSautoCommandWhileLockedAsync(
+            portName,
+            serialPort,
+            $"AT+CUSD=1,\"{ussdCode}\",15\r",
+            ct);
+        await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+        SautoReceiveSnapshot completed =
+            GetSautoReceiveSnapshot(portName);
+        return completed.UssdRevision > ussdRevision
+            ? completed.UssdResponse
+            : "OK";
+    }
+
+    public async Task<string?> RunSautoManualUssdAsync(
+        string portName,
+        IReadOnlyList<string> stages,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+        ArgumentNullException.ThrowIfNull(stages);
+        if (stages.Count == 0
+            || stages.Any(string.IsNullOrWhiteSpace))
+            return null;
+
+        using IDisposable foregroundLease =
+            await AcquireForegroundOperationAsync(portName, "USSD", ct)
+                .ConfigureAwait(false);
+        using IDisposable backgroundLease =
+            SuspendPortBackgroundOperations(portName);
+        bool channelPrepared = false;
+        try
+        {
+            for (int cleanupAttempt = 1;
+                 cleanupAttempt <= 2 && !channelPrepared;
+                 cleanupAttempt++)
+            {
+                channelPrepared = await PrepareForegroundChannelAsync(
+                        portName,
+                        cleanupAttempt == 1 ? "USSD" : "USSD_CLEANUP_RETRY",
+                        ct)
+                    .ConfigureAwait(false);
+                if (!channelPrepared && cleanupAttempt == 1)
+                {
+                    AtCommandTraceLogger.State(
+                        portName,
+                        "USSD_CLEANUP_RETRY;reason=SMS_TERMINAL_PENDING");
+                }
+            }
+
+            if (!channelPrepared)
+                return "ERROR: Modem channel cleanup failed before USSD";
+
+            string? lastResponse = null;
+            bool ussdSessionAlreadyCancelled = true;
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                // Initial cleanup and successful RF recovery both acknowledge
+                // CUSD=2. Other retries close the previous request first.
+                if (!ussdSessionAlreadyCancelled)
+                {
+                    string cancelResponse = await SendCommandAsync(
+                        portName,
+                        "AT+CUSD=2",
+                        3000,
+                        silent: true,
+                        ct: ct).ConfigureAwait(false);
+                    if (!IsSautoOkResponse(cancelResponse))
+                    {
+                        lastResponse =
+                            $"ERROR: USSD cleanup failed ({GetSautoResponseOutcome(cancelResponse)})";
+                        continue;
+                    }
+                }
+                ussdSessionAlreadyCancelled = false;
+
+                bool timedOutWaitingForCusd = false;
+                for (int stageIndex = 0;
+                     stageIndex < stages.Count;
+                     stageIndex++)
+                {
+                    string stage = stages[stageIndex];
+                    long ussdRevision =
+                        GetSautoReceiveSnapshot(portName).UssdRevision;
+                    string requestResponse = await SendCommandAsync(
+                        portName,
+                        $"AT+CUSD=1,\"{stage}\",15",
+                        10000,
+                        silent: true,
+                        ct: ct).ConfigureAwait(false);
+                    if (!IsSautoOkResponse(requestResponse))
+                    {
+                        lastResponse =
+                            $"ERROR: USSD request rejected ({GetSautoResponseOutcome(requestResponse)})";
+                        break;
+                    }
+
+                    SautoReceiveSnapshot? completed =
+                        await WaitForSautoReceiveStateAsync(
+                            portName,
+                            snapshot =>
+                                snapshot.UssdRevision > ussdRevision
+                                && HasSautoManualUssdPayloadForStage(
+                                    snapshot.UssdResponse,
+                                    stage),
+                            SautoManualUssdResponseTimeout,
+                            ct);
+                    bool ussdStatus = completed != null;
+                    lastResponse = completed?.UssdResponse
+                        ?? "ERROR: Timeout waiting for +CUSD";
+
+                    if (!ussdStatus)
+                    {
+                        timedOutWaitingForCusd = true;
+                        break;
+                    }
+
+                    if (ussdStatus
+                        && stageIndex == stages.Count - 1)
+                    {
+                        return lastResponse;
+                    }
+
+                }
+
+                if (timedOutWaitingForCusd && attempt == 0)
+                {
+                    bool radioRecovered = await RecoverSautoRadioServiceAsync(
+                            portName,
+                            "USSD",
+                            "ACK_WITHOUT_CUSD",
+                            ct)
+                        .ConfigureAwait(false);
+                    if (!radioRecovered)
+                    {
+                        lastResponse = "ERROR: USSD RF recovery failed";
+                        break;
+                    }
+
+                    channelPrepared = await PrepareForegroundChannelAsync(
+                            portName,
+                            "USSD_AFTER_RF_RECOVERY",
+                            ct)
+                        .ConfigureAwait(false);
+                    if (!channelPrepared)
+                    {
+                        lastResponse = "ERROR: Modem channel cleanup failed after USSD RF recovery";
+                        break;
+                    }
+
+                    ussdSessionAlreadyCancelled = true;
+                }
+            }
+
+            return lastResponse;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"MANUAL_USSD: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            // Cleanup is part of the same per-COM workflow and therefore finishes
+            // before SMS/call/background polling can use this channel again.
+            try
+            {
+                if (channelPrepared)
+                {
+                    await PrepareForegroundChannelAsync(
+                        portName,
+                        "IDLE_AFTER_USSD",
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // The primary result is preserved; the next queued workflow will
+                // run the same fail-closed cleanup before transmitting anything.
+            }
+        }
+    }
+
     public async Task<string> SendCommandAsync(
         string portName,
         string command,
@@ -7531,11 +8570,6 @@ public class GsmModemService : IGsmModemService
         bool silent = false,
         CancellationToken ct = default)
     {
-        if (Regex.IsMatch(command, @"^AT\+CFUN\s*=\s*[04](?:\D|$)", RegexOptions.IgnoreCase))
-            _simStackDisabledByTool[portName] = true;
-        else if (Regex.IsMatch(command, @"^AT\+CFUN\s*=\s*1(?:\D|$)", RegexOptions.IgnoreCase))
-            _simStackDisabledByTool[portName] = false;
-
         // Kéo dài thời gian chờ cho các lệnh đặc biệt
         // CUSD=1 opens an asynchronous network session. CUSD=2 only closes it and
         // must complete immediately on OK instead of waiting for a +CUSD payload.
@@ -7563,11 +8597,12 @@ public class GsmModemService : IGsmModemService
         bool lockAcquired = await semaphore.WaitAsync(timeoutMs, ct);
         if (!lockAcquired)
         {
+            AtCommandTraceLogger.Timeout(portName, $"LOCK:{command}");
             return "ERROR: Timeout waiting for lock";
         }
 
         var tcs = new TaskCompletionSource<string>(command, TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commandTcs.TryAdd(portName, tcs))
+        if (!TryBeginCommandTransaction(portName, tcs))
         {
             semaphore.Release();
             return "ERROR: Another command is already in progress";
@@ -7580,7 +8615,8 @@ public class GsmModemService : IGsmModemService
             // HandleDataReceived already removes completed command frames.
 
             if (!silent) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> {command}" });
-            
+
+            AtCommandTraceLogger.Tx(portName, command + "\r\n");
             sp.Write(command + "\r\n");
             
             // Mỗi COM có TCS + semaphore riêng. Cancellation chỉ dừng lệnh của
@@ -7593,6 +8629,7 @@ public class GsmModemService : IGsmModemService
             catch (TimeoutException)
             {
                 tcs.TrySetCanceled();
+                AtCommandTraceLogger.Timeout(portName, command);
                 return "ERROR: Timeout (Thiết bị không phản hồi OK/ERROR)";
             }
 
@@ -7601,6 +8638,7 @@ public class GsmModemService : IGsmModemService
         }
         catch (IOException ex)
         {
+            AtCommandTraceLogger.Error(portName, $"{command}: {ex.Message}");
             PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Cáp bị rút khi đang gửi lệnh!" });
             return $"ERROR: Rút cáp đột ngột - {ex.Message}";
         }
@@ -7632,11 +8670,12 @@ public class GsmModemService : IGsmModemService
         bool lockAcquired = await semaphore.WaitAsync(timeoutMs);
         if (!lockAcquired)
         {
+            AtCommandTraceLogger.Timeout(portName, "LOCK:[RAW]");
             return "ERROR: Timeout waiting for lock";
         }
 
         var tcs = new TaskCompletionSource<string>("RAW_DATA", TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commandTcs.TryAdd(portName, tcs))
+        if (!TryBeginCommandTransaction(portName, tcs))
         {
             semaphore.Release();
             return "ERROR: Another command is already in progress";
@@ -7645,7 +8684,8 @@ public class GsmModemService : IGsmModemService
         try
         {
             if (!silent) LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> [RAW] {data}" });
-            
+
+            AtCommandTraceLogger.Tx(portName, $"[RAW] {data}");
             sp.Write(data);
             
             var timeoutTask = Task.Delay(timeoutMs);
@@ -7654,6 +8694,7 @@ public class GsmModemService : IGsmModemService
             if (completedTask == timeoutTask)
             {
                 tcs.TrySetCanceled();
+                AtCommandTraceLogger.Timeout(portName, "[RAW]");
                 return "ERROR: Timeout waiting for response after raw data";
             }
             
@@ -7685,7 +8726,10 @@ public class GsmModemService : IGsmModemService
     private const int MaxUcs2PartLength = 70;
     private const int MaxUcs2ChunkBodyLength = 60;
     private const int MinimumSmsPayloadTimeoutMs = 90_000;
+    private const int SmsStopTerminalDrainTimeoutMs = 15_000;
     internal const string SmsPayloadSubmittedMarker = "[SMS_PAYLOAD_SUBMITTED]";
+    internal const string SmsChannelRecoveryRequiredMarker =
+        "[SMS_CHANNEL_RECOVERY_REQUIRED]";
 
     internal static int GetSmsPayloadTimeoutMs(int requestedTimeoutMs) =>
         Math.Max(requestedTimeoutMs, MinimumSmsPayloadTimeoutMs);
@@ -7706,6 +8750,32 @@ public class GsmModemService : IGsmModemService
         if (!GsmDestination.TryNormalizeSms(phoneNumber, out phoneNumber))
             return "ERROR: Invalid SMS destination";
 
+        using IDisposable foregroundLease =
+            await AcquireForegroundOperationAsync(portName, "SMS", ct)
+                .ConfigureAwait(false);
+        using IDisposable backgroundLease =
+            SuspendPortBackgroundOperations(portName);
+        bool channelPrepared = false;
+        bool radioRecoveryRequired = false;
+        string TrackSmsResult(string result)
+        {
+            if (result.Contains(
+                    SmsChannelRecoveryRequiredMarker,
+                    StringComparison.Ordinal))
+            {
+                radioRecoveryRequired = true;
+            }
+            return result;
+        }
+        try
+        {
+            channelPrepared = await PrepareForegroundChannelAsync(
+                    portName,
+                    "SMS",
+                    ct).ConfigureAwait(false);
+            if (!channelPrepared)
+                return "ERROR: Modem channel cleanup failed before SMS";
+
         // Kiểm tra xem message có ký tự nằm ngoài bảng mã GSM cơ bản hay không
         // (Sử dụng cách kiểm tra đơn giản: nếu có bất kỳ ký tự nào > 127 thì coi là Unicode)
         bool isGsm = (message ?? "").All(c => c <= 127);
@@ -7714,16 +8784,23 @@ public class GsmModemService : IGsmModemService
 
         if (string.IsNullOrEmpty(message) || message.Length <= maxLen)
         {
-            return await SendSmsPartAsync(portName, phoneNumber, message ?? "", isGsm, timeoutMs, ct);
+            return TrackSmsResult(await SendSmsPartAsync(
+                portName, phoneNumber, message ?? "", isGsm, timeoutMs, ct));
         }
 
         var chunks = SplitMessageIntoChunks(message, maxChunk);
         int total = chunks.Count;
         var results = new List<string>();
+        int confirmedParts = 0;
 
         for (int i = 0; i < total; i++)
         {
-            if (ct.IsCancellationRequested) return "ERROR: SMS operation cancelled";
+            if (ct.IsCancellationRequested)
+            {
+                return TrackSmsResult(confirmedParts > 0
+                    ? $"ERROR: {SmsPayloadSubmittedMarker} Multipart SMS cancelled after {confirmedParts}/{total} confirmed parts; do not retry the whole message"
+                    : "ERROR: SMS operation cancelled");
+            }
             string partBody = $"[{i + 1}/{total}] {chunks[i]}";
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[SMS_MULTIPART] Đang gửi đoạn {i + 1}/{total}..." });
 
@@ -7732,18 +8809,66 @@ public class GsmModemService : IGsmModemService
 
             if (resp.Contains("ERROR"))
             {
-                return $"ERROR: Gửi thất bại ở đoạn {i + 1}/{total} - {resp}";
+                if (confirmedParts > 0
+                    || resp.Contains(
+                        SmsPayloadSubmittedMarker,
+                        StringComparison.Ordinal))
+                {
+                    return TrackSmsResult($"ERROR: {SmsPayloadSubmittedMarker} Multipart SMS stopped after {confirmedParts}/{total} confirmed parts; part {i + 1}: {resp}");
+                }
+                return TrackSmsResult($"ERROR: Gửi thất bại ở đoạn {i + 1}/{total} - {resp}");
             }
+            confirmedParts++;
 
             // Chờ 1.5s giữa các đoạn để mạng có thể nhận đúng thứ tự
             if (i < total - 1)
             {
                 try { await Task.Delay(1500, ct); }
-                catch (OperationCanceledException) { return "ERROR: SMS operation cancelled"; }
+                catch (OperationCanceledException)
+                {
+                    return TrackSmsResult($"ERROR: {SmsPayloadSubmittedMarker} Multipart SMS cancelled after {confirmedParts}/{total} confirmed parts; do not retry the whole message");
+                }
             }
         }
 
         return $"OK (Đã gửi {total} đoạn thành công)";
+        }
+        finally
+        {
+            try
+            {
+                if (channelPrepared)
+                {
+                    if (radioRecoveryRequired)
+                    {
+                        bool recovered = await RecoverSautoRadioServiceAsync(
+                                portName,
+                                "SMS",
+                                "CANCELLED_AFTER_CTRL_Z",
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
+                        if (!recovered)
+                        {
+                            AtCommandTraceLogger.Error(
+                                portName,
+                                "SMS_STOP_RECOVERY_FAILED;next_operation_must_clean=true");
+                        }
+                    }
+
+                    await PrepareForegroundChannelAsync(
+                        portName,
+                        radioRecoveryRequired
+                            ? "IDLE_AFTER_SMS_STOP_RECOVERY"
+                            : "IDLE_AFTER_SMS",
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Never resend an irreversible payload. The next queued
+                // operation must pass its own cleanup before transmitting.
+            }
+        }
     }
 
     private static List<string> SplitMessageIntoChunks(string message, int maxBodyLength)
@@ -7791,6 +8916,7 @@ public class GsmModemService : IGsmModemService
 
         TaskCompletionSource<string>? tcs = null;
         bool payloadSubmitted = false;
+        bool channelRecoveryRequired = false;
 
         async Task<string> SendInnerAsync(
             string cmd,
@@ -7799,10 +8925,11 @@ public class GsmModemService : IGsmModemService
         {
             token.ThrowIfCancellationRequested();
             var innerTcs = new TaskCompletionSource<string>(cmd, TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!_commandTcs.TryAdd(portName, innerTcs))
+            if (!TryBeginCommandTransaction(portName, innerTcs))
                 return "ERROR: Another command is already in progress";
             try
             {
+                AtCommandTraceLogger.Tx(portName, cmd);
                 sp.Write(cmd + "\r");
                 Task completed = await Task.WhenAny(innerTcs.Task, Task.Delay(commandTimeoutMs, token));
                 token.ThrowIfCancellationRequested();
@@ -7828,9 +8955,10 @@ public class GsmModemService : IGsmModemService
                 Data = "[SMS_RECOVERY] Quá hạn chờ phản hồi gửi; đang thoát chế độ nhập SMS và đồng bộ lại modem..."
             });
 
-            // ESC chỉ hủy trạng thái nhập còn treo, không gửi lại payload nên không tạo SMS trùng.
-            // Đăng ký probe ngay sau ESC để không bỏ mất +CMGS/OK nếu xác nhận đến muộn.
-            try { if (sp.IsOpen) sp.Write("\x1B"); } catch { }
+            // Ctrl+Z has already ended text-entry mode. Sending ESC here cannot
+            // recall the submitted payload and can make a late +CMS response leak
+            // into the next workflow. Probe command mode directly and let the
+            // outer workflow reset RF only if acknowledged probes cannot clean it.
 
             int consecutiveCleanProbes = 0;
             for (int attempt = 1; attempt <= 4; attempt++)
@@ -7902,11 +9030,12 @@ public class GsmModemService : IGsmModemService
             }
 
             tcs = new TaskCompletionSource<string>("AT+CMGS", TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!_commandTcs.TryAdd(portName, tcs))
+            if (!TryBeginCommandTransaction(portName, tcs))
             {
                 return "ERROR: Another command is already in progress";
             }
 
+            AtCommandTraceLogger.Tx(portName, $"AT+CMGS=\"{phoneNumber}\"");
             sp.Write($"AT+CMGS=\"{phoneNumber}\"\r");
 
             int promptTimeoutMs = Math.Clamp(timeoutMs / 3, 5000, 10000);
@@ -7919,7 +9048,15 @@ public class GsmModemService : IGsmModemService
                 // Abort text-entry mode before the outer SMS service retries. Without
                 // ESC, a late prompt makes the next AT command part of the SMS body and
                 // leaves the modem stuck until the following cooldown.
-                try { if (sp.IsOpen) sp.Write("\x1B"); } catch { }
+                try
+                {
+                    if (sp.IsOpen)
+                    {
+                        AtCommandTraceLogger.Tx(portName, "<ESC>");
+                        sp.Write("\x1B");
+                    }
+                }
+                catch { }
                 await Task.Delay(200, ct);
                 return "ERROR: Timeout waiting for > prompt";
             }
@@ -7934,7 +9071,7 @@ public class GsmModemService : IGsmModemService
                 _commandTcs.TryRemove(portName, out _);
             
             tcs = new TaskCompletionSource<string>("SMS_PAYLOAD", TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!_commandTcs.TryAdd(portName, tcs))
+            if (!TryBeginCommandTransaction(portName, tcs))
                 return "ERROR: Another command is already in progress";
 
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"> {message}" });
@@ -7942,11 +9079,17 @@ public class GsmModemService : IGsmModemService
 
             if (isGsm)
             {
+                AtCommandTraceLogger.Tx(
+                    portName,
+                    $"[SMS_PAYLOAD chars={message.Length}]<CTRL-Z>");
                 sp.Write(message + "\x1A");
             }
             else
             {
                 string hexMessage = BitConverter.ToString(Encoding.BigEndianUnicode.GetBytes(message)).Replace("-", "");
+                AtCommandTraceLogger.Tx(
+                    portName,
+                    $"[SMS_UCS2_PAYLOAD hex_chars={hexMessage.Length}]<CTRL-Z>");
                 sp.Write(hexMessage + "\x1A");
             }
             // SerialPort.Write returning after Ctrl+Z is the irreversible
@@ -7956,14 +9099,34 @@ public class GsmModemService : IGsmModemService
 
             // Sau Ctrl+Z, nhà mạng/modem có thể cần lâu mới trả +CMGS/OK. Chờ tối thiểu
             // 90 giây; nếu vẫn quá hạn thì không retry vì SMS có thể đã được nhận.
-            timeoutTask = Task.Delay(GetSmsPayloadTimeoutMs(timeoutMs), ct);
-            completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
-            if (completedTask == timeoutTask)
+            // Cancellation stops future queue items, but Ctrl+Z is irreversible.
+            // Keep this COM lease and drain the terminal SMS response briefly so
+            // +CMGS/+CMS can never be consumed by the following USSD transaction.
+            Task payloadTimeoutTask = Task.Delay(GetSmsPayloadTimeoutMs(timeoutMs));
+            Task cancellationSignal = ct.CanBeCanceled
+                ? Task.Delay(Timeout.InfiniteTimeSpan, ct)
+                : Task.Delay(Timeout.InfiniteTimeSpan);
+            completedTask = await Task.WhenAny(
+                tcs.Task,
+                payloadTimeoutTask,
+                cancellationSignal);
+
+            bool cancelledAfterSubmit = completedTask == cancellationSignal;
+            if (cancelledAfterSubmit)
             {
-                ct.ThrowIfCancellationRequested();
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SMS_STOP_AFTER_CTRL_Z_WAIT_TERMINAL;timeout_ms={SmsStopTerminalDrainTimeoutMs}");
+                completedTask = await Task.WhenAny(
+                    tcs.Task,
+                    Task.Delay(SmsStopTerminalDrainTimeoutMs));
+            }
+
+            if (completedTask != tcs.Task)
+            {
                 tcs.TrySetCanceled();
 
-                // Gỡ TCS cũ trước khi phục hồi. Nếu để nguyên, ERROR/OK do ESC hoặc AT
+                // Gỡ TCS cũ trước khi phục hồi. Nếu để nguyên, ERROR/OK do AT
                 // có thể bị nhận nhầm thành kết quả của payload đã quá hạn.
                 if (_commandTcs.TryGetValue(portName, out var pendingPayload)
                     && ReferenceEquals(pendingPayload, tcs))
@@ -7975,21 +9138,52 @@ public class GsmModemService : IGsmModemService
                 if (!string.IsNullOrWhiteSpace(lateSubmitConfirmation))
                     return lateSubmitConfirmation;
 
+                string terminalReason = cancelledAfterSubmit
+                    ? "SMS operation cancelled after Ctrl+Z without terminal response"
+                    : "Timeout sending SMS payload";
                 if (!recovered)
-                    return $"ERROR: {SmsPayloadSubmittedMarker} Timeout sending SMS payload; SMS channel recovery failed";
+                {
+                    channelRecoveryRequired = true;
+                    return $"ERROR: {SmsPayloadSubmittedMarker} {SmsChannelRecoveryRequiredMarker} {terminalReason}; SMS channel recovery failed";
+                }
 
-                return $"ERROR: {SmsPayloadSubmittedMarker} Timeout sending SMS payload";
+                return $"ERROR: {SmsPayloadSubmittedMarker} {terminalReason}";
             }
 
             string finalResp = await tcs.Task;
+            if (cancelledAfterSubmit)
+            {
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SMS_STOP_AFTER_CTRL_Z_TERMINAL;result={GetSautoResponseOutcome(finalResp)}");
+            }
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"< {finalResp.Trim()}" });
             return finalResp.Trim();
         }
         catch (OperationCanceledException)
         {
-            try { if (sp.IsOpen) sp.Write("\x1B"); } catch { }
+            if (!payloadSubmitted)
+            {
+                try
+                {
+                    if (sp.IsOpen)
+                    {
+                        AtCommandTraceLogger.Tx(portName, "<ESC>");
+                        sp.Write("\x1B");
+                    }
+                }
+                catch { }
+            }
+            else
+            {
+                // Ctrl+Z already handed the payload to the modem. ESC cannot
+                // recall it and was the cause of late +CMS frames corrupting
+                // the next call/USSD workflow. The outer SMS workflow performs
+                // a bounded RF recovery before releasing this COM.
+                channelRecoveryRequired = true;
+            }
             return payloadSubmitted
-                ? $"ERROR: {SmsPayloadSubmittedMarker} SMS operation cancelled after Ctrl+Z"
+                ? $"ERROR: {SmsPayloadSubmittedMarker} {SmsChannelRecoveryRequiredMarker} SMS operation cancelled after Ctrl+Z"
                 : "ERROR: SMS operation cancelled before Ctrl+Z";
         }
         catch (IOException ex)
@@ -8001,8 +9195,10 @@ public class GsmModemService : IGsmModemService
         }
         catch (Exception ex)
         {
+            if (payloadSubmitted)
+                channelRecoveryRequired = true;
             return payloadSubmitted
-                ? $"ERROR: {SmsPayloadSubmittedMarker} Lỗi sau Ctrl+Z - {ex.Message}"
+                ? $"ERROR: {SmsPayloadSubmittedMarker} {SmsChannelRecoveryRequiredMarker} Lỗi sau Ctrl+Z - {ex.Message}"
                 : $"ERROR: {ex.Message}";
         }
         finally
@@ -8010,18 +9206,35 @@ public class GsmModemService : IGsmModemService
             if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
                 _commandTcs.TryRemove(portName, out _);
 
-            // Restore CSCS về UCS2 để nhận tin nhắn tiếng Việt đúng
-            // KHÔNG reset AT+CSMP vì CSMP ảnh hưởng cả nhận tin (DCS field).
-            // Modem init đã set CMGF=1 + CSCS=UCS2 là đủ cho receive.
-            if (_serialPorts.TryGetValue(portName, out var sp2) && sp2.IsOpen)
+            // Always return the modem to the same live receive mode used by the
+            // SAuto initialization. Leaving Quectel in CMGF=0 after an outgoing
+            // SMS made later inbound records wait in storage or take the slower
+            // PDU fallback path until another +CMTI happened to wake the reader.
+            if (!channelRecoveryRequired
+                && _serialPorts.TryGetValue(portName, out var sp2)
+                && sp2.IsOpen)
             {
+                foreach (string restoreCommand in SmsReceiveRestoreCommandOrder)
+                    await SendInnerAsync(
+                        restoreCommand,
+                        CancellationToken.None);
                 if (GetModemProfile(portName)?.IsQuectel == true)
-                    await SendInnerAsync("AT+CMGF=0");
-                else
-                    await SendInnerAsync("AT+CSCS=\"UCS2\"");
+                {
+                    await SendInnerAsync(
+                        "AT+QURCCFG=\"urcport\",\"uart1\"",
+                        CancellationToken.None);
+                }
             }
 
             semaphore.Release();
+            // This worker waits for the SMS foreground/background leases to be
+            // released, then drains anything that arrived while CMGS owned UART.
+            ScheduleSafeUnreadSmsSweep(
+                portName,
+                channelRecoveryRequired
+                    ? "outgoing-sms-channel-recovery"
+                    : "outgoing-sms-finished",
+                initialDelayMs: 250);
         }
     }
 
@@ -8219,28 +9432,90 @@ public class GsmModemService : IGsmModemService
     public async Task SweepUnreadSmsAsync(string portName)
     {
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return;
-        if (_suspendedBackgroundPorts.ContainsKey(portName)
-            || IsCallInProgress(portName)
-            || _commandTcs.ContainsKey(portName))
+        if (!IsSmsReceiveMaintenanceEnabled(portName))
         {
+            ScheduleSafeUnreadSmsSweep(
+                portName,
+                "sweep-held-until-sauto-ready");
+            return;
+        }
+        if (_suspendedBackgroundPorts.ContainsKey(portName)
+            || IsCallInProgress(portName))
+        {
+            ScheduleSafeUnreadSmsSweep(
+                portName,
+                "sweep-deferred-busy-port",
+                initialDelayMs: 250);
+            return;
+        }
+
+        // One global turn across every COM. Recovery sweeps and periodic
+        // watchdog probes cannot issue CMGL concurrently on a 64-port rig.
+        using IDisposable scanTurn =
+            await AcquireSmsScanTurnAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+        if (!CanRunSmsScanTurn(portName))
+        {
+            ScheduleSafeUnreadSmsSweep(
+                portName,
+                "sweep-deferred-until-next-round-robin-turn",
+                initialDelayMs: 1000);
             return;
         }
 
         SemaphoreSlim sweepLock = _smsSweepLocks.GetOrAdd(portName, static _ => new SemaphoreSlim(1, 1));
-        if (!await sweepLock.WaitAsync(0)) return;
+        await sweepLock.WaitAsync();
 
-        long generation = CurrentSmsGeneration(portName);
         try
         {
+            using IDisposable foregroundLease =
+                await AcquireForegroundOperationAsync(
+                    portName,
+                    "SMS_SWEEP",
+                    CancellationToken.None).ConfigureAwait(false);
+            // State may have changed while this recovery waited behind a user
+            // operation. Defer without dropping the request.
+            if (!IsSmsReceiveMaintenanceEnabled(portName)
+                || _suspendedBackgroundPorts.ContainsKey(portName)
+                || IsCallInProgress(portName))
+            {
+                ScheduleSafeUnreadSmsSweep(
+                    portName,
+                    "sweep-deferred-after-foreground-wait",
+                    initialDelayMs: 250);
+                return;
+            }
+
+            using IDisposable backgroundLease =
+                SuspendPortBackgroundOperations(portName);
+            if (!_serialPorts.TryGetValue(portName, out sp)
+                || !sp.IsOpen
+                || !IsSmsReceiveMaintenanceEnabled(portName))
+                return;
+
+            long generation = CurrentSmsGeneration(portName);
+
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Đang quét tin nhắn tồn đọng (Sweep)..." });
 
             // Re-assert receive mode on every recovery sweep. SMS sending and some
             // EC20 firmware revisions can leave CMGF/CNMI/URC routing changed; without
             // this, the SIM stores the message but no +CMTI reaches the application.
-            await SendCommandAsync(portName, "AT+CMGF=1", 5000, silent: true);
-            await SendCommandAsync(portName, "AT+CNMI=1,1,0,0,0", 5000, silent: true);
+            foreach (string restoreCommand in SmsReceiveRestoreCommandOrder)
+            {
+                if (!IsSmsReceiveMaintenanceEnabled(portName))
+                    return;
+                await SendCommandAsync(
+                    portName,
+                    restoreCommand,
+                    5000,
+                    silent: true);
+            }
             if (GetModemProfile(portName)?.IsQuectel == true)
+            {
+                if (!IsSmsReceiveMaintenanceEnabled(portName))
+                    return;
                 await SendCommandAsync(portName, "AT+QURCCFG=\"urcport\",\"uart1\"", 5000, silent: true);
+            }
 
             // ALL is intentional: CMGR marks a multipart segment REC READ before the remaining
             // segments arrive. Scanning only REC UNREAD loses that segment after restart.
@@ -8251,6 +9526,8 @@ public class GsmModemService : IGsmModemService
             // SIM until a modem/app restart happened to flush the state.  Keep the
             // command consistent with the selected mode for all profiles.
             const string command = "AT+CMGL=\"ALL\"";
+            if (!IsSmsReceiveMaintenanceEnabled(portName))
+                return;
             string sweepResponse = await SendCommandAsync(portName, command, 25000, silent: true);
             if (IsCommandFailure(sweepResponse)
                 && GetModemProfile(portName)?.IsQuectel == true)
@@ -8259,7 +9536,8 @@ public class GsmModemService : IGsmModemService
                 // after a previous PDU operation. Fall back once to PDU mode;
                 // HandleDataReceived can route the returned PDU records through
                 // the same QCMGR/CMGR decoder without dropping them.
-                if (TryGetSmsScope(portName, generation, out string scope))
+                if (IsSmsReceiveMaintenanceEnabled(portName)
+                    && TryGetSmsScope(portName, generation, out string scope))
                 {
                     TrustedPduSnapshot fallback =
                         await CaptureTrustedPduSnapshotAsync(
@@ -8283,7 +9561,8 @@ public class GsmModemService : IGsmModemService
             // Cứu các tin bị chẻ nhóm theo người gửi trước khi hẹn replay: nhóm
             // vừa được ghép đủ mảnh sẽ được chính lượt replay này đẩy vào inbox.
             TryRepairMultipartJournal(portName);
-            await ReportSimStorageUsageAsync(portName);
+            if (IsSmsReceiveMaintenanceEnabled(portName))
+                await ReportSimStorageUsageAsync(portName);
             if (TryGetSmsScope(
                     portName, generation, out string replayScope))
                 ScheduleCompletedMultipartReplay(
@@ -8424,6 +9703,10 @@ public class GsmModemService : IGsmModemService
             || !GsmDestination.TryNormalizeDial(phoneNumber, out string cleanPhone))
             return false;
 
+        using IDisposable foregroundLease =
+            await AcquireForegroundOperationAsync(portName, "CALL", ct)
+                .ConfigureAwait(false);
+
         if (!_outgoingCallOperations.TryAdd(portName, 0))
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs
@@ -8438,10 +9721,18 @@ public class GsmModemService : IGsmModemService
         var endSignal = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _outgoingCallEndSignals[portName] = endSignal;
         using IDisposable backgroundLease = SuspendPortBackgroundOperations(portName);
+        bool channelPrepared = false;
         bool recordingStarted = false;
         string? recordingRemoteName = null;
         try
         {
+            channelPrepared = await PrepareForegroundChannelAsync(
+                    portName,
+                    "CALL",
+                    ct).ConfigureAwait(false);
+            if (!channelPrepared)
+                return false;
+
             // Giữ đúng luồng đã chạy ổn định ở nhánh dev: không đổi chế độ mạng,
             // không preflight CREG/CEREG/QNWINFO và không chờ CLCC 45 giây.
             string? remoteWavName = null;
@@ -8606,7 +9897,6 @@ public class GsmModemService : IGsmModemService
                     Data = $"[CALL_NO_ACTIVE_SESSION] ATD chưa tạo phiên ACTIVE (voiceSeen={sawOutgoingVoiceSession}; CLCC={lastClcc}). Cuộc gọi được đánh dấu thất bại."
                 });
                 await HangUpAndConfirmCallEndedAsync(portName, durationSeconds);
-                _ = LogVoiceFailureDiagnosticsAsync(portName, "NO ACTIVE SESSION");
                 return false;
             }
 
@@ -8623,8 +9913,6 @@ public class GsmModemService : IGsmModemService
                         PortName = portName,
                         Data = $"[CALL] Cuộc gọi kết thúc sớm: {reason}."
                     });
-                    if (reason is "NO CARRIER" or "BUSY" or "NO ANSWER")
-                        _ = LogVoiceFailureDiagnosticsAsync(portName, reason);
                     await HangUpAndConfirmCallEndedAsync(portName, durationSeconds);
                     return false;
                 }
@@ -8689,6 +9977,22 @@ public class GsmModemService : IGsmModemService
             if (_outgoingCallEndSignals.TryGetValue(portName, out var currentSignal)
                 && ReferenceEquals(currentSignal, endSignal))
                 _outgoingCallEndSignals.TryRemove(portName, out _);
+
+            try
+            {
+                if (channelPrepared)
+                {
+                    await PrepareForegroundChannelAsync(
+                        portName,
+                        "IDLE_AFTER_CALL",
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                // Keep the original call result. A queued workflow still has to
+                // pass its own cleanup before it can transmit.
+            }
             _outgoingCallOperations.TryRemove(portName, out _);
         }
     }
@@ -8906,6 +10210,10 @@ public class GsmModemService : IGsmModemService
     {
         _activeCalls[portName] = false;
         _incomingCallNotifications.TryRemove(portName, out _);
+        // Generic NO CARRIER/BUSY/NO ANSWER reaches this method for outgoing
+        // calls too. Queue receive recovery before checking _incomingCalls;
+        // previously outgoing-only calls returned here and never restored SMS.
+        ScheduleSafeUnreadSmsSweep(portName, "voice-call-ended", 250);
         if (!_incomingCalls.TryRemove(portName, out var session))
         {
             ScheduleIncomingCallRecordingFinalization(portName);
@@ -8915,10 +10223,6 @@ public class GsmModemService : IGsmModemService
         session.EndedAt = DateTime.Now;
         IncomingCallEnded?.Invoke(this, session);
         ScheduleIncomingCallRecordingFinalization(portName);
-        // A call can interrupt CMGR/CMGL and consume the serial command lock.
-        // Start a bounded recovery sweep as soon as the call is over instead of
-        // waiting for the next 15/90-second background cycle.
-        ScheduleSafeUnreadSmsSweep(portName, "incoming-call-ended", 250);
         await Task.CompletedTask;
     }
 

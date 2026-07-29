@@ -1,5 +1,4 @@
 using gsm.Services;
-using gsm.ViewModels;
 
 namespace gsm.Tests;
 
@@ -22,189 +21,320 @@ public sealed class SautoInitializationSequenceTests
             "AT+QURCCFG=\"urcport\",\"uart1\"",
             "AT+CMGF=1",
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
+            "AT+CMGD=1,4",
             "AT+CPMS=\"ME\",\"ME\",\"ME\"",
+            "AT+CMGD=1,4",
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
             "AT+CPMS?",
             "AT+CNMI=1,1,0,0,0",
             "AT+QCFG=\"nwscanmode\",0,1",
             "AT+QURCCFG=\"urcport\",\"uart1\"",
-            "AT+CUSD=1",
             "AT+CPIN?"
         ];
 
         Assert.Equal(expected, GsmModemService.SautoInitializationCommandOrder);
-        Assert.DoesNotContain(GsmModemService.SautoInitializationCommandOrder, command =>
-            command.Equals("AT+CMGD=1,4", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(2, expected.Count(command =>
+            command.Equals("AT+CMGD=1,4", StringComparison.OrdinalIgnoreCase)));
+        Assert.DoesNotContain("AT+CUSD=1", expected);
+        Assert.DoesNotContain(expected, command =>
+            command.Contains("QSIMSTAT", StringComparison.OrdinalIgnoreCase)
+            || command == "AT+CFUN=0");
     }
 
     [Fact]
-    public void InitialUssdCommandOrder_MatchesCapturedSautoSequence()
+    public void InitialUssdCommandOrder_ContainsOnlyCapturedCommands()
     {
-        string[] expected111 =
-        [
-            "AT+CUSD=2",
-            "AT+CUSD=1",
-            "AT+CUSD=1,\"*111#\",15"
-        ];
-        string[] expected101 =
-        [
-            "AT+CUSD=2",
-            "AT+CUSD=1",
-            "AT+CUSD=1,\"002A0031003000310023\",15"
-        ];
-
-        Assert.Equal(expected111, MainViewModel.SautoInitial111CommandOrder);
-        Assert.Equal(expected101, MainViewModel.SautoInitial101CommandOrder);
-        Assert.DoesNotContain(MainViewModel.SautoInitial111CommandOrder, command =>
-            command.Contains("*101#", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("CREG", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("COPS=", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("ims", StringComparison.OrdinalIgnoreCase)
-            || command.Contains("CFUN", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            ["AT+CUSD=2", "AT+CUSD=1,\"*111#\",15"],
+            GsmModemService.SautoInitial111CommandOrder);
+        Assert.Equal(
+            ["AT+CUSD=2", "AT+CUSD=1,\"*101#\",15"],
+            GsmModemService.SautoInitial101CommandOrder);
     }
+
+    [Fact]
+    public void NetworkDataPortCycle_MatchesDecompiledSautoCommandsAndGuards()
+    {
+        Assert.Equal(
+        [
+            "AT+CPIN? \r",
+            "AT+CSQ \r",
+            "AT+COPS?"
+        ], GsmModemService.SautoNetworkPollingCommandOrder);
+        Assert.Equal(
+            TimeSpan.FromSeconds(10),
+            GsmModemService.SautoImeiResetGuardDelay);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(500),
+            GsmModemService.SautoImeiWriteGuardDelay);
+        Assert.Equal(5, GsmModemService.SautoImeiReadMaxAttempts);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(100),
+            GsmModemService.SautoImeiReadInitialDelay);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(100),
+            GsmModemService.SautoImeiReadPollDelay);
+        Assert.Equal(
+            TimeSpan.FromSeconds(12),
+            GsmModemService.SautoImeiReadTimeout);
+        Assert.Equal(
+            TimeSpan.FromSeconds(1),
+            GsmModemService.SautoImeiReadRetryDelay);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(100),
+            GsmModemService.SautoDataPortStepDelay);
+        Assert.Equal(
+            TimeSpan.FromSeconds(2),
+            GsmModemService.SautoNetworkRecheckInterval);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(400),
+            GsmModemService.SautoDataPortLoopDelay);
+        Assert.DoesNotContain(
+            GsmModemService.SautoNetworkPollingCommandOrder,
+            command => command.Contains(
+                "CREG",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void AirplaneMode_UsesCapturedSautoRxGuards()
+    {
+        Assert.Equal(5, GsmModemService.SautoAirplaneMaxAttempts);
+        Assert.Equal(
+            TimeSpan.FromSeconds(1),
+            GsmModemService.SautoAirplanePreQueryDelay);
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(200),
+            GsmModemService.SautoAirplaneResponsePollDelay);
+        Assert.Equal(
+            TimeSpan.FromSeconds(10),
+            GsmModemService.SautoAirplaneResponseTimeout);
+        Assert.Equal(
+            TimeSpan.FromSeconds(1),
+            GsmModemService.SautoAirplaneRetryDelay);
+    }
+
+    [Fact]
+    public void ManualUssd_AllowsLateNetworkPayloadBeforeRfRecovery()
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            GsmModemService.SautoManualUssdResponseTimeout);
+    }
+
+    [Theory]
+    [InlineData("OK", null)]
+    [InlineData("\r\nOK\r\n", null)]
+    [InlineData("\r\n+CFUN: 4\r\n\r\nOK\r\n", 4)]
+    [InlineData("\r\n+CFUN: 1\r\n\r\nOK\r\n", 1)]
+    public void AirplaneMode_AdvancesOnlyFromCfunRxReport(
+        string response,
+        int? expectedMode) =>
+        Assert.Equal(
+            expectedMode,
+            GsmModemService.ParseSautoCfunMode(response));
+
+    [Fact]
+    public void NetworkDataPortCycle_RechecksUnknownCarrierOnlyAfterTwoSeconds()
+    {
+        DateTimeOffset lastCheck = new(
+            2026, 7, 29, 0, 0, 0, TimeSpan.Zero);
+
+        Assert.False(GsmModemService.ShouldQuerySautoNetwork(
+            string.Empty,
+            lastCheck.AddSeconds(2),
+            lastCheck));
+        Assert.True(GsmModemService.ShouldQuerySautoNetwork(
+            "No Signal",
+            lastCheck.AddMilliseconds(2001),
+            lastCheck));
+        Assert.False(GsmModemService.ShouldQuerySautoNetwork(
+            "VINAPHONE",
+            lastCheck.AddMinutes(10),
+            lastCheck));
+    }
+
+    [Fact]
+    public void SmsReceiveRestore_ReturnsToSautoGsmCharset()
+    {
+        Assert.Equal(
+        [
+            "AT+CMGF=1",
+            "AT+CSCS=\"GSM\"",
+            "AT+CPMS=\"SM\",\"SM\",\"SM\"",
+            "AT+CNMI=1,1,0,0,0"
+        ], GsmModemService.SmsReceiveRestoreCommandOrder);
+        Assert.DoesNotContain(
+            GsmModemService.SmsReceiveRestoreCommandOrder,
+            command => command.Contains(
+                "UCS2",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("+QIND: SMS DONE", true)]
+    [InlineData("SMS Ready", true)]
+    [InlineData("SMS DONE", true)]
+    [InlineData("+QIND: PB DONE", false)]
+    [InlineData("Call Ready", false)]
+    public void SmsStorageReadyUrc_TriggersStoredMessageDrain(
+        string line,
+        bool expected) =>
+        Assert.Equal(expected, GsmModemService.IsSmsStorageReadyUrc(line));
+
+    [Fact]
+    public void SmsWatchdog_ProbesAllStoredMessagesWithoutBulkDelete()
+    {
+        Assert.Equal(
+            "AT+CMGL=\"ALL\"",
+            GsmModemService.SmsReceiveWatchdogCommand);
+        Assert.Equal(
+            TimeSpan.FromSeconds(60),
+            GsmModemService.SmsReceiveWatchdogInterval);
+        Assert.Equal(
+            TimeSpan.FromSeconds(1),
+            GsmModemService.SmsReceiveWatchdogTurnGap);
+        Assert.DoesNotContain(
+            "CMGD",
+            GsmModemService.SmsReceiveWatchdogCommand,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SmsWatchdog_RoundRobinOrdersPortsNumerically()
+    {
+        string[] ports = ["COM109", "COM84", "COM9", "COM100"];
+
+        Assert.Equal(
+            ["COM9", "COM84", "COM100", "COM109"],
+            ports.OrderBy(GsmModemService.GetSmsReceiveWatchdogPortOrder));
+    }
+
+    [Theory]
+    [InlineData("+CPIN: NOT READY", true)]
+    [InlineData("+CME ERROR: 10", true)]
+    [InlineData("+CME ERROR: 100", false)]
+    [InlineData("+CME ERROR: 13", false)]
+    [InlineData("+CPIN: NOT INSERTED", false)]
+    [InlineData("+CPIN: READY", false)]
+    public void ControllerRestart_UsesOnlySautoCpinConditions(
+        string response,
+        bool expected) =>
+        Assert.Equal(expected, GsmModemService.RequiresSautoControllerRestart(response));
+
+    [Theory]
+    [InlineData("\r\n+CPIN: READY\r\n\r\nOK\r\n", true)]
+    [InlineData("\r\n+CPIN: READY\r\n", false)]
+    [InlineData("\r\n+CME ERROR: 13\r\n", false)]
+    [InlineData("\r\n+CPIN: READY\r\n\r\nERROR\r\n", false)]
+    public void CpinReady_AdvancesOnlyAfterReadyAndTerminalOk(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsSautoCpinReadyResponse(response));
+
+    [Theory]
+    [InlineData("\r\n+CME ERROR: 13\r\n", true)]
+    [InlineData("\r\n+CPIN: NOT INSERTED\r\n", true)]
+    [InlineData("\r\n+CPIN: SIM PIN\r\n\r\nOK\r\n", false)]
+    [InlineData("\r\n+CME ERROR: 10\r\n", false)]
+    [InlineData("\r\nERROR\r\n", false)]
+    public void SimAbsent_UsesOnlyExplicitGsmEvidence(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsSautoSimAbsentResponse(response));
+
+    [Theory]
+    [InlineData("+CUSD: 1,\"TB :0812345678\",15", true)]
+    [InlineData("+CUSD: 0,\"TK chinh=100 VND\",15", true)]
+    [InlineData("+CUSD: 2", false)]
+    [InlineData("OK", false)]
+    [InlineData("+CME ERROR: 100", false)]
+    [InlineData("+CUSD: 1,\"TB :0812345678\",15\r\nERROR", false)]
+    public void Ussd_AdvancesOnlyAfterSuccessfulCusdPayload(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsSautoSuccessfulUssdResponse(response));
+
+    [Theory]
+    [InlineData("*101#", "+CUSD: 0,\"TK chinh=100 VND\",15", true)]
+    [InlineData("*101#", "+CUSD: 1,\"TB :0812345678\",15", false)]
+    [InlineData("*111#", "+CUSD: 1,\"TB :0812345678\",15", true)]
+    [InlineData("*111#", "+CUSD: 0,\"TK chinh=100 VND\",15", false)]
+    [InlineData("*101#", "OK", false)]
+    public void ManualUssd_AcceptsOnlyTheResponseForItsRequestedStage(
+        string stage,
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.HasSautoManualUssdPayloadForStage(response, stage));
+
+    [Theory]
+    [InlineData("+CUSD: 1,\"TB :0849882209,Ngay KH:25/12/2024\",15", true)]
+    [InlineData("+CUSD: 0,\"So TB 0812345678. TK chinh=100 VND\",15", true)]
+    [InlineData("+CUSD: 0,\"TK chinh=100 VND\",15", false)]
+    [InlineData("ccid=89840200011768850016", false)]
+    public void AutomaticUssd_CompletesOnlyWhenPhoneNumberWasParsed(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.ContainsSautoPhoneNumber(response));
+
+    [Theory]
+    [InlineData("+CUSD: 1,\"TB :0849882209,Ngay KH:25/12/2024\",15", true)]
+    [InlineData("+CUSD: 0,\"So TB 0849882209. TK chinh=100 VND\",15", false)]
+    [InlineData("+CUSD: 1,\"Bam 1 de tra cuu\",15", false)]
+    [InlineData("OK", false)]
+    public void SmsMaintenance_OpensOnlyAfterCompletedAutomatic111Rx(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsSautoAutomatic111Completion(response));
+
+    [Theory]
+    [InlineData(8, 8, "89840200011768850016", "89840200011768850016", "89840200011768850016", true, true)]
+    [InlineData(7, 8, "89840200011768850016", "89840200011768850016", "89840200011768850016", true, false)]
+    [InlineData(8, 8, "89840200011768850016", "89840200011768850016", "89840200011768850016", false, false)]
+    [InlineData(8, 8, "89840200011768850016", "89840200011768859999", "89840200011768850016", true, false)]
+    [InlineData(8, 8, "89840200011768850016", "89840200011768850016", "89840200011768859999", true, false)]
+    public void SmsMaintenance_GateRejectsStale111AndIdentityChanges(
+        long expectedGeneration,
+        long currentGeneration,
+        string expectedCcid,
+        string smsCcid,
+        string networkCcid,
+        bool automatic111Completed,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.CanOpenSmsReceiveMaintenanceGate(
+                expectedGeneration,
+                currentGeneration,
+                expectedCcid,
+                smsCcid,
+                networkCcid,
+                automatic111Completed));
 
     [Theory]
     [InlineData("+COPS: 0,0,\"VINAPHONE\",2\r\nOK", "VINAPHONE", "2")]
     [InlineData("+COPS: 0,2,45202,7\r\nOK", "45202", "7")]
     [InlineData("AT+COPS?\r\n+COPS: 0,1,\"VINA\"\r\nOK", "VINA", "")]
-    public void CopsParser_AcceptsQuotedAndUnquotedOperatorFormats(
-        string response, string expectedOperator, string expectedAct)
+    public void CopsParser_AcceptsCapturedOperatorFormats(
+        string response,
+        string expectedOperator,
+        string expectedAct)
     {
-        bool parsed = GsmModemService.TryParseCopsResponse(
-            response, out string operatorName, out string act);
-
-        Assert.True(parsed);
+        Assert.True(GsmModemService.TryParseCopsResponse(
+            response, out string operatorName, out string act));
         Assert.Equal(expectedOperator, operatorName);
         Assert.Equal(expectedAct, act);
-    }
-
-    [Fact]
-    public void FreshBalanceResponse_RequiresParsedTkc()
-    {
-        Assert.False(MainViewModel.HasFreshSautoBalanceResponse(
-            "+CUSD: 0,\"Dich vu dang ban\",15", "", "Dich vu dang ban", "", ""));
-        Assert.False(MainViewModel.HasFreshSautoBalanceResponse(
-            "+CUSD: 0,\"Dich vu dang ban\",15", "", "Dich vu dang ban", "10000", "10000"));
-        Assert.False(MainViewModel.HasFreshSautoBalanceResponse(
-            "+CUSD: 0,\"Dich vu tam loi\",15", "TKC: 10000d", "TKC: 10000d", "10000", "10000"));
-        Assert.True(MainViewModel.HasFreshSautoBalanceResponse(
-            "+CUSD: 0,\"TKC: 0d\",15", "", "TKC: 0d", "", "0"));
-        Assert.True(MainViewModel.HasFreshSautoBalanceResponse(
-            "+CUSD: 0,\"TKC: 10000d\",15", "", "TKC: 10000d", "10000", "10000"));
-    }
-
-    [Theory]
-    [InlineData("+CREG: 2,1\r\nOK", true)]
-    [InlineData("+CGREG: 0,5\r\nOK", true)]
-    [InlineData("+CEREG: 2,2\r\nOK", false)]
-    [InlineData("ERROR", false)]
-    public void RegistrationParser_RecognizesHomeAndRoaming(
-        string response, bool expected)
-    {
-        Assert.Equal(expected, GsmModemService.IsNetworkRegistered(response));
-    }
-
-    [Theory]
-    [InlineData("+CME ERROR: 13", "ERROR", true)]
-    [InlineData("+CPIN: NOT READY", "+CME ERROR: 13", true)]
-    [InlineData("+CPIN: READY", "+QCCID: 89840200011834605261\r\nOK", false)]
-    [InlineData("+CPIN: SIM PIN", "ERROR", false)]
-    [InlineData("+CPIN: SIM PUK", "ERROR", false)]
-    public void StartupSimRecovery_RestartsOfflineOnlyWhenIdentityIsUnreadableAndUnlocked(
-        string cpinResponse,
-        string ccidResponse,
-        bool expected) =>
-        Assert.Equal(
-            expected,
-            GsmModemService.ShouldAttemptStartupOfflineSimRecovery(
-                cpinResponse,
-                ccidResponse));
-
-    [Fact]
-    public void PortHealth_DefersIntentionalPortOwnershipAndLockContention()
-    {
-        Assert.True(GsmModemService.ShouldDeferPortHealthProbe(
-            backgroundSuspended: false,
-            callInProgress: false,
-            commandPending: false,
-            coordinatedRecoveryOwnsPort: true));
-        Assert.False(GsmModemService.ShouldDeferPortHealthProbe(
-            backgroundSuspended: false,
-            callInProgress: false,
-            commandPending: false,
-            coordinatedRecoveryOwnsPort: false));
-        Assert.True(GsmModemService.IsDeferredPortHealthProbeResponse(
-            "ERROR: Timeout waiting for lock"));
-        Assert.True(GsmModemService.IsDeferredPortHealthProbeResponse(
-            "ERROR: Another command is already in progress"));
-        Assert.False(GsmModemService.IsDeferredPortHealthProbeResponse(
-            "ERROR: Timeout (device did not return OK/ERROR)"));
-    }
-
-    [Fact]
-    public void PortHealth_FailureEvidenceSurvivesLockContention()
-    {
-        int failures = GsmModemService.NextPortHealthFailureCount(
-            0,
-            "ERROR: Timeout (device did not return OK/ERROR)");
-        Assert.Equal(1, failures);
-        Assert.Equal(
-            TimeSpan.FromSeconds(3),
-            GsmModemService.GetPortHealthProbeInterval(failures));
-
-        failures = GsmModemService.NextPortHealthFailureCount(
-            failures,
-            "ERROR: Timeout waiting for lock");
-        Assert.Equal(1, failures);
-
-        failures = GsmModemService.NextPortHealthFailureCount(
-            failures,
-            "ERROR: Timeout (device did not return OK/ERROR)");
-        Assert.Equal(2, failures);
-
-        failures = GsmModemService.NextPortHealthFailureCount(
-            failures,
-            "OK");
-        Assert.Equal(0, failures);
-        Assert.Equal(
-            TimeSpan.FromSeconds(15),
-            GsmModemService.GetPortHealthProbeInterval(failures));
-    }
-
-    [Theory]
-    [InlineData("+CME ERROR: 13", true)]
-    [InlineData("+CPIN: NOT READY", true)]
-    [InlineData("+CME ERROR: 10", false)]
-    [InlineData("+CPIN: NOT INSERTED", false)]
-    [InlineData("ERROR: Timeout", false)]
-    public void HotplugOfflineRecovery_RetriesOnlyRecoverableSimStackStates(
-        string response,
-        bool expected) =>
-        Assert.Equal(
-            expected,
-            GsmModemService.IsOfflineRecoverableSimStackResponse(response));
-
-    [Theory]
-    [InlineData(1, true)]
-    [InlineData(2, false)]
-    [InlineData(3, true)]
-    [InlineData(4, false)]
-    [InlineData(6, true)]
-    public void HotplugOfflineRecovery_UsesBoundedCooldown(
-        int pass,
-        bool expected) =>
-        Assert.Equal(
-            expected,
-            GsmModemService.ShouldRunHotplugOfflineRecovery(pass));
-
-    [Theory]
-    [InlineData("89840200011797965884", "VinaPhone")]
-    [InlineData("89840412345678901234", "Viettel")]
-    [InlineData("89840112345678901234", "MobiFone")]
-    [InlineData("unknown", "")]
-    public void CcidProviderFallback_UsesVietnamIssuerPrefix(
-        string ccid, string expected)
-    {
-        Assert.Equal(expected, MainViewModel.ResolveNetworkProviderFromCcid(ccid));
     }
 }

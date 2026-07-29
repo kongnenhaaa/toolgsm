@@ -23,12 +23,10 @@ namespace gsm
 
             BackendConcurrency.ConfigureThreadPool();
 
-            // FIX: Đặt CurrentDirectory về thư mục chứa file exe để BlazorWebView luôn tìm thấy wwwroot
-            var baseDir = System.AppContext.BaseDirectory;
-            if (!string.IsNullOrEmpty(baseDir))
-            {
-                System.IO.Directory.SetCurrentDirectory(baseDir);
-            }
+            // CustomBlazorWebView resolves wwwroot from AppContext.BaseDirectory.
+            // Do not make the publish folder the process current directory:
+            // WebView2 child processes inherit it and can keep that folder locked
+            // briefly after the main window has closed.
 
             // TỰ TẠO FILE + FOLDER TRƯỚC MỌI THỨ
             gsm.Services.AppBootstrap.EnsureAll();
@@ -55,11 +53,6 @@ namespace gsm
             serviceCollection.AddSingleton<IGsmUssdService, GsmUssdService>();
             serviceCollection.AddSingleton<IGsmCallService, GsmCallService>();
             serviceCollection.AddSingleton<IGsmBackgroundSupervisor, GsmBackgroundSupervisor>();
-            serviceCollection.AddSingleton<ImeiManagementService>(sp =>
-            {
-                var modem = sp.GetRequiredService<IGsmModemService>();
-                return new ImeiManagementService(modem, null);
-            });
             serviceCollection.AddSingleton<MainViewModel>();
             serviceCollection.AddSingleton<RealDeviceSmokeTestRunner>();
             serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();

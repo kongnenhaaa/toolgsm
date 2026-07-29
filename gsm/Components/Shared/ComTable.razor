@@ -238,7 +238,7 @@
                 else if (col.Name == "LastMessageContent")
                 {
                     <MudTd Style="@($"white-space:nowrap; font-size:16px; {_brd} {_body}")">
-                        @(string.IsNullOrWhiteSpace(context.LastMessageContent) ? "—" : context.LastMessageContent)
+                        @(string.IsNullOrWhiteSpace(GetContentColumnValue(context)) ? "—" : GetContentColumnValue(context))
                     </MudTd>
                 }
             }
@@ -655,6 +655,11 @@
             : balance;
     }
 
+    private string GetContentColumnValue(SimPort port) =>
+        Operation.Equals("USSD", StringComparison.OrdinalIgnoreCase)
+            ? port.LastUssdResult ?? string.Empty
+            : port.LastMessageContent ?? string.Empty;
+
     void CopyToExcel()
     {
         var cols = VisibleColumns;
@@ -691,7 +696,7 @@
                 "VnptStatus"         => p.VnptStatus ?? "",
                 "Otp"                => p.Otp ?? "",
                 "LastSmsSender"      => p.LastSmsSender ?? "",
-                "LastMessageContent" => p.LastMessageContent ?? "",
+                "LastMessageContent" => GetContentColumnValue(p),
                 _                    => ""
             });
             // Escape tab/newline trong ô để không bị lệch cột

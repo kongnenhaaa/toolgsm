@@ -202,57 +202,6 @@ public sealed class RealDeviceSmokeTestRunnerTests
     }
 
     [Fact]
-    public async Task AcceptanceCollector_RequiresSuccessStructuredMarkerExactEpochAndSequence()
-    {
-        const string ccid = "89840200000000000003";
-        var host = new LogOnlySmokeHost();
-        using var collector = new RealDeviceSmokeLogCollector(
-            host, TimeProvider.System);
-        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddSeconds(-1);
-        long baseline = collector.CurrentSequence;
-
-        host.Emit(
-            $"[COM83] [USSD_STAGE_OK] epoch=41; ccid={ccid}; *101# đã trả dữ liệu.",
-            "SUCCESS");
-        host.Emit(
-            $"[COM83] [USSD_STAGE_OK] epoch=42; ccid={ccid}; *101# giả từ WARN.",
-            "WARN");
-        host.Emit(
-            $"[COM83] [BULK_USSD_RETRY] [USSD_STAGE_OK] epoch=42; ccid={ccid}; *101#",
-            "SUCCESS");
-        host.Emit(
-            $"[COM83] [USSD_STAGE_OK] epoch=42; ccid={ccid}; *101# đã trả dữ liệu.",
-            "SUCCESS");
-
-        RealDeviceSmokeEvidence direct = await collector.WaitForAnyAsync(
-            "COM83",
-            ["[USSD_STAGE_OK]", "[USSD_STAGE_OK_LATE]"],
-            notBefore,
-            TimeSpan.FromSeconds(1),
-            CancellationToken.None,
-            afterSequence: baseline,
-            requiredText: $"epoch=42; ccid={ccid};");
-        Assert.Equal("SUCCESS", direct.Level);
-        Assert.True(RealDeviceSmokeTestRunner.IsDirect101Evidence(
-            direct.Message));
-
-        host.Emit(
-            $"[COM83] [USSD_INITIAL_COMPLETE] epoch=42; ccid={ccid}; done.",
-            "SUCCESS");
-        RealDeviceSmokeEvidence completed = await collector.WaitForAsync(
-            "COM83",
-            "[USSD_INITIAL_COMPLETE]",
-            notBefore,
-            TimeSpan.FromSeconds(1),
-            CancellationToken.None,
-            afterSequence: direct.Sequence,
-            requiredText: $"epoch=42; ccid={ccid};");
-        Assert.True(completed.Sequence > direct.Sequence);
-        Assert.False(RealDeviceSmokeTestRunner.IsDirect101Evidence(
-            completed.Message));
-    }
-
-    [Fact]
     public void Checkpoint_ReplacesResultAndLeavesNoReadableTempCheckpoint()
     {
         string directory = CreateTempDirectory();
@@ -638,8 +587,7 @@ public sealed class RealDeviceSmokeTestRunnerTests
 
         public Task<string> SendUssdForPortAsync(
             string portName,
-            string ussdCode,
-            string expectedCcid) => Task.FromResult(string.Empty);
+            string ussdCode) => Task.FromResult(string.Empty);
 
         public Task<bool> ExecuteCallAsync(
             string portName,

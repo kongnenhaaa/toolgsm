@@ -14,7 +14,8 @@
         Background="White">
 
     <Grid>
-        <local:CustomBlazorWebView HostPage="wwwroot\index.html" 
+        <local:CustomBlazorWebView x:Name="BlazorHost"
+                               HostPage="wwwroot\index.html"
                                Services="{DynamicResource services}">
             <local:CustomBlazorWebView.RootComponents>
                 <blazor:RootComponent Selector="#app" 

@@ -20,6 +20,8 @@ public sealed class RealDeviceSmokeTestRunner
     public const string RequestArgument = "--real-device-smoke-request";
     private const string ExpectedProvider = "VinaPhone";
     private const string ExpectedCcidPrefix = "898402";
+    private const string AutomaticUssd = "*111#";
+    private const string AutomaticUssdDescription = "*111# theo phản hồi COPS VinaPhone";
     private const string ManualUssd = "*101#";
     private const string CallRecipient = "900";
     private const int CallDurationSeconds = 15;
@@ -122,8 +124,6 @@ public sealed class RealDeviceSmokeTestRunner
         AtomicSmokeResultStore store,
         CancellationToken cancellationToken)
     {
-        string startupUssdMode = StartupUssdModes.Normalize(
-            SettingsService.Current.StartupUssdMode);
         var state = new RealDeviceSmokeResult
         {
             RunId = claim.RunId,
@@ -144,7 +144,7 @@ public sealed class RealDeviceSmokeTestRunner
                 ExpectedCcid = NormalizeDigits(claim.Request.ExpectedCcid),
                 ContinuationOfRunId = claim.Request.ContinuationOfRunId?.Trim()
                     ?? string.Empty,
-                AutomaticUssd = StartupUssdModes.GetCodes(startupUssdMode),
+                AutomaticUssd = [AutomaticUssd],
                 ManualUssd = ManualUssd,
                 CallRecipient = CallRecipient,
                 CallDurationSeconds = CallDurationSeconds,
@@ -224,32 +224,23 @@ public sealed class RealDeviceSmokeTestRunner
                 $"COM mở lại đúng CCID/IMEI: {afterRefresh.Ccid}/{afterRefresh.Imei}.");
 
             BeginStep(store, state, logs, "automatic-ussd", chargeable: false,
-                $"Chờ hoàn tất chế độ tự động {StartupUssdModes.GetDescription(startupUssdMode)}.");
-            if (StartupUssdModes.Includes111(startupUssdMode))
-            {
-                await logs.WaitForAsync(
-                        state.PortName,
-                        "[USSD_111_OK]",
-                        automaticUssdStartedAt,
-                        TimeSpan.FromSeconds(claim.Request.AutomaticUssdWaitSeconds),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-            }
+                $"Chờ hoàn tất USSD tự động {AutomaticUssdDescription}.");
             await logs.WaitForAsync(
                     state.PortName,
-                    "[USSD_INITIAL_COMPLETE]",
+                    "[SAUTO_AUTO_USSD_RESULT]",
                     automaticUssdStartedAt,
                     TimeSpan.FromSeconds(claim.Request.AutomaticUssdWaitSeconds),
-                    cancellationToken)
+                    cancellationToken,
+                    requiredText: $"code={AutomaticUssd}")
                 .ConfigureAwait(false);
             CompleteStep(store, state, logs,
-                $"Đã hoàn tất {StartupUssdModes.GetDescription(startupUssdMode)} trên đúng COM sau refresh.");
+                $"Đã hoàn tất {AutomaticUssdDescription} trên đúng COM sau refresh.");
 
             BeginStep(store, state, logs, "manual-ussd-101", chargeable: false,
                 "Chạy kiểm tra thủ công *101# qua pipeline USSD hiện hữu.");
             EnsurePinnedPortNow(state, requireTargetImei: true);
             string ussdResult = await _host.SendUssdForPortAsync(
-                    state.PortName, ManualUssd, state.PinnedCcid)
+                    state.PortName, ManualUssd)
                 .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
             state.ManualUssdResult = ussdResult;
@@ -412,8 +403,6 @@ public sealed class RealDeviceSmokeTestRunner
         AtomicSmokeResultStore store,
         CancellationToken cancellationToken)
     {
-        string startupUssdMode = StartupUssdModes.Normalize(
-            SettingsService.Current.StartupUssdMode);
         string[] requestedPorts = claim.Request.PortNames
             .Select(port => port.Trim().ToUpperInvariant())
             .OrderBy(ParsePortNumber)
@@ -434,7 +423,7 @@ public sealed class RealDeviceSmokeTestRunner
             FixedActions = new RealDeviceSmokeActions
             {
                 Provider = ExpectedProvider,
-                AutomaticUssd = StartupUssdModes.GetCodes(startupUssdMode)
+                AutomaticUssd = [AutomaticUssd]
             }
         };
         using var logs = new RealDeviceSmokeLogCollector(_host, _timeProvider);
@@ -593,7 +582,6 @@ public sealed class RealDeviceSmokeTestRunner
                     ExecuteBulkImeiUssdPortAsync(
                             port,
                             claim.Request,
-                            startupUssdMode,
                             logs,
                             UpdatePort,
                             cancellationToken))
@@ -838,7 +826,6 @@ public sealed class RealDeviceSmokeTestRunner
     private async Task ExecuteBulkImeiUssdPortAsync(
         RealDeviceSmokeBulkPortResult port,
         RealDeviceSmokeRequest request,
-        string startupUssdMode,
         RealDeviceSmokeLogCollector logs,
         Action<RealDeviceSmokeBulkPortResult, Action<RealDeviceSmokeBulkPortResult>> update,
         CancellationToken cancellationToken)
@@ -973,13 +960,13 @@ public sealed class RealDeviceSmokeTestRunner
                     if (!_host.TryGetCurrentSessionEpoch(
                             port.PortName,
                             port.PinnedCcid,
-                            out long sessionEpoch))
+                            out _))
                     {
                         throw new RealDeviceSmokeRunException(
                             "Không đọc được epoch phiên SIM sau refresh.");
                     }
                     string sessionMarker =
-                        $"epoch={sessionEpoch}; ccid={port.PinnedCcid};";
+                        $"ccid={port.PinnedCcid};";
                     RealDeviceSmokeEvidence network = await logs.WaitForAsync(
                             port.PortName,
                             "[SAUTO_NETWORK_READY]",
@@ -992,74 +979,23 @@ public sealed class RealDeviceSmokeTestRunner
                     update(port, item =>
                     {
                         item.NetworkReady = true;
-                        item.CurrentStep = StartupUssdModes.Includes111(startupUssdMode)
-                            ? "ussd-111"
-                            : "ussd-101-direct";
+                        item.CurrentStep = "ussd-111";
                     });
-
-                    RealDeviceSmokeEvidence previousEvidence = network;
-                    if (StartupUssdModes.Includes111(startupUssdMode))
-                    {
-                        previousEvidence = await logs.WaitForAsync(
-                                port.PortName,
-                                "[USSD_111_OK]",
-                                network.AtUtc,
-                                Remaining(ussdDeadline),
-                                cancellationToken,
-                                afterSequence: network.Sequence,
-                                requiredText: sessionMarker)
-                            .ConfigureAwait(false);
-                        update(port, item =>
-                        {
-                            item.Ussd111Passed = true;
-                            item.CurrentStep =
-                                StartupUssdModes.Includes101(startupUssdMode)
-                                    ? "ussd-101-direct"
-                                    : "ussd-initial-complete";
-                        });
-                    }
-
-                    if (StartupUssdModes.Includes101(startupUssdMode))
-                    {
-                        RealDeviceSmokeEvidence directOrComplete =
-                            await logs.WaitForAnyAsync(
-                                    port.PortName,
-                                    [
-                                        "[USSD_STAGE_OK]",
-                                        "[USSD_STAGE_OK_LATE]",
-                                        "[USSD_INITIAL_COMPLETE]"
-                                    ],
-                                    previousEvidence.AtUtc,
-                                    Remaining(ussdDeadline),
-                                    cancellationToken,
-                                    afterSequence: previousEvidence.Sequence,
-                                    requiredText: sessionMarker)
-                                .ConfigureAwait(false);
-                        bool direct101 = IsDirect101Evidence(
-                            directOrComplete.Message);
-                        if (!direct101)
-                        {
-                            throw new RealDeviceSmokeRunException(
-                                "*101# chỉ hoàn tất qua fallback/menu, chưa có bằng chứng direct.");
-                        }
-                        update(port, item =>
-                        {
-                            item.Ussd101DirectPassed = true;
-                            item.Ussd101Evidence = directOrComplete.Message;
-                            item.CurrentStep = "ussd-initial-complete";
-                        });
-                        previousEvidence = directOrComplete;
-                    }
 
                     await logs.WaitForAsync(
                             port.PortName,
-                            "[USSD_INITIAL_COMPLETE]",
-                            previousEvidence.AtUtc,
+                            "[SAUTO_AUTO_USSD_RESULT]",
+                            network.AtUtc,
                             Remaining(ussdDeadline),
                             cancellationToken,
-                            afterSequence: previousEvidence.Sequence,
-                            requiredText: sessionMarker)
+                            afterSequence: network.Sequence,
+                            requiredText: $"code={AutomaticUssd}")
                         .ConfigureAwait(false);
+                    update(port, item =>
+                    {
+                        item.Ussd111Passed = true;
+                        item.CurrentStep = "ussd-initial-complete";
+                    });
                     live = await WaitForBulkTargetAsync(
                             port,
                             TimeSpan.FromSeconds(request.ImeiWaitSeconds),
@@ -1088,7 +1024,7 @@ public sealed class RealDeviceSmokeTestRunner
             if (!ussdPassed)
             {
                 throw new RealDeviceSmokeRunException(
-                    $"{port.PortName} chưa hoàn tất {StartupUssdModes.GetDescription(startupUssdMode)} "
+                    $"{port.PortName} chưa hoàn tất {AutomaticUssdDescription} "
                     + $"sau 3 epoch refresh: {lastUssdError}");
             }
 
@@ -1101,8 +1037,7 @@ public sealed class RealDeviceSmokeTestRunner
             });
             _host.Log(
                 $"[{port.PortName}] [BULK_IMEI_USSD_PORT_PASSED] CCID={port.PinnedCcid}; "
-                + $"IMEI={port.TargetImei}; direct111={StartupUssdModes.Includes111(startupUssdMode)}; "
-                + $"direct101={StartupUssdModes.Includes101(startupUssdMode)}",
+                + $"IMEI={port.TargetImei}; automatic={AutomaticUssd}; manual101=false",
                 "SUCCESS");
         }
         catch (OperationCanceledException ex)
@@ -1606,16 +1541,6 @@ public sealed class RealDeviceSmokeTestRunner
             && !normalized.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase)
             && !normalized.Contains("NO RESPONSE", StringComparison.OrdinalIgnoreCase)
             && !normalized.Contains("CANCEL", StringComparison.OrdinalIgnoreCase);
-    }
-
-    internal static bool IsDirect101Evidence(string? message)
-    {
-        string value = message ?? string.Empty;
-        return (value.Contains(
-                    "[USSD_STAGE_OK]", StringComparison.OrdinalIgnoreCase)
-                || value.Contains(
-                    "[USSD_STAGE_OK_LATE]", StringComparison.OrdinalIgnoreCase))
-            && value.Contains("*101#", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool IsSuccessfulSmsResult(string? result)
@@ -2248,8 +2173,7 @@ internal interface IRealDeviceSmokeHost
         CancellationToken cancellationToken);
     Task<string> SendUssdForPortAsync(
         string portName,
-        string ussdCode,
-        string expectedCcid);
+        string ussdCode);
     Task<bool> ExecuteCallAsync(
         string portName,
         string recipient,
@@ -2357,9 +2281,8 @@ internal sealed class MainViewModelSmokeHost : IRealDeviceSmokeHost
 
     public Task<string> SendUssdForPortAsync(
         string portName,
-        string ussdCode,
-        string expectedCcid) =>
-        _viewModel.SendUssdForPortAsync(portName, ussdCode, expectedCcid);
+        string ussdCode) =>
+        _viewModel.SendUssdForPortAsync(portName, ussdCode);
 
     public Task<bool> ExecuteCallAsync(
         string portName,
@@ -2512,10 +2435,9 @@ internal sealed class RealDeviceSmokeLogCollector : IDisposable
     private static bool IsAcceptanceMarker(string message) =>
         message.Contains("[IMEI_BACKUP_COMMIT]", StringComparison.OrdinalIgnoreCase)
         || message.Contains("[SAUTO_NETWORK_READY]", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("[USSD_111_OK]", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("[USSD_STAGE_OK]", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("[USSD_STAGE_OK_LATE]", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("[USSD_INITIAL_COMPLETE]", StringComparison.OrdinalIgnoreCase);
+        || message.Contains(
+            "[SAUTO_AUTO_USSD_RESULT]",
+            StringComparison.OrdinalIgnoreCase);
 
     public void Dispose() => _host.LogAdded -= OnLogAdded;
 }

@@ -3,87 +3,6 @@ namespace gsm.Services;
 
 public static class ImeiManagementService
 {
-    public static readonly string[] FakeTacs = new[] {
-        // --- SAMSUNG FLAGSHIPS & A-SERIES (Ưu tiên hàng đầu - Bắt sóng 4G/VoLTE cực nhanh) ---
-        "35414838", // Samsung Galaxy S24 Ultra
-        "35414738", // Samsung Galaxy S24+
-        "35414638", // Samsung Galaxy S24
-        "35898337", // Samsung Galaxy Z Fold 5
-        "35898237", // Samsung Galaxy Z Flip 5
-        "35689020", // Samsung Galaxy S23 Ultra
-        "35198031", // Samsung Galaxy S23
-        "35205562", // Samsung Galaxy S22 Ultra
-        "35848511", // Samsung Galaxy S21 Ultra 5G
-        "35623011", // Samsung Galaxy Note 20 Ultra
-        "35179311", // Samsung Galaxy Z Fold 4
-        "35385711", // Samsung Galaxy Z Flip 4
-        "35882911", // Samsung Galaxy Z Fold 3
-        "35882811", // Samsung Galaxy Z Flip 3
-        "35284911", // Samsung Galaxy A54 5G
-        "35839211", // Samsung Galaxy A53 5G
-        "35728411", // Samsung Galaxy S20 FE 5G
-        "35184911", // Samsung Galaxy A73 5G
-        "35682911", // Samsung Galaxy A52s 5G
-        "35392811", // Samsung Galaxy A34 5G
-        "35918211", // Samsung Galaxy S21+ 5G
-        "35619211", // Samsung Galaxy S20 Ultra 5G
-        "35489211", // Samsung Galaxy Note 10+
-        "35298111", // Samsung Galaxy M54 5G
-        "35192811", // Samsung Galaxy A71 5G
-
-        // --- APPLE IPHONE FLAGSHIPS ---
-        "35919376", // iPhone 15 Pro Max
-        "35443477", // iPhone 15 Pro
-        "35874288", // iPhone 15
-        "35684784", // iPhone 15 Plus
-        "35293630", // iPhone 14 Pro Max
-        "35307371", // iPhone 14
-        "35293425", // iPhone 14 Pro
-        "35398226", // iPhone 13 Pro Max
-        "35300911", // iPhone 12 Pro Max
-        "35384110", // iPhone 11 Pro Max
-
-        // --- GOOGLE PIXEL & XIAOMI FLAGSHIPS ---
-        "35424597", // Google Pixel 8 Pro
-        "35639611", // Google Pixel 7 Pro
-        "86884206", // Xiaomi 14 Ultra
-        "86129004", // Xiaomi 13 Pro
-        "86770205", // Oppo Find X5 Pro
-        "86542704"  // Oppo Find X3 Pro
-    };
-
-    public static bool IsFakeImei(string imei)
-    {
-        if (string.IsNullOrWhiteSpace(imei) || imei.Length < 8) return false;
-        string tac = imei.Substring(0, 8);
-        foreach (var t in FakeTacs)
-        {
-            if (tac == t) return true;
-        }
-        return false;
-    }
-
-    public static string GenerateRandomImei()
-    {
-        string tac = FakeTacs[Random.Shared.Next(FakeTacs.Length)];
-        string snr = Random.Shared.Next(0, 1_000_000).ToString("D6");
-        string imeiWithoutCheck = tac + snr;
-        
-        int sum = 0;
-        for (int i = 0; i < 14; i++)
-        {
-            int digit = imeiWithoutCheck[i] - '0';
-            if (i % 2 != 0)
-            {
-                digit *= 2;
-                if (digit > 9) digit -= 9;
-            }
-            sum += digit;
-        }
-        int checkDigit = (10 - (sum % 10)) % 10;
-        return imeiWithoutCheck + checkDigit;
-    }
-
     public static string GetDeviceNameFromImei(string imei)
     {
         if (string.IsNullOrWhiteSpace(imei) || imei.Length < 8) return "Mặc định (GSM Modem)";
@@ -212,14 +131,6 @@ public static class ImeiManagementService
             if (checkDigit >= 0) return clean[..14] + checkDigit;
         }
         return clean;
-    }
-
-    public static bool TryNormalizeBackupImei(string? imei, out string canonicalImei)
-    {
-        canonicalImei = ToCanonicalImei(imei);
-        if (IsValidImei(canonicalImei)) return true;
-        canonicalImei = string.Empty;
-        return false;
     }
 
     private static int CalculateCheckDigit(string first14Digits)

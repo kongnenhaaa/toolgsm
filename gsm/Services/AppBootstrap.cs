@@ -25,8 +25,6 @@ namespace gsm.Services
                 Directory.CreateDirectory(LogsDir);
                 Directory.CreateDirectory(RecordingsDir);
                 Directory.CreateDirectory(ConfigDir);
-                Directory.CreateDirectory(Path.Combine(DataDir, "ImeiBackup"));
-
                 EnsureSettingsFile();
             }
             catch (Exception ex)

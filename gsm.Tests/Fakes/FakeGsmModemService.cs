@@ -97,39 +97,6 @@ public sealed class FakeGsmModemService : IGsmModemService
         return false;
     }
 
-    public async Task<SautoImeiChangeResult> ChangeSautoImeiAsync(
-        string portName,
-        string targetImei,
-        CancellationToken ct = default)
-    {
-        await SendCommandAsync(
-            portName,
-            $"AT+EGMR=1,7,\"{targetImei}\"",
-            silent: true,
-            ct: ct);
-
-        string response = await SendCommandAsync(
-            portName,
-            "AT+EGMR=0,7",
-            silent: true,
-            ct: ct);
-        string readImei = System.Text.RegularExpressions.Regex.Match(
-            response,
-            @"(?<!\d)\d{15}(?!\d)").Value;
-
-        if (!string.Equals(readImei, targetImei, StringComparison.Ordinal))
-            return new SautoImeiChangeResult(
-                string.IsNullOrEmpty(readImei) ? "ERROR" : readImei,
-                false);
-
-        await SendCommandAsync(
-            portName,
-            "AT+CFUN=1,1",
-            silent: true,
-            ct: ct);
-        return new SautoImeiChangeResult(readImei, true);
-    }
-
     public async Task<string?> RunSautoManualUssdAsync(
         string portName,
         IReadOnlyList<string> stages,
@@ -262,7 +229,9 @@ public sealed class FakeGsmModemService : IGsmModemService
         return new CallbackDisposable(
             () => BackgroundResumptions.Enqueue(portName));
     }
-    public void StartHotplugWaitLoop(string portName) { }
+    public void StartHotplugWaitLoop(
+        string portName,
+        bool requireSimRemovalFirst = false) { }
     public Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
     public Task ReloadSimAsync(string portName) => Task.CompletedTask;
     public Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);

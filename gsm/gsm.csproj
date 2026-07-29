@@ -30,22 +30,6 @@
     </Content>
   </ItemGroup>
 
-  <!-- Một thư mục output mới luôn nhận workbook trắng. Nếu build/publish đè
-       vào thư mục runtime đang dùng, không được xóa các binding SIM/IMEI. -->
-  <Target Name="ResetImeiBackupAfterBuild" AfterTargets="Build">
-    <Copy SourceFiles="$(MSBuildProjectDirectory)\Assets\imei_backup.blank.xlsx"
-          DestinationFiles="$(TargetDir)imei_backup.xlsx"
-          SkipUnchangedFiles="true"
-          Condition="!Exists('$(TargetDir)imei_backup.xlsx')" />
-  </Target>
-
-  <Target Name="ResetImeiBackupAfterPublish" AfterTargets="Publish">
-    <Copy SourceFiles="$(MSBuildProjectDirectory)\Assets\imei_backup.blank.xlsx"
-          DestinationFiles="$(PublishDir)imei_backup.xlsx"
-          SkipUnchangedFiles="true"
-          Condition="!Exists('$(PublishDir)imei_backup.xlsx')" />
-  </Target>
-
   <!-- Publish vào một thư mục cũ không tự xóa dependency đã bỏ khỏi project. -->
   <Target Name="RemoveRetiredSpeechRecognitionArtifactsAfterPublish" AfterTargets="Publish">
     <Delete Files="$(PublishDir)libvosk.dll;$(PublishDir)Vosk.dll;$(PublishDir)NAudio.dll;$(PublishDir)System.Speech.dll" />

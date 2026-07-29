@@ -72,8 +72,7 @@ public class AppSettings
     public System.Collections.Generic.List<WebhookRule> WebhookRules { get; set; } = new();
 
 
-    // ========== IMEI BACKUP & RESTORE ==========
-    public bool EnableImeiRestore { get => AutoRestoreImei; set => AutoRestoreImei = value; }
+    // ========== SIM INTAKE ==========
     public bool EnableNewSimIntakeMode { get => NewSimIntake; set => NewSimIntake = value; }
 
     // ========== COLUMN VISIBILITY SETTINGS ==========
@@ -105,7 +104,6 @@ public class AppSettings
 
     // Extra Settings from settings.json UI
     public bool NewSimIntake { get; set; } = true;
-    public bool AutoRestoreImei { get; set; } = true;
     public bool AutoAccept { get; set; } = false;
     public int SignalScanIntervalSeconds { get; set; } = 15;
     public bool TelegramOnCall { get; set; } = true;

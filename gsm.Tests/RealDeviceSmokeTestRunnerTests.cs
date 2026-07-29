@@ -179,26 +179,25 @@ public sealed class RealDeviceSmokeTestRunnerTests
     }
 
     [Fact]
-    public void BatchTargetGenerator_RetriesKnownCollisionAndReservesUniqueTarget()
+    public void NoFakeIdentityReady_UsesLiveImeiWithoutAnyBackupState()
     {
-        string existing = ImeiManagementService.GenerateRandomImei();
-        string unique = ImeiManagementService.GenerateRandomImei();
-        while (string.Equals(existing, unique, StringComparison.Ordinal))
-            unique = ImeiManagementService.GenerateRandomImei();
-        var generated = new Queue<string>([existing, unique]);
-        var unavailable = new HashSet<string>(StringComparer.Ordinal)
-        {
-            existing
-        };
+        string imei = TestImeiFactory.Create();
+        string differentImei = TestImeiFactory.Create();
 
-        string target = RealDeviceSmokeTestRunner.GenerateUniqueBatchImeiTarget(
-            unavailable,
-            generated.Dequeue,
-            maxAttempts: 2);
+        RealDeviceSmokePortSnapshot ready = Port(
+            "COM83",
+            5,
+            "VinaPhone",
+            "89840200000000000003",
+            imei);
 
-        Assert.Equal(unique, target);
-        Assert.Contains(unique, unavailable);
-        Assert.Equal(2, unavailable.Count);
+        Assert.True(RealDeviceSmokeTestRunner.IsCurrentImeiReady(ready, imei));
+        Assert.False(RealDeviceSmokeTestRunner.IsCurrentImeiReady(
+            ready with { IsReadyForOperation = false },
+            imei));
+        Assert.False(RealDeviceSmokeTestRunner.IsCurrentImeiReady(
+            ready,
+            differentImei));
     }
 
     [Fact]
@@ -276,8 +275,8 @@ public sealed class RealDeviceSmokeTestRunnerTests
     [Fact]
     public void PortSelection_RequiresExplicitPortAndExactCcid()
     {
-        string imeiA = ImeiManagementService.GenerateRandomImei();
-        string imeiB = ImeiManagementService.GenerateRandomImei();
+        string imeiA = TestImeiFactory.Create();
+        string imeiB = TestImeiFactory.Create();
         var ports = new[]
         {
             Port("COM83", 5, "Viettel", "89840400000000000001", imeiA),
@@ -307,7 +306,7 @@ public sealed class RealDeviceSmokeTestRunnerTests
             5,
             "VinaPhone",
             "89840200000000000003",
-            ImeiManagementService.GenerateRandomImei(),
+            TestImeiFactory.Create(),
             isBalanceLoading: true);
 
         Assert.NotNull(RealDeviceSmokeTestRunner.SelectEligiblePort(
@@ -399,11 +398,11 @@ public sealed class RealDeviceSmokeTestRunnerTests
     }
 
     [Fact]
-    public void Continuation_ReusesCommittedImeiOnlyAfterKnownEndedCallAndBeforeSms()
+    public void Continuation_ReusesCurrentImeiOnlyAfterKnownEndedCallAndBeforeSms()
     {
         const string runId = "failed-call-run";
         const string ccid = "89840200000000000003";
-        string imei = ImeiManagementService.GenerateRandomImei();
+        string imei = TestImeiFactory.Create();
         var request = new RealDeviceSmokeRequest
         {
             ConfirmTelecomActions = true,
@@ -428,9 +427,9 @@ public sealed class RealDeviceSmokeTestRunnerTests
             Steps =
             [
                 PassedStep("select-port"),
-                PassedStep("create-sauto-imei"),
-                PassedStep("refresh-after-imei"),
-                PassedStep("automatic-ussd-111-101"),
+                PassedStep("verify-current-imei"),
+                PassedStep("refresh-preserve-imei"),
+                PassedStep("automatic-ussd"),
                 PassedStep("manual-ussd-101"),
                 new RealDeviceSmokeStep
                 {
@@ -441,6 +440,25 @@ public sealed class RealDeviceSmokeTestRunnerTests
             ]
         };
 
+        Assert.Equal(
+            imei,
+            RealDeviceSmokeTestRunner.ValidateContinuationAndGetImei(
+                request, prior, selected));
+
+        prior.Steps =
+        [
+            PassedStep("select-port"),
+            PassedStep("create-sauto-imei"),
+            PassedStep("refresh-after-imei"),
+            PassedStep("automatic-ussd-111-101"),
+            PassedStep("manual-ussd-101"),
+            new RealDeviceSmokeStep
+            {
+                Name = "call-900-15s",
+                Chargeable = true,
+                Status = RealDeviceSmokeStepStatus.Failed
+            }
+        ];
         Assert.Equal(
             imei,
             RealDeviceSmokeTestRunner.ValidateContinuationAndGetImei(
@@ -541,22 +559,6 @@ public sealed class RealDeviceSmokeTestRunnerTests
         public IReadOnlyList<RealDeviceSmokePortSnapshot> GetPorts() =>
             Array.Empty<RealDeviceSmokePortSnapshot>();
 
-        public Task<(bool Success, string TargetImei)> CreateNewImeiForPortAsync(
-            string portName,
-            string expectedCcid) =>
-            Task.FromResult((false, string.Empty));
-
-        public Task<bool> ApplyImeiForCurrentSimAsync(
-            string portName,
-            string targetImei,
-            string expectedCcid,
-            CancellationToken cancellationToken) => Task.FromResult(false);
-
-        public IReadOnlySet<string> GetKnownImeis() =>
-            new HashSet<string>(StringComparer.Ordinal);
-
-        public bool IsImeiCommitted(string ccid, string targetImei) => false;
-
         public bool TryGetCurrentSessionEpoch(
             string portName,
             string expectedCcid,
@@ -570,16 +572,6 @@ public sealed class RealDeviceSmokeTestRunnerTests
             string portName,
             string expectedCcid,
             CancellationToken cancellationToken) => Task.FromResult(false);
-
-        public bool TryReserveBatchImeiTarget(
-            string owner,
-            string portName,
-            string ccid,
-            string targetImei) => false;
-
-        public void ReleaseBatchImeiReservations(string owner)
-        {
-        }
 
         public Task RefreshPortAsync(
             string portName,

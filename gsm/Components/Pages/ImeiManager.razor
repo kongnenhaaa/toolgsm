@@ -24,18 +24,6 @@
         Import Backup
     </MudButton>
 
-    <MudButton Variant="Variant.Outlined" Color="Color.Primary" 
-               StartIcon="@Icons.Material.Filled.Sync"
-               OnClick="RestoreAll" Size="Size.Small">
-        Restore tất cả
-    </MudButton>
-
-    <MudButton Variant="Variant.Filled" Color="Color.Warning"
-               StartIcon="@Icons.Material.Filled.Brush"
-               OnClick="PaintAllNew" Size="Size.Small">
-        Tạo IMEI mới tất cả
-    </MudButton>
-
     <MudButton Variant="Variant.Text" Color="Color.Error" 
                StartIcon="@Icons.Material.Filled.DeleteSweep"
                OnClick="ClearAllBackup" Size="Size.Small">
@@ -68,14 +56,6 @@
     </MudItem>
     <MudItem xs="6" sm="3">
         <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudText Typo="Typo.caption" Style="color:#64748B;">Chặn SIM</MudText>
-            <MudText Typo="Typo.h5" Color="Color.Warning" Style="font-weight:700;">
-                @Ports.Count(p => p.Status == SimStatus.WaitingAccept || p.Status == SimStatus.SecurityBlocked)
-            </MudText>
-        </MudPaper>
-    </MudItem>
-    <MudItem xs="6" sm="3">
-        <MudPaper Class="pa-3" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.caption" Style="color:#64748B;">Có backup</MudText>
             <MudText Typo="Typo.h5" Color="Color.Info" Style="font-weight:700;">@_withBackupCount</MudText>
         </MudPaper>
@@ -89,11 +69,9 @@
         <!-- TAB 1: MAPPING HIỆN TẠI -->
         <MudTabPanel Text="Mapping hiện tại">
         <MudPaper Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px; overflow-x:auto; overflow-y:hidden; margin-top:12px;">
-            <MudTable Items="@FilteredPorts" Hover="true" Dense="true" Elevation="0" 
-                      MultiSelection="true" @bind-SelectedItems="_selectedPorts"
+            <MudTable Items="@FilteredPorts" Hover="true" Dense="true" Elevation="0"
                       Style="background:white; min-width:1450px;" Breakpoint="Breakpoint.None">
                 <HeaderContent>
-                    <MudTh Style="width:40px;"></MudTh>
                     <MudTh Style="white-space: nowrap;">COM</MudTh>
                     <MudTh Style="min-width:230px; white-space: nowrap;">CCID / Serial</MudTh>
                     <MudTh Style="white-space: nowrap;">IMEI hiện tại</MudTh>
@@ -104,9 +82,6 @@
                     <MudTh Style="min-width:160px; white-space: nowrap;">Thao tác</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd>
-                        <!-- Moved to MultiSelection natively -->
-                    </MudTd>
                     <MudTd Style="font-size:16px; font-weight:600; white-space: nowrap;">@context.PortName</MudTd>
                     <MudTd Style="@("font-family:monospace; font-size:16px; min-width:230px; white-space:nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Serial) ? "—" : context.Serial)</MudTd>
                     <MudTd Style="@("font-family:monospace; font-size:16px; white-space: nowrap; mso-number-format: '\\@';")">@(string.IsNullOrEmpty(context.Imei) ? "—" : context.Imei)</MudTd>
@@ -121,16 +96,6 @@
                             <MudTooltip Text="Copy IMEI">
                                 <MudIconButton Icon="@Icons.Material.Filled.ContentCopy" Size="Size.Small" 
                                                OnClick="@(() => CopyText(context.Imei))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Restore IMEI từ backup">
-                                <MudIconButton Icon="@Icons.Material.Filled.Restore" Size="Size.Small" Color="Color.Primary"
-                                               OnClick="@(() => RestoreOne(context))" 
-                                               Disabled="@(string.IsNullOrEmpty(GetOriginalImei(context.Serial)) || !IsWaitingForImeiAction(context))" />
-                            </MudTooltip>
-                            <MudTooltip Text="Tráng IMEI mới">
-                                <MudIconButton Icon="@Icons.Material.Filled.Brush" Size="Size.Small" Color="Color.Warning"
-                                               OnClick="@(() => PaintNewImei(context))"
-                                               Disabled="@(!IsWaitingForImeiAction(context))" />
                             </MudTooltip>
                             <MudTooltip Text="Xóa mapping">
                                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
@@ -187,36 +152,6 @@
         <MudGrid Class="mt-3">
             <MudItem xs="12" md="6">
                 <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-                    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Generate IMEI mới</MudText>
-                    
-                    <MudTextField @bind-Value="_customTac" Label="TAC (8 số đầu, tùy chọn)" 
-                                  Placeholder="86012345" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
-                    
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
-                               StartIcon="@Icons.Material.Filled.Casino"
-                               OnClick="GenerateImei">
-                        Generate IMEI ngẫu nhiên
-                    </MudButton>
-
-                    @if (!string.IsNullOrEmpty(_generatedImei))
-                    {
-                        <MudPaper Class="pa-3 mt-3" Style="background:#F0FDF4; border-radius:8px;">
-                            <MudText Typo="Typo.caption" Style="color:#64748B;">IMEI vừa tạo:</MudText>
-                            <MudText Typo="Typo.h6" Style="font-family:monospace; font-weight:700; color:#16A34A;">
-                                @_generatedImei
-                            </MudText>
-                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
-                                       StartIcon="@Icons.Material.Filled.ContentCopy"
-                                       OnClick="@(() => CopyText(_generatedImei))" Class="mt-1">
-                                Copy
-                            </MudButton>
-                        </MudPaper>
-                    }
-                </MudPaper>
-            </MudItem>
-
-            <MudItem xs="12" md="6">
-                <MudPaper Class="pa-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
                     <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">Kiểm tra IMEI</MudText>
                     
                     <MudTextField @bind-Value="_checkImei" Label="Nhập IMEI cần check" 
@@ -243,13 +178,10 @@
 
 @code {
     private string _search = "";
-    private HashSet<SimPort> _selectedPorts = new();
     private List<ImeiBackupItem> _backupList = new();
     private int BackupCount => _backupList.Count;
     private int _withBackupCount = 0;
 
-    private string _customTac = "";
-    private string _generatedImei = "";
     private string _checkImei = "";
     private string _imeiCheckResult = "";
     private bool _imeiValid = false;
@@ -336,140 +268,6 @@
         }
     }
 
-    async Task RestoreAll()
-    {
-        var targets = Ports.Where(p => IsWaitingForImeiAction(p)
-            && !string.IsNullOrEmpty(p.Serial)
-            && !string.IsNullOrEmpty(GetOriginalImei(p.Serial))).ToList();
-        if (!targets.Any())
-        {
-            Snackbar.Add("Không có cổng nào có IMEI gốc/backup", Severity.Warning);
-            return;
-        }
-
-        var confirm = await DialogService.ShowMessageBox(
-            "Xác nhận Restore",
-            $"Restore IMEI từ backup cho tất cả {targets.Count} cổng đang cắm?",
-            yesText: "Restore", cancelText: "Hủy");
-
-        if (confirm != true) return;
-
-        Snackbar.Add($"Bắt đầu Restore IMEI cho {targets.Count} cổng...", Severity.Info);
-        BackendConcurrency.ConfigureThreadPool(targets.Count);
-        await Task.WhenAll(targets.Select(port =>
-            PerformPaintImeiAsync(
-                port,
-                GetOriginalImei(port.Serial)!,
-                overwriteBackupWithCurrentImei: false)));
-        Snackbar.Add("Hoàn tất restore", Severity.Success);
-    }
-
-    async Task PaintAllNew()
-    {
-        var targets = Ports.Where(IsWaitingForImeiAction).ToList();
-        if (!targets.Any())
-        {
-            Snackbar.Add("Không có SIM nào đang chờ tạo IMEI mới", Severity.Warning);
-            return;
-        }
-
-        var confirm = await DialogService.ShowMessageBox(
-            "Xác nhận tạo IMEI mới",
-            $"Tạo và tráng IMEI mới cho tất cả {targets.Count} SIM đang chờ?",
-            yesText: "Tạo IMEI mới", cancelText: "Hủy");
-        if (confirm != true) return;
-
-        BackendConcurrency.ConfigureThreadPool(targets.Count);
-        await Task.WhenAll(targets.Select(PerformCreateNewImeiAsync));
-    }
-
-    static bool IsWaitingForImeiAction(SimPort port) =>
-        port.Status == SimStatus.WaitingAccept || port.Status == SimStatus.SecurityBlocked;
-
-    async Task RestoreOne(SimPort port)
-    {
-        var original = GetOriginalImei(port.Serial);
-        if (string.IsNullOrEmpty(original)) return;
-
-        var confirm = await DialogService.ShowMessageBox(
-            "Restore IMEI",
-            $"Restore IMEI gốc cho {port.PortName}?\n\nIMEI hiện tại: {port.Imei}\nIMEI gốc: {original}",
-            yesText: "Restore", cancelText: "Hủy");
-
-        if (confirm != true) return;
-
-        await PerformPaintImeiAsync(port, original, overwriteBackupWithCurrentImei: false);
-    }
-
-    async Task PaintNewImei(SimPort port)
-    {
-        var confirm = await DialogService.ShowMessageBox(
-            "Tráng IMEI mới",
-            $"Tạo và tráng IMEI mới cho {port.PortName}?\nSIM sẽ bị gán IMEI mới vĩnh viễn.",
-            yesText: "Tráng mới", cancelText: "Hủy");
-
-        if (confirm != true) return;
-
-        await PerformCreateNewImeiAsync(port);
-    }
-
-    async Task PerformCreateNewImeiAsync(SimPort port)
-    {
-        try
-        {
-            var result = await Vm.CreateNewImeiForPortAsync(port.PortName);
-            if (result.Success)
-            {
-                Snackbar.Add(
-                    $"[{port.PortName}] Tráng IMEI {result.TargetImei} thành công!",
-                    Severity.Success);
-            }
-            else
-            {
-                string target = string.IsNullOrWhiteSpace(result.TargetImei)
-                    ? "mới"
-                    : result.TargetImei;
-                Snackbar.Add(
-                    $"[{port.PortName}] Tráng IMEI {target} thất bại!",
-                    Severity.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add(
-                $"[{port.PortName}] Lỗi tạo IMEI mới: {ex.Message}",
-                Severity.Error);
-        }
-    }
-
-    async Task PerformPaintImeiAsync(
-        SimPort port,
-        string targetImei,
-        bool overwriteBackupWithCurrentImei)
-    {
-        try
-        {
-            bool success = await Vm.PaintImeiForCurrentSimAsync(
-                port.PortName, targetImei, overwriteBackupWithCurrentImei);
-            
-            if (success)
-            {
-                Snackbar.Add($"[{port.PortName}] Tráng IMEI {targetImei} thành công!", Severity.Success);
-            }
-            else
-            {
-                Snackbar.Add($"[{port.PortName}] Tráng IMEI {targetImei} thất bại!", Severity.Error);
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"[{port.PortName}] Lỗi: {ex.Message}", Severity.Error);
-        }
-        
-        LoadBackup();
-        StateHasChanged();
-    }
-
     async Task DeleteMapping(SimPort port)
     {
         if (string.IsNullOrEmpty(port.Serial)) return;
@@ -511,25 +309,6 @@
             _withBackupCount = Ports.Count(p => !string.IsNullOrEmpty(GetOriginalImei(p.Serial)));
             Snackbar.Add("Đã xóa toàn bộ backup", Severity.Success);
         }
-    }
-
-    void GenerateImei()
-    {
-        var rnd = new Random();
-        string tac = string.IsNullOrWhiteSpace(_customTac) ? "86" + rnd.Next(100000, 999999).ToString() : _customTac.PadRight(8, '0')[..8];
-        string body = tac;
-        for (int i = 0; i < 6; i++) body += rnd.Next(0, 10);
-
-        // Luhn check digit
-        int sum = 0;
-        for (int i = 0; i < 14; i++)
-        {
-            int d = body[i] - '0';
-            if (i % 2 == 1) { d *= 2; if (d > 9) d -= 9; }
-            sum += d;
-        }
-        int check = (10 - (sum % 10)) % 10;
-        _generatedImei = body + check;
     }
 
     void ValidateImei()

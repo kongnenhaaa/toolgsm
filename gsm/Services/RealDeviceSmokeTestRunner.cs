@@ -175,20 +175,13 @@ public sealed class RealDeviceSmokeTestRunner
 
             if (string.IsNullOrWhiteSpace(claim.Request.ContinuationOfRunId))
             {
-            DateTimeOffset imeiStartedAt = UtcNow;
-            BeginStep(store, state, logs, "create-sauto-imei", chargeable: false,
-                "Tạo hoặc resume đúng một mục tiêu IMEI theo journal SAuto.");
-            (bool imeiSuccess, string targetImei) =
-                await _host.CreateNewImeiForPortAsync(
-                        selected.PortName, state.PinnedCcid)
-                    .WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
-            state.TargetImei = NormalizeDigits(targetImei);
-            if (!imeiSuccess
-                || !ImeiManagementService.IsValidImei(state.TargetImei))
+            BeginStep(store, state, logs, "verify-current-imei", chargeable: false,
+                "Xác minh IMEI hiện có của modem; chế độ nofake không tạo, đổi hoặc lưu backup IMEI.");
+            state.TargetImei = NormalizeDigits(selected.Imei);
+            if (!ImeiManagementService.IsUsableObservedImei(state.TargetImei))
             {
                 FailKnown(store, state, logs,
-                    $"Tạo IMEI không hoàn tất; success={imeiSuccess}; target={targetImei}.");
+                    $"IMEI hiện có không hợp lệ: {selected.Imei}.");
             }
 
             RealDeviceSmokePortSnapshot afterImei = await WaitForPinnedPortAsync(
@@ -197,21 +190,14 @@ public sealed class RealDeviceSmokeTestRunner
                     requireTargetImei: true,
                     cancellationToken)
                 .ConfigureAwait(false);
-            await logs.WaitForAsync(
-                    state.PortName,
-                    "[IMEI_BACKUP_COMMIT]",
-                    imeiStartedAt,
-                    TimeSpan.FromSeconds(claim.Request.ImeiWaitSeconds),
-                    cancellationToken)
-                .ConfigureAwait(false);
             CompleteStep(store, state, logs,
-                $"IMEI đã xác minh, workbook đã commit và cổng đã Active: {afterImei.Imei}.");
+                $"IMEI hiện có đã được giữ nguyên và cổng đang Active: {afterImei.Imei}.");
 
-            // Force a fresh SIM epoch after the verified IMEI commit so the
-            // configured automatic USSD plan runs against the new identity.
+            // Force a fresh SIM epoch so the configured automatic USSD plan also
+            // proves that reconnecting preserves the modem's existing identity.
             DateTimeOffset automaticUssdStartedAt = UtcNow;
-            BeginStep(store, state, logs, "refresh-after-imei", chargeable: false,
-                "Mở lại riêng COM để kiểm tra resume IMEI và luồng USSD tự động trên epoch mới.");
+            BeginStep(store, state, logs, "refresh-preserve-imei", chargeable: false,
+                "Mở lại riêng COM để kiểm tra IMEI hiện có được giữ nguyên và chạy USSD tự động trên epoch mới.");
             await _host.RefreshPortAsync(state.PortName, cancellationToken)
                 .ConfigureAwait(false);
             RealDeviceSmokePortSnapshot afterRefresh = await WaitForPinnedPortAsync(
@@ -272,7 +258,7 @@ public sealed class RealDeviceSmokeTestRunner
                     store,
                     state,
                     logs,
-                    $"Tiếp tục từ run={prior.RunId}; giữ IMEI đã commit {state.TargetImei}; không tạo lại IMEI/USSD.");
+                    $"Tiếp tục từ run={prior.RunId}; giữ IMEI hiện có {state.TargetImei}; không đổi IMEI hoặc chạy lại USSD.");
             }
 
             BeginStep(store, state, logs, "call-900-15s", chargeable: true,
@@ -475,14 +461,6 @@ public sealed class RealDeviceSmokeTestRunner
                     requestedPorts,
                     inventory);
 
-            var unavailable = new HashSet<string>(
-                _host.GetKnownImeis()
-                    .Select(NormalizeDigits)
-                    .Where(ImeiManagementService.IsValidImei),
-                StringComparer.Ordinal);
-            foreach (RealDeviceSmokePortSnapshot port in inventory)
-                unavailable.Add(NormalizeDigits(port.Imei));
-
             var priorByPort = prior?.BulkPorts.ToDictionary(
                 port => port.PortName,
                 StringComparer.OrdinalIgnoreCase);
@@ -491,33 +469,30 @@ public sealed class RealDeviceSmokeTestRunner
             {
                 RealDeviceSmokeBulkPortResult? previous = null;
                 priorByPort?.TryGetValue(snapshot.PortName, out previous);
-                string target = previous == null
-                    ? GenerateUniqueBatchImeiTarget(unavailable)
-                    : NormalizeDigits(previous.TargetImei);
-                if (!ImeiManagementService.IsValidImei(target))
+                string target = NormalizeDigits(snapshot.Imei);
+                if (!ImeiManagementService.IsUsableObservedImei(target))
                 {
                     throw new RealDeviceSmokeRunException(
-                        $"Target resume không hợp lệ trên {snapshot.PortName}: {target}.");
+                        $"IMEI hiện có không hợp lệ trên {snapshot.PortName}: {target}.");
                 }
-                if (previous != null)
-                    unavailable.Add(target);
 
                 state.BulkPorts.Add(new RealDeviceSmokeBulkPortResult
                 {
                     PortName = snapshot.PortName,
                     PhysicalIndex = snapshot.PhysicalIndex,
                     PinnedCcid = NormalizeDigits(snapshot.Ccid),
-                    InitialImei = previous?.InitialImei ?? NormalizeDigits(snapshot.Imei),
+                    InitialImei = NormalizeDigits(snapshot.Imei),
                     TargetImei = target,
                     Outcome = previous?.Outcome == RealDeviceSmokeOutcome.Passed
                         ? RealDeviceSmokeOutcome.Passed
                         : RealDeviceSmokeOutcome.Running,
                     CurrentStep = previous?.Outcome == RealDeviceSmokeOutcome.Passed
                         ? "resume-verify-passed"
-                        : "target-prepared",
+                        : "current-imei-prepared",
                     ImeiAttempts = previous?.ImeiAttempts ?? 0,
                     UssdRefreshAttempts = previous?.UssdRefreshAttempts ?? 0,
-                    ImeiBackupCommitted = previous?.ImeiBackupCommitted ?? false,
+                    ImeiVerified = previous?.ImeiVerified ?? false,
+                    ImeiBackupCommitted = false,
                     NetworkReady = previous?.NetworkReady ?? false,
                     Ussd111Passed = previous?.Ussd111Passed ?? false,
                     Ussd101DirectPassed = previous?.Ussd101DirectPassed ?? false,
@@ -535,25 +510,13 @@ public sealed class RealDeviceSmokeTestRunner
                     claim.Request.MaxParallelPorts,
                     cancellationToken)
                 .ConfigureAwait(false);
-            foreach (RealDeviceSmokeBulkPortResult port in state.BulkPorts)
-            {
-                if (!_host.TryReserveBatchImeiTarget(
-                        $"BULK:{claim.RunId}:{port.PinnedCcid}",
-                        port.PortName,
-                        port.PinnedCcid,
-                        port.TargetImei))
-                {
-                    throw new RealDeviceSmokeRunException(
-                        $"Không reserve được target {port.TargetImei} cho {port.PortName}/{port.PinnedCcid}; batch bị chặn trước mutation.");
-                }
-            }
 
-            // This is the durable ownership boundary for every generated IMEI.
-            // No modem mutation starts until all 32 fixed targets are on disk.
-            state.CurrentStep = "targets-checkpointed";
+            // Persist the observed identities before refreshing any ports. The
+            // nofake scenario never generates, reserves, or writes an IMEI.
+            state.CurrentStep = "current-imeis-checkpointed";
             SaveState();
             _host.Log(
-                $"[BULK_IMEI_TARGETS_CHECKPOINTED] run={state.RunId}; targets={state.BulkPorts.Count}; no-call=true; no-sms=true",
+                $"[BULK_CURRENT_IMEIS_CHECKPOINTED] run={state.RunId}; ports={state.BulkPorts.Count}; no-imei-write=true; no-call=true; no-sms=true",
                 "SUCCESS");
             await VerifyBulkPhysicalIdentitiesAsync(
                     state.BulkPorts,
@@ -629,7 +592,7 @@ public sealed class RealDeviceSmokeTestRunner
                     port.CurrentStep = port.ImeiAttempts == 0
                         ? "cancelled-before-start"
                         : "cancelled-after-recovery";
-                    port.Error = "Batch đã bị hủy; target checkpoint vẫn được giữ để resume.";
+                    port.Error = "Batch đã bị hủy; snapshot IMEI hiện có vẫn được giữ để resume.";
                     port.UpdatedAtUtc = UtcNow;
                     port.CompletedAtUtc = UtcNow;
                 }
@@ -650,16 +613,6 @@ public sealed class RealDeviceSmokeTestRunner
             _host.Log(
                 $"[BULK_IMEI_USSD_FAILED] run={state.RunId}; error={ex.Message}; result={state.ResultPath}",
                 "ERROR");
-        }
-        finally
-        {
-            foreach (string owner in state.BulkPorts
-                         .Select(port =>
-                             $"BULK:{claim.RunId}:{port.PinnedCcid}")
-                         .Distinct(StringComparer.Ordinal))
-            {
-                _host.ReleaseBatchImeiReservations(owner);
-            }
         }
     }
 
@@ -801,8 +754,11 @@ public sealed class RealDeviceSmokeTestRunner
                 RealDeviceSmokePortSnapshot? snapshot = FindExactBulkIdentity(expected);
                 if (snapshot == null
                     || snapshot.IsRebooting
-                    || !ImeiManagementService.IsValidImei(
-                        NormalizeDigits(snapshot.Imei)))
+                    || !ImeiManagementService.IsUsableObservedImei(
+                        NormalizeDigits(snapshot.Imei))
+                    || !ImeiManagementService.AreEquivalentImei(
+                        snapshot.Imei,
+                        expected.TargetImei))
                 {
                     return false;
                 }
@@ -818,7 +774,7 @@ public sealed class RealDeviceSmokeTestRunner
                     .Where((_, index) => !verified[index])
                     .Select(port => port.PortName));
                 throw new RealDeviceSmokeRunException(
-                    $"Physical CCID preflight thất bại trên {failed}; chưa cho phép wave mutation.");
+                    $"Physical CCID preflight thất bại trên {failed}; wave chưa được phép chạy.");
             }
         }
     }
@@ -833,16 +789,13 @@ public sealed class RealDeviceSmokeTestRunner
         try
         {
             RealDeviceSmokePortSnapshot? live = FindExactBulkIdentity(port);
-            bool alreadyCommitted = live != null
-                && ImeiManagementService.AreEquivalentImei(
-                    live.Imei, port.TargetImei)
-                && _host.IsImeiCommitted(
-                    port.PinnedCcid, port.TargetImei);
+            bool alreadyVerified = IsCurrentImeiReady(live, port.TargetImei);
             if (port.Outcome == RealDeviceSmokeOutcome.Passed
-                && alreadyCommitted)
+                && alreadyVerified)
             {
                 update(port, item =>
                 {
+                    item.ImeiVerified = true;
                     item.CurrentStep = "resume-verified-passed";
                     item.Error = string.Empty;
                 });
@@ -852,36 +805,30 @@ public sealed class RealDeviceSmokeTestRunner
             update(port, item =>
             {
                 item.Outcome = RealDeviceSmokeOutcome.Running;
-                item.CurrentStep = alreadyCommitted
-                    ? "imei-commit-resume-verified"
-                    : "apply-fixed-imei";
+                item.CurrentStep = alreadyVerified
+                    ? "current-imei-resume-verified"
+                    : "wait-current-imei";
                 item.Error = string.Empty;
             });
 
-            bool imeiReady = alreadyCommitted;
+            bool imeiReady = alreadyVerified;
             for (int attempt = 1; !imeiReady && attempt <= 3; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                DateTimeOffset imeiStartedAt = UtcNow;
-                long imeiEvidenceSequence = logs.CurrentSequence;
                 update(port, item =>
                 {
                     item.ImeiAttempts++;
-                    item.CurrentStep = $"apply-fixed-imei-{attempt}";
+                    item.CurrentStep = $"verify-current-imei-{attempt}";
                 });
-                bool applied = await _host.ApplyImeiForCurrentSimAsync(
-                        port.PortName,
-                        port.TargetImei,
-                        port.PinnedCcid,
-                        cancellationToken)
+
+                await _host.RefreshPortAsync(
+                        port.PortName, cancellationToken)
                     .ConfigureAwait(false);
                 try
                 {
                     live = await WaitForBulkTargetAsync(
                             port,
-                            TimeSpan.FromSeconds(applied
-                                ? request.ImeiWaitSeconds
-                                : Math.Min(180, request.ImeiWaitSeconds)),
+                            TimeSpan.FromSeconds(request.ImeiWaitSeconds),
                             cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -889,27 +836,11 @@ public sealed class RealDeviceSmokeTestRunner
                 {
                     live = null;
                 }
-                imeiReady = live != null
-                    && _host.IsImeiCommitted(
-                        port.PinnedCcid, port.TargetImei);
-                if (imeiReady)
-                {
-                    await logs.WaitForAsync(
-                            port.PortName,
-                            $"[IMEI_BACKUP_COMMIT] CCID={port.PinnedCcid}; IMEI={port.TargetImei}",
-                            imeiStartedAt,
-                            TimeSpan.FromSeconds(request.ImeiWaitSeconds),
-                            cancellationToken,
-                            afterSequence: imeiEvidenceSequence)
-                        .ConfigureAwait(false);
-                    break;
-                }
+                imeiReady = IsCurrentImeiReady(live, port.TargetImei);
+                if (imeiReady) break;
 
                 if (attempt < 3)
                 {
-                    await _host.RefreshPortAsync(
-                            port.PortName, cancellationToken)
-                        .ConfigureAwait(false);
                     await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -917,12 +848,12 @@ public sealed class RealDeviceSmokeTestRunner
             if (!imeiReady)
             {
                 throw new RealDeviceSmokeRunException(
-                    $"{port.PortName} chưa xác minh được IMEI/backup target {port.TargetImei} sau 3 lần replay cùng target.");
+                    $"{port.PortName} chưa Active/Ready với IMEI hiện có {port.TargetImei} sau 3 lần refresh; nofake không ghi IMEI.");
             }
 
             update(port, item =>
             {
-                item.ImeiBackupCommitted = true;
+                item.ImeiVerified = true;
                 item.CurrentStep = "refresh-for-new-ussd-epoch";
             });
 
@@ -1001,9 +932,7 @@ public sealed class RealDeviceSmokeTestRunner
                             TimeSpan.FromSeconds(request.ImeiWaitSeconds),
                             cancellationToken)
                         .ConfigureAwait(false);
-                    ussdPassed = live != null
-                        && _host.IsImeiCommitted(
-                            port.PinnedCcid, port.TargetImei);
+                    ussdPassed = IsCurrentImeiReady(live, port.TargetImei);
                     if (ussdPassed)
                     {
                         update(port, item =>
@@ -1118,7 +1047,7 @@ public sealed class RealDeviceSmokeTestRunner
             .Select(port =>
                 $"{port.PortName}:ccid={NormalizeDigits(port.Ccid)},imei={NormalizeDigits(port.Imei)},reboot={port.IsRebooting}"));
         throw new RealDeviceSmokeRunException(
-            $"Không ghim được đủ {requestedPorts.Count} COM/CCID/IMEI ổn định trước mutation. {diagnostic}");
+            $"Không ghim được đủ {requestedPorts.Count} COM/CCID/IMEI hiện có ổn định. {diagnostic}");
     }
 
     private static bool IsSafeBulkInventoryPort(
@@ -1128,7 +1057,7 @@ public sealed class RealDeviceSmokeTestRunner
         return !port.IsRebooting
             && ccid.Length == 20
             && ccid.StartsWith(ExpectedCcidPrefix, StringComparison.Ordinal)
-            && ImeiManagementService.IsValidImei(
+            && ImeiManagementService.IsUsableObservedImei(
                 NormalizeDigits(port.Imei));
     }
 
@@ -1144,6 +1073,16 @@ public sealed class RealDeviceSmokeTestRunner
                 NormalizeDigits(expected.PinnedCcid),
                 StringComparison.Ordinal));
 
+    internal static bool IsCurrentImeiReady(
+        RealDeviceSmokePortSnapshot? port,
+        string expectedImei) =>
+        port != null
+        && port.IsActive
+        && port.IsReadyForOperation
+        && !port.IsRebooting
+        && ImeiManagementService.AreEquivalentImei(
+            port.Imei, expectedImei);
+
     private async Task<RealDeviceSmokePortSnapshot?> WaitForBulkTargetAsync(
         RealDeviceSmokeBulkPortResult expected,
         TimeSpan timeout,
@@ -1154,12 +1093,7 @@ public sealed class RealDeviceSmokeTestRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             RealDeviceSmokePortSnapshot? live = FindExactBulkIdentity(expected);
-            if (live != null
-                && live.IsActive
-                && live.IsReadyForOperation
-                && !live.IsRebooting
-                && ImeiManagementService.AreEquivalentImei(
-                    live.Imei, expected.TargetImei))
+            if (IsCurrentImeiReady(live, expected.TargetImei))
             {
                 return live;
             }
@@ -1205,7 +1139,7 @@ public sealed class RealDeviceSmokeTestRunner
             && priorPorts.SequenceEqual(
                 requestedPorts.OrderBy(ParsePortNumber),
                 StringComparer.OrdinalIgnoreCase);
-        bool exactCcids = prior.BulkPorts.All(previous =>
+        bool exactLiveIdentities = prior.BulkPorts.All(previous =>
             inventory.Any(current =>
                 string.Equals(
                     current.PortName,
@@ -1214,40 +1148,21 @@ public sealed class RealDeviceSmokeTestRunner
                 && string.Equals(
                     NormalizeDigits(current.Ccid),
                     NormalizeDigits(previous.PinnedCcid),
-                    StringComparison.Ordinal)));
-        bool uniqueTargets = prior.BulkPorts.Count == requestedPorts.Count
+                    StringComparison.Ordinal)
+                && ImeiManagementService.AreEquivalentImei(
+                    current.Imei,
+                    previous.TargetImei)));
+        bool validTargets = prior.BulkPorts.Count == requestedPorts.Count
             && prior.BulkPorts.All(port =>
-                ImeiManagementService.IsValidImei(
-                    NormalizeDigits(port.TargetImei)))
-            && prior.BulkPorts.Select(port => NormalizeDigits(port.TargetImei))
-                .Distinct(StringComparer.Ordinal).Count() == prior.BulkPorts.Count;
-        if (!samePorts || !exactCcids || !uniqueTargets)
+                ImeiManagementService.IsUsableObservedImei(
+                    NormalizeDigits(port.TargetImei)));
+        if (!samePorts || !exactLiveIdentities || !validTargets)
         {
             throw new RealDeviceSmokeRunException(
-                "Bulk resume bị chặn: port/CCID/target không trùng tuyệt đối với checkpoint trước.");
+                "Bulk resume bị chặn: port/CCID/IMEI hiện có không trùng tuyệt đối với checkpoint trước.");
         }
 
         return prior;
-    }
-
-    internal static string GenerateUniqueBatchImeiTarget(
-        ISet<string> unavailable,
-        Func<string>? generator = null,
-        int maxAttempts = 1000)
-    {
-        generator ??= ImeiManagementService.GenerateRandomImei;
-        for (int attempt = 0; attempt < Math.Max(1, maxAttempts); attempt++)
-        {
-            string candidate = NormalizeDigits(generator());
-            if (ImeiManagementService.IsValidImei(candidate)
-                && unavailable.Add(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new RealDeviceSmokeRunException(
-            "Không sinh được IMEI batch duy nhất sau số lần thử cho phép.");
     }
 
     private static int ParsePortNumber(string portName) =>
@@ -1339,19 +1254,17 @@ public sealed class RealDeviceSmokeTestRunner
             ?? string.Empty;
         string expectedCcid = NormalizeDigits(request.ExpectedCcid);
         string targetImei = NormalizeDigits(prior.TargetImei);
-        string[] requiredPassedSteps =
-        [
-            "select-port",
-            "create-sauto-imei",
-            "refresh-after-imei",
-            "automatic-ussd-111-101",
-            "manual-ussd-101"
-        ];
-
-        bool requiredStepsPassed = requiredPassedSteps.All(name =>
+        bool PassedAny(params string[] names) =>
             prior.Steps.Any(step =>
-                string.Equals(step.Name, name, StringComparison.Ordinal)
-                && step.Status == RealDeviceSmokeStepStatus.Passed));
+                step.Status == RealDeviceSmokeStepStatus.Passed
+                && names.Contains(step.Name, StringComparer.Ordinal));
+
+        bool requiredStepsPassed =
+            PassedAny("select-port")
+            && PassedAny("verify-current-imei", "create-sauto-imei")
+            && PassedAny("refresh-preserve-imei", "refresh-after-imei")
+            && PassedAny("automatic-ussd", "automatic-ussd-111-101")
+            && PassedAny("manual-ussd-101");
         bool inheritedVerifiedState = prior.Steps.Any(step =>
             string.Equals(
                 step.Name,
@@ -1384,7 +1297,7 @@ public sealed class RealDeviceSmokeTestRunner
             || !string.Equals(
                 NormalizeDigits(selected.Ccid), expectedCcid,
                 StringComparison.Ordinal)
-            || !ImeiManagementService.IsValidImei(targetImei)
+            || !ImeiManagementService.IsUsableObservedImei(targetImei)
             || !ImeiManagementService.AreEquivalentImei(
                 selected.Imei, targetImei)
             || !hasVerifiedImeiAndUssdState
@@ -1392,7 +1305,7 @@ public sealed class RealDeviceSmokeTestRunner
             || !smsWasNeverStarted)
         {
             throw new RealDeviceSmokeRunException(
-                "Run tiếp nối không đạt điều kiện an toàn: phải cùng COM/CCID/IMEI, các bước IMEI/USSD đã Passed, call cũ Failed nhưng ATH+CLCC trống, và SMS chưa từng bắt đầu.");
+                "Run tiếp nối không đạt điều kiện an toàn: phải cùng COM/CCID/IMEI hiện có, các bước xác minh/USSD đã Passed, call cũ Failed nhưng ATH+CLCC trống, và SMS chưa từng bắt đầu.");
         }
 
         return targetImei;
@@ -1527,7 +1440,8 @@ public sealed class RealDeviceSmokeTestRunner
         && !string.IsNullOrWhiteSpace(port.NetworkType)
         && NormalizeDigits(port.Ccid).StartsWith(
             ExpectedCcidPrefix, StringComparison.Ordinal)
-        && ImeiManagementService.IsValidImei(NormalizeDigits(port.Imei));
+        && ImeiManagementService.IsUsableObservedImei(
+            NormalizeDigits(port.Imei));
 
     internal static bool IsEligible(RealDeviceSmokePortSnapshot port) =>
         IsEligibleForInitialImeiSelection(port)
@@ -1704,7 +1618,7 @@ public sealed class RealDeviceSmokeTestRunner
         if (!request.ConfirmTelecomActions)
         {
             throw new InvalidDataException(
-                "confirmTelecomActions phải là true vì test sẽ đổi IMEI, gọi 900 và gửi SMS 888.");
+                "confirmTelecomActions phải là true vì full test sẽ gọi 900 và gửi SMS 888; IMEI chỉ được đọc/xác minh.");
         }
         if (!string.IsNullOrWhiteSpace(request.RequestId)
             && !Regex.IsMatch(request.RequestId, @"^[A-Za-z0-9_-]{1,80}$"))
@@ -2039,9 +1953,12 @@ public sealed class RealDeviceSmokeBulkPortResult
     public string InitialImei { get; set; } = string.Empty;
     public string TargetImei { get; set; } = string.Empty;
     public RealDeviceSmokeOutcome Outcome { get; set; } = RealDeviceSmokeOutcome.Running;
-    public string CurrentStep { get; set; } = "target-prepared";
+    public string CurrentStep { get; set; } = "current-imei-prepared";
     public int ImeiAttempts { get; set; }
     public int UssdRefreshAttempts { get; set; }
+    public bool ImeiVerified { get; set; }
+    // Kept only so schema-v1 checkpoints written before nofake can still be read.
+    // New runs never set this flag and never use a backup as acceptance evidence.
     public bool ImeiBackupCommitted { get; set; }
     public bool NetworkReady { get; set; }
     public bool Ussd111Passed { get; set; }
@@ -2144,16 +2061,6 @@ internal interface IRealDeviceSmokeHost
     event Action<LogMessage>? LogAdded;
 
     IReadOnlyList<RealDeviceSmokePortSnapshot> GetPorts();
-    Task<(bool Success, string TargetImei)> CreateNewImeiForPortAsync(
-        string portName,
-        string expectedCcid);
-    Task<bool> ApplyImeiForCurrentSimAsync(
-        string portName,
-        string targetImei,
-        string expectedCcid,
-        CancellationToken cancellationToken);
-    IReadOnlySet<string> GetKnownImeis();
-    bool IsImeiCommitted(string ccid, string targetImei);
     bool TryGetCurrentSessionEpoch(
         string portName,
         string expectedCcid,
@@ -2162,12 +2069,6 @@ internal interface IRealDeviceSmokeHost
         string portName,
         string expectedCcid,
         CancellationToken cancellationToken);
-    bool TryReserveBatchImeiTarget(
-        string owner,
-        string portName,
-        string ccid,
-        string targetImei);
-    void ReleaseBatchImeiReservations(string owner);
     Task RefreshPortAsync(
         string portName,
         CancellationToken cancellationToken);
@@ -2222,33 +2123,6 @@ internal sealed class MainViewModelSmokeHost : IRealDeviceSmokeHost
             Regex.Replace(port.Imei ?? string.Empty, @"\D", string.Empty)))
         .ToArray();
 
-    public Task<(bool Success, string TargetImei)> CreateNewImeiForPortAsync(
-        string portName,
-        string expectedCcid) =>
-        _viewModel.CreateNewImeiForPortAsync(portName, expectedCcid);
-
-    public Task<bool> ApplyImeiForCurrentSimAsync(
-        string portName,
-        string targetImei,
-        string expectedCcid,
-        CancellationToken cancellationToken) =>
-        _viewModel.PaintImeiForCurrentSimAsync(
-            portName,
-            targetImei,
-            overwriteBackupWithCurrentImei: true,
-            expectedCcid: expectedCcid,
-            cancellationToken: cancellationToken);
-
-    public IReadOnlySet<string> GetKnownImeis() =>
-        _viewModel.GetKnownImeiTargetsSnapshot();
-
-    public bool IsImeiCommitted(string ccid, string targetImei) =>
-        _viewModel.ImeiCache.TryGetValue(
-            Regex.Replace(ccid ?? string.Empty, @"\D", string.Empty),
-            out SimBackupEntry? entry)
-        && ImeiManagementService.AreEquivalentImei(
-            entry.Imei, targetImei);
-
     public bool TryGetCurrentSessionEpoch(
         string portName,
         string expectedCcid,
@@ -2262,17 +2136,6 @@ internal sealed class MainViewModelSmokeHost : IRealDeviceSmokeHost
         CancellationToken cancellationToken) =>
         _viewModel.VerifyPhysicalCcidAsync(
             portName, expectedCcid, cancellationToken);
-
-    public bool TryReserveBatchImeiTarget(
-        string owner,
-        string portName,
-        string ccid,
-        string targetImei) =>
-        _viewModel.TryReserveBatchImeiTarget(
-            owner, portName, ccid, targetImei);
-
-    public void ReleaseBatchImeiReservations(string owner) =>
-        _viewModel.ReleaseBatchImeiReservations(owner);
 
     public Task RefreshPortAsync(
         string portName,
@@ -2433,8 +2296,7 @@ internal sealed class RealDeviceSmokeLogCollector : IDisposable
     }
 
     private static bool IsAcceptanceMarker(string message) =>
-        message.Contains("[IMEI_BACKUP_COMMIT]", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("[SAUTO_NETWORK_READY]", StringComparison.OrdinalIgnoreCase)
+        message.Contains("[SAUTO_NETWORK_READY]", StringComparison.OrdinalIgnoreCase)
         || message.Contains(
             "[SAUTO_AUTO_USSD_RESULT]",
             StringComparison.OrdinalIgnoreCase);

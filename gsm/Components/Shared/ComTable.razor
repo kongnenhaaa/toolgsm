@@ -19,7 +19,6 @@
                 var statConn      = visiblePorts.Count(p => p.Status == SimStatus.Connecting);
                 var statWaitSim   = visiblePorts.Count(p => p.Status == "Chờ cắm SIM");
                 var statNoResp    = visiblePorts.Count(p => p.Status == SimStatus.NoResponse);
-                var statBlocked   = visiblePorts.Count(p => p.Status == SimStatus.WaitingAccept || p.Status == SimStatus.SecurityBlocked);
                 var statTotal     = visiblePorts.Count;
                 var isDark        = gsm.Services.SettingsService.Current.DarkMode;
                 var titleColor    = isDark ? "color:#E2E8F0; font-weight:600;" : "color:#64748B; font-weight:600;";
@@ -56,37 +55,9 @@
                         Không phản hồi: @statNoResp
                     </MudChip>
                 }
-                @if (statBlocked > 0)
-                {
-                    <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled"
-                             Icon="@Icons.Material.Filled.Block" Class="mr-1 com-stat-chip">
-                        Chặn SIM: @statBlocked
-                    </MudChip>
-                }
             }
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Refresh" Class="mr-2"
                        Variant="Variant.Outlined" Color="Color.Primary" OnClick="RefreshSelected">Refresh</MudButton>
-            @{
-                // Khi người dùng đã chọn COM, số trên nút phải phản ánh đúng số COM
-                // đang chọn. Việc kiểm tra trạng thái/khả năng thao tác diễn ra sau
-                // khi bấm nút và được báo rõ trong hộp xác nhận/kết quả.
-                var imeiActionCount = SelectedItems.Any()
-                    ? SelectedItems.Count(port => !IsImeiActionRunning(port))
-                    : VisiblePorts.Count(port => CanCreateImei(port) && !IsImeiActionRunning(port));
-            }
-            
-            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning" Class="mr-2"
-                       StartIcon="@Icons.Material.Filled.Brush"
-                       OnClick="CreateNewImeiSelected"
-                       Disabled="@(!HasImeiActionTarget())">
-                @(imeiActionCount > 0 ? $"TẠO IMEI MỚI ({imeiActionCount})" : "TẠO IMEI MỚI")
-            </MudButton>
-            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary" Class="mr-2"
-                       StartIcon="@Icons.Material.Filled.Restore"
-                       OnClick="RestoreImeiSelected"
-                       Disabled="@(!HasImeiActionTarget())">
-                @(imeiActionCount > 0 ? $"KHÔI PHỤC IMEI ({imeiActionCount})" : "KHÔI PHỤC IMEI")
-            </MudButton>
 
             @if (Operation.Equals("SMS", StringComparison.OrdinalIgnoreCase))
             {
@@ -277,26 +248,6 @@
 
     [Parameter] public bool IsDeletingSmsStorage { get; set; }
 
-    bool IsImeiActionPending(SimPort p)
-    {
-        if (p == null) return false;
-        var s = p.Status ?? "";
-
-        // Chỉ các cổng đang bị chặn chờ thao tác IMEI mới được xử lý.
-        if (s == gsm.Models.SimStatus.Active
-            || s == gsm.Models.SimStatus.Connecting
-            || s == gsm.Models.SimStatus.NoResponse
-            || s == "Chờ cắm SIM")
-        {
-            return false;
-        }
-
-        // WaitingAccept chỉ được giữ để tương thích dữ liệu trạng thái cũ; UI hiển thị là Chặn SIM.
-        return s == gsm.Models.SimStatus.WaitingAccept
-            || s == gsm.Models.SimStatus.SecurityBlocked
-            || s == gsm.Models.SimStatus.ImeiError;
-    }
-
     async Task RefreshOne(SimPort port)
     {
         if (OnRefresh.HasDelegate)
@@ -308,178 +259,6 @@
     }
 
     [Inject] private IDialogService DialogService { get; set; } = default!;
-
-    // Khóa theo từng COM: modem đang ghi IMEI không chạy chồng tác vụ,
-    // nhưng các COM khác vẫn được phép tạo/khôi phục song song.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _imeiActionPorts =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    bool IsImeiActionRunning(SimPort? port) =>
-        port != null && _imeiActionPorts.ContainsKey(port.PortName);
-
-    bool HasImeiActionTarget()
-    {
-        IEnumerable<SimPort> candidates = SelectedItems.Any()
-            ? SelectedItems
-            : VisiblePorts.Where(CanCreateImei);
-        return candidates.Any(port => !IsImeiActionRunning(port));
-    }
-
-    List<SimPort> FilterFreeImeiTargets(IEnumerable<SimPort> candidates) =>
-        candidates.Where(port => !IsImeiActionRunning(port)).ToList();
-
-    Task<List<SimPort>> GetImeiActionCandidatesAsync()
-    {
-        // SAuto dùng ngay snapshot COM người dùng đã chọn. Không chèn một lượt
-        // HandleSimInserted (CFUN/CPIN/CCID) trước thao tác IMEI vì lượt probe đó
-        // tranh cổng với vòng no-SIM và làm cả batch phải chờ/timeout.
-        var candidates = SelectedItems.Any() ? SelectedItems.ToList() : VisiblePorts.ToList();
-        return Task.FromResult(candidates);
-    }
-
-    bool CanCreateImei(SimPort port) =>
-        (port.Status ?? string.Empty) == "Chờ cắm SIM"
-        || IsImeiActionPending(port)
-        || port.Status == gsm.Models.SimStatus.Active;
-
-    static string Digits(string? value) =>
-        new((value ?? string.Empty).Where(char.IsDigit).ToArray());
-
-    async Task CreateNewImeiSelected()
-    {
-        try
-        {
-            var candidates = await GetImeiActionCandidatesAsync();
-            // Khi đã chọn thủ công, SAuto thử đúng toàn bộ COM đã chọn. Không lọc
-            // lại theo status cũ khiến nút báo 32 nhưng thực tế chỉ chạy 4.
-            var targets = SelectedItems.Any()
-                ? FilterFreeImeiTargets(candidates)
-                : FilterFreeImeiTargets(candidates.Where(CanCreateImei));
-            if (targets.Count == 0)
-            {
-                Snackbar.Add("Các cổng đã chọn đang có tác vụ IMEI; hãy chọn cổng khác.", Severity.Warning);
-                return;
-            }
-
-            var ok = await DialogService.ShowMessageBox(
-                "Tạo IMEI mới",
-                $"Tạo IMEI mới cho {targets.Count} cổng? Cổng chưa cắm SIM vẫn được xử lý.",
-                yesText: "Tạo IMEI mới", cancelText: "Hủy");
-            if (ok != true) return;
-
-            var acquiredTargets = targets
-                .Where(port => _imeiActionPorts.TryAdd(port.PortName, 0))
-                .ToList();
-            if (acquiredTargets.Count == 0)
-            {
-                Snackbar.Add("Các cổng đã chọn vừa bắt đầu tác vụ IMEI khác.", Severity.Warning);
-                return;
-            }
-            StateHasChanged();
-
-            int success = 0;
-            try
-            {
-                await RunAllPortsAsync(acquiredTargets, async port =>
-                {
-                    var result = await Vm.CreateNewImeiForPortAsync(
-                        port.PortName);
-                    if (result.Success)
-                        Interlocked.Increment(ref success);
-                });
-                Snackbar.Add($"Tạo IMEI mới hoàn tất: {success}/{acquiredTargets.Count} cổng.",
-                    success == acquiredTargets.Count ? Severity.Success : Severity.Warning);
-            }
-            finally
-            {
-                foreach (var port in acquiredTargets)
-                    _imeiActionPorts.TryRemove(port.PortName, out _);
-                StateHasChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Tạo IMEI mới lỗi: {ex.Message}", Severity.Error);
-            StateHasChanged();
-        }
-    }
-
-    async Task RestoreImeiSelected()
-    {
-        try
-        {
-            var candidates = await GetImeiActionCandidatesAsync();
-            var restoreImeis = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var port in FilterFreeImeiTargets(candidates.Where(CanCreateImei)))
-            {
-                string ccid = Digits(port.Serial);
-                if (!string.IsNullOrWhiteSpace(ccid)
-                    && Vm.ImeiCache.TryGetValue(ccid, out var simEntry)
-                    && gsm.Services.ImeiManagementService.IsValidImei(simEntry.Imei))
-                {
-                    restoreImeis[port.PortName] = simEntry.Imei;
-                }
-                else if (string.IsNullOrWhiteSpace(ccid)
-                    && Vm.TryGetModemImeiBackup(port.PortName, out var modemEntry))
-                {
-                    restoreImeis[port.PortName] = modemEntry.Imei;
-                }
-            }
-            var targets = candidates.Where(port => restoreImeis.ContainsKey(port.PortName)).ToList();
-
-            if (targets.Count == 0)
-            {
-                Snackbar.Add("Không có cổng nào có IMEI backup phù hợp trong XLSX.", Severity.Warning);
-                return;
-            }
-
-            var ok = await DialogService.ShowMessageBox(
-                "Khôi phục IMEI",
-                $"Khôi phục IMEI gần nhất từ XLSX cho {targets.Count} cổng?",
-                yesText: "Khôi phục", cancelText: "Hủy");
-            if (ok != true) return;
-
-            var acquiredTargets = targets
-                .Where(port => _imeiActionPorts.TryAdd(port.PortName, 0))
-                .ToList();
-            if (acquiredTargets.Count == 0)
-            {
-                Snackbar.Add("Các cổng đã chọn vừa bắt đầu tác vụ IMEI khác.", Severity.Warning);
-                return;
-            }
-            StateHasChanged();
-
-            int success = 0;
-            try
-            {
-                await RunAllPortsAsync(acquiredTargets, async port =>
-                {
-                    string backupImei = restoreImeis[port.PortName];
-                    bool hasSim = !string.IsNullOrWhiteSpace(Digits(port.Serial));
-                    bool applied = hasSim
-                        ? await Vm.PaintImeiForCurrentSimAsync(
-                            port.PortName, backupImei, overwriteBackupWithCurrentImei: false)
-                        : await Vm.PaintImeiWithoutSimAsync(
-                            port.PortName, backupImei, backupCurrentBeforeWrite: false);
-                    if (applied)
-                        Interlocked.Increment(ref success);
-                });
-                Snackbar.Add($"Khôi phục IMEI hoàn tất: {success}/{acquiredTargets.Count} cổng.",
-                    success == acquiredTargets.Count ? Severity.Success : Severity.Warning);
-            }
-            finally
-            {
-                foreach (var port in acquiredTargets)
-                    _imeiActionPorts.TryRemove(port.PortName, out _);
-                StateHasChanged();
-            }
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"Khôi phục IMEI lỗi: {ex.Message}", Severity.Error);
-            StateHasChanged();
-        }
-    }
 
     async Task RefreshSelected()
     {
@@ -499,14 +278,6 @@
     {
         SelectedItems = selectedItems ?? new HashSet<SimPort>();
         await SelectedItemsChanged.InvokeAsync(SelectedItems);
-    }
-
-    private static Task RunAllPortsAsync(
-        IReadOnlyCollection<SimPort> ports,
-        Func<SimPort, Task> operation)
-    {
-        gsm.Services.BackendConcurrency.ConfigureThreadPool(ports.Count);
-        return Task.WhenAll(ports.Select(operation));
     }
 
     private static string GetRowClass(SimPort port, int rowNumber) => port.Status switch

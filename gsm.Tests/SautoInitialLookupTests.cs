@@ -77,28 +77,23 @@ public sealed class SautoInitialLookupTests
         Assert.Equal(expected, MainViewModel.ExtractPromotionBalanceFromUssd(response));
 
     [Theory]
-    [InlineData("354434778044431", "354434778044431", true)]
-    [InlineData("\r\n354434778044431\r\nOK", "354434778044431", true)]
-    [InlineData("353982261250411", "354434778044431", false)]
-    [InlineData("", "354434778044431", false)]
-    [InlineData("354434778044431", "", false)]
-    public void RefreshedSession_ResumesOnlyWithPreviouslyVerifiedImei(
-        string currentImei, string verifiedImei, bool expected) =>
-        Assert.Equal(expected, MainViewModel.IsVerifiedImeiResumeMatch(currentImei, verifiedImei));
-
-    [Theory]
-    [InlineData("351928119811880", "351928119811880", true)]
-    [InlineData("\r\n+EGMR: \"351928119811880\"\r\nOK", "351928119811880", true)]
-    [InlineData("351928119811880", "354147385996229", false)]
-    [InlineData("", "351928119811880", false)]
-    [InlineData("351928119811880", "", false)]
-    public void FirstCcidAfterNoSimCreate_UsesOnlyVerifiedPendingImei(
-        string currentImei,
-        string pendingImei,
+    [InlineData("89840200000000000003", "89840200000000000003", SimStatus.Active, true, true)]
+    [InlineData("89840200000000000003", "89840200000000000003", SimStatus.Active, false, false)]
+    [InlineData("89840200000000000003", "89840200000000000003", SimStatus.Connecting, true, false)]
+    [InlineData("89840200000000000003", "89840200000000000003", SimStatus.WaitingAccept, true, false)]
+    [InlineData("89840200000000000003", "89840200000000000003", SimStatus.SecurityBlocked, true, false)]
+    [InlineData("89840200000000000003", "89840200000000000004", SimStatus.Active, true, false)]
+    public void DetectedCcid_IsIgnoredOnlyWhenSameSimIsAlreadyActive(
+        string currentCcid,
+        string detectedCcid,
+        string status,
+        bool currentSessionMatches,
         bool expected) =>
         Assert.Equal(
             expected,
-            MainViewModel.IsPendingNoSimImeiHandoffMatch(
-                currentImei,
-                pendingImei));
+            MainViewModel.ShouldIgnoreDetectedCcid(
+                currentCcid,
+                detectedCcid,
+                status,
+                currentSessionMatches));
 }

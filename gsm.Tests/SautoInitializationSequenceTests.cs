@@ -62,25 +62,6 @@ public sealed class SautoInitializationSequenceTests
             "AT+COPS?"
         ], GsmModemService.SautoNetworkPollingCommandOrder);
         Assert.Equal(
-            TimeSpan.FromSeconds(10),
-            GsmModemService.SautoImeiResetGuardDelay);
-        Assert.Equal(
-            TimeSpan.FromMilliseconds(500),
-            GsmModemService.SautoImeiWriteGuardDelay);
-        Assert.Equal(5, GsmModemService.SautoImeiReadMaxAttempts);
-        Assert.Equal(
-            TimeSpan.FromMilliseconds(100),
-            GsmModemService.SautoImeiReadInitialDelay);
-        Assert.Equal(
-            TimeSpan.FromMilliseconds(100),
-            GsmModemService.SautoImeiReadPollDelay);
-        Assert.Equal(
-            TimeSpan.FromSeconds(12),
-            GsmModemService.SautoImeiReadTimeout);
-        Assert.Equal(
-            TimeSpan.FromSeconds(1),
-            GsmModemService.SautoImeiReadRetryDelay);
-        Assert.Equal(
             TimeSpan.FromMilliseconds(100),
             GsmModemService.SautoDataPortStepDelay);
         Assert.Equal(

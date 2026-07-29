@@ -51,10 +51,6 @@ internal sealed class PortReconnectCoordinator
     }
 }
 
-public readonly record struct SautoImeiChangeResult(
-    string ReadImei,
-    bool ResetRequested);
-
 public interface IGsmModemService
 {
     Task<string> SendCommandAsync(
@@ -69,15 +65,6 @@ public interface IGsmModemService
     /// </summary>
     Task<bool> EnterSautoAirplaneModeAsync(
         string portName,
-        CancellationToken ct = default);
-    /// <summary>
-    /// Runs GSMController.ChangeImei while owning the UART continuously:
-    /// write slot 7, wait for the shared RX callback to publish the readback,
-    /// then send the CFUN reset without using terminal OK as a gate.
-    /// </summary>
-    Task<SautoImeiChangeResult> ChangeSautoImeiAsync(
-        string portName,
-        string targetImei,
         CancellationToken ct = default);
     /// <summary>
     /// Returns the latest slot-7 IMEI already parsed by the SAuto receive loop.
@@ -112,16 +99,14 @@ public interface IGsmModemService
         string expectedCcid,
         string expectedImei);
     /// <summary>
-    /// Stops the additional SMS maintenance layer before a SAuto IMEI workflow.
-    /// Normal SAuto RX handling remains active; maintenance is re-enabled only
-    /// after the post-reset automatic USSD stage has completed.
+    /// Stops the additional SMS maintenance layer while a foreground SAuto
+    /// workflow owns the port.
     /// </summary>
     Task<IDisposable> HoldSmsReceiveMaintenanceUntilSautoReadyAsync(
         string portName,
         CancellationToken ct = default);
     /// <summary>
-    /// Bật/tắt xác nhận rút SIM nhanh. Cờ được bật ngay khi CCID của phiên hiện
-    /// tại đã được xác nhận, kể cả khi SIM còn đang chờ thao tác IMEI.
+    /// Bật/tắt xác nhận rút SIM nhanh theo CCID của phiên hiện tại.
     /// </summary>
     void SetSmsSimIdentity(string portName, string? ccid);
     List<string> GetAvailablePorts();
@@ -135,7 +120,9 @@ public interface IGsmModemService
     IDisposable SuspendPortBackgroundOperations(
         string portName,
         bool preserveCurrentNetworkPollingForResume = true);
-    void StartHotplugWaitLoop(string portName);
+    void StartHotplugWaitLoop(
+        string portName,
+        bool requireSimRemovalFirst = false);
     Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default);
     Task ReloadSimAsync(string portName);
     Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default);
@@ -301,26 +288,6 @@ public class GsmModemService : IGsmModemService
         "AT+COPS?"
     ];
 
-    internal static TimeSpan SautoImeiResetGuardDelay { get; } =
-        TimeSpan.FromSeconds(10);
-
-    internal static TimeSpan SautoImeiWriteGuardDelay { get; } =
-        TimeSpan.FromMilliseconds(500);
-
-    internal const int SautoImeiReadMaxAttempts = 5;
-
-    internal static TimeSpan SautoImeiReadInitialDelay { get; } =
-        TimeSpan.FromMilliseconds(100);
-
-    internal static TimeSpan SautoImeiReadPollDelay { get; } =
-        TimeSpan.FromMilliseconds(100);
-
-    internal static TimeSpan SautoImeiReadTimeout { get; } =
-        TimeSpan.FromSeconds(12);
-
-    internal static TimeSpan SautoImeiReadRetryDelay { get; } =
-        TimeSpan.FromSeconds(1);
-
     internal const int SautoAirplaneMaxAttempts = 5;
 
     internal static TimeSpan SautoAirplanePreQueryDelay { get; } =
@@ -451,8 +418,6 @@ public class GsmModemService : IGsmModemService
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _sautoRestartOwners =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _sautoImeiChangePorts =
-        new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Guid> _sautoResettingPorts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _sautoInitializingPorts =
@@ -540,12 +505,9 @@ public class GsmModemService : IGsmModemService
                 _pollingExpectedIdentities.TryRemove(portName, out _);
             }
 
-            // IMEI mutation is a fail-closed boundary.  A polling request that
-            // belonged to the pre-mutation IMEI must never be restored merely
-            // because the suspension lease was disposed.  Remove that captured
-            // request even when this is a nested lease; a later explicit
-            // StartPollingNetwork call after exact CCID + slot-7 verification is
-            // the only operation allowed to enqueue a new identity.
+            // Callers performing an identity-changing reset opt out of resuming
+            // the captured polling request. A later explicit StartPollingNetwork
+            // call must bind the loop to the freshly verified CCID.
             if (!ShouldPreserveNetworkPollingOnSuspension(
                     preserveCurrentNetworkPollingForResume))
                 _pendingNetworkPollingPorts.TryRemove(portName, out _);
@@ -570,9 +532,8 @@ public class GsmModemService : IGsmModemService
                     portName, out resumeNetworkPollingIdentity);
             }
 
-            // CompleteSautoResetAsync reaches Active while the IMEI operation still owns
-            // this lease. Its StartPollingNetwork request must run after the lease opens;
-            // dropping it here left the UI with only IMEI/CCID/CSQ and no COPS/USSD data.
+            // A foreground workflow may request network polling before releasing
+            // this lease. Resume that request only after the UART is available.
             if (resumeNetworkPollingIdentity != null)
                 StartPollingNetwork(
                     portName,
@@ -1340,7 +1301,6 @@ public class GsmModemService : IGsmModemService
             && !_suspendedBackgroundPorts.ContainsKey(portName)
             && !IsCallInProgress(portName)
             && !_sautoInitializingPorts.ContainsKey(portName)
-            && !_sautoImeiChangePorts.ContainsKey(portName)
             && !_sautoResettingPorts.ContainsKey(portName);
     }
 
@@ -3568,7 +3528,8 @@ public class GsmModemService : IGsmModemService
     internal static bool NetworkRecoveryImeiMatches(
         string? observedImei,
         string? expectedImei) =>
-        ImeiManagementService.AreEquivalentImei(
+        string.IsNullOrWhiteSpace(expectedImei)
+        || ImeiManagementService.AreEquivalentImei(
             observedImei,
             expectedImei);
 
@@ -3770,173 +3731,6 @@ public class GsmModemService : IGsmModemService
         return finalSnapshot.CfunRevision > revisionAtAttemptStart
             ? finalSnapshot.CfunMode
             : null;
-    }
-
-    public async Task<SautoImeiChangeResult> ChangeSautoImeiAsync(
-        string portName,
-        string targetImei,
-        CancellationToken ct = default)
-    {
-        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
-            || serialPort == null)
-        {
-            AtCommandTraceLogger.Error(
-                portName,
-                $"IMEI_CHANGE:{targetImei}: Port not open");
-            return new SautoImeiChangeResult(string.Empty, false);
-        }
-
-        if (!_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
-        {
-            AtCommandTraceLogger.Error(
-                portName,
-                $"IMEI_CHANGE:{targetImei}: Semaphore missing");
-            return new SautoImeiChangeResult(string.Empty, false);
-        }
-
-        string readImei = "ERROR";
-        bool resetRequested = false;
-        bool needAirplane = false;
-
-        await semaphore.WaitAsync(ct);
-        _sautoImeiChangePorts[portName] = 0;
-        try
-        {
-            // GSMController.ChangeImei writes slot 7 directly and deliberately
-            // ignores the terminal OK. The only progression evidence is the
-            // IMEI later published by HandlePort from AT+EGMR=0,7.
-            WriteSautoRawWhileLocked(
-                portName,
-                serialPort,
-                $"AT+EGMR=1,7,\"{targetImei}\"{Environment.NewLine}",
-                ct);
-            AtCommandTraceLogger.State(
-                portName,
-                $"SAUTO_IMEI_WRITE_SENT;target={targetImei};next=RX_READBACK;guard_ms=500");
-            await Task.Delay(SautoImeiWriteGuardDelay, ct);
-
-            UpdateSautoReceiveState(
-                portName,
-                static state => state.Imei = string.Empty);
-
-            for (int attempt = 1;
-                 attempt <= SautoImeiReadMaxAttempts;
-                 attempt++)
-            {
-                WriteSautoRawWhileLocked(
-                    portName,
-                    serialPort,
-                    $"AT+EGMR=0,7{Environment.NewLine}",
-                    ct);
-                await Task.Delay(SautoImeiReadInitialDelay, ct);
-
-                int remainingMilliseconds = checked(
-                    (int)SautoImeiReadTimeout.TotalMilliseconds);
-                int pollMilliseconds = checked(
-                    (int)SautoImeiReadPollDelay.TotalMilliseconds);
-                while (remainingMilliseconds > 0)
-                {
-                    string observedImei =
-                        GetSautoReceiveSnapshot(portName).Imei;
-                    if (!string.IsNullOrWhiteSpace(observedImei))
-                    {
-                        readImei = observedImei;
-                        break;
-                    }
-
-                    remainingMilliseconds -= pollMilliseconds;
-                    await Task.Delay(SautoImeiReadPollDelay, ct);
-                }
-
-                if (!string.Equals(
-                        readImei,
-                        "ERROR",
-                        StringComparison.Ordinal))
-                {
-                    AtCommandTraceLogger.State(
-                        portName,
-                        $"SAUTO_IMEI_READBACK;attempt={attempt}/{SautoImeiReadMaxAttempts};imei={readImei};source=RX");
-                    break;
-                }
-
-                AtCommandTraceLogger.State(
-                    portName,
-                    $"SAUTO_STEP_HOLD;step=EGMR_READBACK;attempt={attempt}/{SautoImeiReadMaxAttempts};next_retry_seconds=1");
-                await Task.Delay(SautoImeiReadRetryDelay, ct);
-            }
-
-            if (!string.Equals(
-                    readImei,
-                    targetImei,
-                    StringComparison.Ordinal))
-            {
-                needAirplane = true;
-            }
-            else
-            {
-                Guid resetGeneration = Guid.NewGuid();
-                _sautoResettingPorts[portName] = resetGeneration;
-                try
-                {
-                    // ResetModemAsync uses SerialPort.Write and then sleeps for
-                    // ten seconds. It does not wait for OK/RDY/CPIN.
-                    WriteSautoRawWhileLocked(
-                        portName,
-                        serialPort,
-                        $"AT+CFUN=1,1{Environment.NewLine}",
-                        ct);
-                    resetRequested = true;
-                    AtCommandTraceLogger.State(
-                        portName,
-                        "SAUTO_RESET_SENT;command=AT+CFUN=1,1;terminal_gate=OFF;guard_seconds=10");
-                    await Task.Delay(SautoImeiResetGuardDelay, ct);
-                }
-                finally
-                {
-                    RemoveSautoResetGeneration(
-                        portName,
-                        resetGeneration);
-                }
-
-                UpdateSautoReceiveState(
-                    portName,
-                    static state =>
-                    {
-                        state.RestartRequired = false;
-                        state.CpinResponse = string.Empty;
-                        state.Carrier = string.Empty;
-                        state.NetworkType = string.Empty;
-                        state.CsqResponse = string.Empty;
-                        state.CopsResponse = string.Empty;
-                    });
-                _sautoNetworkStates.TryRemove(portName, out _);
-            }
-        }
-        finally
-        {
-            _sautoImeiChangePorts.TryRemove(portName, out _);
-            semaphore.Release();
-        }
-
-        // This is the final needAirplane branch in ChangeImei. It executes only
-        // after releasing the ChangeImei UART ownership, exactly like SAuto.
-        if (needAirplane)
-            await EnterSautoAirplaneModeAsync(portName, ct);
-
-        return new SautoImeiChangeResult(readImei, resetRequested);
-    }
-
-    private void RemoveSautoResetGeneration(
-        string portName,
-        Guid resetGeneration)
-    {
-        if (_sautoResettingPorts.TryGetValue(
-                portName,
-                out Guid currentGeneration)
-            && currentGeneration == resetGeneration)
-        {
-            _sautoResettingPorts.TryRemove(portName, out _);
-        }
     }
 
     private async Task<SautoInitializationResult> RunSautoInitializationSequenceAsync(
@@ -4286,16 +4080,20 @@ public class GsmModemService : IGsmModemService
         await InitializeModemCoreAsync(portName, ct);
         return true;
     }
-    public void StartHotplugWaitLoop(string portName) =>
+    public void StartHotplugWaitLoop(
+        string portName,
+        bool requireSimRemovalFirst = false) =>
         StartHotplugWaitLoop(
             portName,
             simReadyInitially: false,
-            completeInitialProbe: false);
+            completeInitialProbe: false,
+            requireSimRemovalFirst);
 
     private void StartHotplugWaitLoop(
         string portName,
         bool simReadyInitially,
-        bool completeInitialProbe)
+        bool completeInitialProbe,
+        bool requireSimRemovalFirst = false)
     {
         if (_suspendedBackgroundPorts.ContainsKey(portName)) return;
 
@@ -4304,10 +4102,17 @@ public class GsmModemService : IGsmModemService
         // this new hot-plug loop exit before it can query CPIN and ICCID.
         UpdateSautoReceiveState(
             portName,
-            static state =>
+            state =>
             {
                 state.RestartRequired = false;
                 state.CpinResponse = string.Empty;
+                if (requireSimRemovalFirst)
+                {
+                    state.SimReady = false;
+                    state.SimLocked = false;
+                    state.ReadyTransitionPending = false;
+                    state.Ccid = string.Empty;
+                }
             });
 
         CancellationTokenSource loopCts;
@@ -4328,7 +4133,10 @@ public class GsmModemService : IGsmModemService
 
         _ = Task.Run(async () =>
         {
-            bool simReady = simReadyInitially;
+            bool simReady = requireSimRemovalFirst
+                ? false
+                : simReadyInitially;
+            bool simRemovalObserved = !requireSimRemovalFirst;
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
@@ -4403,6 +4211,25 @@ public class GsmModemService : IGsmModemService
                                 && afterCpin.SimReady;
                             bool simAbsent =
                                 IsSautoSimAbsentResponse(cpinResponse);
+                            if (!simRemovalObserved)
+                            {
+                                if (simAbsent)
+                                {
+                                    simRemovalObserved = true;
+                                    AtCommandTraceLogger.State(
+                                        portName,
+                                        "SAUTO_STEP_DONE;step=SIM_REMOVAL_EDGE");
+                                }
+                                else
+                                {
+                                    AtCommandTraceLogger.State(
+                                        portName,
+                                        "SAUTO_STEP_HOLD;step=WAIT_SIM_REMOVAL");
+                                }
+
+                                continue;
+                            }
+
                             if (!simReady && !simAbsent)
                             {
                                 AtCommandTraceLogger.State(
@@ -4410,6 +4237,9 @@ public class GsmModemService : IGsmModemService
                                     $"SAUTO_STEP_HOLD;step=CPIN_DECISION;result={GetSautoResponseOutcome(cpinResponse)}");
                                 continue;
                             }
+
+                            if (simAbsent)
+                                continue;
 
                             string imeiResponse =
                                 await WriteSautoCommandForResponseWhileLockedAsync(
@@ -4431,9 +4261,8 @@ public class GsmModemService : IGsmModemService
                             }
 
                             if (simReady
-                                && imeiAccepted
                                 && string.IsNullOrWhiteSpace(
-                                    GetSautoReceiveSnapshot(portName).Ccid))
+                                     GetSautoReceiveSnapshot(portName).Ccid))
                             {
                                 string ccidResponse =
                                     await WriteSautoCommandForResponseWhileLockedAsync(
@@ -4452,9 +4281,7 @@ public class GsmModemService : IGsmModemService
 
                             SautoReceiveSnapshot completed =
                                 GetSautoReceiveSnapshot(portName);
-                            if (imeiAccepted
-                                && completed.SimReady
-                                && !string.IsNullOrWhiteSpace(completed.Imei)
+                            if (completed.SimReady
                                 && !string.IsNullOrWhiteSpace(completed.Ccid))
                             {
                                 break;
@@ -4499,7 +4326,6 @@ public class GsmModemService : IGsmModemService
                             }
 
                             if (simReady
-                                && imeiReady
                                 && string.IsNullOrWhiteSpace(afterCpin.Ccid))
                             {
                                 string ccidResponse =
@@ -4607,9 +4433,10 @@ public class GsmModemService : IGsmModemService
             expectedCcid ?? string.Empty,
             @"(?<!\d)89\d{16,20}(?!\d)").Value;
         string normalizedExpectedImei =
-            ImeiManagementService.ToCanonicalImei(expectedImei);
-        if (string.IsNullOrWhiteSpace(normalizedExpectedCcid)
-            || !ImeiManagementService.IsValidImei(normalizedExpectedImei))
+            ImeiManagementService.IsUsableObservedImei(expectedImei)
+                ? ImeiManagementService.ToCanonicalImei(expectedImei)
+                : string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedExpectedCcid))
             return;
 
         var expectedIdentity = new NetworkPollingIdentity(
@@ -4674,6 +4501,7 @@ public class GsmModemService : IGsmModemService
 
         _ = Task.Run(async () =>
         {
+            bool simRemovalDetected = false;
             while (!token.IsCancellationRequested
                    && _serialPorts.ContainsKey(portName)
                    && IsNetworkPollingIdentityCurrent(portName, expectedIdentity))
@@ -4698,6 +4526,9 @@ public class GsmModemService : IGsmModemService
                         // then the receive callback updates simReady/networkGSM.
                         // Do not turn terminal OK/ERROR into extra progression
                         // gates that SAuto does not have.
+                        UpdateSautoReceiveState(
+                            portName,
+                            static state => state.CpinResponse = string.Empty);
                         await WriteSautoCommandWhileLockedAsync(
                             portName,
                             networkPort,
@@ -4713,7 +4544,23 @@ public class GsmModemService : IGsmModemService
                             break;
                         }
 
-                        if (!afterCpin.SimReady)
+                        if (IsSautoSimAbsentResponse(afterCpin.CpinResponse))
+                        {
+                            simRemovalDetected = true;
+                            SetSmsSimIdentity(portName, null);
+                            LogMessage?.Invoke(this, new GsmDataEventArgs
+                            {
+                                PortName = portName,
+                                Data = "[STATUS_SIM_REMOVED] Không còn đọc thấy SIM vật lý."
+                            });
+                            break;
+                        }
+
+                        bool freshCpinReady =
+                            afterCpin.CpinResponse.Contains(
+                                "CPIN: READY",
+                                StringComparison.OrdinalIgnoreCase);
+                        if (!freshCpinReady)
                         {
                             AtCommandTraceLogger.State(
                                 portName,
@@ -4929,6 +4776,9 @@ public class GsmModemService : IGsmModemService
                 try { await Task.Delay(SautoDataPortLoopDelay, token); }
                 catch (OperationCanceledException) { break; }
             }
+
+            if (simRemovalDetected && _serialPorts.ContainsKey(portName))
+                StartHotplugWaitLoop(portName);
         }, token);
     }
     internal static string ResolveSautoCarrier(string? response)
@@ -5023,6 +4873,16 @@ public class GsmModemService : IGsmModemService
     }
     public async Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile)
     {
+        if (!IsSafeModemFileName(remoteFile))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[AT_COMMAND_REJECTED] Tên file modem không hợp lệ."
+            });
+            return string.Empty;
+        }
+
         if (!_portVendors.TryGetValue(portName, out var v) || !v.Contains("QUECTEL"))
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi: Tính năng tải file chỉ hỗ trợ trên modem Quectel." });
@@ -5142,6 +5002,16 @@ public class GsmModemService : IGsmModemService
 
     public async Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile)
     {
+        if (!IsSafeModemFileName(remoteFile))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[AT_COMMAND_REJECTED] Tên file modem không hợp lệ."
+            });
+            return false;
+        }
+
         if (!_portVendors.TryGetValue(portName, out var v) || !v.Contains("QUECTEL"))
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi: Tính năng tải file lên chỉ hỗ trợ trên modem Quectel." });
@@ -5954,7 +5824,6 @@ public class GsmModemService : IGsmModemService
                         || _suspendedBackgroundPorts.ContainsKey(portName)
                         || IsCallInProgress(portName)
                         || _sautoInitializingPorts.ContainsKey(portName)
-                        || _sautoImeiChangePorts.ContainsKey(portName)
                         || _sautoResettingPorts.ContainsKey(portName);
                     if (!busy)
                     {
@@ -6828,6 +6697,14 @@ public class GsmModemService : IGsmModemService
                     state.RestartRequired = true;
                     restartReason = line;
                 }
+                else if (IsSautoSimAbsentResponse(line))
+                {
+                    state.CpinResponse = line;
+                    state.SimReady = false;
+                    state.SimLocked = false;
+                    state.ReadyTransitionPending = false;
+                    state.Ccid = string.Empty;
+                }
                 else if (line.Contains(
                              "CPIN: SIM PIN",
                              StringComparison.OrdinalIgnoreCase)
@@ -6845,8 +6722,7 @@ public class GsmModemService : IGsmModemService
                 if (RequiresSautoControllerRestart(line)
                     && !line.Contains(
                         "CPIN: NOT READY",
-                        StringComparison.OrdinalIgnoreCase)
-                    && !_sautoImeiChangePorts.ContainsKey(portName))
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     state.SimReady = false;
                     state.ReadyTransitionPending = false;
@@ -7062,8 +6938,7 @@ public class GsmModemService : IGsmModemService
                 SautoReceiveSnapshot? ready =
                     await WaitForSautoReceiveStateAsync(
                         portName,
-                        snapshot =>
-                            !_sautoImeiChangePorts.ContainsKey(portName),
+                        snapshot => true,
                         TimeSpan.FromSeconds(10),
                         CancellationToken.None);
                 if (ready != null)
@@ -7759,7 +7634,6 @@ public class GsmModemService : IGsmModemService
         _sautoReceiveStates.Clear();
         _sautoReceiveSignals.Clear();
         _sautoRestartOwners.Clear();
-        _sautoImeiChangePorts.Clear();
         _sautoResettingPorts.Clear();
         _sautoInitializingPorts.Clear();
         _portLifetimeCts.Clear();
@@ -7857,7 +7731,6 @@ public class GsmModemService : IGsmModemService
         _sautoNetworkStates.TryRemove(portName, out _);
         _sautoReceiveStates.TryRemove(portName, out _);
         _sautoReceiveSignals.TryRemove(portName, out _);
-        _sautoImeiChangePorts.TryRemove(portName, out _);
         _sautoResettingPorts.TryRemove(portName, out _);
         _sautoInitializingPorts.TryRemove(portName, out _);
 
@@ -7903,20 +7776,6 @@ public class GsmModemService : IGsmModemService
         }
         sp = null;
         return false;
-    }
-
-    private static void WriteSautoRawWhileLocked(
-        string portName,
-        SerialPort serialPort,
-        string data,
-        CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        if (!serialPort.IsOpen)
-            throw new IOException($"Port {portName} is not open.");
-
-        AtCommandTraceLogger.Tx(portName, data);
-        serialPort.Write(data);
     }
 
     private static async Task WriteSautoCommandWhileLockedAsync(
@@ -8570,6 +8429,36 @@ public class GsmModemService : IGsmModemService
         bool silent = false,
         CancellationToken ct = default)
     {
+        if (ContainsUnsafeAtControlCharacter(command))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[AT_COMMAND_REJECTED] Lệnh AT chứa ký tự điều khiển không an toàn."
+            });
+            return "ERROR: Unsafe AT command";
+        }
+
+        if (IsUnsafeAtLineDisciplineCommand(command))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[AT_COMMAND_REJECTED] Chế độ nofake đã chặn thay đổi ký tự điều khiển dòng AT."
+            });
+            return "ERROR: AT line discipline changes are disabled";
+        }
+
+        if (IsImeiWriteCommand(command))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[IMEI_WRITE_DISABLED] Chế độ nofake đã chặn lệnh ghi IMEI."
+            });
+            return "ERROR: IMEI writes are disabled";
+        }
+
         // Kéo dài thời gian chờ cho các lệnh đặc biệt
         // CUSD=1 opens an asynchronous network session. CUSD=2 only closes it and
         // must complete immediately on OK instead of waiting for a +CUSD payload.
@@ -8657,6 +8546,36 @@ public class GsmModemService : IGsmModemService
     /// </summary>
     public async Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false)
     {
+        if (ContainsUnsafeAtControlCharacter(data))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[AT_COMMAND_REJECTED] Dữ liệu thô chứa ký tự điều khiển không an toàn."
+            });
+            return "ERROR: Unsafe raw data";
+        }
+
+        if (IsUnsafeAtLineDisciplineCommand(data))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[AT_COMMAND_REJECTED] Chế độ nofake đã chặn dữ liệu thô thay đổi ký tự điều khiển dòng AT."
+            });
+            return "ERROR: AT line discipline changes are disabled";
+        }
+
+        if (IsImeiWriteCommand(data))
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[IMEI_WRITE_DISABLED] Chế độ nofake đã chặn dữ liệu thô chứa lệnh ghi IMEI."
+            });
+            return "ERROR: IMEI writes are disabled";
+        }
+
         if (!EnsurePortOpen(portName, out var sp) || sp == null)
         {
             return "ERROR: Port not open";
@@ -8747,6 +8666,8 @@ public class GsmModemService : IGsmModemService
         CancellationToken ct = default)
     {
         if (ct.IsCancellationRequested) return "ERROR: SMS operation cancelled";
+        if (ContainsUnsafeSmsTransportControlCharacter(message))
+            return "ERROR: SMS contains unsafe transport control characters";
         if (!GsmDestination.TryNormalizeSms(phoneNumber, out phoneNumber))
             return "ERROR: Invalid SMS destination";
 
@@ -8871,6 +8792,64 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    internal static bool IsImeiWriteCommand(string? command)
+    {
+        foreach (string segment in (command ?? string.Empty).Split(
+                     ['\r', '\n', '\0'],
+                     StringSplitOptions.RemoveEmptyEntries
+                     | StringSplitOptions.TrimEntries))
+        {
+            string normalized = Regex.Replace(segment, @"\s+", string.Empty);
+            foreach (Match egmrAssignment in Regex.Matches(
+                         normalized,
+                         @"\+EGMR=([^,;]*)",
+                         RegexOptions.IgnoreCase))
+            {
+                string modeText = egmrAssignment.Groups[1].Value;
+                if (!int.TryParse(modeText, out int mode) || mode != 0)
+                    return true;
+            }
+
+            if (Regex.IsMatch(
+                    normalized,
+                    @"(?:\+QIMEI|\+SIMEI|\^CIMEI)=",
+                    RegexOptions.IgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    internal static bool IsUnsafeAtLineDisciplineCommand(string? command)
+    {
+        string normalized = Regex.Replace(
+            command ?? string.Empty,
+            @"\s+",
+            string.Empty);
+        return Regex.IsMatch(
+            normalized,
+            @"S0*[345]=",
+            RegexOptions.IgnoreCase);
+    }
+
+    internal static bool ContainsUnsafeAtControlCharacter(string? value) =>
+        (value ?? string.Empty).Any(char.IsControl);
+
+    internal static bool ContainsUnsafeSmsTransportControlCharacter(
+        string? value) =>
+        (value ?? string.Empty).Any(
+            character =>
+                char.IsControl(character)
+                && character is not '\r' and not '\n' and not '\t');
+
+    internal static bool IsSafeModemFileName(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Length <= 255
+        && !value.Contains('"')
+        && !ContainsUnsafeAtControlCharacter(value);
+
     private static List<string> SplitMessageIntoChunks(string message, int maxBodyLength)
     {
         var chunks = new List<string>();
@@ -8906,6 +8885,8 @@ public class GsmModemService : IGsmModemService
         int timeoutMs = 30000,
         CancellationToken ct = default)
     {
+        if (ContainsUnsafeSmsTransportControlCharacter(message))
+            return "ERROR: SMS contains unsafe transport control characters";
         if (!EnsurePortOpen(portName, out var sp) || sp == null) return "ERROR: Port not open";
         if (!_semaphores.TryGetValue(portName, out var semaphore)) return "ERROR: Semaphore missing";
 

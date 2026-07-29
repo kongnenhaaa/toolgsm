@@ -395,7 +395,6 @@
 
     // ========== NEW SIM ==========
     private bool _newSimIntake = true;
-    private bool _autoRestoreImei = true;
     private bool _autoAccept = false;
 
     // ========== LIFECYCLE ==========
@@ -456,7 +455,6 @@
             _minimizeToTray = cfg.MinimizeToTray;
 
             _newSimIntake = cfg.NewSimIntake;
-            _autoRestoreImei = cfg.AutoRestoreImei;
             _autoAccept = cfg.AutoAccept;
         }
         catch { }
@@ -525,7 +523,6 @@
             cfg.MinimizeToTray = _minimizeToTray;
 
             cfg.NewSimIntake = _newSimIntake;
-            cfg.AutoRestoreImei = _autoRestoreImei;
             cfg.AutoAccept = _autoAccept;
 
             gsm.Services.SettingsService.SaveSettings(cfg);
@@ -586,7 +583,6 @@
         _minimizeToTray = true;
 
         _newSimIntake = true;
-        _autoRestoreImei = true;
         _autoAccept = false;
 
         Snackbar.Add("Đã khôi phục mặc định (chưa lưu — nhấn Lưu để áp dụng)", Severity.Info);

@@ -5,20 +5,6 @@ namespace gsm.Tests;
 
 public sealed class ImeiIdentityTests
 {
-    [Fact]
-    public void SautoGenerator_AlwaysUsesConfiguredTacAndValidLuhn()
-    {
-        for (int sample = 0; sample < 10_000; sample++)
-        {
-            string imei = ImeiManagementService.GenerateRandomImei();
-
-            Assert.Equal(15, imei.Length);
-            Assert.True(imei.All(char.IsAsciiDigit));
-            Assert.Contains(imei[..8], ImeiManagementService.FakeTacs);
-            Assert.True(ImeiManagementService.IsValidImei(imei));
-        }
-    }
-
     [Theory]
     [InlineData("352054261826334")]
     [InlineData("358226401760615")]
@@ -57,15 +43,6 @@ public sealed class ImeiIdentityTests
     }
 
     [Theory]
-    [InlineData("351488165212710", "351488165212715")]
-    [InlineData("355008370781440", "355008370781449")]
-    public void LegacyBackupSpareZero_IsCanonicalizedBeforeRestore(string stored, string expected)
-    {
-        Assert.True(ImeiManagementService.TryNormalizeBackupImei(stored, out string canonical));
-        Assert.Equal(expected, canonical);
-    }
-
-    [Theory]
     [InlineData("+CFUN: 0\r\nOK", true)]
     [InlineData("+CFUN: 4\r\nOK", true)]
     [InlineData("+CFUN: 1\r\nOK", false)]
@@ -76,15 +53,52 @@ public sealed class ImeiIdentityTests
     }
 
     [Theory]
-    [InlineData("+CFUN: 0\r\nOK", true)]
-    [InlineData("+CFUN: 4\r\nOK", true)]
-    [InlineData("+CFUN: 1\r\nOK", false)]
-    [InlineData("TIMEOUT", false)]
+    [InlineData("OK", true)]
+    [InlineData("AT+CFUN=1\r\r\nOK\r\n", true)]
+    [InlineData("", false)]
+    [InlineData("NO RESPONSE", false)]
     [InlineData("ERROR", false)]
-    public void CcidVerification_IsDeferredOnlyWhenRadioStackIsExplicitlyDisabled(
+    [InlineData("ERROR\r\nOK", false)]
+    [InlineData("Timeout", false)]
+    public void NofakeRadioActivation_RequiresExplicitSuccessfulAcknowledgement(
         string response,
         bool expected)
     {
-        Assert.Equal(expected, MainViewModel.IsRadioStackDisabled(response));
+        Assert.Equal(
+            expected,
+            MainViewModel.HasSuccessfulCommandAcknowledgement(response));
+    }
+
+    [Fact]
+    public void NofakeNetworkPromotion_AcceptsObservedSpareZeroImei()
+    {
+        var port = new gsm.Models.SimPort
+        {
+            Status = gsm.Models.SimStatus.Connecting,
+            Serial = "89840200000000000003",
+            Imei = "351488165212710"
+        };
+
+        Assert.True(MainViewModel.CanPromoteNetworkRegistration(
+            port,
+            initializationInProgress: false,
+            sessionCurrent: true));
+    }
+
+    [Theory]
+    [InlineData("", "", true)]
+    [InlineData("351488165212715", "", true)]
+    [InlineData("351488165212715", "351488165212710", true)]
+    [InlineData("356847842519710", "351488165212715", false)]
+    public void NofakeNetworkRecovery_TreatsMissingExpectedImeiAsInformational(
+        string observedImei,
+        string expectedImei,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            GsmModemService.NetworkRecoveryImeiMatches(
+                observedImei,
+                expectedImei));
     }
 }

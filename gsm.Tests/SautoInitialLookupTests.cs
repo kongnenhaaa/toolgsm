@@ -18,7 +18,7 @@ public sealed class SautoInitialLookupTests
         Assert.Equal(expected, GsmModemService.MapSautoCopsAccessTechnology(act));
 
     [Theory]
-    [InlineData("VinaPhone", "*111#")]
+    [InlineData("VinaPhone", "*101#")]
     [InlineData("Viettel", "")]
     [InlineData("MobiFone", "")]
     [InlineData("Vietnamobile", "")]

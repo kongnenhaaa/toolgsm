@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Windows;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,11 +12,16 @@ namespace gsm
 {
     public partial class App : Application
     {
+        private const string SingleInstanceMutexName =
+            @"Local\ToolGSM.Nofake.SingleInstance";
+
         private ServiceProvider? _serviceProvider;
         private MainViewModel? _mainViewModel;
         private RealDeviceSmokeTestRunner? _realDeviceSmokeRunner;
         private CancellationTokenSource? _realDeviceSmokeCts;
         private Task? _realDeviceSmokeTask;
+        private Mutex? _singleInstanceMutex;
+        private bool _ownsSingleInstanceMutex;
 
         public App()
         {
@@ -66,6 +72,18 @@ namespace gsm
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            if (!TryClaimSingleInstance(out string existingInstance))
+            {
+                MessageBox.Show(
+                    $"ToolGSM đã chạy{existingInstance}.\n\n" +
+                    "Bản vừa mở đã được đóng để không tranh chấp cổng COM và không làm GSM báo mất phản hồi.",
+                    "ToolGSM đang chạy",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                Shutdown();
+                return;
+            }
+
             base.OnStartup(e);
 
             // Resolve từ chính container mà Blazor sử dụng. Container sẽ gọi
@@ -203,8 +221,75 @@ namespace gsm
             {
                 _mainViewModel = null;
                 UnregisterGlobalExceptionHandlers();
+                ReleaseSingleInstance();
                 base.OnExit(e);
             }
+        }
+
+        private bool TryClaimSingleInstance(out string existingInstance)
+        {
+            existingInstance = string.Empty;
+            _singleInstanceMutex = new Mutex(
+                initiallyOwned: true,
+                SingleInstanceMutexName,
+                out bool createdNew);
+            _ownsSingleInstanceMutex = createdNew;
+
+            if (!createdNew)
+            {
+                _singleInstanceMutex.Dispose();
+                _singleInstanceMutex = null;
+                existingInstance = FindExistingToolGsmDescription();
+                return false;
+            }
+
+            // Các bản publish cũ chưa có mutex. Kiểm tra theo cùng tên tiến
+            // trình để lần chạy đầu tiên của bản mới cũng không giành COM với
+            // một ToolGSM cũ vẫn còn mở.
+            existingInstance = FindExistingToolGsmDescription();
+            if (!string.IsNullOrEmpty(existingInstance))
+            {
+                ReleaseSingleInstance();
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string FindExistingToolGsmDescription()
+        {
+            using Process current = Process.GetCurrentProcess();
+            foreach (Process process in Process.GetProcessesByName(
+                         current.ProcessName))
+            {
+                using (process)
+                {
+                    if (process.Id == current.Id) continue;
+
+                    string path = string.Empty;
+                    try { path = process.MainModule?.FileName ?? string.Empty; }
+                    catch { }
+
+                    return string.IsNullOrWhiteSpace(path)
+                        ? $" (PID {process.Id})"
+                        : $" (PID {process.Id}, {path})";
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private void ReleaseSingleInstance()
+        {
+            if (_singleInstanceMutex == null) return;
+            if (_ownsSingleInstanceMutex)
+            {
+                try { _singleInstanceMutex.ReleaseMutex(); }
+                catch (ApplicationException) { }
+            }
+            _singleInstanceMutex.Dispose();
+            _singleInstanceMutex = null;
+            _ownsSingleInstanceMutex = false;
         }
 
         internal static bool WaitForTaskBounded(Task? task, TimeSpan timeout)

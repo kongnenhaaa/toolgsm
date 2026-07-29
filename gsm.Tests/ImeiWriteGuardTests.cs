@@ -5,6 +5,41 @@ namespace gsm.Tests;
 public sealed class ImeiWriteGuardTests
 {
     [Theory]
+    [InlineData("AT+CFUN=0")]
+    [InlineData("AT+CFUN=4")]
+    [InlineData("AT+CFUN=1")]
+    [InlineData("AT+CFUN=1,1")]
+    [InlineData("AT+COPS=0")]
+    [InlineData("AT+QCFG=\"nwscanmode\",0,1")]
+    [InlineData("AT+QCFG=\"nwscanseq\",020301")]
+    [InlineData("AT+QCFG=\"band\",0,0,0")]
+    [InlineData("AT+QCFG=\"ims\",1")]
+    [InlineData("AT+QCFG=\"ims\",2")]
+    [InlineData("AT+QCFG=\"ims/ut\",0")]
+    [InlineData("AT+QPOWD=1")]
+    [InlineData("AT+QRESET")]
+    [InlineData("AT+QRST=1")]
+    [InlineData("AT+QPRTPARA=1")]
+    [InlineData("AT+QPRTPARA=2")]
+    [InlineData("AT+QPRTPARA=3")]
+    [InlineData("ATZ")]
+    [InlineData("AT&F")]
+    public void RadioDisruptiveCommands_AreBlocked(string command) =>
+        Assert.True(GsmModemService.IsRadioDisruptiveCommand(command));
+
+    [Theory]
+    [InlineData("AT+CFUN?")]
+    [InlineData("AT+COPS?")]
+    [InlineData("AT+QCFG=\"nwscanmode\"")]
+    [InlineData("AT+QCFG=\"ims/ut\"")]
+    [InlineData("AT+QPRTPARA?")]
+    [InlineData("AT+QCFG=\"urcport\",\"uart1\"")]
+    [InlineData("AT+CPIN?")]
+    [InlineData("AT+ICCID")]
+    public void RadioSafeCommands_AreAllowed(string command) =>
+        Assert.False(GsmModemService.IsRadioDisruptiveCommand(command));
+
+    [Theory]
     [InlineData("AT+EGMR=1,7,\"490154203237518\"")]
     [InlineData("AT+EGMR=01,7,\"490154203237518\"")]
     [InlineData("AT+EGMR=+1,7,\"490154203237518\"")]

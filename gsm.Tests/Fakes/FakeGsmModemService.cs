@@ -14,7 +14,6 @@ public sealed class FakeGsmModemService : IGsmModemService
     public ConcurrentQueue<string> Commands { get; } = new();
     public ConcurrentQueue<string> SautoWireWrites { get; } = new();
     public ConcurrentQueue<(string Port, string Phone, string Message)> SmsRequests { get; } = new();
-    public ConcurrentQueue<(string Port, int BaudRate)> ReconnectRequests { get; } = new();
     public ConcurrentQueue<(string Port, string ExpectedCcid)> CcidVerifications { get; } = new();
     public ConcurrentQueue<string> BackgroundSuspensions { get; } = new();
     public ConcurrentQueue<string> BackgroundResumptions { get; } = new();
@@ -22,7 +21,6 @@ public sealed class FakeGsmModemService : IGsmModemService
     public Func<string, string, Task<string>>? CommandHandler { get; set; }
     public Func<string, string, string, Task<string>>? SmsHandler { get; set; }
     public Func<string, string, CancellationToken, Task<bool>>? CallHandler { get; set; }
-    public Func<string, int, CancellationToken, Task<bool>>? ReconnectHandler { get; set; }
     public Func<string, string, CancellationToken, Task<bool>>? CcidVerificationHandler { get; set; }
     public bool CallInProgress { get; set; }
     public QuectelModemProfile? ModemProfile { get; set; }
@@ -66,35 +64,6 @@ public sealed class FakeGsmModemService : IGsmModemService
         if (response.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase))
             RaiseLog(portName, response);
         return response;
-    }
-
-    public async Task<bool> EnterSautoAirplaneModeAsync(
-        string portName,
-        CancellationToken ct = default)
-    {
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            string off = await SendCommandAsync(
-                portName,
-                "AT+CFUN=4",
-                silent: true,
-                ct: ct);
-            _ = off;
-            string state = await SendCommandAsync(
-                portName,
-                "AT+CFUN?",
-                silent: true,
-                ct: ct);
-            if (System.Text.RegularExpressions.Regex.IsMatch(
-                    state,
-                    @"\+CFUN:\s*4\b",
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     public async Task<string?> RunSautoManualUssdAsync(
@@ -208,17 +177,6 @@ public sealed class FakeGsmModemService : IGsmModemService
         string expectedImei) { }
     public List<string> GetAvailablePorts() => ["COM1", "COM2"];
     public string ConnectAll(int baudRate = 115200) => "OK";
-    public async Task<bool> ReconnectPortAsync(
-        string portName,
-        int baudRate = 115200,
-        CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        ReconnectRequests.Enqueue((portName, baudRate));
-        if (ReconnectHandler != null)
-            return await ReconnectHandler(portName, baudRate, ct).WaitAsync(ct);
-        return true;
-    }
     public void Disconnect(string portName) { }
     public void DisconnectAll() { }
     public IDisposable SuspendPortBackgroundOperations(
@@ -229,12 +187,7 @@ public sealed class FakeGsmModemService : IGsmModemService
         return new CallbackDisposable(
             () => BackgroundResumptions.Enqueue(portName));
     }
-    public void StartHotplugWaitLoop(
-        string portName,
-        bool requireSimRemovalFirst = false) { }
-    public Task<bool> ReinitializeSettingsAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
-    public Task ReloadSimAsync(string portName) => Task.CompletedTask;
-    public Task<bool> ReloadAndResumeSimAsync(string portName, CancellationToken ct = default) => Task.FromResult(true);
+    public void StartHotplugWaitLoop(string portName) { }
 
     public void RaiseSms(string portName, string sender, string data) =>
         SmsReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Sender = sender, Data = data });

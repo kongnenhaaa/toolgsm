@@ -42,33 +42,6 @@ public sealed class ImeiIdentityTests
             "356847842519710"));
     }
 
-    [Theory]
-    [InlineData("+CFUN: 0\r\nOK", true)]
-    [InlineData("+CFUN: 4\r\nOK", true)]
-    [InlineData("+CFUN: 1\r\nOK", false)]
-    [InlineData("ERROR", false)]
-    public void Ec20RadioOffConfirmation_OnlyAcceptsCfunZeroOrFour(string response, bool expected)
-    {
-        Assert.Equal(expected, GsmModemService.IsRadioDisabledResponse(response));
-    }
-
-    [Theory]
-    [InlineData("OK", true)]
-    [InlineData("AT+CFUN=1\r\r\nOK\r\n", true)]
-    [InlineData("", false)]
-    [InlineData("NO RESPONSE", false)]
-    [InlineData("ERROR", false)]
-    [InlineData("ERROR\r\nOK", false)]
-    [InlineData("Timeout", false)]
-    public void NofakeRadioActivation_RequiresExplicitSuccessfulAcknowledgement(
-        string response,
-        bool expected)
-    {
-        Assert.Equal(
-            expected,
-            MainViewModel.HasSuccessfulCommandAcknowledgement(response));
-    }
-
     [Fact]
     public void NofakeNetworkPromotion_AcceptsObservedSpareZeroImei()
     {

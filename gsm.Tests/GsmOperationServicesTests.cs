@@ -509,7 +509,6 @@ public sealed class GsmOperationServicesTests
 
         Assert.Contains("Timeout sending SMS payload", result);
         Assert.Single(modem.SmsRequests);
-        Assert.Empty(modem.ReconnectRequests);
         Assert.Empty(delay.Delays);
     }
 
@@ -531,36 +530,10 @@ public sealed class GsmOperationServicesTests
 
         Assert.Equal(uncertainResult, result);
         Assert.Single(modem.SmsRequests);
-        Assert.Empty(modem.ReconnectRequests);
         Assert.Empty(delay.Delays);
         Assert.Equal(["COM120"], modem.BackgroundSuspensions.ToArray());
         Assert.Equal(["COM120"], modem.BackgroundResumptions.ToArray());
         Assert.False(sms.IsInProgress("COM120"));
-    }
-
-    [Fact]
-    public async Task Sms_ChannelRecoveryFailure_NeverInvokesReconnectHandler()
-    {
-        using var sessions = new PortSessionRegistry();
-        sessions.Begin("COM121", CcidA);
-        const string uncertainResult =
-            "ERROR: Timeout sending SMS payload; SMS channel recovery failed";
-        var modem = new FakeGsmModemService
-        {
-            SmsHandler = (_, _, _) => Task.FromResult(uncertainResult),
-            ReconnectHandler = (_, _, _) => Task.FromException<bool>(
-                new IOException("COM reopen failed"))
-        };
-        using var sms = new GsmSmsService(
-            modem,
-            sessions,
-            new ImmediateGsmOperationDelay());
-
-        string result = await sms.SendAsync("COM121", "0912345678", "test");
-
-        Assert.Equal(uncertainResult, result);
-        Assert.Single(modem.SmsRequests);
-        Assert.Empty(modem.ReconnectRequests);
     }
 
     [Fact]
@@ -579,7 +552,6 @@ public sealed class GsmOperationServicesTests
 
         Assert.Contains("+CMS ERROR: 350", result, StringComparison.OrdinalIgnoreCase);
         Assert.Single(modem.SmsRequests);
-        Assert.Empty(modem.ReconnectRequests);
         Assert.Empty(delay.Delays);
     }
 
@@ -607,7 +579,6 @@ public sealed class GsmOperationServicesTests
 
         Assert.Contains("SIM session changed", result, StringComparison.OrdinalIgnoreCase);
         Assert.Single(modem.SmsRequests);
-        Assert.Empty(modem.ReconnectRequests);
     }
 
     [Theory]

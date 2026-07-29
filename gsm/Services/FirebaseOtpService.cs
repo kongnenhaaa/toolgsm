@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -60,8 +61,28 @@ public class FirebaseOtpService : IFirebaseOtpService
         try
         {
             var url = Path($"machines/{machineId}/ports/{port.PortId}");
-            var json = System.Text.Json.JsonSerializer.Serialize(port);
-            await _http.PutAsync(url, new StringContent(json, Encoding.UTF8, "application/json"));
+            // SyncPortsAsync là writer chính và dùng schema camelCase. Chỉ PATCH
+            // các giá trị thực có ở snapshot tức thời để không xóa/đổi casing
+            // status, balance, smsContent... trong lúc sync 2 giây đang chạy.
+            var payload = new Dictionary<string, object?>
+            {
+                ["id"] = port.PortId,
+                ["portId"] = port.PortId
+            };
+            if (!string.IsNullOrWhiteSpace(port.PortName)) payload["portName"] = port.PortName;
+            if (!string.IsNullOrWhiteSpace(port.Status)) payload["status"] = port.Status;
+            if (port.Phone != null) payload["phone"] = port.Phone;
+            if (port.Operator != null) payload["network"] = port.Operator;
+            if (port.Balance != null) payload["balance"] = port.Balance;
+            if (port.Imei != null) payload["imei"] = port.Imei;
+            if (port.Ccid != null) payload["ccid"] = port.Ccid;
+            if (port.Otp != null) payload["otp"] = port.Otp;
+            if (port.LastContent != null) payload["smsContent"] = port.LastContent;
+            if (port.UpdatedAt != null) payload["updatedAt"] = port.UpdatedAt;
+
+            var json = System.Text.Json.JsonSerializer.Serialize(payload);
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            await _http.PatchAsync(url, content);
         }
         catch
         {

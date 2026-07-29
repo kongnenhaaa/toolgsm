@@ -20,8 +20,8 @@ public sealed class RealDeviceSmokeTestRunner
     public const string RequestArgument = "--real-device-smoke-request";
     private const string ExpectedProvider = "VinaPhone";
     private const string ExpectedCcidPrefix = "898402";
-    private const string AutomaticUssd = "*111#";
-    private const string AutomaticUssdDescription = "*111# theo phản hồi COPS VinaPhone";
+    private const string AutomaticUssd = "*101#";
+    private const string AutomaticUssdDescription = "*101# tự động theo phản hồi COPS VinaPhone";
     private const string ManualUssd = "*101#";
     private const string CallRecipient = "900";
     private const int CallDurationSeconds = 15;

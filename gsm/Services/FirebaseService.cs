@@ -465,29 +465,7 @@ namespace gsm.Services
                     }
                 }
 
-                // The web/Python side reserves the exact machine+COM before
-                // creating a command. Do not let another worker consume a
-                // command while that reservation is still alive.
-                var requestedPort = node.TryGetPropertyValue("portId", out var portNode)
-                    ? portNode?.GetValue<string>()?.Trim() : null;
-                var requestedMachine = node.TryGetPropertyValue("machineId", out var requestedMachineNode)
-                    ? requestedMachineNode?.GetValue<string>()?.Trim() : _machineId;
-                if (!string.IsNullOrWhiteSpace(requestedPort)
-                    && !string.Equals(requestedPort, "ALL", StringComparison.OrdinalIgnoreCase))
-                {
-                    var stateJson = await _restClient.GetStringAsync(
-                        $"{_databaseUrl}web_states/machines/{requestedMachine ?? _machineId}/ports/{requestedPort}.json");
-                    if (!string.IsNullOrWhiteSpace(stateJson) && stateJson != "null")
-                    {
-                        var stateNode = JsonNode.Parse(stateJson) as JsonObject;
-                        var reservationId = stateNode?["reservationId"]?.GetValue<string>();
-                        var expiresAt = stateNode?["reservationExpiresAt"]?.GetValue<long?>() ?? 0;
-                        if (!string.IsNullOrWhiteSpace(reservationId)
-                            && !string.Equals(reservationId, cmdId, StringComparison.OrdinalIgnoreCase)
-                            && expiresAt > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-                            return false;
-                    }
-                }
+                if (!await ReservationAllowsCommandAsync(node, cmdId)) return false;
 
                 // 2. Cập nhật object hiện tại (Chuẩn bị PUT)
                 node["status"] = "running";
@@ -521,6 +499,17 @@ namespace gsm.Services
                     return false;
                 }
 
+                // Reservation and command live on different RTDB paths. Recheck
+                // after the ETag claim so a concurrent web cancel/fence wins
+                // before any physical SMS/USSD/CLEAR operation can start.
+                if (!await ReservationAllowsCommandAsync(node, cmdId))
+                {
+                    await UpdateCommandStatusAsync(
+                        cmdId, "canceled", "Reservation changed before execution");
+                    await _restClient.DeleteAsync(commandUrl);
+                    return false;
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -528,6 +517,36 @@ namespace gsm.Services
                 _vm.AddLog($"[FIREBASE_CLAIM_ERROR] Lỗi nhận lệnh {cmdId}: {ex.Message}", "ERROR");
                 return false;
             }
+        }
+
+        private async Task<bool> ReservationAllowsCommandAsync(JsonObject command, string cmdId)
+        {
+            var requestedPort = command.TryGetPropertyValue("portId", out var portNode)
+                ? portNode?.GetValue<string>()?.Trim() : null;
+            if (string.IsNullOrWhiteSpace(requestedPort)
+                || string.Equals(requestedPort, "ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var requestedMachine = command.TryGetPropertyValue("machineId", out var machineNode)
+                ? machineNode?.GetValue<string>()?.Trim() : _machineId;
+            var stateJson = await _restClient.GetStringAsync(
+                $"{_databaseUrl}web_states/machines/{requestedMachine ?? _machineId}/ports/{requestedPort}.json");
+            if (string.IsNullOrWhiteSpace(stateJson) || stateJson == "null")
+            {
+                return false;
+            }
+
+            var stateNode = JsonNode.Parse(stateJson) as JsonObject;
+            var reservationId = stateNode?["reservationId"]?.GetValue<string>();
+            var expiresAt = stateNode?["reservationExpiresAt"]?.GetValue<long?>() ?? 0;
+            var reservationIsActive = expiresAt > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // Every command targeting a physical COM must hold the exact active
+            // reservation. requestSource is caller-controlled and cannot safely
+            // decide whether the concurrency protocol applies.
+            return reservationIsActive
+                && string.Equals(reservationId, cmdId, StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task<bool> WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null, string? smsContent = null)
@@ -597,11 +616,6 @@ namespace gsm.Services
             if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(portId) || portId == "ALL") return;
             try
             {
-                if (!await IsWebCommandCurrentAsync(portId, cmdId))
-                {
-                    return;
-                }
-
                 if (status == "failed" && !IsSpecificSmsError(error))
                 {
                     error = await TryGetSpecificWebErrorAsync(portId) ?? error;
@@ -634,50 +648,73 @@ namespace gsm.Services
                     payload["smsContentAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" };
                 }
 
-                var json = JsonSerializer.Serialize(payload);
-                using var content = new StringContent(json, Encoding.UTF8, "application/json");
-                await _restClient.PatchAsync($"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json", content);
+                await PatchWebCommandStateIfCurrentAsync(portId, cmdId, payload);
             }
             catch { }
         }
 
-        private async Task<bool> IsWebCommandCurrentAsync(string portId, string cmdId)
+        private static bool IsWebCommandCurrent(JsonObject state, string cmdId)
         {
-            for (int attempt = 0; attempt < 5; attempt++)
+            if (state["commandId"]?.GetValue<string>() == cmdId
+                || state["reservationId"]?.GetValue<string>() == cmdId)
             {
-                try
+                return true;
+            }
+
+            if (state["commandIds"] is JsonArray commandIds)
+            {
+                foreach (var idNode in commandIds)
                 {
-                    var json = await _restClient.GetStringAsync($"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json");
-                    if (!string.IsNullOrWhiteSpace(json) && json != "null")
-                    {
-                        using var doc = JsonDocument.Parse(json);
-                        var root = doc.RootElement;
-
-                        if (root.TryGetProperty("commandId", out var commandIdEl) &&
-                            commandIdEl.GetString() == cmdId)
-                        {
-                            return true;
-                        }
-
-                        if (root.TryGetProperty("commandIds", out var commandIdsEl) &&
-                            commandIdsEl.ValueKind == JsonValueKind.Array)
-                        {
-                            foreach (var idEl in commandIdsEl.EnumerateArray())
-                            {
-                                if (idEl.GetString() == cmdId) return true;
-                            }
-                        }
-
-                        return false;
-                    }
-
-                    await Task.Delay(200);
+                    if (idNode?.GetValue<string>() == cmdId) return true;
                 }
-                catch
+            }
+
+            return false;
+        }
+
+        private async Task<bool> PatchWebCommandStateIfCurrentAsync(
+            string portId,
+            string cmdId,
+            IReadOnlyDictionary<string, object?> payload)
+        {
+            var stateUrl = $"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json";
+            for (var attempt = 0; attempt < 5; attempt++)
+            {
+                using var getRequest = new HttpRequestMessage(HttpMethod.Get, stateUrl);
+                getRequest.Headers.TryAddWithoutValidation("X-Firebase-ETag", "true");
+                using var getResponse = await _restClient.SendAsync(getRequest);
+                if (!getResponse.IsSuccessStatusCode)
                 {
-                    if (attempt == 4) return false;
                     await Task.Delay(200);
+                    continue;
                 }
+
+                var etag = getResponse.Headers.ETag?.Tag;
+                var stateJson = await getResponse.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(etag)
+                    || string.IsNullOrWhiteSpace(stateJson)
+                    || stateJson == "null"
+                    || JsonNode.Parse(stateJson) is not JsonObject state
+                    || !IsWebCommandCurrent(state, cmdId))
+                {
+                    return false;
+                }
+
+                foreach (var item in payload)
+                {
+                    state[item.Key] = item.Value == null
+                        ? null
+                        : JsonSerializer.SerializeToNode(item.Value);
+                }
+
+                using var putRequest = new HttpRequestMessage(HttpMethod.Put, stateUrl);
+                putRequest.Headers.TryAddWithoutValidation("if-match", etag);
+                putRequest.Content = new StringContent(
+                    state.ToJsonString(), Encoding.UTF8, "application/json");
+                using var putResponse = await _restClient.SendAsync(putRequest);
+                if (putResponse.IsSuccessStatusCode) return true;
+                if (putResponse.StatusCode != HttpStatusCode.PreconditionFailed) return false;
+                await Task.Delay(100 * (attempt + 1));
             }
 
             return false;
@@ -1108,25 +1145,20 @@ namespace gsm.Services
 
                 _otpCompletedCommands[pending.CommandId] = 0;
 
-                if (await IsWebCommandCurrentAsync(portId, pending.CommandId))
+                var statePayload = new Dictionary<string, object?>
                 {
-                    var statePayload = new Dictionary<string, object?>
-                    {
-                        ["commandId"] = pending.CommandId,
-                        ["commandStatus"] = "otp_received",
-                        ["smsSent"] = false,
-                        ["otp"] = otp,
-                        ["smsContent"] = smsContent,
-                        ["smsSender"] = sender,
-                        ["errorMsg"] = null,
-                        ["otpReceivedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" },
-                        ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
-                    };
-                    using var stateContent = new StringContent(
-                        JsonSerializer.Serialize(statePayload), Encoding.UTF8, "application/json");
-                    await _restClient.PatchAsync(
-                        $"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json", stateContent);
-                }
+                    ["commandId"] = pending.CommandId,
+                    ["commandStatus"] = "otp_received",
+                    ["smsSent"] = false,
+                    ["otp"] = otp,
+                    ["smsContent"] = smsContent,
+                    ["smsSender"] = sender,
+                    ["errorMsg"] = null,
+                    ["otpReceivedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" },
+                    ["updatedAt"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
+                };
+                await PatchWebCommandStateIfCurrentAsync(
+                    portId, pending.CommandId, statePayload);
 
                 _vm.UpsertCommandQueue(
                     pending.CommandId, portId, "sms", pending.Recipient, pending.Content,

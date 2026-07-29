@@ -257,10 +257,21 @@ public class GsmModemService : IGsmModemService
         public IDisposable? BackgroundLease { get; set; }
     }
 
+    internal const string SautoImsUtQueryCommand = "AT+QCFG=\"ims/ut\"";
+    internal const string SautoImsUtDisableCommand = "AT+QCFG=\"ims/ut\",0";
+
+    internal static IReadOnlyList<string> SautoImsUtRepairCommandOrder { get; } =
+    [
+        SautoImsUtQueryCommand,
+        SautoImsUtDisableCommand,
+        SautoImsUtQueryCommand
+    ];
+
     internal static IReadOnlyList<string> SautoInitializationCommandOrder { get; } =
     [
         "\u001b",
         "ATI",
+        SautoImsUtQueryCommand,
         "AT+CPMS=\"ME\",\"SM\",\"MT\"",
         "AT+CFUN=4",
         "AT+CNMI=1,1,0,0,0",
@@ -3027,7 +3038,23 @@ public class GsmModemService : IGsmModemService
             requiredMarker = "+QNWINFO:";
         else if (command.StartsWith("AT+QCFG", StringComparison.OrdinalIgnoreCase)
                  && !command.Contains(",", StringComparison.Ordinal))
-            requiredMarker = "+QCFG:";
+        {
+            Match query = Regex.Match(
+                command,
+                @"^AT\+QCFG\s*=\s*""(?<key>[^""]+)""\s*$",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!query.Success)
+            {
+                requiredMarker = "+QCFG:";
+            }
+            else
+            {
+                return Regex.IsMatch(
+                    frame,
+                    $@"\+QCFG:\s*""{Regex.Escape(query.Groups["key"].Value)}""\s*,",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            }
+        }
         else if (command.StartsWith("AT+QCCID", StringComparison.OrdinalIgnoreCase)
                  || command.StartsWith("AT+CCID", StringComparison.OrdinalIgnoreCase)
                  || command.StartsWith("AT+ICCID", StringComparison.OrdinalIgnoreCase))
@@ -3565,6 +3592,40 @@ public class GsmModemService : IGsmModemService
             : null;
     }
 
+    internal static (int First, int Second, int Third)?
+        ParseSautoImsUtConfiguration(string? response)
+    {
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            @"\+QCFG:[ \t]*""ims/ut""[ \t]*,[ \t]*([01])[ \t]*,[ \t]*([01])[ \t]*,[ \t]*([01])[ \t]*(?:\r?\n|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success
+            || !int.TryParse(match.Groups[1].Value, out int first)
+            || !int.TryParse(match.Groups[2].Value, out int second)
+            || !int.TryParse(match.Groups[3].Value, out int third))
+        {
+            return null;
+        }
+
+        return (first, second, third);
+    }
+
+    internal static bool IsSautoImsUtDisabledResponse(string? response)
+    {
+        (int First, int Second, int Third)? config =
+            ParseSautoImsUtConfiguration(response);
+        return IsSautoOkResponse(response)
+            && config is { First: 0, Second: 0, Third: 0 };
+    }
+
+    internal static bool RequiresSautoImsUtDisable(string? response)
+    {
+        (int First, int Second, int Third)? config =
+            ParseSautoImsUtConfiguration(response);
+        return IsSautoOkResponse(response)
+            && config is { First: 1 };
+    }
+
     internal static bool NetworkRecoveryImeiMatches(
         string? observedImei,
         string? expectedImei) =>
@@ -3939,6 +4000,147 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    private async Task EnsureSautoImsUtDisabledWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        CancellationToken ct)
+    {
+        string beforeResponse;
+        try
+        {
+            beforeResponse =
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    SautoImsUtQueryCommand,
+                    TimeSpan.FromSeconds(5),
+                    ct);
+        }
+        catch (TimeoutException ex)
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"IMS_UT_CHECK_TIMEOUT;action=SKIP_WRITE_CONTINUE;message={ex.Message}");
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[IMS_UT_CHECK_WARN] Không đọc được ims/ut; bỏ qua ghi để tránh đổi cấu hình mù."
+            });
+            return;
+        }
+
+        (int First, int Second, int Third)? before =
+            ParseSautoImsUtConfiguration(beforeResponse);
+        if (IsSautoImsUtDisabledResponse(beforeResponse))
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                "IMS_UT_CHECK;state=0,0,0;action=SKIP_WRITE;next=SAUTO_INITIALIZATION");
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[IMS_UT_READY] ims/ut=0,0,0; đã đúng nên không ghi lại."
+            });
+            return;
+        }
+
+        string beforeState = before is { } beforeValue
+            ? $"{beforeValue.First},{beforeValue.Second},{beforeValue.Third}"
+            : GetSautoResponseOutcome(beforeResponse);
+        if (!RequiresSautoImsUtDisable(beforeResponse))
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"IMS_UT_CHECK;state={beforeState};action=SKIP_UNRECOGNIZED_OR_ALREADY_DISABLED");
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[IMS_UT_CHECK_WARN] ims/ut={beforeState}; không ghi vì phản hồi không phải trạng thái bật hợp lệ."
+            });
+            return;
+        }
+
+        AtCommandTraceLogger.State(
+            portName,
+            $"IMS_UT_CHECK;state={beforeState};action=SET_0");
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = $"[IMS_UT_REPAIR] ims/ut={beforeState}; đang đặt về 0,0,0."
+        });
+
+        string setResponse;
+        try
+        {
+            setResponse =
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    SautoImsUtDisableCommand,
+                    TimeSpan.FromSeconds(5),
+                    ct);
+        }
+        catch (TimeoutException ex)
+        {
+            // The modem may have accepted the write even when its terminal OK
+            // arrived late. Never repeat the write blindly; verify once below.
+            setResponse = string.Empty;
+            AtCommandTraceLogger.State(
+                portName,
+                $"IMS_UT_SET_ACK_TIMEOUT;action=VERIFY;message={ex.Message}");
+        }
+
+        string verificationResponse;
+        try
+        {
+            verificationResponse =
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    SautoImsUtQueryCommand,
+                    TimeSpan.FromSeconds(5),
+                    ct);
+        }
+        catch (TimeoutException ex)
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"IMS_UT_VERIFY_TIMEOUT;action=CONTINUE_WITH_WARNING;message={ex.Message}");
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[IMS_UT_REPAIR_WARN] Đã gửi lệnh tắt nhưng chưa đọc lại được 0,0,0."
+            });
+            return;
+        }
+        if (!IsSautoImsUtDisabledResponse(verificationResponse))
+        {
+            (int First, int Second, int Third)? after =
+                ParseSautoImsUtConfiguration(verificationResponse);
+            string afterState = after is { } afterValue
+                ? $"{afterValue.First},{afterValue.Second},{afterValue.Third}"
+                : GetSautoResponseOutcome(verificationResponse);
+            AtCommandTraceLogger.State(
+                portName,
+                $"IMS_UT_VERIFY_FAILED;before={beforeState};set={GetSautoResponseOutcome(setResponse)};after={afterState};action=CONTINUE_WITH_WARNING");
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[IMS_UT_REPAIR_WARN] Chưa xác minh được 0,0,0 (sau={afterState})."
+            });
+            return;
+        }
+
+        AtCommandTraceLogger.State(
+            portName,
+            $"IMS_UT_VERIFIED;state=0,0,0;set={GetSautoResponseOutcome(setResponse)};next=SAUTO_INITIALIZATION");
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = "[IMS_UT_READY] Đã đặt và xác minh ims/ut=0,0,0."
+        });
+    }
+
     private async Task<SautoInitializationResult> RunSautoInitializationSequenceAsync(
         string portName,
         CancellationToken ct)
@@ -4034,6 +4236,10 @@ public class GsmModemService : IGsmModemService
 
             if (isEc20)
             {
+                await EnsureSautoImsUtDisabledWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    ct);
                 await WriteSautoCommandForResponseWhileLockedAsync(
                     portName,
                     serialPort,

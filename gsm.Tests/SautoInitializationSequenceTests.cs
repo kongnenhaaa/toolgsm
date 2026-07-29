@@ -11,6 +11,7 @@ public sealed class SautoInitializationSequenceTests
         [
             "\u001b",
             "ATI",
+            "AT+QCFG=\"ims/ut\"",
             "AT+CPMS=\"ME\",\"SM\",\"MT\"",
             "AT+CFUN=4",
             "AT+CNMI=1,1,0,0,0",
@@ -39,7 +40,69 @@ public sealed class SautoInitializationSequenceTests
         Assert.DoesNotContain(expected, command =>
             command.Contains("QSIMSTAT", StringComparison.OrdinalIgnoreCase)
             || command == "AT+CFUN=0");
+        Assert.True(
+            Array.IndexOf(expected, GsmModemService.SautoImsUtQueryCommand)
+            < Array.IndexOf(expected, "AT+CFUN=4"));
+        Assert.DoesNotContain(expected, command =>
+            command.Contains("QCFG=\"ims\",2", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void ImsUtRepair_ChecksBeforeWritingAndVerifiesAfterward()
+    {
+        Assert.Equal(
+        [
+            "AT+QCFG=\"ims/ut\"",
+            "AT+QCFG=\"ims/ut\",0",
+            "AT+QCFG=\"ims/ut\""
+        ], GsmModemService.SautoImsUtRepairCommandOrder);
+        Assert.Equal(
+            "AT+QCFG=\"ims/ut\",0",
+            GsmModemService.SautoImsUtDisableCommand);
+        Assert.DoesNotContain(
+            GsmModemService.SautoImsUtRepairCommandOrder,
+            command => command.StartsWith(
+                "AT+CFUN=",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            GsmModemService.SautoImsUtRepairCommandOrder,
+            command => command.Contains(
+                "QCFG=\"ims\",2",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("+QCFG: \"ims/ut\",0,0,0\r\nOK\r\n", true)]
+    [InlineData("+QCFG: \"ims/ut\",1,1,0\r\nOK\r\n", false)]
+    [InlineData("+QCFG: \"ims/ut\",0,0,1\r\nOK\r\n", false)]
+    [InlineData("+QCFG: \"ims/ut\",0,0,0", false)]
+    [InlineData("+QCFG: \"ims/ut\",0,0,0\r\nERROR\r\n", false)]
+    [InlineData("+QCFG: \"ims\",0,0,0\r\nOK\r\n", false)]
+    [InlineData("+QCFG: \"ims/ut\",0,0,00\r\nOK\r\n", false)]
+    public void ImsUtReady_RequiresExactZeroTripleAndTerminalOk(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsSautoImsUtDisabledResponse(response));
+
+    [Theory]
+    [InlineData("+QCFG: \"ims/ut\",1,1,0\r\nOK\r\n", true)]
+    [InlineData("+QCFG: \"ims/ut\",1,0,0\r\nOK\r\n", true)]
+    [InlineData("+QCFG: \"ims/ut\",1,1,1\r\nOK\r\n", true)]
+    [InlineData("+QCFG: \"ims/ut\",0,0,0\r\nOK\r\n", false)]
+    [InlineData("+QCFG: \"ims/ut\",0,1,0\r\nOK\r\n", false)]
+    [InlineData("+QCFG: \"ims/ut\",0,0,1\r\nOK\r\n", false)]
+    [InlineData("+QCFG: \"ims/ut\",1,1,0", false)]
+    [InlineData("+QCFG: \"ims/ut\",1,1,0\r\nERROR\r\n", false)]
+    [InlineData("+QCFG: \"ims\",1,1,0\r\nOK\r\n", false)]
+    [InlineData("+CME ERROR: 100\r\n", false)]
+    public void ImsUtRepair_WritesOnlyForVerifiedEnabledState(
+        string response,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.RequiresSautoImsUtDisable(response));
 
     [Fact]
     public void InitialUssdCommandOrder_ContainsOnlyCapturedCommands()

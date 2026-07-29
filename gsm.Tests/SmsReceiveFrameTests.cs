@@ -143,6 +143,9 @@ public class SmsReceiveFrameTests
     [InlineData("\r\n+CPMS: \"SM\",0,30,\"SM\",0,30,\"SM\",0,30\r\n\r\nOK\r\n", "AT+CPMS?", true)]
     [InlineData("\r\n+CFUN: 4\r\n\r\nOK\r\n", "AT+CFUN?", true)]
     [InlineData("\r\n+COPS: 0,0,\"VINAPHONE\",2\r\n\r\nOK\r\n", "AT+COPS?", true)]
+    [InlineData("\r\n+QCFG: \"ims/ut\",0,0,0\r\n\r\nOK\r\n", "AT+QCFG=\"ims/ut\"", true)]
+    [InlineData("\r\n+QCFG: \"ims\",2,0\r\n\r\nOK\r\n", "AT+QCFG=\"ims/ut\"", false)]
+    [InlineData("\r\n+QCFG: \"nwscanmode\",0\r\n\r\nOK\r\n", "AT+QCFG=\"ims/ut\"", false)]
     public void QueryOnlyCompletesOnItsOwnPayload(
         string frame,
         string command,

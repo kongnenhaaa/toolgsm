@@ -4880,6 +4880,7 @@ public class GsmModemService : IGsmModemService
 
         _ = Task.Run(async () =>
         {
+            int consecutiveCopsNoCarrierResponses = 0;
             while (!token.IsCancellationRequested
                    && _serialPorts.ContainsKey(portName)
                    && IsNetworkPollingIdentityCurrent(portName, expectedIdentity))
@@ -4963,6 +4964,7 @@ public class GsmModemService : IGsmModemService
                                 networkType = afterCops.NetworkType;
                                 if (IsSautoCarrierRegistered(carrier))
                                 {
+                                    consecutiveCopsNoCarrierResponses = 0;
                                     _sautoNetworkStates[portName] =
                                         new SautoNetworkState(
                                             normalizedExpectedCcid,
@@ -4983,9 +4985,37 @@ public class GsmModemService : IGsmModemService
                                 }
                                 else
                                 {
+                                    consecutiveCopsNoCarrierResponses++;
                                     AtCommandTraceLogger.State(
                                         portName,
-                                        $"SAUTO_STEP_HOLD;step=COPS_REGISTERED;result={GetSautoResponseOutcome(afterCops.CopsResponse)};next_retry_seconds=2");
+                                        $"SAUTO_STEP_HOLD;step=COPS_REGISTERED;result={GetSautoResponseOutcome(afterCops.CopsResponse)};next_retry_seconds=2;no_carrier_count={consecutiveCopsNoCarrierResponses}");
+                                    // Sau 5 lần COPS liên tiếp không có carrier (~12s), gửi AT+COPS=0,0
+                                    // để force firmware tự đăng ký mạng (giúp EC20CEFAGR08A03M4G boot chậm).
+                                    if (consecutiveCopsNoCarrierResponses >= 5)
+                                    {
+                                        consecutiveCopsNoCarrierResponses = 0;
+                                        AtCommandTraceLogger.State(
+                                            portName,
+                                            "SAUTO_NETWORK_REREGISTER;reason=COPS_NO_CARRIER;action=AT+COPS=0,0");
+                                        try
+                                        {
+                                            await WriteSautoCommandWhileLockedAsync(
+                                                portName,
+                                                networkPort,
+                                                "AT+COPS=0,0",
+                                                token);
+                                            await Task.Delay(SautoDataPortStepDelay, token);
+                                        }
+                                        catch (Exception reregEx)
+                                            when (reregEx is TimeoutException
+                                                          or IOException
+                                                          or InvalidOperationException)
+                                        {
+                                            AtCommandTraceLogger.Error(
+                                                portName,
+                                                $"SAUTO_NETWORK_REREGISTER_FAILED;detail={reregEx.Message}");
+                                        }
+                                    }
                                 }
                             }
 

@@ -4418,6 +4418,7 @@ public class GsmModemService : IGsmModemService
             bool simRemovalDetected = false;
             int consecutiveNetworkSimFailureResponses = 0;
             int consecutiveNetworkCpinUnavailableResponses = 0;
+            int consecutiveCopsNoCarrierResponses = 0;
             while (!token.IsCancellationRequested
                    && _serialPorts.ContainsKey(portName)
                    && IsNetworkPollingIdentityCurrent(portName, expectedIdentity))
@@ -4609,6 +4610,7 @@ public class GsmModemService : IGsmModemService
                                 networkType = afterCops.NetworkType;
                                 if (IsSautoCarrierRegistered(carrier))
                                 {
+                                    consecutiveCopsNoCarrierResponses = 0;
                                     _sautoNetworkStates[portName] =
                                         new SautoNetworkState(
                                             normalizedExpectedCcid,
@@ -4629,9 +4631,38 @@ public class GsmModemService : IGsmModemService
                                 }
                                 else
                                 {
+                                    consecutiveCopsNoCarrierResponses++;
                                     AtCommandTraceLogger.State(
                                         portName,
-                                        $"SAUTO_STEP_HOLD;step=COPS_REGISTERED;result={GetSautoResponseOutcome(afterCops.CopsResponse)};next_retry_seconds=2");
+                                        $"SAUTO_STEP_HOLD;step=COPS_REGISTERED;result={GetSautoResponseOutcome(afterCops.CopsResponse)};next_retry_seconds=2;no_carrier_count={consecutiveCopsNoCarrierResponses}");
+                                    // Sau 5 lần COPS liên tiếp không có carrier (~12s), gửi AT+COPS=0,0
+                                    // để force firmware tự đăng ký mạng (giúp EC20CEFAGR08A03M4G, v.v.).
+                                    if (consecutiveCopsNoCarrierResponses >= 5)
+                                    {
+                                        consecutiveCopsNoCarrierResponses = 0;
+                                        AtCommandTraceLogger.State(
+                                            portName,
+                                            "SAUTO_NETWORK_REREGISTER;reason=COPS_NO_CARRIER;action=AT+COPS=0,0");
+                                        try
+                                        {
+                                            await WriteSautoCommandWhileLockedAsync(
+                                                portName,
+                                                networkPort,
+                                                "AT+COPS=0,0",
+                                                token,
+                                                allowNetworkReregistration: true);
+                                            await Task.Delay(SautoDataPortStepDelay, token);
+                                        }
+                                        catch (Exception reregEx)
+                                            when (reregEx is TimeoutException
+                                                          or IOException
+                                                          or InvalidOperationException)
+                                        {
+                                            AtCommandTraceLogger.Error(
+                                                portName,
+                                                $"SAUTO_NETWORK_REREGISTER_FAILED;detail={reregEx.Message}");
+                                        }
+                                    }
                                 }
                             }
 
@@ -7840,7 +7871,8 @@ public class GsmModemService : IGsmModemService
         bool allowImsUtRecovery = false,
         bool allowUssdFixWorkflow = false,
         bool allowHotplugRfRecovery = false,
-        bool allowHotplugSimFailureRecovery = false)
+        bool allowHotplugSimFailureRecovery = false,
+        bool allowNetworkReregistration = false)
     {
         ct.ThrowIfCancellationRequested();
         if (IsRadioDisruptiveCommand(command)
@@ -7851,7 +7883,9 @@ public class GsmModemService : IGsmModemService
             && !(allowHotplugRfRecovery
                 && IsAuthorizedHotplugRfRecoveryCommand(command))
             && !(allowHotplugSimFailureRecovery
-                && IsAuthorizedHotplugSimFailureRecoveryCommand(command)))
+                && IsAuthorizedHotplugSimFailureRecoveryCommand(command))
+            && !(allowNetworkReregistration
+                && IsAuthorizedNetworkReregistrationCommand(command)))
         {
             AtCommandTraceLogger.Error(
                 portName,
@@ -8127,6 +8161,21 @@ public class GsmModemService : IGsmModemService
             string.Empty);
         return normalized.Equals(
             "AT+CFUN=1",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsAuthorizedNetworkReregistrationCommand(
+        string? command)
+    {
+        // Chỉ cho phép AT+COPS=0,0 — force automatic operator selection
+        // mà không thay đổi network mode hay reboot modem.
+        // Được dùng khi modem báo signal tốt nhưng +COPS: 0 liên tục.
+        string normalized = Regex.Replace(
+            command ?? string.Empty,
+            @"\s+",
+            string.Empty);
+        return normalized.Equals(
+            "AT+COPS=0,0",
             StringComparison.OrdinalIgnoreCase);
     }
 

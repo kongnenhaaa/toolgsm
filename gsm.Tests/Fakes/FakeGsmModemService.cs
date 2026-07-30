@@ -22,6 +22,7 @@ public sealed class FakeGsmModemService : IGsmModemService
     public Func<string, string, string, Task<string>>? SmsHandler { get; set; }
     public Func<string, string, CancellationToken, Task<bool>>? CallHandler { get; set; }
     public Func<string, string, CancellationToken, Task<bool>>? CcidVerificationHandler { get; set; }
+    public Func<string, CancellationToken, Task<string>>? UssdFixHandler { get; set; }
     public bool CallInProgress { get; set; }
     public QuectelModemProfile? ModemProfile { get; set; }
     public string ObservedImei { get; set; } = string.Empty;
@@ -122,6 +123,15 @@ public sealed class FakeGsmModemService : IGsmModemService
         }
 
         return lastResponse;
+    }
+
+    public Task<string> FixUssdLikePythonAsync(
+        string portName,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return UssdFixHandler?.Invoke(portName, ct)
+            ?? Task.FromResult("SKIPPED_NO_ICCID");
     }
 
     public Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false) =>

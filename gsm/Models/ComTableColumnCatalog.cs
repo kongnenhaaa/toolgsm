@@ -28,4 +28,5 @@ public static class ComTableColumnCatalog
         new("LastSmsSender", "Người gửi SMS"),
         new("LastMessageContent", "Nội dung")
     ];
+
 }

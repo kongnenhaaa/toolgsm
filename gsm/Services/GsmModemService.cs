@@ -41,6 +41,13 @@ public interface IGsmModemService
         string portName,
         IReadOnlyList<string> stages,
         CancellationToken ct = default);
+    /// <summary>
+    /// Runs the same bounded, one-reboot USSD repair used by gsm_fix_tool.py
+    /// against an already connected COM port.
+    /// </summary>
+    Task<string> FixUssdLikePythonAsync(
+        string portName,
+        CancellationToken ct = default);
     Task<string> SendRawAsync(string portName, string data, int timeoutMs = 5000, bool silent = false);
     Task<string> SendSmsAsync(string portName, string phoneNumber, string message, int timeoutMs = 15000, CancellationToken ct = default);
     Task<bool> VerifyExpectedCcidAsync(
@@ -227,6 +234,35 @@ public class GsmModemService : IGsmModemService
     internal static TimeSpan SautoAutomaticUssdResponseTimeout { get; } =
         TimeSpan.FromSeconds(35);
 
+    // COPS/LTE alone does not prove that the CS domain used by *101# is ready.
+    // Give CREG a short non-mutating window before deciding that this COM needs
+    // the one-time Python-style recovery.
+    internal static TimeSpan SautoAutomaticUssdCsReadyDeadline { get; } =
+        TimeSpan.FromSeconds(12);
+
+    // Keep automatic lookups in bounded parallel waves to reduce the startup
+    // burst and transient CSFB load seen with 28/64 attached modems. This does
+    // not claim that burst limiting alone cures every +CME ERROR/CREG=0 case.
+    internal const int SautoAutomaticUssdMaxConcurrency = 8;
+
+    internal static TimeSpan SautoUssdCleanupResponseTimeout { get; } =
+        TimeSpan.FromSeconds(3);
+
+    internal static TimeSpan UssdFixInitialAtDeadline { get; } =
+        TimeSpan.FromSeconds(12);
+
+    internal static TimeSpan UssdFixBootDelay { get; } =
+        TimeSpan.FromSeconds(8);
+
+    internal static TimeSpan UssdFixAtReadyDeadline { get; } =
+        TimeSpan.FromSeconds(90);
+
+    internal static TimeSpan UssdFixCfunReadyDeadline { get; } =
+        TimeSpan.FromSeconds(60);
+
+    internal static TimeSpan UssdFixNetworkDeadline { get; } =
+        TimeSpan.FromSeconds(30);
+
     internal static TimeSpan SautoAutomaticUssdRetryInterval { get; } =
         TimeSpan.FromMinutes(2);
 
@@ -258,6 +294,8 @@ public class GsmModemService : IGsmModemService
         TimeSpan.FromSeconds(60);
     internal static TimeSpan SmsReceiveWatchdogTurnGap { get; } =
         TimeSpan.FromSeconds(1);
+    internal static TimeSpan SmsStorageCleanupInterval { get; } =
+        TimeSpan.FromMinutes(5);
 
     private readonly ConcurrentDictionary<string, SerialPort> _serialPorts = new();
     private readonly ConcurrentDictionary<string, gsm.Models.IncomingCallSession> _incomingCalls = new();
@@ -343,9 +381,23 @@ public class GsmModemService : IGsmModemService
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _sautoInitializingPorts =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _imsUtRecoveryAttempts =
+    // A physical SIM can become readable while RF is still disabled (CFUN 0/4).
+    // Permit one non-rebooting CFUN=1 recovery for this COM + ICCID session.
+    private readonly ConcurrentDictionary<string, byte> _hotplugRfRecoveryAttempts =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Some EC20 firmwares report +CME ERROR: 13 forever after a physical SIM
+    // change. Allow one reboot for the current COM lifetime, never a loop.
+    private readonly ConcurrentDictionary<string, byte> _hotplugSimFailureReboots =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Shared one-reboot budget for automatic *101# recovery.  IMS/UT
+    // preflight and the full Python-style fallback must never reboot the same
+    // COM + SIM twice during one ToolGSM session.
+    private readonly ConcurrentDictionary<string, byte> _automaticUssdRecoveryAttempts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _imsUtRecoveryGate = new(2, 2);
+    private readonly SemaphoreSlim _sautoAutomaticUssdGate = new(
+        SautoAutomaticUssdMaxConcurrency,
+        SautoAutomaticUssdMaxConcurrency);
     private readonly ConcurrentDictionary<string, int> _suspendedBackgroundPorts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, NetworkPollingIdentity> _pendingNetworkPollingPorts =
@@ -775,6 +827,8 @@ public class GsmModemService : IGsmModemService
     private int _smsReceiveWatchdogCursor;
     private readonly ConcurrentDictionary<string, long> _smsReceiveWatchdogLastProbeTicks =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, long> _smsStorageCleanupLastScheduleTicks =
+        new(StringComparer.OrdinalIgnoreCase);
     // Every periodic or recovery CMGL scan across all physical COM ports owns
     // this one gate. With 64 ports the modem never receives a 64-command burst.
     private readonly SemaphoreSlim _smsScanTurnGate = new(1, 1);
@@ -889,6 +943,8 @@ public class GsmModemService : IGsmModemService
         ArgumentException.ThrowIfNullOrWhiteSpace(portName);
         string normalized = Regex.Match(
             ccid ?? string.Empty, @"(?<!\d)89\d{16,20}(?!\d)").Value;
+        if (string.IsNullOrWhiteSpace(normalized))
+            ClearHotplugRfRecoveryClaims(portName);
         bool networkIdentityChanged;
         if (string.IsNullOrWhiteSpace(normalized))
         {
@@ -1159,9 +1215,13 @@ public class GsmModemService : IGsmModemService
             || lifetime.IsCancellationRequested)
             return;
 
+        long now = Environment.TickCount64;
         bool newlyRegistered = _smsReceiveWatchdogLastProbeTicks.TryAdd(
             portName,
-            Environment.TickCount64);
+            now);
+        // Delay the first full cleanup sweep for one interval. The lightweight
+        // watchdog still drains new messages every minute in the meantime.
+        _smsStorageCleanupLastScheduleTicks.TryAdd(portName, now);
         lock (_smsReceiveWatchdogSchedulerSync)
         {
             if (_smsReceiveWatchdogSchedulerCts is { } existing
@@ -1194,6 +1254,7 @@ public class GsmModemService : IGsmModemService
     private void StopSmsReceiveWatchdog(string portName)
     {
         _smsReceiveWatchdogLastProbeTicks.TryRemove(portName, out _);
+        _smsStorageCleanupLastScheduleTicks.TryRemove(portName, out _);
         CancellationTokenSource? schedulerToCancel = null;
         lock (_smsReceiveWatchdogSchedulerSync)
         {
@@ -1212,6 +1273,7 @@ public class GsmModemService : IGsmModemService
             scheduler = _smsReceiveWatchdogSchedulerCts;
         try { scheduler?.Cancel(); } catch { }
         _smsReceiveWatchdogLastProbeTicks.Clear();
+        _smsStorageCleanupLastScheduleTicks.Clear();
     }
 
     internal static int GetSmsReceiveWatchdogPortOrder(string? portName)
@@ -1235,6 +1297,30 @@ public class GsmModemService : IGsmModemService
             && !_suspendedBackgroundPorts.ContainsKey(portName)
             && !IsCallInProgress(portName)
             && !_sautoInitializingPorts.ContainsKey(portName);
+    }
+
+    internal static bool IsSmsStorageCleanupDue(
+        long nowTicks,
+        long lastScheduledTicks) =>
+        nowTicks >= lastScheduledTicks
+        && nowTicks - lastScheduledTicks
+            >= (long)SmsStorageCleanupInterval.TotalMilliseconds;
+
+    private bool TryClaimSmsStorageCleanup(string portName)
+    {
+        while (true)
+        {
+            long now = Environment.TickCount64;
+            long previous = _smsStorageCleanupLastScheduleTicks.GetOrAdd(
+                portName,
+                now);
+            if (!IsSmsStorageCleanupDue(now, previous)) return false;
+            if (_smsStorageCleanupLastScheduleTicks.TryUpdate(
+                    portName,
+                    now,
+                    previous))
+                return true;
+        }
     }
 
     private async Task<IDisposable> AcquireSmsScanTurnAsync(
@@ -1322,6 +1408,21 @@ public class GsmModemService : IGsmModemService
 
                 await ProbeStoredSmsForWatchdogAsync(selectedPort, token)
                     .ConfigureAwait(false);
+                if (CanRunSmsScanTurn(selectedPort)
+                    && TryClaimSmsStorageCleanup(selectedPort))
+                {
+                    // Reuse the existing durable receive pipeline: CMGL finds
+                    // every old READ/UNREAD record, the inbox/journal accepts it,
+                    // identity+content are rechecked, then only that exact index
+                    // is released with CMGD=<index>,0. No background bulk delete.
+                    AtCommandTraceLogger.State(
+                        selectedPort,
+                        "SMS_STORAGE_CLEANUP_SCHEDULED;mode=SAFE_SWEEP;interval_minutes=5");
+                    ScheduleSafeUnreadSmsSweep(
+                        selectedPort,
+                        "periodic-storage-cleanup",
+                        initialDelayMs: 250);
+                }
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -3565,6 +3666,303 @@ public class GsmModemService : IGsmModemService
         !IsCommandFailure(response)
         && Regex.IsMatch(response, @"(?<!\d)89\d{16,20}(?!\d)");
 
+    internal static bool TryGetHotplugCfunMode(
+        string? response,
+        out int mode)
+    {
+        mode = -1;
+        if (!IsSautoOkResponse(response)) return false;
+
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            @"(?:^|\r?\n)\s*\+CFUN:\s*(\d+)\s*(?:\r?\n|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success
+            && int.TryParse(match.Groups[1].Value, out mode);
+    }
+
+    internal static bool ShouldEnableHotplugRf(string? cfunResponse) =>
+        TryGetHotplugCfunMode(cfunResponse, out int mode)
+        && mode is 0 or 4;
+
+    internal static bool IsHotplugSimFailureResponse(string? response) =>
+        Regex.IsMatch(
+            response ?? string.Empty,
+            @"(?:^|\r?\n)\s*\+CME\s+ERROR:\s*13\s*(?:\r?\n|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static bool IsHotplugCpinUnavailableResponse(string? response) =>
+        Regex.IsMatch(
+            response ?? string.Empty,
+            @"(?:^|\r?\n)\s*\+CME\s+ERROR:\s*10\s*(?:\r?\n|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static bool IsHotplugCpin10Iccid13Signature(
+        string? cpinResponse,
+        string? iccidResponse) =>
+        IsHotplugCpinUnavailableResponse(cpinResponse)
+        && IsHotplugSimFailureResponse(iccidResponse);
+
+    internal static bool ShouldRecoverHotplugSimFailure(
+        int consecutiveFailures) =>
+        consecutiveFailures >= 3;
+
+    internal static string GetHotplugReadOnlyImei(string? response)
+    {
+        if (!IsSautoOkResponse(response)) return string.Empty;
+
+        return Regex.Match(
+            response ?? string.Empty,
+            @"(?<!\d)\d{15}(?!\d)",
+            RegexOptions.CultureInvariant).Value;
+    }
+
+    internal bool TryClaimHotplugRfRecovery(string portName, string ccid)
+    {
+        string normalizedCcid = Regex.Match(
+            ccid ?? string.Empty,
+            @"(?<!\d)89\d{16,20}(?!\d)").Value;
+        if (string.IsNullOrWhiteSpace(portName)
+            || string.IsNullOrWhiteSpace(normalizedCcid))
+        {
+            return false;
+        }
+
+        string key = $"{portName.Trim().ToUpperInvariant()}|{normalizedCcid}";
+        return _hotplugRfRecoveryAttempts.TryAdd(key, 0);
+    }
+
+    internal bool TryClaimHotplugSimFailureReboot(string portName)
+    {
+        if (string.IsNullOrWhiteSpace(portName)) return false;
+        return _hotplugSimFailureReboots.TryAdd(
+            portName.Trim().ToUpperInvariant(),
+            0);
+    }
+
+    private void ClearHotplugRfRecoveryClaims(string portName)
+    {
+        if (string.IsNullOrWhiteSpace(portName)) return;
+
+        string prefix = $"{portName.Trim().ToUpperInvariant()}|";
+        foreach (string key in _hotplugRfRecoveryAttempts.Keys)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                _hotplugRfRecoveryAttempts.TryRemove(key, out _);
+        }
+    }
+
+    private async Task PrepareAcceptedHotplugSimWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        string ccid,
+        CancellationToken loopToken)
+    {
+        CancellationToken lifetimeToken = TryGetPortLifetimeToken(portName);
+        CancellationToken operationToken = lifetimeToken.CanBeCanceled
+            ? lifetimeToken
+            : loopToken;
+
+        string cfunResponse = string.Empty;
+        try
+        {
+            cfunResponse =
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+CFUN?",
+                    TimeSpan.FromSeconds(3),
+                    operationToken);
+        }
+        catch (TimeoutException ex)
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"HOTPLUG_RF_SKIPPED;reason=CFUN_QUERY_TIMEOUT;detail={ex.Message}");
+        }
+
+        if (TryGetHotplugCfunMode(cfunResponse, out int cfunMode))
+        {
+            if (cfunMode is 0 or 4)
+            {
+                if (TryClaimHotplugRfRecovery(portName, ccid))
+                {
+                    string enableResponse;
+                    try
+                    {
+                        enableResponse =
+                            await WriteSautoCommandForResponseWhileLockedAsync(
+                                portName,
+                                serialPort,
+                                "AT+CFUN=1",
+                                TimeSpan.FromSeconds(10),
+                                operationToken,
+                                allowHotplugRfRecovery: true);
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        enableResponse = $"ERROR: {ex.Message}";
+                    }
+
+                    bool enabled = IsSautoOkResponse(enableResponse);
+                    AtCommandTraceLogger.State(
+                        portName,
+                        enabled
+                            ? $"HOTPLUG_RF_ENABLED;previous_cfun={cfunMode};ccid={ccid};reboot=false"
+                            : $"HOTPLUG_RF_ENABLE_FAILED;previous_cfun={cfunMode};ccid={ccid};result={GetSautoResponseOutcome(enableResponse)};retry=false");
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = enabled
+                            ? $"[HOTPLUG_RF_ENABLED] SIM đã nhận; chuyển CFUN={cfunMode} sang CFUN=1, không reboot."
+                            : $"[HOTPLUG_RF_WARNING] Không bật được RF từ CFUN={cfunMode}: {enableResponse.Trim()}"
+                    });
+                }
+                else
+                {
+                    AtCommandTraceLogger.State(
+                        portName,
+                        $"HOTPLUG_RF_SKIPPED;reason=ALREADY_ATTEMPTED;cfun={cfunMode};ccid={ccid}");
+                }
+            }
+            else
+            {
+                // CFUN=1 already has RF enabled. Any other reported mode is
+                // deliberately left untouched; only explicit 0/4 is safe here.
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"HOTPLUG_RF_SKIPPED;reason=NO_SAFE_CHANGE;cfun={cfunMode};ccid={ccid}");
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(cfunResponse))
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"HOTPLUG_RF_SKIPPED;reason=CFUN_QUERY_INVALID;result={GetSautoResponseOutcome(cfunResponse)}");
+        }
+
+        string imei = string.Empty;
+        foreach (string command in new[] { "AT+CGSN", "AT+GSN" })
+        {
+            try
+            {
+                string response =
+                    await WriteSautoCommandForResponseWhileLockedAsync(
+                        portName,
+                        serialPort,
+                        command,
+                        TimeSpan.FromSeconds(3),
+                        operationToken);
+                imei = GetHotplugReadOnlyImei(response);
+                if (!string.IsNullOrWhiteSpace(imei)) break;
+            }
+            catch (TimeoutException)
+            {
+                // Read-only fallback below; failure never changes modem state.
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(imei)) return;
+
+        bool imeiChanged = !string.Equals(
+            GetSautoReceiveSnapshot(portName).Imei,
+            imei,
+            StringComparison.Ordinal);
+        UpdateSautoReceiveState(portName, state => state.Imei = imei);
+        if (imeiChanged)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[PARSE_IMEI] {imei}"
+            });
+        }
+    }
+
+    private async Task RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        CancellationToken loopToken)
+    {
+        UpdateSautoReceiveState(
+            portName,
+            static state =>
+            {
+                state.SimReady = false;
+                state.SimLocked = false;
+                state.Ccid = string.Empty;
+                state.CpinResponse = string.Empty;
+            });
+        SetSmsSimIdentity(portName, null);
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = "[SIM_CONTACT_ERROR] CPIN/ICCID báo lỗi tiếp điểm SIM; xóa nhận dạng SIM cũ và khởi động modem đúng một lần."
+        });
+
+        CancellationToken lifetimeToken = TryGetPortLifetimeToken(portName);
+        CancellationToken operationToken = lifetimeToken.CanBeCanceled
+            ? lifetimeToken
+            : loopToken;
+        try
+        {
+            await WriteSautoCommandWhileLockedAsync(
+                portName,
+                serialPort,
+                ImsUtRecoveryRebootCommand,
+                operationToken,
+                allowHotplugSimFailureRecovery: true);
+            AtCommandTraceLogger.State(
+                portName,
+                "HOTPLUG_SIM_FAILURE_REBOOT_SENT;reason=SIM_CONTACT_FAILURE;budget=ONE");
+            await Task.Delay(ImsUtRecoveryBootDelay, operationToken);
+        }
+        catch (Exception ex) when (ex is IOException
+                                      or InvalidOperationException
+                                      or TimeoutException)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"HOTPLUG_SIM_FAILURE_REBOOT_FAILED;retry=false;detail={ex.Message}");
+        }
+    }
+
+    private async Task<bool> ProbeHotplugIccidContactFailureWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        string cpinResponse,
+        CancellationToken ct)
+    {
+        if (!IsHotplugCpinUnavailableResponse(cpinResponse)) return false;
+
+        string iccidResponse;
+        try
+        {
+            iccidResponse =
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+ICCID",
+                    TimeSpan.FromSeconds(5),
+                    ct);
+        }
+        catch (TimeoutException ex)
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"HOTPLUG_ICCID_PROBE;cpin=CME_10;result=TIMEOUT;detail={ex.Message}");
+            return false;
+        }
+
+        bool contactFailure = IsHotplugCpin10Iccid13Signature(
+            cpinResponse,
+            iccidResponse);
+        AtCommandTraceLogger.State(
+            portName,
+            $"HOTPLUG_ICCID_PROBE;cpin=CME_10;result={GetSautoResponseOutcome(iccidResponse)};contact_failure={contactFailure}");
+        return contactFailure;
+    }
+
     public void StartHotplugWaitLoop(string portName) =>
         StartHotplugWaitLoop(
             portName,
@@ -3604,6 +4002,8 @@ public class GsmModemService : IGsmModemService
         _ = Task.Run(async () =>
         {
             bool simReady = simReadyInitially;
+            int consecutiveSimFailureResponses = 0;
+            int consecutiveCpinUnavailableResponses = 0;
             if (!simReadyInitially)
                 LogMessage?.Invoke(this, new GsmDataEventArgs
             {
@@ -3652,6 +4052,61 @@ public class GsmModemService : IGsmModemService
                                     TimeSpan.FromSeconds(10),
                                     token);
 
+                            if (IsHotplugCpinUnavailableResponse(cpinResponse))
+                            {
+                                consecutiveCpinUnavailableResponses++;
+                                if (ShouldRecoverHotplugSimFailure(
+                                        consecutiveCpinUnavailableResponses))
+                                {
+                                    consecutiveCpinUnavailableResponses = 0;
+                                    bool contactFailure =
+                                        await ProbeHotplugIccidContactFailureWhileLockedAsync(
+                                            portName,
+                                            hotplugPort,
+                                            cpinResponse,
+                                            token);
+                                    if (contactFailure
+                                        && TryClaimHotplugSimFailureReboot(portName))
+                                    {
+                                        await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                            portName,
+                                            hotplugPort,
+                                            token);
+                                        if (token.IsCancellationRequested
+                                            && _serialPorts.ContainsKey(portName))
+                                        {
+                                            StartHotplugWaitLoop(portName);
+                                            return;
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                            consecutiveCpinUnavailableResponses = 0;
+
+                            if (IsHotplugSimFailureResponse(cpinResponse))
+                            {
+                                consecutiveSimFailureResponses++;
+                                if (ShouldRecoverHotplugSimFailure(
+                                        consecutiveSimFailureResponses)
+                                    && TryClaimHotplugSimFailureReboot(portName))
+                                {
+                                    await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                        portName,
+                                        hotplugPort,
+                                        token);
+                                    consecutiveSimFailureResponses = 0;
+                                    if (token.IsCancellationRequested
+                                        && _serialPorts.ContainsKey(portName))
+                                    {
+                                        StartHotplugWaitLoop(portName);
+                                        return;
+                                    }
+                                }
+                                continue;
+                            }
+                            consecutiveSimFailureResponses = 0;
+
                             SautoReceiveSnapshot afterCpin =
                                 GetSautoReceiveSnapshot(portName);
                             // The shared RX parser is authoritative. On EC20 the
@@ -3697,6 +4152,11 @@ public class GsmModemService : IGsmModemService
                             if (completed.SimReady
                                 && !string.IsNullOrWhiteSpace(completed.Ccid))
                             {
+                                await PrepareAcceptedHotplugSimWhileLockedAsync(
+                                    portName,
+                                    hotplugPort,
+                                    completed.Ccid,
+                                    token);
                                 break;
                             }
                         }
@@ -3713,6 +4173,61 @@ public class GsmModemService : IGsmModemService
                                     "AT+CPIN? \r",
                                     TimeSpan.FromSeconds(10),
                                     token);
+
+                            if (IsHotplugCpinUnavailableResponse(cpinResponse))
+                            {
+                                consecutiveCpinUnavailableResponses++;
+                                if (ShouldRecoverHotplugSimFailure(
+                                        consecutiveCpinUnavailableResponses))
+                                {
+                                    consecutiveCpinUnavailableResponses = 0;
+                                    bool contactFailure =
+                                        await ProbeHotplugIccidContactFailureWhileLockedAsync(
+                                            portName,
+                                            hotplugPort,
+                                            cpinResponse,
+                                            token);
+                                    if (contactFailure
+                                        && TryClaimHotplugSimFailureReboot(portName))
+                                    {
+                                        await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                            portName,
+                                            hotplugPort,
+                                            token);
+                                        if (token.IsCancellationRequested
+                                            && _serialPorts.ContainsKey(portName))
+                                        {
+                                            StartHotplugWaitLoop(portName);
+                                            return;
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                            consecutiveCpinUnavailableResponses = 0;
+
+                            if (IsHotplugSimFailureResponse(cpinResponse))
+                            {
+                                consecutiveSimFailureResponses++;
+                                if (ShouldRecoverHotplugSimFailure(
+                                        consecutiveSimFailureResponses)
+                                    && TryClaimHotplugSimFailureReboot(portName))
+                                {
+                                    await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                        portName,
+                                        hotplugPort,
+                                        token);
+                                    consecutiveSimFailureResponses = 0;
+                                    if (token.IsCancellationRequested
+                                        && _serialPorts.ContainsKey(portName))
+                                    {
+                                        StartHotplugWaitLoop(portName);
+                                        return;
+                                    }
+                                }
+                                continue;
+                            }
+                            consecutiveSimFailureResponses = 0;
 
                             SautoReceiveSnapshot afterCpin =
                                 GetSautoReceiveSnapshot(portName);
@@ -3731,6 +4246,13 @@ public class GsmModemService : IGsmModemService
                                     && !string.IsNullOrWhiteSpace(
                                         GetSautoReceiveSnapshot(portName).Ccid))
                                 {
+                                    SautoReceiveSnapshot completed =
+                                        GetSautoReceiveSnapshot(portName);
+                                    await PrepareAcceptedHotplugSimWhileLockedAsync(
+                                        portName,
+                                        hotplugPort,
+                                        completed.Ccid,
+                                        token);
                                     break;
                                 }
                             }
@@ -3894,10 +4416,13 @@ public class GsmModemService : IGsmModemService
         _ = Task.Run(async () =>
         {
             bool simRemovalDetected = false;
+            int consecutiveNetworkSimFailureResponses = 0;
+            int consecutiveNetworkCpinUnavailableResponses = 0;
             while (!token.IsCancellationRequested
                    && _serialPorts.ContainsKey(portName)
                    && IsNetworkPollingIdentityCurrent(portName, expectedIdentity))
             {
+                bool runAutomaticUssdFix = false;
                 try
                 {
                     if (!EnsurePortOpen(
@@ -3918,6 +4443,8 @@ public class GsmModemService : IGsmModemService
                         // then the receive callback updates simReady/networkGSM.
                         // Do not turn terminal OK/ERROR into extra progression
                         // gates that SAuto does not have.
+                        SautoReceiveSnapshot beforeCpinProbe =
+                            GetSautoReceiveSnapshot(portName);
                         UpdateSautoReceiveState(
                             portName,
                             static state => state.CpinResponse = string.Empty);
@@ -3930,6 +4457,97 @@ public class GsmModemService : IGsmModemService
 
                         SautoReceiveSnapshot afterCpin =
                             GetSautoReceiveSnapshot(portName);
+
+                        bool freshCpinUnavailable =
+                            afterCpin.TerminalErrorRevision
+                                > beforeCpinProbe.TerminalErrorRevision
+                            && IsHotplugCpinUnavailableResponse(
+                                afterCpin.TerminalErrorResponse);
+                        if (freshCpinUnavailable)
+                        {
+                            consecutiveNetworkCpinUnavailableResponses++;
+                            AtCommandTraceLogger.State(
+                                portName,
+                                $"SAUTO_CPIN_UNAVAILABLE;source=NETWORK_POLL;count={consecutiveNetworkCpinUnavailableResponses};threshold=3");
+                            if (ShouldRecoverHotplugSimFailure(
+                                    consecutiveNetworkCpinUnavailableResponses))
+                            {
+                                consecutiveNetworkCpinUnavailableResponses = 0;
+                                bool contactFailure =
+                                    await ProbeHotplugIccidContactFailureWhileLockedAsync(
+                                        portName,
+                                        networkPort,
+                                        afterCpin.TerminalErrorResponse,
+                                        token);
+                                if (contactFailure)
+                                {
+                                    simRemovalDetected = true;
+                                    if (TryClaimHotplugSimFailureReboot(portName))
+                                    {
+                                        await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                            portName,
+                                            networkPort,
+                                            token);
+                                    }
+                                    else
+                                    {
+                                        SetSmsSimIdentity(portName, null);
+                                        LogMessage?.Invoke(
+                                            this,
+                                            new GsmDataEventArgs
+                                            {
+                                                PortName = portName,
+                                                Data = "[SIM_CONTACT_ERROR] CPIN=CME 10 và ICCID=CME 13; lần reboot tự động duy nhất đã được dùng."
+                                            });
+                                    }
+                                    break;
+                                }
+                            }
+
+                            continue;
+                        }
+                        consecutiveNetworkCpinUnavailableResponses = 0;
+
+                        bool freshSimFailure =
+                            afterCpin.TerminalErrorRevision
+                                > beforeCpinProbe.TerminalErrorRevision
+                            && IsHotplugSimFailureResponse(
+                                afterCpin.TerminalErrorResponse);
+                        if (freshSimFailure)
+                        {
+                            consecutiveNetworkSimFailureResponses++;
+                            AtCommandTraceLogger.State(
+                                portName,
+                                $"SAUTO_SIM_FAILURE;source=NETWORK_POLL;count={consecutiveNetworkSimFailureResponses};threshold=3");
+                            if (ShouldRecoverHotplugSimFailure(
+                                    consecutiveNetworkSimFailureResponses))
+                            {
+                                simRemovalDetected = true;
+                                if (TryClaimHotplugSimFailureReboot(portName))
+                                {
+                                    await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                        portName,
+                                        networkPort,
+                                        token);
+                                }
+                                else
+                                {
+                                    SetSmsSimIdentity(portName, null);
+                                    LogMessage?.Invoke(
+                                        this,
+                                        new GsmDataEventArgs
+                                        {
+                                            PortName = portName,
+                                            Data = "[SIM_CONTACT_ERROR] Modem vẫn trả +CME ERROR: 13; lần reboot tự động duy nhất đã được dùng."
+                                        });
+                                }
+                                break;
+                            }
+
+                            continue;
+                        }
+
+                        consecutiveNetworkSimFailureResponses = 0;
 
                         if (IsSautoSimAbsentResponse(afterCpin.CpinResponse))
                         {
@@ -4164,11 +4782,27 @@ public class GsmModemService : IGsmModemService
                                             Data =
                                                 $"[SAUTO_AUTO_USSD_RESULT] ccid={normalizedExpectedCcid}; carrier={carrier}; code={automaticUssd}; completed={automaticUssdCompleted}; result={GetSautoResponseOutcome(ussdResult)}; cusd={ussdResult.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase)}"
                                         });
-                                    if (!automaticUssdCompleted)
+                                    if (!automaticUssdCompleted
+                                        && ShouldRunAutomaticUssdFix(
+                                            ussdResult)
+                                        && TryClaimAutomaticUssdFix(
+                                            portName,
+                                            normalizedExpectedCcid))
                                     {
+                                        runAutomaticUssdFix = true;
                                         AtCommandTraceLogger.State(
                                             portName,
-                                            $"SAUTO_AUTO_USSD_WAITING;code={automaticUssd};next_retry_seconds={(int)SautoAutomaticUssdRetryInterval.TotalSeconds}");
+                                            $"SAUTO_AUTO_USSD_FIX_QUEUED;ccid={normalizedExpectedCcid};reason={GetSautoResponseOutcome(ussdResult)};reboot_budget=ONE");
+                                    }
+
+                                    if (!automaticUssdCompleted)
+                                    {
+                                        if (!runAutomaticUssdFix)
+                                        {
+                                            AtCommandTraceLogger.State(
+                                                portName,
+                                                $"SAUTO_AUTO_USSD_WAITING;code={automaticUssd};next_retry_seconds={(int)SautoAutomaticUssdRetryInterval.TotalSeconds}");
+                                        }
                                     }
                                     else
                                     {
@@ -4185,6 +4819,18 @@ public class GsmModemService : IGsmModemService
                     finally
                     {
                         networkSemaphore.Release();
+                    }
+
+                    // FixUssdLikePythonAsync acquires this same per-COM
+                    // semaphore and suspends this polling loop.  It must run
+                    // only after the lock above has been released.
+                    if (runAutomaticUssdFix)
+                    {
+                        automaticUssdCompleted =
+                            await RunAutomaticUssdFixAsync(
+                                portName,
+                                normalizedExpectedCcid,
+                                smsReceiveMaintenanceGeneration);
                     }
                 }
                 catch (OperationCanceledException)
@@ -4208,6 +4854,75 @@ public class GsmModemService : IGsmModemService
                 StartHotplugWaitLoop(portName);
         }, token);
     }
+
+    private async Task<bool> RunAutomaticUssdFixAsync(
+        string portName,
+        string expectedCcid,
+        long smsReceiveMaintenanceGeneration)
+    {
+        CancellationToken portLifetimeToken =
+            TryGetPortLifetimeToken(portName);
+        AtCommandTraceLogger.State(
+            portName,
+            $"SAUTO_AUTO_USSD_FIX_BEGIN;ccid={expectedCcid}");
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data =
+                $"[SAUTO_AUTO_USSD_FIX] *101# lỗi; tự fix một lần cho {portName}."
+        });
+
+        string fixResult = await FixUssdLikePythonAsync(
+            portName,
+            portLifetimeToken);
+        bool completed =
+            IsNetworkSimIdentityCurrent(portName, expectedCcid)
+            && IsSautoAutomatic101Completion(fixResult);
+        DateTimeOffset completedUtc = DateTimeOffset.UtcNow;
+
+        if (_sautoNetworkStates.TryGetValue(
+                portName,
+                out SautoNetworkState? current)
+            && string.Equals(
+                current.Ccid,
+                expectedCcid,
+                StringComparison.Ordinal))
+        {
+            _sautoNetworkStates[portName] = current with
+            {
+                AutomaticUssdCompleted = completed,
+                LastAutomaticUssdAttemptUtc = completedUtc
+            };
+        }
+
+        AtCommandTraceLogger.State(
+            portName,
+            $"SAUTO_AUTO_USSD_FIX_DONE;ccid={expectedCcid};completed={completed};result={GetSautoResponseOutcome(fixResult)}");
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data =
+                $"[SAUTO_AUTO_USSD_FIX_RESULT] ccid={expectedCcid}; completed={completed}; result={GetSautoResponseOutcome(fixResult)}"
+        });
+
+        if (completed)
+        {
+            EnableSmsReceiveMaintenanceAfterSauto(
+                portName,
+                expectedCcid,
+                smsReceiveMaintenanceGeneration,
+                "automatic-fix-101-rx-complete");
+        }
+        else
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"SAUTO_AUTO_USSD_WAITING;code=*101#;next_retry_seconds={(int)SautoAutomaticUssdRetryInterval.TotalSeconds};auto_fix_reboot_will_not_repeat=true");
+        }
+
+        return completed;
+    }
+
     internal static string ResolveSautoCarrier(string? response)
     {
         string value = (response ?? string.Empty).ToUpperInvariant();
@@ -6984,6 +7699,8 @@ public class GsmModemService : IGsmModemService
         _sautoReceiveStates.Clear();
         _sautoReceiveSignals.Clear();
         _sautoInitializingPorts.Clear();
+        _hotplugRfRecoveryAttempts.Clear();
+        _hotplugSimFailureReboots.Clear();
         _portLifetimeCts.Clear();
         _dataReceivedHandlers.Clear();
         _isDownloading.Clear();
@@ -7023,6 +7740,10 @@ public class GsmModemService : IGsmModemService
     public void Disconnect(string portName)
     {
         InvalidateSmsReceiveMaintenance(portName);
+        ClearHotplugRfRecoveryClaims(portName);
+        _hotplugSimFailureReboots.TryRemove(
+            portName.Trim().ToUpperInvariant(),
+            out _);
         _networkSimIdentities.TryRemove(portName, out _);
         _networkIdentityGenerations.TryRemove(portName, out _);
         InvalidateNetworkRecoveryForIdentityChange(portName);
@@ -7116,12 +7837,21 @@ public class GsmModemService : IGsmModemService
         SerialPort serialPort,
         string command,
         CancellationToken ct,
-        bool allowImsUtRecovery = false)
+        bool allowImsUtRecovery = false,
+        bool allowUssdFixWorkflow = false,
+        bool allowHotplugRfRecovery = false,
+        bool allowHotplugSimFailureRecovery = false)
     {
         ct.ThrowIfCancellationRequested();
         if (IsRadioDisruptiveCommand(command)
             && !(allowImsUtRecovery
-                && IsAuthorizedImsUtRecoveryCommand(command)))
+                && IsAuthorizedImsUtRecoveryCommand(command))
+            && !(allowUssdFixWorkflow
+                && IsAuthorizedUssdFixCommand(command))
+            && !(allowHotplugRfRecovery
+                && IsAuthorizedHotplugRfRecoveryCommand(command))
+            && !(allowHotplugSimFailureRecovery
+                && IsAuthorizedHotplugSimFailureRecoveryCommand(command)))
         {
             AtCommandTraceLogger.Error(
                 portName,
@@ -7172,7 +7902,10 @@ public class GsmModemService : IGsmModemService
         TimeSpan timeout,
         CancellationToken ct,
         bool appendConfiguredNewLine = true,
-        bool allowImsUtRecovery = false)
+        bool allowImsUtRecovery = false,
+        bool allowUssdFixWorkflow = false,
+        bool allowHotplugRfRecovery = false,
+        bool allowHotplugSimFailureRecovery = false)
     {
         string logicalCommand = command.TrimEnd('\r', '\n', ' ');
         var response = new TaskCompletionSource<string>(
@@ -7190,7 +7923,10 @@ public class GsmModemService : IGsmModemService
                     serialPort,
                     command,
                     ct,
-                    allowImsUtRecovery);
+                    allowImsUtRecovery,
+                    allowUssdFixWorkflow,
+                    allowHotplugRfRecovery,
+                    allowHotplugSimFailureRecovery);
             }
             else
             {
@@ -7365,7 +8101,151 @@ public class GsmModemService : IGsmModemService
                 StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool IsAuthorizedUssdFixCommand(string? command)
+    {
+        string normalized = Regex.Replace(
+            command ?? string.Empty,
+            @"\s+",
+            string.Empty);
+        return normalized.Equals(
+                DisableImsUtCommand,
+                StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals(
+                "AT+QCFG=\"nwscanmode\",0,0",
+                StringComparison.OrdinalIgnoreCase)
+            || normalized.Equals(
+                ImsUtRecoveryRebootCommand,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsAuthorizedHotplugRfRecoveryCommand(
+        string? command)
+    {
+        string normalized = Regex.Replace(
+            command ?? string.Empty,
+            @"\s+",
+            string.Empty);
+        return normalized.Equals(
+            "AT+CFUN=1",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsAuthorizedHotplugSimFailureRecoveryCommand(
+        string? command)
+    {
+        string normalized = Regex.Replace(
+            command ?? string.Empty,
+            @"\s+",
+            string.Empty);
+        return normalized.Equals(
+            ImsUtRecoveryRebootCommand,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool TryGetUssdFixQcfgFirstValue(
+        string? response,
+        string key,
+        out int value)
+    {
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            $@"\+QCFG:\s*""{Regex.Escape(key)}""\s*,\s*(-?\d+)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return int.TryParse(match.Groups[1].Value, out value);
+    }
+
+    internal static bool IsUssdFixQcfgExplicitlyUnsupported(
+        string? response,
+        string key)
+    {
+        if (TryGetUssdFixQcfgFirstValue(response, key, out _))
+            return false;
+
+        string value = response ?? string.Empty;
+        return Regex.IsMatch(
+                value,
+                @"(?:^|\r?\n)\s*ERROR\s*(?:\r?\n|$)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            || Regex.IsMatch(
+                value,
+                @"\+CME ERROR:\s*(?:unknown|not supported|operation not supported)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    internal static bool TryGetUssdFixQsimdetConfig(
+        string? response,
+        out int enabled,
+        out int polarity)
+    {
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            @"\+QSIMDET:\s*([01])\s*,\s*([01])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (match.Success
+            && int.TryParse(match.Groups[1].Value, out enabled)
+            && int.TryParse(match.Groups[2].Value, out polarity))
+        {
+            return true;
+        }
+
+        enabled = 0;
+        polarity = 0;
+        return false;
+    }
+
+    internal static bool IsUssdFixUart1Active(string? response) =>
+        IsSautoOkResponse(response)
+        && Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+QURCCFG:\s*""urcport""\s*,\s*""uart1""",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static bool IsUssdFixCfunOne(string? response) =>
+        IsSautoOkResponse(response)
+        && Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+CFUN:\s*1(?:\s*(?:\r?\n|$))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static bool IsUssdFixCpinReady(string? response) =>
+        IsSautoOkResponse(response)
+        && Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+CPIN:\s*READY(?:\s*(?:\r?\n|$))",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static bool IsUssdFixRegisteredResponse(
+        string? response,
+        string family)
+    {
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            $@"\+{Regex.Escape(family)}REG:\s*(\d+)(?:\s*,\s*(\d+))?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return false;
+
+        string statusText = match.Groups[2].Success
+            ? match.Groups[2].Value
+            : match.Groups[1].Value;
+        return statusText is "1" or "5";
+    }
+
+    internal static string GetUssdFixIccid(string? response) =>
+        Regex.Match(
+            response ?? string.Empty,
+            @"(?<!\d)89\d{16,20}(?!\d)",
+            RegexOptions.CultureInvariant).Value;
+
     internal bool TryClaimImsUtRecovery(string portName, string ccid)
+        => TryClaimAutomaticUssdRecovery(portName, ccid);
+
+    internal bool TryClaimAutomaticUssdFix(string portName, string ccid)
+        => TryClaimAutomaticUssdRecovery(portName, ccid);
+
+    private bool TryClaimAutomaticUssdRecovery(
+        string portName,
+        string ccid)
     {
         string normalizedCcid = Regex.Match(
             ccid ?? string.Empty,
@@ -7377,7 +8257,25 @@ public class GsmModemService : IGsmModemService
         }
 
         string key = $"{portName.Trim().ToUpperInvariant()}|{normalizedCcid}";
-        return _imsUtRecoveryAttempts.TryAdd(key, 0);
+        return _automaticUssdRecoveryAttempts.TryAdd(key, 0);
+    }
+
+    internal static bool ShouldRunAutomaticUssdFix(string? response)
+    {
+        string value = response ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(value)
+            || Regex.IsMatch(
+                value,
+                @"(?:^|\r?\n)\s*\+CUSD:",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(
+            value,
+            @"\+(?:CME|CMS)\s+ERROR:|\bERROR\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     internal static bool IsSautoTerminalErrorResponse(string? response) =>
@@ -7733,6 +8631,38 @@ public class GsmModemService : IGsmModemService
         string ussdCode,
         CancellationToken ct)
     {
+        AtCommandTraceLogger.State(
+            portName,
+            $"SAUTO_AUTO_USSD_QUEUED;max_concurrency={SautoAutomaticUssdMaxConcurrency}");
+        await _sautoAutomaticUssdGate.WaitAsync(ct);
+        try
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                "SAUTO_AUTO_USSD_SLOT_ACQUIRED");
+            return await RunSautoAutomaticUssdCoreWhileLockedAsync(
+                portName,
+                serialPort,
+                expectedCcid,
+                ussdCode,
+                ct);
+        }
+        finally
+        {
+            _sautoAutomaticUssdGate.Release();
+            AtCommandTraceLogger.State(
+                portName,
+                "SAUTO_AUTO_USSD_SLOT_RELEASED");
+        }
+    }
+
+    private async Task<string> RunSautoAutomaticUssdCoreWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        string expectedCcid,
+        string ussdCode,
+        CancellationToken ct)
+    {
         bool readyForUssd =
             await EnsureImsUtCsFallbackWhileLockedAsync(
                 portName,
@@ -7742,6 +8672,16 @@ public class GsmModemService : IGsmModemService
                 ct);
         if (!readyForUssd)
             return "ERROR: IMS/UT recovery did not restore USSD service";
+
+        bool circuitRegistered =
+            await WaitForSautoCircuitRegistrationWhileLockedAsync(
+                portName,
+                serialPort,
+                ct);
+        if (!circuitRegistered)
+        {
+            return "ERROR: CS registration not ready for automatic USSD";
+        }
 
         // Keep the UART lock for the whole automatic lookup. The second form
         // omits DCS because some otherwise healthy EC20/SIM pairs acknowledge
@@ -7759,11 +8699,30 @@ public class GsmModemService : IGsmModemService
         {
             for (int attempt = 0; attempt < 2; attempt++)
             {
-                await WriteSautoCommandWhileLockedAsync(
-                    portName,
-                    serialPort,
-                    "AT+CUSD=2",
-                    ct);
+                // Match gsm_fix_tool.py: CUSD=2 is a real command transaction,
+                // not a write-only delay.  A failed cleanup is non-fatal, but
+                // its terminal response must be consumed before *101# starts.
+                string cleanupResponse;
+                try
+                {
+                    cleanupResponse =
+                        await WriteSautoCommandForResponseWhileLockedAsync(
+                            portName,
+                            serialPort,
+                            "AT+CUSD=2",
+                            SautoUssdCleanupResponseTimeout,
+                            ct);
+                }
+                catch (TimeoutException)
+                {
+                    cleanupResponse = string.Empty;
+                }
+                if (!IsSautoOkResponse(cleanupResponse))
+                {
+                    AtCommandTraceLogger.Error(
+                        portName,
+                        $"SAUTO_AUTO_USSD_CLEANUP_WARNING;attempt={attempt + 1};result={GetSautoResponseOutcome(cleanupResponse)};normal_ussd_continues=true");
+                }
                 ussdSessionMayBeOpen = false;
                 await Task.Delay(TimeSpan.FromSeconds(1), ct);
 
@@ -7850,6 +8809,564 @@ public class GsmModemService : IGsmModemService
                         $"SAUTO_AUTO_USSD_CLEANUP_FAILED;error={ex.Message}");
                 }
             }
+        }
+    }
+
+    private async Task<bool>
+        WaitForSautoCircuitRegistrationWhileLockedAsync(
+            string portName,
+            SerialPort serialPort,
+            CancellationToken ct)
+    {
+        DateTimeOffset deadline =
+            DateTimeOffset.UtcNow + SautoAutomaticUssdCsReadyDeadline;
+        string lastResponse = string.Empty;
+        do
+        {
+            try
+            {
+                lastResponse =
+                    await WriteSautoCommandForResponseWhileLockedAsync(
+                        portName,
+                        serialPort,
+                        "AT+CREG?",
+                        TimeSpan.FromSeconds(3),
+                        ct);
+            }
+            catch (TimeoutException)
+            {
+                lastResponse = string.Empty;
+            }
+
+            if (IsCircuitSwitchedRegisteredResponse(lastResponse))
+            {
+                AtCommandTraceLogger.State(
+                    portName,
+                    "SAUTO_AUTO_USSD_CS_READY;creg=REGISTERED");
+                return true;
+            }
+
+            if (DateTimeOffset.UtcNow >= deadline)
+                break;
+
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        AtCommandTraceLogger.State(
+            portName,
+            $"SAUTO_AUTO_USSD_CS_NOT_READY;result={GetSautoResponseOutcome(lastResponse)};auto_fix=true");
+        return false;
+    }
+
+    public async Task<string> FixUssdLikePythonAsync(
+        string portName,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+
+        using IDisposable foregroundLease =
+            await AcquireForegroundOperationAsync(
+                    portName,
+                    "FIX_USSD_PYTHON",
+                    ct)
+                .ConfigureAwait(false);
+        using IDisposable backgroundLease =
+            SuspendPortBackgroundOperations(portName);
+
+        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
+            || serialPort == null)
+        {
+            return "ERROR: Port not open";
+        }
+
+        if (!_semaphores.TryGetValue(
+                portName,
+                out SemaphoreSlim? semaphore))
+        {
+            return "ERROR: Semaphore missing";
+        }
+
+        await semaphore.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            void LogStep(string message)
+            {
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"USSD_FIX_PYTHON;{message}");
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[FIX_USSD] {message}"
+                });
+            }
+
+            async Task<string> SendAsync(
+                string command,
+                TimeSpan timeout,
+                bool allowFixRfCommand = false)
+            {
+                try
+                {
+                    return await WriteSautoCommandForResponseWhileLockedAsync(
+                            portName,
+                            serialPort,
+                            command,
+                            timeout,
+                            ct,
+                            allowUssdFixWorkflow: allowFixRfCommand)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    return string.Empty;
+                }
+            }
+
+            async Task<string> RequireOkAsync(
+                string command,
+                TimeSpan? timeout = null,
+                bool allowFixRfCommand = false)
+            {
+                string response = await SendAsync(
+                        command,
+                        timeout ?? TimeSpan.FromSeconds(3),
+                        allowFixRfCommand)
+                    .ConfigureAwait(false);
+                if (!IsSautoOkResponse(response))
+                {
+                    throw new InvalidOperationException(
+                        $"{command} did not return OK ({GetSautoResponseOutcome(response)})");
+                }
+
+                return response;
+            }
+
+            async Task<string> SendNonfatalAsync(
+                string command,
+                TimeSpan? timeout = null)
+            {
+                string response = await SendAsync(
+                        command,
+                        timeout ?? TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
+                if (!IsSautoOkResponse(response))
+                {
+                    AtCommandTraceLogger.Error(
+                        portName,
+                        $"USSD_FIX_PYTHON_WARNING;command={command};result={GetSautoResponseOutcome(response)};continues=true");
+                }
+
+                return response;
+            }
+
+            LogStep("BEGIN");
+
+            DateTimeOffset initialAtDeadline =
+                DateTimeOffset.UtcNow + UssdFixInitialAtDeadline;
+            string initialAt = string.Empty;
+            while (DateTimeOffset.UtcNow < initialAtDeadline)
+            {
+                initialAt = await SendAsync(
+                        "AT",
+                        TimeSpan.FromSeconds(2))
+                    .ConfigureAwait(false);
+                if (IsSautoOkResponse(initialAt))
+                    break;
+
+                await Task.Delay(
+                        TimeSpan.FromMilliseconds(500),
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (!IsSautoOkResponse(initialAt))
+                return "ERROR: AT did not become ready within 12 seconds";
+
+            await RequireOkAsync("ATE0").ConfigureAwait(false);
+            await RequireOkAsync("AT+CMEE=2").ConfigureAwait(false);
+            await RequireOkAsync(Uart1UrcRoutingCommand)
+                .ConfigureAwait(false);
+
+            // Diagnostic-only reads from gsm_fix_tool.py. None of these can
+            // change the main IMS setting, COPS selection, NV, or identity.
+            await SendNonfatalAsync("ATI").ConfigureAwait(false);
+            await SendNonfatalAsync("AT+CGMR").ConfigureAwait(false);
+            await SendNonfatalAsync("AT+QSIMSTAT?").ConfigureAwait(false);
+            string qsimdetBefore =
+                await SendNonfatalAsync("AT+QSIMDET?")
+                    .ConfigureAwait(false);
+            await SendNonfatalAsync("AT+CUSD?").ConfigureAwait(false);
+
+            await SendNonfatalAsync("AT+QCFG=\"ims\"")
+                .ConfigureAwait(false);
+            string imsUtBefore = await SendAsync(
+                    ImsUtStatusCommand,
+                    TimeSpan.FromSeconds(3))
+                .ConfigureAwait(false);
+            bool imsUtUnsupported =
+                IsUssdFixQcfgExplicitlyUnsupported(
+                    imsUtBefore,
+                    "ims/ut");
+            bool imsUtParsed = TryGetUssdFixQcfgFirstValue(
+                imsUtBefore,
+                "ims/ut",
+                out int imsUtValueBefore);
+            if (!imsUtUnsupported && !imsUtParsed)
+            {
+                return "ERROR: Cannot determine ims/ut support or value";
+            }
+
+            string networkModeBefore = await SendAsync(
+                    "AT+QCFG=\"nwscanmode\"",
+                    TimeSpan.FromSeconds(3))
+                .ConfigureAwait(false);
+            bool networkModeParsed = TryGetUssdFixQcfgFirstValue(
+                networkModeBefore,
+                "nwscanmode",
+                out int networkModeValueBefore);
+
+            await SendNonfatalAsync("AT+CFUN?").ConfigureAwait(false);
+            await SendNonfatalAsync("AT+CPIN?").ConfigureAwait(false);
+
+            // Closing a stale session is intentionally non-fatal, matching
+            // the standalone Python tool on firmware that reports ERROR when
+            // no USSD session exists.
+            await SendNonfatalAsync("AT+CUSD=2").ConfigureAwait(false);
+
+            bool preserveHotplug = TryGetUssdFixQsimdetConfig(
+                    qsimdetBefore,
+                    out int hotplugEnabled,
+                    out int hotplugPolarity)
+                && hotplugEnabled == 1;
+            if (preserveHotplug)
+            {
+                await SendNonfatalAsync("AT+QSIMSTAT=1")
+                    .ConfigureAwait(false);
+                await SendNonfatalAsync(
+                        $"AT+QSIMDET=1,{hotplugPolarity}")
+                    .ConfigureAwait(false);
+            }
+
+            if (imsUtParsed && imsUtValueBefore != 0)
+            {
+                await RequireOkAsync(
+                        DisableImsUtCommand,
+                        allowFixRfCommand: true)
+                    .ConfigureAwait(false);
+            }
+
+            // Python treats every value other than an explicit zero as
+            // needing AUTO. This also gives a clear ERROR on firmware that
+            // cannot query/set this mandatory network-mode key.
+            if (!networkModeParsed || networkModeValueBefore != 0)
+            {
+                await RequireOkAsync(
+                        "AT+QCFG=\"nwscanmode\",0,0",
+                        allowFixRfCommand: true)
+                    .ConfigureAwait(false);
+            }
+
+            await RequireOkAsync(Uart1UrcRoutingCommand)
+                .ConfigureAwait(false);
+
+            // This is the sole reboot submission in this workflow. Wait at
+            // most three seconds so an explicit rejection is not hidden, but
+            // accept a missing final OK because the UART may restart first.
+            string rebootResponse = await SendAsync(
+                    ImsUtRecoveryRebootCommand,
+                    TimeSpan.FromSeconds(3),
+                    allowFixRfCommand: true)
+                .ConfigureAwait(false);
+            if (Regex.IsMatch(
+                    rebootResponse,
+                    @"(?:^|\r?\n)\s*(?:ERROR|\+(?:CME|CMS) ERROR:)",
+                    RegexOptions.IgnoreCase
+                    | RegexOptions.CultureInvariant))
+            {
+                return $"ERROR: Modem rejected reboot ({GetSautoResponseOutcome(rebootResponse)})";
+            }
+            UpdateSautoReceiveState(
+                portName,
+                static state =>
+                {
+                    state.CpinResponse = string.Empty;
+                    state.CopsResponse = string.Empty;
+                });
+            LogStep("REBOOT_SUBMITTED_ONCE");
+
+            await Task.Delay(UssdFixBootDelay, ct)
+                .ConfigureAwait(false);
+
+            DateTimeOffset atReadyDeadline =
+                DateTimeOffset.UtcNow + UssdFixAtReadyDeadline;
+            string atAfterReboot = string.Empty;
+            while (DateTimeOffset.UtcNow < atReadyDeadline)
+            {
+                atAfterReboot = await SendAsync(
+                        "AT",
+                        TimeSpan.FromSeconds(2))
+                    .ConfigureAwait(false);
+                if (IsSautoOkResponse(atAfterReboot))
+                    break;
+
+                await Task.Delay(TimeSpan.FromSeconds(1), ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (!IsSautoOkResponse(atAfterReboot))
+                return "ERROR: Modem did not answer AT within 90 seconds after reboot";
+
+            await RequireOkAsync("ATE0").ConfigureAwait(false);
+            await RequireOkAsync("AT+CMEE=2").ConfigureAwait(false);
+
+            DateTimeOffset cfunDeadline =
+                DateTimeOffset.UtcNow + UssdFixCfunReadyDeadline;
+            string cfunAfter = string.Empty;
+            while (DateTimeOffset.UtcNow < cfunDeadline)
+            {
+                cfunAfter = await SendAsync(
+                        "AT+CFUN?",
+                        TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
+                if (IsUssdFixCfunOne(cfunAfter))
+                    break;
+
+                await Task.Delay(TimeSpan.FromSeconds(1), ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (!IsUssdFixCfunOne(cfunAfter))
+                return "ERROR: CFUN did not return to 1 within 60 seconds";
+
+            await RequireOkAsync(Uart1UrcRoutingCommand)
+                .ConfigureAwait(false);
+            string uartAfter = await RequireOkAsync(
+                    "AT+QURCCFG=\"urcport\"")
+                .ConfigureAwait(false);
+            if (!IsUssdFixUart1Active(uartAfter))
+                return "ERROR: URC port verification is not uart1";
+
+            // Main IMS is deliberately diagnostic-only.
+            await SendNonfatalAsync("AT+QCFG=\"ims\"")
+                .ConfigureAwait(false);
+            if (!imsUtUnsupported)
+            {
+                string imsUtAfter = await RequireOkAsync(
+                        ImsUtStatusCommand)
+                    .ConfigureAwait(false);
+                if (!TryGetUssdFixQcfgFirstValue(
+                        imsUtAfter,
+                        "ims/ut",
+                        out int imsUtValueAfter)
+                    || imsUtValueAfter != 0)
+                {
+                    return "ERROR: ims/ut verification is not 0";
+                }
+            }
+
+            string networkModeAfter = await RequireOkAsync(
+                    "AT+QCFG=\"nwscanmode\"")
+                .ConfigureAwait(false);
+            if (!TryGetUssdFixQcfgFirstValue(
+                    networkModeAfter,
+                    "nwscanmode",
+                    out int networkModeValueAfter)
+                || networkModeValueAfter != 0)
+            {
+                return "ERROR: nwscanmode verification is not AUTO (0)";
+            }
+
+            string cpinAfter =
+                await SendNonfatalAsync("AT+CPIN?")
+                    .ConfigureAwait(false);
+            await SendNonfatalAsync("AT+QSIMSTAT?")
+                .ConfigureAwait(false);
+            string qsimdetAfter =
+                await SendNonfatalAsync("AT+QSIMDET?")
+                    .ConfigureAwait(false);
+            await SendNonfatalAsync("AT+CUSD?").ConfigureAwait(false);
+
+            if (!IsUssdFixCpinReady(cpinAfter))
+            {
+                AtCommandTraceLogger.Error(
+                    portName,
+                    "USSD_FIX_PYTHON_WARNING;step=CPIN_READY;continues=true");
+            }
+
+            if (preserveHotplug
+                && (!TryGetUssdFixQsimdetConfig(
+                        qsimdetAfter,
+                        out int enabledAfter,
+                        out int polarityAfter)
+                    || enabledAfter != 1
+                    || polarityAfter != hotplugPolarity))
+            {
+                AtCommandTraceLogger.Error(
+                    portName,
+                    "USSD_FIX_PYTHON_WARNING;step=QSIMDET_VERIFY;no_retry_or_polarity_guess=true");
+            }
+
+            DateTimeOffset networkDeadline =
+                DateTimeOffset.UtcNow + UssdFixNetworkDeadline;
+            bool registered = false;
+            while (DateTimeOffset.UtcNow < networkDeadline)
+            {
+                string creg = await SendAsync(
+                        "AT+CREG?",
+                        TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
+                string cgreg = await SendAsync(
+                        "AT+CGREG?",
+                        TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
+                string cereg = await SendAsync(
+                        "AT+CEREG?",
+                        TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
+                await SendNonfatalAsync(
+                        "AT+COPS?",
+                        TimeSpan.FromSeconds(5))
+                    .ConfigureAwait(false);
+                await SendNonfatalAsync("AT+CSQ")
+                    .ConfigureAwait(false);
+
+                registered =
+                    IsUssdFixRegisteredResponse(creg, "C")
+                    || IsUssdFixRegisteredResponse(cgreg, "CG")
+                    || IsUssdFixRegisteredResponse(cereg, "CE");
+                if (registered)
+                    break;
+
+                await Task.Delay(TimeSpan.FromSeconds(2), ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (!registered)
+            {
+                await SendNonfatalAsync("AT+CEER")
+                    .ConfigureAwait(false);
+                LogStep("NETWORK_NOT_REGISTERED_AFTER_30_SECONDS");
+            }
+
+            await SendNonfatalAsync(
+                    "AT+QNWINFO",
+                    TimeSpan.FromSeconds(5))
+                .ConfigureAwait(false);
+            await SendNonfatalAsync(
+                    "AT+QENG=\"servingcell\"",
+                    TimeSpan.FromSeconds(5))
+                .ConfigureAwait(false);
+
+            string iccid = string.Empty;
+            foreach (string command in new[] { "AT+ICCID", "AT+QCCID" })
+            {
+                string iccidResponse = await SendAsync(
+                        command,
+                        TimeSpan.FromSeconds(3))
+                    .ConfigureAwait(false);
+                iccid = GetUssdFixIccid(iccidResponse);
+                if (!string.IsNullOrEmpty(iccid))
+                    break;
+            }
+
+            if (string.IsNullOrEmpty(iccid))
+            {
+                LogStep("SKIPPED_NO_ICCID");
+                return "SKIPPED_NO_ICCID";
+            }
+
+            string lastUssdResult =
+                "ERROR: Timeout waiting for +CUSD";
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                string cleanup = await SendAsync(
+                        "AT+CUSD=2",
+                        SautoUssdCleanupResponseTimeout)
+                    .ConfigureAwait(false);
+                if (!IsSautoOkResponse(cleanup))
+                {
+                    AtCommandTraceLogger.Error(
+                        portName,
+                        $"USSD_FIX_PYTHON_WARNING;step=CUSD_CLEANUP;attempt={attempt + 1};result={GetSautoResponseOutcome(cleanup)};continues=true");
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(1), ct)
+                    .ConfigureAwait(false);
+
+                SautoReceiveSnapshot baseline =
+                    GetSautoReceiveSnapshot(portName);
+                string requestCommand = BuildSautoUssdRequestCommand(
+                    "*101#",
+                    includeDcs: attempt == 0);
+                await WriteSautoCommandWhileLockedAsync(
+                        portName,
+                        serialPort,
+                        requestCommand,
+                        ct)
+                    .ConfigureAwait(false);
+
+                SautoReceiveSnapshot? completed =
+                    await WaitForSautoReceiveStateAsync(
+                            portName,
+                            snapshot =>
+                                snapshot.UssdRevision
+                                    > baseline.UssdRevision
+                                || snapshot.TerminalErrorRevision
+                                    > baseline.TerminalErrorRevision,
+                            SautoAutomaticUssdResponseTimeout,
+                            ct)
+                        .ConfigureAwait(false);
+
+                if (completed != null
+                    && completed.UssdRevision > baseline.UssdRevision
+                    && Regex.IsMatch(
+                        completed.UssdResponse,
+                        @"(?:^|\r?\n)\s*\+CUSD:",
+                        RegexOptions.IgnoreCase
+                        | RegexOptions.CultureInvariant))
+                {
+                    LogStep($"SUCCESS;attempt={attempt + 1}");
+                    return completed.UssdResponse;
+                }
+
+                lastUssdResult = completed == null
+                    ? "ERROR: Timeout waiting for +CUSD"
+                    : completed.TerminalErrorRevision
+                        > baseline.TerminalErrorRevision
+                        ? completed.TerminalErrorResponse
+                        : "ERROR: USSD did not return +CUSD";
+            }
+
+            await SendNonfatalAsync("AT+CEER")
+                .ConfigureAwait(false);
+            return lastUssdResult.StartsWith(
+                    "ERROR",
+                    StringComparison.OrdinalIgnoreCase)
+                || lastUssdResult.StartsWith(
+                    "+CME ERROR",
+                    StringComparison.OrdinalIgnoreCase)
+                || lastUssdResult.StartsWith(
+                    "+CMS ERROR",
+                    StringComparison.OrdinalIgnoreCase)
+                ? lastUssdResult
+                : $"ERROR: {lastUssdResult}";
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"USSD_FIX_PYTHON_FAILED;error={ex.Message}");
+            return $"ERROR: Fix USSD failed ({ex.Message})";
+        }
+        finally
+        {
+            semaphore.Release();
         }
     }
 

@@ -45,6 +45,15 @@
             Khôi phục sóng
         </MudButton>
         
+        <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Build"
+                   OnClick="FixSelectedUssd"
+                   Disabled="@(!_fixUssdInFlight.IsEmpty)">
+            @(_fixUssdInFlight.IsEmpty
+                ? "FIX USSD"
+                : $"FIX USSD ({_fixUssdInFlight.Count} đang chạy)")
+        </MudButton>
+
         <MudSpacer />
         
         <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
@@ -283,6 +292,7 @@
     private int _subTab = 0;
     private readonly ConcurrentDictionary<string, byte> _ussdInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _networkInFlight = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _fixUssdInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _pageCts = new();
 
     // Spam SMS
@@ -445,11 +455,118 @@
             p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
         if (port == null) return;
         port.LastMessageContent = content;
-        port.Sender = content.StartsWith("[USSD]", StringComparison.OrdinalIgnoreCase) ? "USSD" : "SYSTEM";
+        bool isUssdContent =
+            content.StartsWith("[USSD]", StringComparison.OrdinalIgnoreCase)
+            || content.StartsWith("[FIX USSD]", StringComparison.OrdinalIgnoreCase);
+        if (isUssdContent)
+            port.LastUssdResult = content;
+        port.Sender = isUssdContent ? "USSD" : "SYSTEM";
         port.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
     }
 
     // ========== 4. THAY ĐỔI MỨC SÓNG ==========
+    // Runs the same targeted repair sequence as gsm_fix_tool.py. Only COMs
+    // explicitly selected by the user are touched, and each reboots once.
+    async Task FixSelectedUssd()
+    {
+        var requested = _selectedPorts
+            .Where(port => port.Status == SimStatus.Active)
+            .Select(port => port.PortName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (!requested.Any())
+        {
+            Snackbar.Add("Hãy tích chọn ít nhất 1 COM Active cần Fix USSD.", Severity.Warning);
+            return;
+        }
+
+        var targets = new List<string>();
+        foreach (string portName in requested)
+        {
+            if (_ussdInFlight.ContainsKey(portName)
+                || !_networkInFlight.TryAdd(portName, 0))
+            {
+                continue;
+            }
+
+            if (!_fixUssdInFlight.TryAdd(portName, 0))
+            {
+                _networkInFlight.TryRemove(portName, out _);
+                continue;
+            }
+
+            targets.Add(portName);
+        }
+
+        int skipped = requested.Count - targets.Count;
+        if (skipped > 0)
+            Snackbar.Add($"Bỏ qua {skipped} COM đang bận.", Severity.Info);
+        if (!targets.Any())
+        {
+            Snackbar.Add("Các COM đã chọn đang bận USSD hoặc thao tác mạng.", Severity.Warning);
+            return;
+        }
+
+        _selectedPorts.RemoveWhere(port =>
+            targets.Contains(port.PortName, StringComparer.OrdinalIgnoreCase));
+        foreach (string portName in targets)
+            SetPortContent(portName, "[FIX USSD][ĐANG CHẠY] Đang chạy đúng quy trình gsm_fix_tool.py...");
+
+        Snackbar.Add(
+            $"Đang Fix USSD {targets.Count} COM; mỗi modem sẽ reboot đúng 1 lần...",
+            Severity.Info);
+        StateHasChanged();
+
+        var tasks = targets.Select(async portName =>
+        {
+            string rawResult;
+            bool success;
+            try
+            {
+                rawResult = await ModemService.FixUssdLikePythonAsync(
+                    portName,
+                    _pageCts.Token);
+                success = rawResult.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase)
+                    && !rawResult.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (OperationCanceledException)
+            {
+                rawResult = "Đã hủy";
+                success = false;
+            }
+            catch (Exception ex)
+            {
+                rawResult = "Lỗi: " + ex.Message;
+                success = false;
+            }
+            finally
+            {
+                _fixUssdInFlight.TryRemove(portName, out _);
+                _networkInFlight.TryRemove(portName, out _);
+            }
+
+            string displayResult = gsm.Services.UssdResponseDecoder.Normalize(rawResult);
+            await InvokeAsync(() =>
+            {
+                var port = Ports.FirstOrDefault(candidate =>
+                    candidate.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                port?.SetOperationStatus("USSD", success);
+                SetPortContent(
+                    portName,
+                    $"[FIX USSD][{(success ? "HOÀN TẤT" : "THẤT BẠI")}] {displayResult}");
+                StateHasChanged();
+            });
+            return success;
+        });
+
+        bool[] results = await Task.WhenAll(tasks);
+        int ok = results.Count(result => result);
+        Snackbar.Add(
+            $"Fix USSD xong: {ok} thành công, {results.Length - ok} lỗi.",
+            ok == results.Length ? Severity.Success : Severity.Warning);
+    }
+
     async Task ApplyScanMode()
     {
         var requested = _selectedPorts.Any()

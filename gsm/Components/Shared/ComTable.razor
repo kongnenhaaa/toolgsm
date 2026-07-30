@@ -434,52 +434,75 @@
     void CopyToExcel()
     {
         var cols = VisibleColumns;
-        var rows = SelectedItems.Any() ? SelectedItems.Cast<SimPort>().ToList() : VisiblePorts.ToList();
+        var visibleRows = VisiblePorts.ToList();
+        var selectedPortNames = new HashSet<string>(
+            SelectedItems.Select(port => port.PortName),
+            StringComparer.OrdinalIgnoreCase);
+        // Resolve selected COMs back to the current visible instances. A SIM
+        // hot-swap can replace a SimPort object while the page still holds the
+        // old selected reference; copying that object exported the previous
+        // SIM's CCID even though the table already displayed the new one.
+        var rows = selectedPortNames.Count > 0
+            ? visibleRows.Where(port => selectedPortNames.Contains(port.PortName)).ToList()
+            : visibleRows;
 
-        var sb = new System.Text.StringBuilder();
-
-        // Header row
-        sb.AppendLine(string.Join("\t", cols.Select(c => c.Header)));
-
-        // Data rows
-        int stt = 1;
+        var exportRows = new List<IReadOnlyList<string>>();
         foreach (var p in rows)
         {
-            var values = cols.Select(col => col.Name switch
+            string[] values = cols.Select(col =>
             {
-                "Stt"                => (stt++).ToString(),
-                "PortName"           => p.PortName ?? "",
-                "Status"             => p.GetOperationStatus(Operation) ?? "",
-                "NetworkProvider"    => p.NetworkProvider ?? "",
-                "NetworkType"        => p.NetworkType ?? "",
-                "Signal"             => p.SignalDisplay,
-                "LastSignalScan"     => p.LastSignalScanDisplay,
-                "Balance"            => FormatBalanceValue(p.Balance),
-                "PhoneNumber"        => p.PhoneNumber ?? "",
-                "SimType"            => p.SimType ?? "",
-                "Imei"               => p.Imei ?? "",
-                "Serial"             => p.Serial ?? "",
-                "ExpiryDate"         => p.ExpiryDate ?? "",
-                "SimRegDate"         => p.SimRegDate ?? "",
-                "Lock1C"             => p.Lock1C ?? "",
-                "Lock2C"             => p.Lock2C ?? "",
-                "ForwardedTo"        => p.ForwardedTo ?? "",
-                "VnptStatus"         => p.VnptStatus ?? "",
-                "Otp"                => p.Otp ?? "",
-                "LastSmsSender"      => p.LastSmsSender ?? "",
-                "LastMessageContent" => GetContentColumnValue(p),
-                _                    => ""
-            });
-            // Escape tab/newline trong ô để không bị lệch cột
-            sb.AppendLine(string.Join("\t", values.Select(v => v.Replace("\t", " ").Replace("\r\n", " ").Replace("\n", " "))));
+                return col.Name switch
+                {
+                    "Stt"                => (visibleRows.IndexOf(p) + 1).ToString(),
+                    "PortName"           => p.PortName ?? "",
+                    "Status"             => p.GetOperationStatus(Operation) ?? "",
+                    "NetworkProvider"    => p.NetworkProvider ?? "",
+                    "NetworkType"        => p.NetworkType ?? "",
+                    "Signal"             => p.SignalDisplay,
+                    "LastSignalScan"     => p.LastSignalScanDisplay,
+                    "Balance"            => FormatBalanceValue(p.Balance),
+                    "PhoneNumber"        => p.PhoneNumber ?? "",
+                    "SimType"            => p.SimType ?? "",
+                    "Imei"               => p.Imei ?? "",
+                    "Serial"             => p.Serial ?? "",
+                    "ExpiryDate"         => p.ExpiryDate ?? "",
+                    "SimRegDate"         => p.SimRegDate ?? "",
+                    "Lock1C"             => p.Lock1C ?? "",
+                    "Lock2C"             => p.Lock2C ?? "",
+                    "ForwardedTo"        => p.ForwardedTo ?? "",
+                    "VnptStatus"         => p.VnptStatus ?? "",
+                    "Otp"                => p.Otp ?? "",
+                    "LastSmsSender"      => p.LastSmsSender ?? "",
+                    "LastMessageContent" => GetContentColumnValue(p),
+                    _                    => ""
+                };
+            }).ToArray();
+            exportRows.Add(values);
         }
 
-        // Dùng System.Windows.Clipboard (WPF) để đặt text Unicode — đây là clipboard đúng cho Excel
+        var exportColumns = cols
+            .Select(col => new ComTableColumnDefinition(col.Name, col.Header))
+            .ToList();
+        var payload = gsm.Services.ExcelClipboardFormatter.Build(
+            exportColumns,
+            exportRows);
+
+        // Excel consumes the HTML table, whose cells carry an explicit Text
+        // format. Unicode TSV remains available to Notepad and other programs.
         try
         {
             System.Windows.Application.Current.Dispatcher.Invoke(() =>
             {
-                System.Windows.Clipboard.SetText(sb.ToString(), System.Windows.TextDataFormat.UnicodeText);
+                var clipboardData = new System.Windows.DataObject();
+                clipboardData.SetData(
+                    System.Windows.DataFormats.UnicodeText,
+                    payload.UnicodeText,
+                    false);
+                clipboardData.SetData(
+                    System.Windows.DataFormats.Html,
+                    payload.Html,
+                    false);
+                System.Windows.Clipboard.SetDataObject(clipboardData, true);
             });
             Snackbar.Add($"✅ Đã copy {rows.Count} dòng vào clipboard — Paste thẳng vào Excel!", Severity.Success);
         }

@@ -27,4 +27,5 @@ public sealed class ComTableColumnCatalogTests
             Assert.False(string.IsNullOrWhiteSpace(column.Header));
         });
     }
+
 }

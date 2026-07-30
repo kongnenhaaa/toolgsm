@@ -8,7 +8,7 @@ The repair flow is intentionally narrow:
   * disable IMS/UT so supplementary services use CS fallback;
   * leave the module's main IMS/MBN setting untouched;
   * close any stale USSD session and restore automatic network selection;
-  * preserve SIM hot-plug only when the modem already reports it enabled;
+  * enable SIM hot-plug using the insert polarity reported by the modem;
   * reboot exactly once;
   * wait for the modem and report detailed SIM/network state;
   * if an ICCID is present, run one *101# lookup (with a no-DCS fallback).
@@ -204,9 +204,9 @@ def qsimdet_config(response: str) -> tuple[int, int] | None:
     return int(match.group(1)), int(match.group(2))
 
 
-def sim_hotplug_preservation_commands(response: str) -> list[str]:
+def sim_hotplug_enable_commands(response: str) -> list[str]:
     config = qsimdet_config(response)
-    if config is None or config[0] != 1:
+    if config is None:
         return []
     _enabled, polarity = config
     return [SIM_STATUS_URC_ENABLE, f"AT+QSIMDET=1,{polarity}"]
@@ -732,36 +732,34 @@ def repair_port(
                 USSD_CANCEL,
             )
 
-            expected_hotplug = qsimdet_config(sim_detect_before.response)
-            hotplug_commands = sim_hotplug_preservation_commands(
+            current_hotplug = qsimdet_config(sim_detect_before.response)
+            hotplug_commands = sim_hotplug_enable_commands(
                 sim_detect_before.response
             )
             if hotplug_commands:
+                # QSIMDET reports the board's configured insert level even when
+                # detection is disabled. Reuse that level; do not guess or flip
+                # polarity. The existing single reboot makes the change active.
+                expected_hotplug = (1, current_hotplug[1])
                 for index, command in enumerate(hotplug_commands, start=1):
                     run_nonfatal_command(
                         session,
                         report,
-                        f"HOTPLUG_PRESERVE_{index}",
+                        f"HOTPLUG_ENABLE_{index}",
                         command,
                     )
+                action = "PRESERVED" if current_hotplug[0] == 1 else "ENABLED"
                 report.final_values["SIM_HOTPLUG"] = (
-                    f"PRESERVED_{expected_hotplug[0]}_{expected_hotplug[1]}"
+                    f"{action}_{expected_hotplug[0]}_{expected_hotplug[1]}"
                 )
             else:
                 expected_hotplug = None
-                current_config = qsimdet_config(sim_detect_before.response)
-                if current_config is None:
-                    reason = "SKIPPED_UNSUPPORTED_OR_MALFORMED"
-                else:
-                    reason = (
-                        f"SKIPPED_DETECTOR_DISABLED_{current_config[0]}_"
-                        f"{current_config[1]}"
-                    )
+                reason = "SKIPPED_UNSUPPORTED_OR_MALFORMED"
                 report.final_values["SIM_HOTPLUG"] = reason
                 logger.write(
                     port,
-                    "QSIMDET chưa báo detector đang bật; không tự đoán polarity "
-                    "và không gửi lệnh bật hot-plug.",
+                    "Firmware không trả về cấu hình QSIMDET hợp lệ; "
+                    "bỏ qua hot-plug, không đoán polarity.",
                 )
 
             for command in planned_config_commands(
@@ -949,16 +947,23 @@ def run_self_test() -> None:
     assert qsimdet_config("+QSIMDET: 0,0\r\nOK") == (0, 0)
     assert qsimdet_config("+CME ERROR: 100") is None
     assert qsimdet_config("+QSIMDET: 2,9\r\nOK") is None
-    assert sim_hotplug_preservation_commands("+QSIMDET: 1,0\r\nOK") == [
+    assert sim_hotplug_enable_commands("+QSIMDET: 1,0\r\nOK") == [
         SIM_STATUS_URC_ENABLE,
         "AT+QSIMDET=1,0",
     ]
-    assert sim_hotplug_preservation_commands("+QSIMDET: 1,1\r\nOK") == [
+    assert sim_hotplug_enable_commands("+QSIMDET: 1,1\r\nOK") == [
         SIM_STATUS_URC_ENABLE,
         "AT+QSIMDET=1,1",
     ]
-    assert sim_hotplug_preservation_commands("+QSIMDET: 0,0\r\nOK") == []
-    assert sim_hotplug_preservation_commands("+CME ERROR: 100") == []
+    assert sim_hotplug_enable_commands("+QSIMDET: 0,0\r\nOK") == [
+        SIM_STATUS_URC_ENABLE,
+        "AT+QSIMDET=1,0",
+    ]
+    assert sim_hotplug_enable_commands("+QSIMDET: 0,1\r\nOK") == [
+        SIM_STATUS_URC_ENABLE,
+        "AT+QSIMDET=1,1",
+    ]
+    assert sim_hotplug_enable_commands("+CME ERROR: 100") == []
     assert iccid_value("+ICCID: 89840200011815310980\r\nOK") == (
         "89840200011815310980"
     )
@@ -995,8 +1000,9 @@ def run_self_test() -> None:
         SIM_STATUS_QUERY,
         SIM_STATUS_URC_ENABLE,
         SIM_DETECT_QUERY,
-        *sim_hotplug_preservation_commands("+QSIMDET: 1,0\r\nOK"),
-        *sim_hotplug_preservation_commands("+QSIMDET: 1,1\r\nOK"),
+        *sim_hotplug_enable_commands("+QSIMDET: 1,0\r\nOK"),
+        *sim_hotplug_enable_commands("+QSIMDET: 1,1\r\nOK"),
+        *sim_hotplug_enable_commands("+QSIMDET: 0,0\r\nOK"),
         IDENTITY_QUERY,
         FIRMWARE_QUERY,
         NETWORK_INFO_QUERY,
@@ -1033,7 +1039,7 @@ def run_self_test() -> None:
     assert all_commands.count(USSD_101_WITH_DCS) == 1
     assert all_commands.count(USSD_101_WITHOUT_DCS) == 1
     print(
-        "SELF-TEST PASSED: safe command set, QSIMDET preservation, "
+        "SELF-TEST PASSED: safe command set, QSIMDET hot-plug enable, "
         "ICCID presence gate, *101# fallback, no reset-gốc."
     )
 
@@ -1099,7 +1105,7 @@ class GsmFixGui:
             outer,
             text=(
                 "ICCID chỉ để phát hiện SIM • Có ICCID thì dò *101# • "
-                "QSIMDET chỉ giữ khi vốn đã bật • Không reset gốc/IMEI. "
+                "Tự bật QSIMDET theo polarity modem đang lưu • Không reset gốc/IMEI. "
                 "Đóng ToolGSM trước khi chạy."
             ),
             foreground="#444444",
@@ -1302,7 +1308,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Fix Quectel GSM: clean stale USSD, uart1, IMS/UT off, "
-            "network AUTO, safe QSIMDET preservation, one reboot. "
+            "network AUTO, QSIMDET hot-plug enable, one reboot. "
             "If ICCID is present, query *101#."
         )
     )

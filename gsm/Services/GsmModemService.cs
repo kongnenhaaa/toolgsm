@@ -259,6 +259,18 @@ public class GsmModemService : IGsmModemService
 
     internal const string SautoImsUtQueryCommand = "AT+QCFG=\"ims/ut\"";
     internal const string SautoImsUtDisableCommand = "AT+QCFG=\"ims/ut\",0";
+    internal const string SautoNetworkModeQueryCommand =
+        "AT+QCFG=\"nwscanmode\"";
+    internal const string SautoNetworkModeAutoCommand =
+        "AT+QCFG=\"nwscanmode\",0,0";
+    internal const string SautoServiceDomainQueryCommand =
+        "AT+QCFG=\"servicedomain\"";
+    internal const string SautoServiceDomainCsPsCommand =
+        "AT+QCFG=\"servicedomain\",2,0";
+    internal const string SautoMbnAutoSelQueryCommand =
+        "AT+QMBNCFG=\"AutoSel\"";
+    internal const string SautoMbnAutoSelEnableCommand =
+        "AT+QMBNCFG=\"AutoSel\",1";
 
     internal static IReadOnlyList<string> SautoImsUtRepairCommandOrder { get; } =
     [
@@ -288,7 +300,7 @@ public class GsmModemService : IGsmModemService
         "AT+CPMS=\"SM\",\"SM\",\"SM\"",
         "AT+CPMS?",
         "AT+CNMI=1,1,0,0,0",
-        "AT+QCFG=\"nwscanmode\",0,1",
+        SautoNetworkModeAutoCommand,
         "AT+QURCCFG=\"urcport\",\"uart1\"",
         "AT+CPIN?"
     ];
@@ -301,6 +313,7 @@ public class GsmModemService : IGsmModemService
 
     internal static IReadOnlyList<string> SautoInitial101CommandOrder { get; } =
     [
+        "AT+CSCS=\"GSM\"",
         "AT+CUSD=2",
         "AT+CUSD=1,\"*101#\",15"
     ];
@@ -4141,6 +4154,135 @@ public class GsmModemService : IGsmModemService
         });
     }
 
+    private async Task EnsureSautoOptionalFirmwareSettingsWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        CancellationToken ct)
+    {
+        // These settings are optional across EC20 firmware revisions. Always
+        // query first, and only write when the response is readable and wrong.
+        // An unsupported optional key must never abort IMEI or SIM handling.
+        await TryEnsureSautoOptionalSettingWhileLockedAsync(
+            portName,
+            serialPort,
+            SautoNetworkModeQueryCommand,
+            SautoNetworkModeAutoCommand,
+            "nwscanmode",
+            response => ParseSautoQcfgFirstValue(response, "nwscanmode") is not null,
+            response => ParseSautoQcfgFirstValue(response, "nwscanmode") == 0,
+            ct);
+        await TryEnsureSautoOptionalSettingWhileLockedAsync(
+            portName,
+            serialPort,
+            SautoServiceDomainQueryCommand,
+            SautoServiceDomainCsPsCommand,
+            "servicedomain",
+            response => ParseSautoQcfgFirstValue(response, "servicedomain") is not null,
+            response => ParseSautoQcfgFirstValue(response, "servicedomain") == 2,
+            ct);
+        await TryEnsureSautoOptionalSettingWhileLockedAsync(
+            portName,
+            serialPort,
+            SautoMbnAutoSelQueryCommand,
+            SautoMbnAutoSelEnableCommand,
+            "mbn-autosel",
+            response => ParseSautoMbnAutoSelValue(response) is not null,
+            response => ParseSautoMbnAutoSelValue(response) == 1,
+            ct);
+    }
+
+    private async Task TryEnsureSautoOptionalSettingWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        string queryCommand,
+        string setCommand,
+        string settingName,
+        Func<string, bool> isReadable,
+        Func<string, bool> isConfigured,
+        CancellationToken ct)
+    {
+        string queryResponse;
+        try
+        {
+            queryResponse = await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                queryCommand,
+                TimeSpan.FromSeconds(5),
+                ct);
+        }
+        catch (TimeoutException ex)
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"FIRMWARE_SETTING_SKIP;setting={settingName};reason=QUERY_TIMEOUT;message={ex.Message}");
+            return;
+        }
+
+        if (!IsSautoOkResponse(queryResponse) || !isReadable(queryResponse))
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"FIRMWARE_SETTING_SKIP;setting={settingName};reason=UNSUPPORTED_OR_UNREADABLE");
+            return;
+        }
+        if (isConfigured(queryResponse))
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"FIRMWARE_SETTING_READY;setting={settingName};action=SKIP_WRITE");
+            return;
+        }
+
+        string setResponse;
+        try
+        {
+            setResponse = await WriteSautoCommandForResponseWhileLockedAsync(
+                portName,
+                serialPort,
+                setCommand,
+                TimeSpan.FromSeconds(8),
+                ct);
+        }
+        catch (TimeoutException ex)
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                $"FIRMWARE_SETTING_WARN;setting={settingName};reason=SET_TIMEOUT;message={ex.Message}");
+            return;
+        }
+
+        AtCommandTraceLogger.State(
+            portName,
+            $"FIRMWARE_SETTING_SET;setting={settingName};result={GetSautoResponseOutcome(setResponse)}");
+    }
+
+    internal static int? ParseSautoQcfgFirstValue(
+        string? response,
+        string key)
+    {
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            $@"\+QCFG:\s*""{Regex.Escape(key)}""\s*,\s*(-?\d+)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success
+               && int.TryParse(match.Groups[1].Value, out int value)
+            ? value
+            : null;
+    }
+
+    internal static int? ParseSautoMbnAutoSelValue(string? response)
+    {
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            @"\+QMBNCFG:\s*""AutoSel""\s*,\s*([01])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success
+               && int.TryParse(match.Groups[1].Value, out int value)
+            ? value
+            : null;
+    }
+
     private async Task<SautoInitializationResult> RunSautoInitializationSequenceAsync(
         string portName,
         CancellationToken ct)
@@ -4237,6 +4379,10 @@ public class GsmModemService : IGsmModemService
             if (isEc20)
             {
                 await EnsureSautoImsUtDisabledWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    ct);
+                await EnsureSautoOptionalFirmwareSettingsWhileLockedAsync(
                     portName,
                     serialPort,
                     ct);
@@ -4337,7 +4483,7 @@ public class GsmModemService : IGsmModemService
                 await WriteSautoCommandForResponseWhileLockedAsync(
                     portName,
                     serialPort,
-                    "AT+QCFG=\"nwscanmode\",0,1",
+                    SautoNetworkModeAutoCommand,
                     TimeSpan.FromSeconds(10),
                     ct);
                 await WriteSautoCommandForResponseWhileLockedAsync(
@@ -8598,12 +8744,17 @@ public class GsmModemService : IGsmModemService
         string ussdCode,
         CancellationToken ct)
     {
+        // Keep the UART lock for the whole sequence, but never gate progress
+        // on terminal OK/ERROR. +CUSD is asynchronous and is consumed by the
+        // shared receive parser. Automatic lookup remains the captured 111
+        // flow; 101 is an explicit manual lookup from the UI.
+        await WriteSautoCommandWhileLockedAsync(
+            portName,
+            serialPort,
+            "AT+CSCS=\"GSM\"",
+            ct);
         long ussdRevision =
             GetSautoReceiveSnapshot(portName).UssdRevision;
-
-        // Exact GSMController.runUSSD sequence: keep the UART lock for the
-        // whole sequence, but never gate progress on OK/ERROR/CME. The modem's
-        // asynchronous +CUSD is parsed independently by HandleDataReceived.
         await WriteSautoCommandWhileLockedAsync(
             portName,
             serialPort,

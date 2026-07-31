@@ -28,7 +28,7 @@ public sealed class SautoInitializationSequenceTests
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
             "AT+CPMS?",
             "AT+CNMI=1,1,0,0,0",
-            "AT+QCFG=\"nwscanmode\",0,1",
+            "AT+QCFG=\"nwscanmode\",0,0",
             "AT+QURCCFG=\"urcport\",\"uart1\"",
             "AT+CPIN?"
         ];
@@ -104,6 +104,28 @@ public sealed class SautoInitializationSequenceTests
             expected,
             GsmModemService.RequiresSautoImsUtDisable(response));
 
+    [Theory]
+    [InlineData("+QCFG: \"nwscanmode\",0,0\r\nOK\r\n", "nwscanmode", 0)]
+    [InlineData("+QCFG: \"servicedomain\",2,0\r\nOK\r\n", "servicedomain", 2)]
+    [InlineData("+QCFG: \"nwscanmode\",1,0\r\nOK\r\n", "nwscanmode", 1)]
+    [InlineData("ERROR\r\n", "nwscanmode", null)]
+    public void FirmwareQcfgParser_ReadsOnlyTheRequestedFirstValue(
+        string response,
+        string key,
+        int? expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.ParseSautoQcfgFirstValue(response, key));
+
+    [Theory]
+    [InlineData("+QMBNCFG: \"AutoSel\",1\r\nOK\r\n", 1)]
+    [InlineData("+QMBNCFG: \"AutoSel\",0\r\nOK\r\n", 0)]
+    [InlineData("ERROR\r\n", null)]
+    public void FirmwareMbnParser_ReadsAutoSelection(
+        string response,
+        int? expected) =>
+        Assert.Equal(expected, GsmModemService.ParseSautoMbnAutoSelValue(response));
+
     [Fact]
     public void InitialUssdCommandOrder_ContainsOnlyCapturedCommands()
     {
@@ -111,7 +133,7 @@ public sealed class SautoInitializationSequenceTests
             ["AT+CUSD=2", "AT+CUSD=1,\"*111#\",15"],
             GsmModemService.SautoInitial111CommandOrder);
         Assert.Equal(
-            ["AT+CUSD=2", "AT+CUSD=1,\"*101#\",15"],
+            ["AT+CSCS=\"GSM\"", "AT+CUSD=2", "AT+CUSD=1,\"*101#\",15"],
             GsmModemService.SautoInitial101CommandOrder);
     }
 

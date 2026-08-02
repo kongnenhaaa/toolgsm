@@ -155,6 +155,8 @@
 
     private List<LogItem> _logs = new();
     private ElementReference _logContainer;
+    private int _renderScheduled;
+    private bool _disposed;
 
     // Stats counters (cập nhật realtime)
     private int _smsSuccess, _smsError, _ussdSuccess, _ussdError;
@@ -205,7 +207,33 @@
             AddLog("system", "info", "Sẵn sàng kết nối thiết bị");
         }
 
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1000, 1000);
+        _timer = new System.Threading.Timer(_ => RequestRender(), null, 1000, 1000);
+    }
+
+    private void RequestRender()
+    {
+        if (_disposed || Interlocked.Exchange(ref _renderScheduled, 1) != 0)
+            return;
+
+        try
+        {
+            _ = InvokeAsync(() =>
+            {
+                try
+                {
+                    if (!_disposed)
+                        StateHasChanged();
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _renderScheduled, 0);
+                }
+            });
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _renderScheduled, 0);
+        }
     }
 
     // =====================================================
@@ -236,10 +264,12 @@
         else if (msg.Contains("WARN", StringComparison.OrdinalIgnoreCase))
             level = "warning";
 
-        InvokeAsync(() =>
+        // Marshal to the Blazor renderer, but let the once-per-second timer
+        // below own rendering instead of repainting for every incoming line.
+        _ = InvokeAsync(() =>
         {
-            AddLog(port, level, msg);
-            StateHasChanged();
+            if (!_disposed)
+                AddLog(port, level, msg);
         });
     }
 
@@ -338,6 +368,7 @@
 
     public void Dispose()
     {
+        _disposed = true;
         try
         {
             Vm.LogAdded -= OnVmLogAdded;

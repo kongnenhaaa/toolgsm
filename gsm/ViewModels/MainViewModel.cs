@@ -15,6 +15,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Windows;
 using OfficeOpenXml;
@@ -194,7 +195,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
+    private sealed record FileLogEntry(DateTime Timestamp, string Level, string Message);
+
+    private const int MaxUiLogsPerFlush = 64;
+    private const int MaxPendingUiLogs = 2048;
+    private static readonly TimeSpan SmsUiDispatchTimeout =
+        TimeSpan.FromSeconds(15);
     private readonly object _logFileLock = new();
+    private readonly Channel<FileLogEntry> _fileLogChannel =
+        Channel.CreateBounded<FileLogEntry>(new BoundedChannelOptions(4096)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropOldest
+        });
+    private readonly ConcurrentQueue<LogMessage> _pendingUiLogs = new();
+    private readonly CancellationTokenSource _logWriterCts = new();
+    private Task? _logFileWriterTask;
+    private int _uiLogFlushScheduled;
+    private bool _disposed;
     
     public event Action<string, string>? OtpReceivedEvent;
 
@@ -1147,6 +1166,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ussdService = ussdService;
         _callService = callService;
         _backgroundSupervisor = backgroundSupervisor;
+        _logFileWriterTask = Task.Run(
+            () => RunLogFileWriterAsync(_logWriterCts.Token));
         AppSettings = SettingsService.Current;
         _modemService.LogMessage += ModemService_LogMessage;
         _modemService.SmsReceived += ModemService_SmsReceived;
@@ -1426,54 +1447,149 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void AddLog(string message, string level = "INFO")
     {
         message = TextEncodingNormalizer.RepairMojibake(message);
-        try 
+        DateTime timestamp = DateTime.Now;
+
+        // Never perform file I/O on the WPF dispatcher. A bounded queue keeps
+        // a noisy modem from growing memory without making the UI wait.
+        _fileLogChannel.Writer.TryWrite(
+            new FileLogEntry(timestamp, level, message));
+
+        var newLog = new LogMessage
+        {
+            Time = timestamp.ToString("HH:mm:ss"),
+            Level = level,
+            Message = message
+        };
+        _pendingUiLogs.Enqueue(newLog);
+        while (_pendingUiLogs.Count > MaxPendingUiLogs)
+            _pendingUiLogs.TryDequeue(out _);
+        ScheduleUiLogFlush();
+    }
+
+    private void ScheduleUiLogFlush()
+    {
+        if (_disposed) return;
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null) return;
+        if (Interlocked.Exchange(ref _uiLogFlushScheduled, 1) != 0) return;
+
+        try
+        {
+            _ = dispatcher.InvokeAsync(
+                FlushPendingUiLogs,
+                System.Windows.Threading.DispatcherPriority.Background);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _uiLogFlushScheduled, 0);
+        }
+    }
+
+    private void FlushPendingUiLogs()
+    {
+        int flushed = 0;
+        while (flushed < MaxUiLogsPerFlush
+               && _pendingUiLogs.TryDequeue(out LogMessage? newLog))
+        {
+            SystemLogs.Insert(0, newLog);
+            if (SystemLogs.Count > 500)
+                SystemLogs.RemoveAt(SystemLogs.Count - 1);
+
+            LogAdded?.Invoke(newLog);
+            flushed++;
+        }
+
+        if (flushed > 0)
+        {
+            OnPropertyChanged(nameof(FilteredLogs));
+            OnPropertyChanged(nameof(FilteredLogCount));
+        }
+
+        Interlocked.Exchange(ref _uiLogFlushScheduled, 0);
+        if (!_pendingUiLogs.IsEmpty)
+            ScheduleUiLogFlush();
+    }
+
+    private async Task RunLogFileWriterAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await _fileLogChannel.Reader.WaitToReadAsync(cancellationToken))
+            {
+                var batch = new List<FileLogEntry>(128);
+                while (batch.Count < 256
+                       && _fileLogChannel.Reader.TryRead(out FileLogEntry? entry))
+                {
+                    batch.Add(entry);
+                }
+
+                AppendLogBatch(batch);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Shutdown is bounded; any remaining entries are best-effort.
+        }
+        catch
+        {
+            // Logging must never take down the modem/UI pipeline.
+        }
+    }
+
+    private void AppendLogBatch(IReadOnlyCollection<FileLogEntry> entries)
+    {
+        if (entries.Count == 0) return;
+
+        try
         {
             lock (_logFileLock)
             {
-            string logFile = AppPaths.ForRuntimeFile("system_log.txt");
-            // Fix #2: Giới hạn log file tối đa 5MB, tự động xoay vòng
-            var fi = new System.IO.FileInfo(logFile);
-            if (fi.Exists && fi.Length > 5 * 1024 * 1024) // 5MB
-            {
-                string archive = AppPaths.ForRuntimeFile($"system_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                System.IO.File.Move(logFile, archive, overwrite: true);
-
-                // Tự động dọn dẹp, chỉ giữ lại 5 file log cũ nhất (khoảng 25MB)
-                try
+                string logFile = AppPaths.ForRuntimeFile("system_log.txt");
+                var fi = new FileInfo(logFile);
+                if (fi.Exists && fi.Length > 5 * 1024 * 1024)
                 {
-                    var dirInfo = new System.IO.DirectoryInfo(System.IO.Path.GetDirectoryName(logFile) ?? "");
-                    var oldLogs = dirInfo.GetFiles("system_log_*.txt")
-                                         .OrderByDescending(f => f.CreationTime)
-                                         .Skip(5)
-                                         .ToList();
-                    foreach (var oldLog in oldLogs)
+                    string archive = AppPaths.ForRuntimeFile(
+                        $"system_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
+                    File.Move(logFile, archive, overwrite: true);
+
+                    try
                     {
-                        oldLog.Delete();
+                        var dirInfo = new DirectoryInfo(
+                            Path.GetDirectoryName(logFile) ?? string.Empty);
+                        foreach (FileInfo oldLog in dirInfo
+                                     .GetFiles("system_log_*.txt")
+                                     .OrderByDescending(f => f.CreationTime)
+                                     .Skip(5)
+                                     .ToList())
+                        {
+                            oldLog.Delete();
+                        }
                     }
+                    catch { }
                 }
-                catch { }
-            }
-            System.IO.File.AppendAllText(
-                logFile,
-                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [{level}] {message}{Environment.NewLine}",
-                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+                var content = new StringBuilder();
+                foreach (FileLogEntry entry in entries)
+                {
+                    content.Append(entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"))
+                        .Append(" [")
+                        .Append(entry.Level)
+                        .Append("] ")
+                        .Append(entry.Message)
+                        .AppendLine();
+                }
+
+                File.AppendAllText(
+                    logFile,
+                    content.ToString(),
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             }
         }
-        catch { }
-
-        Application.Current.Dispatcher.InvokeAsync(() =>
+        catch
         {
-            var newLog = new LogMessage { Time = DateTime.Now.ToString("HH:mm:ss"), Level = level, Message = message };
-            SystemLogs.Insert(0, newLog);
-            if (SystemLogs.Count > 500)
-            {
-                SystemLogs.RemoveAt(SystemLogs.Count - 1);
-            }
-            // Cập nhật bộ lọc log sau mỗi lần thêm dòng mới
-            OnPropertyChanged(nameof(FilteredLogs));
-            OnPropertyChanged(nameof(FilteredLogCount));
-            LogAdded?.Invoke(newLog);
-        });
+            // A locked/unavailable log file must not block the application.
+        }
     }
 
     private void AttachPortStateLogging(SimPort port)
@@ -3115,10 +3231,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // +CMGR: "REC UNREAD","+84999999999",,"26/05/01,10:00:00+28"
         // Ma xac nhan Zalo cua ban la 123456
 
-        // Process the decoded SMS synchronously on the UI dispatcher. The modem
-        // service deletes the recyclable SIM index only after this handler has
-        // returned, so the UI has taken ownership before CMGD is issued.
-        Application.Current.Dispatcher.Invoke(() =>
+        // The modem service deletes the recyclable SIM index only after this
+        // handler returns. Keep the durable-ack ordering, but cap how long a
+        // blocked WPF/Blazor dispatcher can hold the serial receive pipeline.
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null)
+            return;
+
+        void ProcessOnUiThread()
         {
             try
             {
@@ -3515,7 +3635,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 AddLog($"[{e.PortName}] Lỗi xử lý SMS: {ex.Message}", "ERROR");
             }
-        });
+        }
+
+        if (dispatcher.CheckAccess())
+        {
+            ProcessOnUiThread();
+            return;
+        }
+
+        try
+        {
+            var operation = dispatcher.InvokeAsync(ProcessOnUiThread);
+            if (!operation.Task.Wait(SmsUiDispatchTimeout))
+            {
+                // Do not acknowledge here. GsmModemService keeps the exact SIM
+                // record and its retry/sweep path will deliver it later.
+                AddLog(
+                    $"[{e.PortName}] [SMS_UI_DISPATCH_TIMEOUT] UI bận quá {SmsUiDispatchTimeout.TotalSeconds:0}s; giữ SMS trên SIM để tự thử lại.",
+                    "ERROR");
+                return;
+            }
+
+            operation.Task.GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            AddLog(
+                $"[{e.PortName}] [SMS_UI_DISPATCH_FAILED] Không đưa được SMS vào UI: {ex.Message}; giữ SMS trên SIM.",
+                "ERROR");
+        }
     }
 
     private class MultipartSmsBuffer
@@ -6337,6 +6485,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+
         if (!_lifetimeCts.IsCancellationRequested)
         {
             _lifetimeCts.Cancel();
@@ -6358,7 +6508,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ussdService.Dispose();
         _backgroundSupervisor.Dispose();
         _portSessions.Dispose();
+
+        _fileLogChannel.Writer.TryComplete();
+        try
+        {
+            if (_logFileWriterTask != null
+                && !_logFileWriterTask.Wait(TimeSpan.FromSeconds(2)))
+            {
+                _logWriterCts.Cancel();
+            }
+        }
+        catch { }
+        _logWriterCts.Dispose();
         _lifetimeCts.Dispose();
+        _disposed = true;
     }
 
     [RelayCommand]

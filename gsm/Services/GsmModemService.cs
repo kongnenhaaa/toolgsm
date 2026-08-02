@@ -296,6 +296,11 @@ public class GsmModemService : IGsmModemService
         TimeSpan.FromSeconds(1);
     internal static TimeSpan SmsStorageCleanupInterval { get; } =
         TimeSpan.FromMinutes(5);
+    // A receive gate can remain closed when SAuto/network recovery is stuck.
+    // Do not leave a per-port SMS reader parked forever; the watchdog/sweep
+    // must get a chance to recreate it when the gate becomes valid again.
+    internal static TimeSpan SmsReceiveMaintenanceWaitTimeout { get; } =
+        TimeSpan.FromMinutes(2);
 
     private readonly ConcurrentDictionary<string, SerialPort> _serialPorts = new();
     private readonly ConcurrentDictionary<string, gsm.Models.IncomingCallSession> _incomingCalls = new();
@@ -401,6 +406,11 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, int> _suspendedBackgroundPorts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, NetworkPollingIdentity> _pendingNetworkPollingPorts =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Some modem firmwares emit NETWORK_REG for every poll even when the
+    // registration state is unchanged. Keep only transitions in the app log;
+    // the raw UART trace still contains every response.
+    private readonly ConcurrentDictionary<string, string> _lastPublishedNetworkRegistration =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly object _backgroundOperationSync = new();
     // GlobalSimMonitor chạy độc lập với vòng polling mạng. Bộ xác nhận này xử lý
@@ -1428,20 +1438,42 @@ public class GsmModemService : IGsmModemService
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
+        catch (Exception ex)
+        {
+            // A single unexpected scheduler fault must not permanently disable
+            // SMS recovery for every port until the application is restarted.
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = "SYSTEM",
+                Data = $"[SMS_WATCHDOG_CRASH] Scheduler tự dừng: {ex.Message}; sẽ tự khởi động lại."
+            });
+        }
         finally
         {
+            bool restart = false;
             lock (_smsReceiveWatchdogSchedulerSync)
             {
                 if (ReferenceEquals(
                         _smsReceiveWatchdogSchedulerCts,
                         scheduler))
                 {
+                    restart = !token.IsCancellationRequested
+                        && _smsReceiveMaintenanceIdentities.Keys.Any(
+                            IsSmsReceiveMaintenanceEnabled);
                     _smsReceiveWatchdogSchedulerCts = null;
                     _smsReceiveWatchdogSchedulerTask = null;
                     _smsReceiveWatchdogCursor = 0;
                 }
             }
             scheduler.Dispose();
+
+            if (restart)
+            {
+                string? portToRestart = _smsReceiveMaintenanceIdentities.Keys
+                    .FirstOrDefault(IsSmsReceiveMaintenanceEnabled);
+                if (portToRestart != null)
+                    EnsureSmsReceiveWatchdog(portToRestart);
+            }
         }
     }
 
@@ -1954,82 +1986,116 @@ public class GsmModemService : IGsmModemService
         SmsReadQueueState state)
     {
         CancellationToken token = state.Cancellation.Token;
-        await foreach (string msgIndex in state.Queue.Reader.ReadAllAsync(token))
+        try
         {
-            if (!IsCurrentSmsGeneration(port, state.Generation)) break;
+            await foreach (string msgIndex in state.Queue.Reader.ReadAllAsync(token))
+            {
+                if (!IsCurrentSmsGeneration(port, state.Generation)) break;
 
-            // Preserve the +CMTI index, but do not emit CMGR/QCMGR while the
-            // The automatic *101# lifecycle owns
-            // this COM. The queued index resumes as soon as that RX milestone
-            // enables SMS maintenance for the same CCID.
-            while (!IsSmsReceiveMaintenanceEnabled(port))
-            {
-                if (!IsCurrentSmsGeneration(port, state.Generation))
-                    return;
-                await Task.Delay(100, token).ConfigureAwait(false);
-            }
-
-            // A CMGR can fail while another AT command owns this COM. Keep the
-            // SIM index claimed and schedule it again instead of dropping it.
-            bool completed = false;
-            bool retry = false;
-            try
-            {
-                completed = await ProcessStoredSmsAsync(
-                    port, msgIndex, state.Generation, token);
-            }
-            catch (OperationCanceledException)
-                when (token.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception ex)
-            {
-                retry = true;
-                LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[SMS_QUEUE] Lỗi đọc index {msgIndex}: {ex.Message}. SMS vẫn được giữ trên SIM." });
-            }
-
-            if (!completed)
-                retry = true;
-
-            if (completed)
-            {
-                string queueKey =
-                    $"{port}\u001f{state.Generation}\u001f{msgIndex}";
-                _smsReadRetryAttempts.TryRemove(queueKey, out _);
-                while (_queuedSmsIndices.TryGetValue(queueKey, out int pending))
+                // Preserve the +CMTI index, but do not emit CMGR/QCMGR while
+                // the automatic *101# lifecycle owns this COM. The queued
+                // index resumes as soon as that RX milestone enables SMS
+                // maintenance for the same CCID.
+                DateTime maintenanceDeadline = DateTime.UtcNow
+                    + SmsReceiveMaintenanceWaitTimeout;
+                while (!IsSmsReceiveMaintenanceEnabled(port))
                 {
-                    if (pending > 1)
+                    if (!IsCurrentSmsGeneration(port, state.Generation))
+                        return;
+                    if (DateTime.UtcNow >= maintenanceDeadline)
                     {
-                        // The just-completed path already issued CMGD. A second
-                        // immediate CMGR normally hits an empty slot forever;
-                        // if EC20 recycled the index for a new burst message, a
-                        // full CMGL sweep discovers that new record safely.
-                        if (!_queuedSmsIndices.TryRemove(
-                                new KeyValuePair<string, int>(queueKey, pending)))
-                            continue;
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = port,
+                            Data = $"[SMS_QUEUE_GATE_TIMEOUT] Chưa mở lại được gate nhận SMS sau {SmsReceiveMaintenanceWaitTimeout.TotalMinutes:0} phút; giữ SMS trên SIM và chuyển sang watchdog/sweep."
+                        });
                         ScheduleSafeUnreadSmsSweep(
                             port,
-                            "duplicate-index-after-cleanup");
+                            "sms-maintenance-gate-timeout",
+                            initialDelayMs: 30000);
                         break;
                     }
+                    await Task.Delay(250, token).ConfigureAwait(false);
+                }
 
-                    if (_queuedSmsIndices.TryRemove(
-                        new KeyValuePair<string, int>(queueKey, pending))) break;
+                if (!IsSmsReceiveMaintenanceEnabled(port))
+                    break;
+
+                // A CMGR can fail while another AT command owns this COM. Keep
+                // the SIM index claimed and schedule it again instead of
+                // dropping it.
+                bool completed = false;
+                bool retry = false;
+                try
+                {
+                    completed = await ProcessStoredSmsAsync(
+                        port, msgIndex, state.Generation, token);
+                }
+                catch (OperationCanceledException)
+                    when (token.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    retry = true;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = port, Data = $"[SMS_QUEUE] Lỗi đọc index {msgIndex}: {ex.Message}. SMS vẫn được giữ trên SIM." });
+                }
+
+                if (!completed)
+                    retry = true;
+
+                if (completed)
+                {
+                    string queueKey =
+                        $"{port}\u001f{state.Generation}\u001f{msgIndex}";
+                    _smsReadRetryAttempts.TryRemove(queueKey, out _);
+                    while (_queuedSmsIndices.TryGetValue(queueKey, out int pending))
+                    {
+                        if (pending > 1)
+                        {
+                            // The just-completed path already issued CMGD. A
+                            // second immediate CMGR normally hits an empty slot
+                            // forever; if EC20 recycled the index for a new burst
+                            // message, a full CMGL sweep discovers it safely.
+                            if (!_queuedSmsIndices.TryRemove(
+                                    new KeyValuePair<string, int>(queueKey, pending)))
+                                continue;
+                            ScheduleSafeUnreadSmsSweep(
+                                port,
+                                "duplicate-index-after-cleanup");
+                            break;
+                        }
+
+                        if (_queuedSmsIndices.TryRemove(
+                                new KeyValuePair<string, int>(queueKey, pending))) break;
+                    }
+                }
+
+                if (retry)
+                {
+                    // Do not block this single-reader queue while a long AT
+                    // command is running. A duplicate CMTI during this yield is
+                    // coalesced by QueueStoredSmsRead (state 2).
+                    ScheduleStoredSmsRetry(
+                        port,
+                        msgIndex,
+                        $"{port}\u001f{state.Generation}\u001f{msgIndex}",
+                        state);
                 }
             }
-
-            if (retry)
-            {
-                // Do not block this single-reader queue while a long AT command
-                // is running. A duplicate CMTI during this yield is coalesced by
-                // QueueStoredSmsRead (state 2).
-                ScheduleStoredSmsRetry(
-                    port,
-                    msgIndex,
-                    $"{port}\u001f{state.Generation}\u001f{msgIndex}",
-                    state);
-            }
+        }
+        catch (OperationCanceledException)
+            when (token.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            // A timed-out gate or an unexpected queue fault must not leave an
+            // orphaned state that permanently coalesces every future CMTI.
+            if (_smsReadQueues.TryRemove(
+                    new KeyValuePair<string, SmsReadQueueState>(port, state)))
+                state.Queue.Writer.TryComplete();
         }
     }
 
@@ -4353,6 +4419,8 @@ public class GsmModemService : IGsmModemService
         if (string.IsNullOrWhiteSpace(normalizedExpectedCcid))
             return;
 
+        _lastPublishedNetworkRegistration.TryRemove(portName, out _);
+
         var expectedIdentity = new NetworkPollingIdentity(
             normalizedExpectedCcid,
             normalizedExpectedImei);
@@ -4389,6 +4457,7 @@ public class GsmModemService : IGsmModemService
         CancellationToken token = loopCts.Token;
         string carrier = string.Empty;
         string networkType = string.Empty;
+        string lastReportedNetworkStatus = string.Empty;
         bool automaticUssdCompleted = false;
         DateTimeOffset lastNetworkCheckUtc = DateTimeOffset.MinValue;
         DateTimeOffset lastAutomaticUssdAttemptUtc = DateTimeOffset.MinValue;
@@ -4620,17 +4689,28 @@ public class GsmModemService : IGsmModemService
                                                 automaticUssdCompleted,
                                             LastAutomaticUssdAttemptUtc:
                                                 lastAutomaticUssdAttemptUtc);
-                                    LogMessage?.Invoke(
-                                        this,
-                                        new GsmDataEventArgs
-                                        {
-                                            PortName = portName,
-                                            Data =
-                                                $"[SAUTO_NETWORK_READY] ccid={normalizedExpectedCcid}; carrier={carrier}; type={networkType}"
-                                        });
+                                    string networkStatus = $"{carrier}|{networkType}";
+                                    if (!string.Equals(
+                                            lastReportedNetworkStatus,
+                                            networkStatus,
+                                            StringComparison.Ordinal))
+                                    {
+                                        lastReportedNetworkStatus = networkStatus;
+                                        LogMessage?.Invoke(
+                                            this,
+                                            new GsmDataEventArgs
+                                            {
+                                                PortName = portName,
+                                                Data =
+                                                    $"[SAUTO_NETWORK_READY] ccid={normalizedExpectedCcid}; carrier={carrier}; type={networkType}"
+                                            });
+                                    }
                                 }
                                 else
                                 {
+                                    // Allow the next successful registration to
+                                    // be logged as a recovery transition.
+                                    lastReportedNetworkStatus = string.Empty;
                                     consecutiveCopsNoCarrierResponses++;
                                     AtCommandTraceLogger.State(
                                         portName,
@@ -7264,7 +7344,24 @@ public class GsmModemService : IGsmModemService
                             "CEREG" => "EPS (Data 4G LTE)",
                             _ => "CS (Thoại/2G)"
                         };
-                        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"[NETWORK_REG] Đã đăng ký mạng {netName}" });
+                        string registrationMessage = $"[NETWORK_REG] Đã đăng ký mạng {netName}";
+                        if (!_lastPublishedNetworkRegistration.TryGetValue(
+                                portName,
+                                out string? previousMessage)
+                            || !string.Equals(
+                                previousMessage,
+                                registrationMessage,
+                                StringComparison.Ordinal))
+                        {
+                            _lastPublishedNetworkRegistration[portName] = registrationMessage;
+                            LogMessage?.Invoke(
+                                this,
+                                new GsmDataEventArgs
+                                {
+                                    PortName = portName,
+                                    Data = registrationMessage
+                                });
+                        }
                     }
                     if (!isRequestedResponse)
                         buffer.Replace(match.Value, "");
@@ -7726,6 +7823,7 @@ public class GsmModemService : IGsmModemService
         _pollingCts.Clear();
         _pollingExpectedIdentities.Clear();
         _pendingNetworkPollingPorts.Clear();
+        _lastPublishedNetworkRegistration.Clear();
         _sautoNetworkStates.Clear();
         _sautoReceiveStates.Clear();
         _sautoReceiveSignals.Clear();
@@ -7777,6 +7875,7 @@ public class GsmModemService : IGsmModemService
             out _);
         _networkSimIdentities.TryRemove(portName, out _);
         _networkIdentityGenerations.TryRemove(portName, out _);
+        _lastPublishedNetworkRegistration.TryRemove(portName, out _);
         InvalidateNetworkRecoveryForIdentityChange(portName);
         _incomingCalls.TryRemove(portName, out _);
         _incomingCallNotifications.TryRemove(portName, out _);

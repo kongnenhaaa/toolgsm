@@ -971,9 +971,14 @@ namespace gsm.Services
         {
             var sem = _smsSemaphores.GetOrAdd(portId, _ => new SemaphoreSlim(1, 1));
             await sem.WaitAsync();
-            
+
             // Đánh dấu cổng này đang có SMS sắp gửi, USSD sẽ tự động nhường đường
             _vm.SmsInProgressPorts.TryAdd(portId, true);
+
+            // Timeout tổng cho toàn bộ phiên gửi SMS: bao gồm cả payload timeout và recovery.
+            // Nếu QueueSmsAsync bị treo hoàn toàn (mất sóng, modem không phản hồi),
+            // CTS này sẽ hủy sau 120s thay vì block thread Firebase vô thời hạn.
+            using var smsCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
 
             try
             {
@@ -984,9 +989,9 @@ namespace gsm.Services
                     // chờ cooldown của cổng và để GsmSmsService khóa/configure modem.
                     // Trước đây web tự gửi AT+CSMP rồi gọi thẳng _smsService, có thể
                     // chạy giữa lúc cổng đang chuyển trạng thái và báo sent giả.
-                    result = await _vm.QueueSmsAsync(portId, recipient, content);
+                    result = await _vm.QueueSmsAsync(portId, recipient, content, smsCts.Token);
 
-                    // KHÔNG RETRY nếu lỗi Timeout để tránh gửi trùng SMS (anti-duplicate SMS)
+                    // KHÔNG RETRY nếu lỗi Timeout để tránh gửi trùng SMS (anti-duplicate SMS)
                     // Chỉ retry khi chắc chắn lỗi là do cổng bận (Lock / Another command)
                     if (!result.Contains("ERROR") || (!result.Contains("Another command") && !result.Contains("waiting for lock")))
                     {
@@ -995,7 +1000,7 @@ namespace gsm.Services
 
                     if (attempt < 3)
                     {
-                        await Task.Delay(2000); // Đợi 2s trước khi retry
+                        await Task.Delay(2000, smsCts.Token).ConfigureAwait(false);
                     }
                 }
 
@@ -1013,6 +1018,14 @@ namespace gsm.Services
                 }
 
                 return result;
+            }
+            catch (OperationCanceledException) when (smsCts.IsCancellationRequested)
+            {
+                // Timeout 120s hit: phiên SMS treo quá lâu. Báo lỗi để Firebase
+                // đánh dấu lệnh là failed và không block các lệnh tiếp theo.
+                string timeoutMsg = $"ERROR: SMS timeout (>120s) on {portId} - phiên gửi bị treo quá lâu, tự động hủy";
+                _vm.AddLog($"[{portId}] {timeoutMsg}", "ERROR");
+                return timeoutMsg;
             }
             finally
             {

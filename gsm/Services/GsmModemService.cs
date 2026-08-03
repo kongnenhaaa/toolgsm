@@ -9176,8 +9176,8 @@ public class GsmModemService : IGsmModemService
     private const int MaxGsmChunkBodyLength = 150;
     private const int MaxUcs2PartLength = 70;
     private const int MaxUcs2ChunkBodyLength = 60;
-    private const int MinimumSmsPayloadTimeoutMs = 90_000;
-    private const int SmsStopTerminalDrainTimeoutMs = 15_000;
+    private const int MinimumSmsPayloadTimeoutMs = 45_000;
+    private const int SmsStopCleanupTimeoutMs = 5_000;
     internal const string SmsPayloadSubmittedMarker = "[SMS_PAYLOAD_SUBMITTED]";
     internal const string SmsChannelRecoveryRequiredMarker =
         "[SMS_CHANNEL_RECOVERY_REQUIRED]";
@@ -9286,9 +9286,15 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
+            using var cleanupCts = new CancellationTokenSource(SmsStopCleanupTimeoutMs);
             try
             {
-                if (channelPrepared)
+                // A stop before Ctrl+Z already sends ESC in SendSmsPartAsync;
+                // do not make the user wait for optional receive-mode restore.
+                // A payload submitted through Ctrl+Z still requires the bounded
+                // RF recovery below before the COM is reused.
+                if (channelPrepared
+                    && (radioRecoveryRequired || !ct.IsCancellationRequested))
                 {
                     if (radioRecoveryRequired)
                     {
@@ -9296,7 +9302,7 @@ public class GsmModemService : IGsmModemService
                                 portName,
                                 "SMS",
                                 "CANCELLED_AFTER_CTRL_Z",
-                                CancellationToken.None)
+                                cleanupCts.Token)
                             .ConfigureAwait(false);
                         if (!recovered)
                         {
@@ -9311,7 +9317,7 @@ public class GsmModemService : IGsmModemService
                         radioRecoveryRequired
                             ? "IDLE_AFTER_SMS_STOP_RECOVERY"
                             : "IDLE_AFTER_SMS",
-                        CancellationToken.None).ConfigureAwait(false);
+                        cleanupCts.Token).ConfigureAwait(false);
                 }
             }
             catch
@@ -9452,7 +9458,14 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = "[SMS_RECOVERY_FAILED] Modem chưa về trạng thái lệnh AT sạch; hãy Refresh riêng cổng này trước khi gửi lại."
+                Data = "[SMS_RECOVERY_FAILED] Modem chưa về trạng thái lệnh AT sạch; tự động hủy phiên cổng để tránh treo."
+            });
+            // Phiên SMS treo không phục hồi được → fire PortDisconnected để
+            // MainViewModel invalidate session và không nhận lệnh mới cho đến khi Refresh.
+            PortDisconnected?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[SMS_RECOVERY_FAILED] Phiên SMS không phục hồi được; cổng bị đưa về Connecting."
             });
             return (false, null);
         }
@@ -9563,15 +9576,6 @@ public class GsmModemService : IGsmModemService
                 cancellationSignal);
 
             bool cancelledAfterSubmit = completedTask == cancellationSignal;
-            if (cancelledAfterSubmit)
-            {
-                AtCommandTraceLogger.State(
-                    portName,
-                    $"SMS_STOP_AFTER_CTRL_Z_WAIT_TERMINAL;timeout_ms={SmsStopTerminalDrainTimeoutMs}");
-                completedTask = await Task.WhenAny(
-                    tcs.Task,
-                    Task.Delay(SmsStopTerminalDrainTimeoutMs));
-            }
 
             if (completedTask != tcs.Task)
             {
@@ -9583,6 +9587,16 @@ public class GsmModemService : IGsmModemService
                     && ReferenceEquals(pendingPayload, tcs))
                 {
                     _commandTcs.TryRemove(portName, out _);
+                }
+
+                if (cancelledAfterSubmit)
+                {
+                    // Ctrl+Z has already handed the SMS to the modem. Do not
+                    // wait for a late +CMGS/+CMS response after the user presses
+                    // Stop; return immediately as uncertain and let the outer
+                    // bounded cleanup restore the channel before the next job.
+                    channelRecoveryRequired = true;
+                    return $"ERROR: {SmsPayloadSubmittedMarker} {SmsChannelRecoveryRequiredMarker} SMS operation cancelled after Ctrl+Z";
                 }
 
                 (bool recovered, string? lateSubmitConfirmation) = await RecoverSmsChannelAsync();
@@ -9654,30 +9668,38 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
-            if (_commandTcs.TryGetValue(portName, out var existing) && ReferenceEquals(existing, tcs))
-                _commandTcs.TryRemove(portName, out _);
-
-            // Always return the modem to the same live receive mode used by the
-            // SAuto initialization. Leaving Quectel in CMGF=0 after an outgoing
-            // SMS made later inbound records wait in storage or take the slower
-            // PDU fallback path until another +CMTI happened to wake the reader.
-            if (!channelRecoveryRequired
-                && _serialPorts.TryGetValue(portName, out var sp2)
-                && sp2.IsOpen)
+            try
             {
-                foreach (string restoreCommand in SmsReceiveRestoreCommandOrder)
-                    await SendInnerAsync(
-                        restoreCommand,
-                        CancellationToken.None);
-                if (GetModemProfile(portName)?.IsQuectel == true)
+                if (_commandTcs.TryGetValue(portName, out var existing)
+                    && ReferenceEquals(existing, tcs))
+                    _commandTcs.TryRemove(portName, out _);
+
+                // If Stop cancelled the operation before Ctrl+Z, ESC already
+                // left text mode. Skip nonessential restore commands so the
+                // semaphore is released immediately; the next foreground
+                // workflow performs its own channel preparation.
+                if (!channelRecoveryRequired
+                    && !ct.IsCancellationRequested
+                    && _serialPorts.TryGetValue(portName, out var sp2)
+                    && sp2.IsOpen)
                 {
-                    await SendInnerAsync(
-                        "AT+QURCCFG=\"urcport\",\"uart1\"",
-                        CancellationToken.None);
+                    foreach (string restoreCommand in SmsReceiveRestoreCommandOrder)
+                        await SendInnerAsync(restoreCommand, ct);
+                    if (GetModemProfile(portName)?.IsQuectel == true)
+                        await SendInnerAsync(
+                            "AT+QURCCFG=\"urcport\",\"uart1\"",
+                            ct);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                // Stop must not be held by best-effort receive-mode restore.
+            }
+            finally
+            {
+                semaphore.Release();
+            }
 
-            semaphore.Release();
             // This worker waits for the SMS foreground/background leases to be
             // released, then drains anything that arrived while CMGS owned UART.
             ScheduleSafeUnreadSmsSweep(

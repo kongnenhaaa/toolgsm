@@ -1,0 +1,690 @@
+[
+  {
+    "Port": "COM83",
+    "StartedAt": "2026-08-03T14:44:59.4138928+07:00",
+    "FinishedAt": "2026-08-03T14:51:40.8247693+07:00",
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "AdvertisedCommands": [
+      "AT$CCLK",
+      "AT$CREG",
+      "AT$CSQ",
+      "AT$QCACQDBC",
+      "AT$QCANTE",
+      "AT$QCAPNE",
+      "AT$QCATMOD",
+      "AT$QCBANDPREF",
+      "AT$QCBOOTVER",
+      "AT$QCCLAC",
+      "AT$QCCLR",
+      "AT$QCCNMI",
+      "AT$QCCOPS",
+      "AT$QCCSGCOPS",
+      "AT$QCCTM",
+      "AT$QCDEFPROF",
+      "AT$QCDGEN",
+      "AT$QCDMR",
+      "AT$QCDNSP",
+      "AT$QCDNSS",
+      "AT$QCDRX",
+      "AT$QCHWREV",
+      "AT$QCMRUC",
+      "AT$QCMRUE",
+      "AT$QCNSP",
+      "AT$QCPBMPREF",
+      "AT$QCPDPCFGE",
+      "AT$QCPDPCFGEXT",
+      "AT$QCPDPIMSCFGE",
+      "AT$QCPDPLT",
+      "AT$QCPDPP",
+      "AT$QCPINSTAT",
+      "AT$QCPRFCRT",
+      "AT$QCPRFMOD",
+      "AT$QCPWRDN",
+      "AT$QCRCIND",
+      "AT$QCRMCALL",
+      "AT$QCRPW",
+      "AT$QCRSRP",
+      "AT$QCRSRQ",
+      "AT$QCSIMAPP",
+      "AT$QCSIMSTAT",
+      "AT$QCSIMT",
+      "AT$QCSQ",
+      "AT$QCSYSMODE",
+      "AT$QCTER",
+      "AT$QCVOLT",
+      "AT%V",
+      "AT\u0026C",
+      "AT\u0026D",
+      "AT\u0026E",
+      "AT\u0026F",
+      "AT\u0026S",
+      "AT\u0026V",
+      "AT\u0026W",
+      "AT*CNTI",
+      "AT\u002BCBST",
+      "AT\u002BCEER",
+      "AT\u002BCEMODE",
+      "AT\u002BCEREG",
+      "AT\u002BCFUN",
+      "AT\u002BCGCLASS",
+      "AT\u002BCGCONTRDP",
+      "AT\u002BCGDATA",
+      "AT\u002BCGDCONT",
+      "AT\u002BCGDSCONT",
+      "AT\u002BCGEQMIN",
+      "AT\u002BCGEQOS",
+      "AT\u002BCGEQOSRDP",
+      "AT\u002BCGEQREQ",
+      "AT\u002BCGEREP",
+      "AT\u002BCGPADDR",
+      "AT\u002BCGPIAF",
+      "AT\u002BCGQMIN",
+      "AT\u002BCGQREQ",
+      "AT\u002BCGREG",
+      "AT\u002BCGSCONTRDP",
+      "AT\u002BCGSMS",
+      "AT\u002BCGTFT",
+      "AT\u002BCGTFTRDP",
+      "AT\u002BCHSN",
+      "AT\u002BCLCC",
+      "AT\u002BCMEE",
+      "AT\u002BCMGF",
+      "AT\u002BCMOD",
+      "AT\u002BCR",
+      "AT\u002BCRC",
+      "AT\u002BCREG",
+      "AT\u002BCRES",
+      "AT\u002BCRLP",
+      "AT\u002BCSAS",
+      "AT\u002BCSCA",
+      "AT\u002BCSCB",
+      "AT\u002BCSCS",
+      "AT\u002BCSDH",
+      "AT\u002BCSMP",
+      "AT\u002BCSMS",
+      "AT\u002BCSSN",
+      "AT\u002BCSTA",
+      "AT\u002BCV120",
+      "AT\u002BCVHU",
+      "AT\u002BDR",
+      "AT\u002BDS",
+      "AT\u002BES",
+      "AT\u002BESA",
+      "AT\u002BFCLASS",
+      "AT\u002BGCAP",
+      "AT\u002BGMI",
+      "AT\u002BGMM",
+      "AT\u002BGMR",
+      "AT\u002BGSN",
+      "AT\u002BICF",
+      "AT\u002BIFC",
+      "AT\u002BIPR",
+      "AT\u002BPACSP",
+      "AT\u002BQCGEQMIN",
+      "AT\u002BQCGEQOS",
+      "AT\u002BQCGEQREQ",
+      "AT\u002BQCGQMIN",
+      "AT\u002BQCGQREQ",
+      "AT\u002BQCGTFT",
+      "AT\u002BWS46",
+      "ATA",
+      "ATD",
+      "ATE",
+      "ATH",
+      "ATI",
+      "ATL",
+      "ATM",
+      "ATO",
+      "ATP",
+      "ATQ",
+      "ATS0",
+      "ATS10",
+      "ATS103",
+      "ATS104",
+      "ATS11",
+      "ATS2",
+      "ATS3",
+      "ATS30",
+      "ATS4",
+      "ATS5",
+      "ATS6",
+      "ATS7",
+      "ATS8",
+      "ATS9",
+      "ATT",
+      "ATV",
+      "ATX",
+      "ATZ",
+      "AT\\Q",
+      "AT\\S",
+      "AT\\V",
+      "AT^CARDMODE",
+      "AT^DSCI",
+      "AT^MODE",
+      "AT^PREFMODE",
+      "AT^SPN",
+      "AT^SYSCONFIG",
+      "AT^SYSINFO"
+    ],
+    "Results": [
+      {
+        "Category": "identity",
+        "Command": "AT",
+        "Status": "supported",
+        "ElapsedMs": 75,
+        "Response": "\u002BCPIN: READY\r\n\r\n\u002BQUSIM: 1\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "ATI",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\nEC20F\r\nRevision: EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMI",
+        "Status": "supported",
+        "ElapsedMs": 30,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMM",
+        "Status": "supported",
+        "ElapsedMs": 32,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCGMR",
+        "Status": "supported",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Category": "identity",
+        "Command": "AT\u002BCLAC",
+        "Status": "supported-no-terminator",
+        "ElapsedMs": 25023,
+        "Response": "\u0026C\r\n\u0026D\r\n\u0026E\r\n\u0026F\r\n\u0026S\r\n\u0026V\r\n\u0026W\r\nE\r\nI\r\nL\r\nM\r\nQ\r\nV\r\nX\r\nZ\r\nT\r\nP\r\n\\Q\r\n\\S\r\n\\V\r\n%V\r\nD\r\nA\r\nH\r\nO\r\nS0\r\nS2\r\nS3\r\nS4\r\nS5\r\nS6\r\nS7\r\nS8\r\nS9\r\nS10\r\nS11\r\nS30\r\nS103\r\nS104\r\n\u002BFCLASS\r\n\u002BICF\r\n\u002BIFC\r\n\u002BIPR\r\n\u002BGMI\r\n\u002BGMM\r\n\u002BGMR\r\n\u002BGCAP\r\n\u002BGSN\r\n\u002BDR\r\n\u002BDS\r\n\u002BCMEE\r\n\u002BWS46\r\n\u002BPACSP\r\n\u002BCFUN\r\n\u002BCLCC\r\n\u002BCBST\r\n\u002BCRLP\r\n\u002BCV120\r\n\u002BCHSN\r\n\u002BCSSN\r\n\u002BCREG\r\n\u002BCGREG\r\n\u002BCEREG\r\n\u002BCSCS\r\n\u002BCSTA\r\n\u002BCR\r\n\u002BCEER\r\n\u002BCRC\r\n\u002BCGDCONT\r\n\u002BCGDSCONT\r\n\u002BCGTFT\r\n\u002BCGEQREQ\r\n\u002BCGEQMIN\r\n\u002BCGEQOS\r\n\u002BCGCONTRDP\r\n\u002BCGSCONTRDP\r\n\u002BCGTFTRDP\r\n\u002BCGEQOSRDP\r\n\u002BCGQREQ\r\n\u002BCGQMIN\r\n\u002BCGEREP\r\n\u002BCGPADDR\r\n\u002BCGDATA\r\n\u002BCGCLASS\r\n\u002BCGPIAF\r\n\u002BCGSMS\r\n\u002BCSMS\r\n\u002BCMGF\r\n\u002BCSAS\r\n\u002BCRES\r\n\u002BCSCA\r\n\u002BCSMP\r\n\u002BCSDH\r\n\u002BCSCB\r\n\u002BES\r\n\u002BESA\r\n\u002BCMOD\r\n\u002BCEMODE\r\n\u002BCVHU\r\n\u002BQCGEQMIN\r\n\u002BQCGEQOS\r\n\u002BQCGEQREQ\r\n\u002BQCGQMIN\r\n\u002BQCGQREQ\r\n\u002BQCGTFT\r\n$QCSIMSTAT\r\n$QCPBMPREF\r\n$CREG\r\n$CCLK\r\n$QCCNMI\r\n*CNTI\r\n$QCCLR\r\n$QCDMR\r\n$QCDNSP\r\n$QCDNSS\r\n$QCTER\r\n$QCSIMAPP\r\n$QCPINSTAT\r\n$QCPDPP\r\n$QCPDPLT\r\n$QCPWRDN\r\n$QCDGEN\r\n$QCPDPCFGE\r\n$QCANTE\r\n$QCRPW\r\n$QCSQ\r\n$CSQ\r\n$QCSYSMODE\r\n$QCCTM\r\n$QCBANDPREF\r\n^PREFMODE\r\n^SYSINFO\r\n^SYSCONFIG\r\n^CARDMODE\r\n^DSCI\r\n$QCVOLT\r\n$QCHWREV\r\n$QCBOOTVER\r\n$QCDEFPROF\r\n$QCMRUE\r\n$QCMRUC\r\n$QCAPNE\r\n$QCPDPIMSCFGE\r\n$QCCLAC\r\n^SPN\r\n$QCRMCALL\r\n$QCDRX\r\n$QCRSRP\r\n$QCRSRQ\r\n$QCACQDBC\r\n$QCATMOD\r\n$QCCOPS\r\n^MODE\r\n$QCSIMT\r\n$QCNSP\r\n$QCRCIND\r\n$QCCSGCOPS\r\n$QCPDPCFGEXT\r\n$QCPRFCRT\r\n$QCPRFMOD\r\n\r\n\r\n\u002BQIND: SMS DONE\r\n\r\n\u002BCGREG: 1,\u00226624\u0022,\u0022A364102\u0022,2\r\n\r\n\u002BQIND: PB DONE\r\n\r\n\u002BCGREG: 1,\u00221817\u0022,\u0022959B80C\u0022,7\r\n\r\n\u002BCEREG: 1,\u00221817\u0022,\u0022959B80C\u0022,7"
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPIN?",
+        "Status": "timeout",
+        "ElapsedMs": 5012,
+        "Response": ""
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "timeout",
+        "ElapsedMs": 5025,
+        "Response": ""
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BQCCID",
+        "Status": "timeout",
+        "ElapsedMs": 5004,
+        "Response": ""
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCIMI",
+        "Status": "timeout",
+        "ElapsedMs": 5015,
+        "Response": ""
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCNUM",
+        "Status": "timeout",
+        "ElapsedMs": 5001,
+        "Response": ""
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPBS?",
+        "Status": "timeout",
+        "ElapsedMs": 5029,
+        "Response": ""
+      },
+      {
+        "Category": "sim",
+        "Command": "AT\u002BCPBR=?",
+        "Status": "timeout",
+        "ElapsedMs": 5024,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCFUN?",
+        "Status": "timeout",
+        "ElapsedMs": 5024,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCSQ",
+        "Status": "timeout",
+        "ElapsedMs": 5002,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCREG?",
+        "Status": "timeout",
+        "ElapsedMs": 5005,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCGREG?",
+        "Status": "timeout",
+        "ElapsedMs": 5013,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCEREG?",
+        "Status": "timeout",
+        "ElapsedMs": 5030,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BCOPS?",
+        "Status": "timeout",
+        "ElapsedMs": 5005,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "timeout",
+        "ElapsedMs": 5007,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "timeout",
+        "ElapsedMs": 5030,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "timeout",
+        "ElapsedMs": 5002,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "timeout",
+        "ElapsedMs": 5013,
+        "Response": ""
+      },
+      {
+        "Category": "network",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "timeout",
+        "ElapsedMs": 5005,
+        "Response": ""
+      },
+      {
+        "Category": "ussd",
+        "Command": "AT\u002BCUSD?",
+        "Status": "timeout",
+        "ElapsedMs": 5029,
+        "Response": ""
+      },
+      {
+        "Category": "ussd",
+        "Command": "AT\u002BCUSD=?",
+        "Status": "timeout",
+        "ElapsedMs": 5016,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCMGF?",
+        "Status": "timeout",
+        "ElapsedMs": 5010,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCMGF=?",
+        "Status": "timeout",
+        "ElapsedMs": 5028,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCPMS?",
+        "Status": "timeout",
+        "ElapsedMs": 5004,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCPMS=?",
+        "Status": "timeout",
+        "ElapsedMs": 5029,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCNMI?",
+        "Status": "timeout",
+        "ElapsedMs": 5024,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCNMI=?",
+        "Status": "timeout",
+        "ElapsedMs": 5009,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCS?",
+        "Status": "timeout",
+        "ElapsedMs": 5008,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCS=?",
+        "Status": "timeout",
+        "ElapsedMs": 5006,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BCSCA?",
+        "Status": "timeout",
+        "ElapsedMs": 5009,
+        "Response": ""
+      },
+      {
+        "Category": "sms",
+        "Command": "AT\u002BQCMGR=?",
+        "Status": "timeout",
+        "ElapsedMs": 5024,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLCC",
+        "Status": "timeout",
+        "ElapsedMs": 5024,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLCC=?",
+        "Status": "timeout",
+        "ElapsedMs": 5026,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLIP?",
+        "Status": "timeout",
+        "ElapsedMs": 20020,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCLIP=?",
+        "Status": "timeout",
+        "ElapsedMs": 5029,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCOLP?",
+        "Status": "timeout",
+        "ElapsedMs": 20028,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCRC?",
+        "Status": "timeout",
+        "ElapsedMs": 5024,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCHLD=?",
+        "Status": "timeout",
+        "ElapsedMs": 5019,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BVTS=?",
+        "Status": "timeout",
+        "ElapsedMs": 5020,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BQVTS=?",
+        "Status": "timeout",
+        "ElapsedMs": 5018,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCCFC=?",
+        "Status": "timeout",
+        "ElapsedMs": 5027,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCCWA=?",
+        "Status": "timeout",
+        "ElapsedMs": 5022,
+        "Response": ""
+      },
+      {
+        "Category": "call",
+        "Command": "AT\u002BCEER",
+        "Status": "timeout",
+        "ElapsedMs": 5017,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCLVL?",
+        "Status": "timeout",
+        "ElapsedMs": 5025,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCLVL=?",
+        "Status": "timeout",
+        "ElapsedMs": 5017,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BCMUT?",
+        "Status": "timeout",
+        "ElapsedMs": 5023,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQDAI?",
+        "Status": "timeout",
+        "ElapsedMs": 5015,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQDAI=?",
+        "Status": "timeout",
+        "ElapsedMs": 5008,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDMOD?",
+        "Status": "timeout",
+        "ElapsedMs": 5022,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDMOD=?",
+        "Status": "timeout",
+        "ElapsedMs": 5008,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDRD=?",
+        "Status": "timeout",
+        "ElapsedMs": 5011,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQAUDPLAY=?",
+        "Status": "timeout",
+        "ElapsedMs": 5028,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQPSND=?",
+        "Status": "timeout",
+        "ElapsedMs": 5022,
+        "Response": ""
+      },
+      {
+        "Category": "audio",
+        "Command": "AT\u002BQTONEDET=?",
+        "Status": "timeout",
+        "ElapsedMs": 5000,
+        "Response": ""
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLST",
+        "Status": "timeout",
+        "ElapsedMs": 5002,
+        "Response": ""
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLST=?",
+        "Status": "timeout",
+        "ElapsedMs": 5015,
+        "Response": ""
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFLDS",
+        "Status": "timeout",
+        "ElapsedMs": 5020,
+        "Response": ""
+      },
+      {
+        "Category": "filesystem",
+        "Command": "AT\u002BQFUPL=?",
+        "Status": "timeout",
+        "ElapsedMs": 5015,
+        "Response": ""
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BCGATT?",
+        "Status": "timeout",
+        "ElapsedMs": 5027,
+        "Response": ""
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BCGDCONT?",
+        "Status": "timeout",
+        "ElapsedMs": 5002,
+        "Response": ""
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQIACT?",
+        "Status": "timeout",
+        "ElapsedMs": 5014,
+        "Response": ""
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQICSGP=?",
+        "Status": "timeout",
+        "ElapsedMs": 5029,
+        "Response": ""
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQHTTPCFG=?",
+        "Status": "timeout",
+        "ElapsedMs": 5013,
+        "Response": ""
+      },
+      {
+        "Category": "packet-data",
+        "Command": "AT\u002BQHTTPURL=?",
+        "Status": "timeout",
+        "ElapsedMs": 5013,
+        "Response": ""
+      },
+      {
+        "Category": "gnss",
+        "Command": "AT\u002BQGPS?",
+        "Status": "timeout",
+        "ElapsedMs": 5009,
+        "Response": ""
+      },
+      {
+        "Category": "gnss",
+        "Command": "AT\u002BQGPSCFG=?",
+        "Status": "timeout",
+        "ElapsedMs": 5019,
+        "Response": ""
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BCCLK?",
+        "Status": "timeout",
+        "ElapsedMs": 5017,
+        "Response": ""
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BQLTS=2",
+        "Status": "timeout",
+        "ElapsedMs": 5016,
+        "Response": ""
+      },
+      {
+        "Category": "device",
+        "Command": "AT\u002BQCFG=\u0022usbnet\u0022",
+        "Status": "timeout",
+        "ElapsedMs": 5016,
+        "Response": ""
+      }
+    ]
+  }
+]

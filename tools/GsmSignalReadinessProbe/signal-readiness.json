@@ -1,0 +1,2728 @@
+[
+  {
+    "Port": "COM86",
+    "StartedAt": "2026-08-03T15:33:29.5397083+07:00",
+    "FinishedAt": "2026-08-03T15:33:31.6568504+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "359182116805014",
+    "Ccid": "89840200011833719337",
+    "Cim": "452021183371933",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 36,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "359182116805014\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCCID: 89840200011833719337\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "452021183371933\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 32,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM87",
+    "StartedAt": "2026-08-03T15:33:31.6588342+07:00",
+    "FinishedAt": "2026-08-03T15:33:33.738797+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "359182117729213",
+    "Ccid": "89840200011833719501",
+    "Cim": "452021183371950",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "359182117729213\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCCID: 89840200011833719501\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371950\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 32,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM88",
+    "StartedAt": "2026-08-03T15:33:33.7389579+07:00",
+    "FinishedAt": "2026-08-03T15:33:35.8178257+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFDR02A13M4G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "356230118156382",
+    "Ccid": "89840200011833719360",
+    "Cim": "452021183371936",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "EC20CEFDR02A13M4G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "356230118156382\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCCID: 89840200011833719360\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371936\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e000000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 32,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM89",
+    "StartedAt": "2026-08-03T15:33:35.8179691+07:00",
+    "FinishedAt": "2026-08-03T15:33:37.9040656+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "357284116898999",
+    "Ccid": "89840200011833719345",
+    "Cim": "452021183371934",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "357284116898999\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCCID: 89840200011833719345\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "452021183371934\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 31,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM90",
+    "StartedAt": "2026-08-03T15:33:37.9042576+07:00",
+    "FinishedAt": "2026-08-03T15:33:39.9756044+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "358742880205971",
+    "Ccid": "89840200011833719683",
+    "Cim": "452021183371968",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "358742880205971\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCCID: 89840200011833719683\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371968\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 31,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM91",
+    "StartedAt": "2026-08-03T15:33:39.9757925+07:00",
+    "FinishedAt": "2026-08-03T15:33:42.0562395+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFDR02A13M4G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "354147388661465",
+    "Ccid": "89840200011833719469",
+    "Cim": "452021183371946",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFDR02A13M4G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "354147388661465\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCCID: 89840200011833719469\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371946\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e000000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 30,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM92",
+    "StartedAt": "2026-08-03T15:33:42.0564466+07:00",
+    "FinishedAt": "2026-08-03T15:33:44.1342827+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFDR02A13M4G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "351980317095725",
+    "Ccid": "89840200011833719444",
+    "Cim": "452021183371944",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "EC20CEFDR02A13M4G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "351980317095725\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCCID: 89840200011833719444\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371944\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e000000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 31,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM93",
+    "StartedAt": "2026-08-03T15:33:44.1345221+07:00",
+    "FinishedAt": "2026-08-03T15:33:46.2152875+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "351928117177375",
+    "Ccid": "89840200011833719451",
+    "Cim": "452021183371945",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "351928117177375\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCCID: 89840200011833719451\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "452021183371945\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 30,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM94",
+    "StartedAt": "2026-08-03T15:33:46.215521+07:00",
+    "FinishedAt": "2026-08-03T15:33:46.2217455+07:00",
+    "Opened": false,
+    "OpenError": "Could not find file \u0027COM94\u0027.",
+    "FirmwareRevision": "",
+    "Manufacturer": "",
+    "Model": "",
+    "Imei": null,
+    "Ccid": null,
+    "Cim": null,
+    "Cpin": null,
+    "Qsimstat": null,
+    "Cfun": null,
+    "Csq": null,
+    "CsqRssi": null,
+    "CsqBer": null,
+    "Cops": null,
+    "Creg": null,
+    "Cgreg": null,
+    "Cereg": null,
+    "Qnwinfo": null,
+    "NwscanMode": null,
+    "NwscanSeq": null,
+    "Ims": null,
+    "Band": null,
+    "Ratacqorder": null,
+    "UrcPortUsb": false,
+    "Findings": [],
+    "Ready": false,
+    "Score": 0,
+    "Results": []
+  },
+  {
+    "Port": "COM95",
+    "StartedAt": "2026-08-03T15:33:46.2217951+07:00",
+    "FinishedAt": "2026-08-03T15:33:46.2222153+07:00",
+    "Opened": false,
+    "OpenError": "Could not find file \u0027COM95\u0027.",
+    "FirmwareRevision": "",
+    "Manufacturer": "",
+    "Model": "",
+    "Imei": null,
+    "Ccid": null,
+    "Cim": null,
+    "Cpin": null,
+    "Qsimstat": null,
+    "Cfun": null,
+    "Csq": null,
+    "CsqRssi": null,
+    "CsqBer": null,
+    "Cops": null,
+    "Creg": null,
+    "Cgreg": null,
+    "Cereg": null,
+    "Qnwinfo": null,
+    "NwscanMode": null,
+    "NwscanSeq": null,
+    "Ims": null,
+    "Band": null,
+    "Ratacqorder": null,
+    "UrcPortUsb": false,
+    "Findings": [],
+    "Ready": false,
+    "Score": 0,
+    "Results": []
+  },
+  {
+    "Port": "COM96",
+    "StartedAt": "2026-08-03T15:33:46.2222486+07:00",
+    "FinishedAt": "2026-08-03T15:33:46.2223005+07:00",
+    "Opened": false,
+    "OpenError": "Could not find file \u0027COM96\u0027.",
+    "FirmwareRevision": "",
+    "Manufacturer": "",
+    "Model": "",
+    "Imei": null,
+    "Ccid": null,
+    "Cim": null,
+    "Cpin": null,
+    "Qsimstat": null,
+    "Cfun": null,
+    "Csq": null,
+    "CsqRssi": null,
+    "CsqBer": null,
+    "Cops": null,
+    "Creg": null,
+    "Cgreg": null,
+    "Cereg": null,
+    "Qnwinfo": null,
+    "NwscanMode": null,
+    "NwscanSeq": null,
+    "Ims": null,
+    "Band": null,
+    "Ratacqorder": null,
+    "UrcPortUsb": false,
+    "Findings": [],
+    "Ready": false,
+    "Score": 0,
+    "Results": []
+  },
+  {
+    "Port": "COM97",
+    "StartedAt": "2026-08-03T15:33:46.2223104+07:00",
+    "FinishedAt": "2026-08-03T15:33:46.2223256+07:00",
+    "Opened": false,
+    "OpenError": "Could not find file \u0027COM97\u0027.",
+    "FirmwareRevision": "",
+    "Manufacturer": "",
+    "Model": "",
+    "Imei": null,
+    "Ccid": null,
+    "Cim": null,
+    "Cpin": null,
+    "Qsimstat": null,
+    "Cfun": null,
+    "Csq": null,
+    "CsqRssi": null,
+    "CsqBer": null,
+    "Cops": null,
+    "Creg": null,
+    "Cgreg": null,
+    "Cereg": null,
+    "Qnwinfo": null,
+    "NwscanMode": null,
+    "NwscanSeq": null,
+    "Ims": null,
+    "Band": null,
+    "Ratacqorder": null,
+    "UrcPortUsb": false,
+    "Findings": [],
+    "Ready": false,
+    "Score": 0,
+    "Results": []
+  },
+  {
+    "Port": "COM98",
+    "StartedAt": "2026-08-03T15:33:46.2223331+07:00",
+    "FinishedAt": "2026-08-03T15:33:46.2223439+07:00",
+    "Opened": false,
+    "OpenError": "Could not find file \u0027COM98\u0027.",
+    "FirmwareRevision": "",
+    "Manufacturer": "",
+    "Model": "",
+    "Imei": null,
+    "Ccid": null,
+    "Cim": null,
+    "Cpin": null,
+    "Qsimstat": null,
+    "Cfun": null,
+    "Csq": null,
+    "CsqRssi": null,
+    "CsqBer": null,
+    "Cops": null,
+    "Creg": null,
+    "Cgreg": null,
+    "Cereg": null,
+    "Qnwinfo": null,
+    "NwscanMode": null,
+    "NwscanSeq": null,
+    "Ims": null,
+    "Band": null,
+    "Ratacqorder": null,
+    "UrcPortUsb": false,
+    "Findings": [],
+    "Ready": false,
+    "Score": 0,
+    "Results": []
+  },
+  {
+    "Port": "COM99",
+    "StartedAt": "2026-08-03T15:33:46.2223498+07:00",
+    "FinishedAt": "2026-08-03T15:33:46.2223658+07:00",
+    "Opened": false,
+    "OpenError": "Could not find file \u0027COM99\u0027.",
+    "FirmwareRevision": "",
+    "Manufacturer": "",
+    "Model": "",
+    "Imei": null,
+    "Ccid": null,
+    "Cim": null,
+    "Cpin": null,
+    "Qsimstat": null,
+    "Cfun": null,
+    "Csq": null,
+    "CsqRssi": null,
+    "CsqBer": null,
+    "Cops": null,
+    "Creg": null,
+    "Cgreg": null,
+    "Cereg": null,
+    "Qnwinfo": null,
+    "NwscanMode": null,
+    "NwscanSeq": null,
+    "Ims": null,
+    "Band": null,
+    "Ratacqorder": null,
+    "UrcPortUsb": false,
+    "Findings": [],
+    "Ready": false,
+    "Score": 0,
+    "Results": []
+  },
+  {
+    "Port": "COM100",
+    "StartedAt": "2026-08-03T15:33:46.2223723+07:00",
+    "FinishedAt": "2026-08-03T15:33:48.3014405+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "354245971207033",
+    "Ccid": "89840200011833719261",
+    "Cim": "452021183371926",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "0,0",
+    "Cereg": "0,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0403010502",
+    "Ims": "0",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00270,0\u0027 CEREG=\u00270,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "354245971207033\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCCID: 89840200011833719261\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371926\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0403010502\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCFG: \u0022ims\u0022,0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 31,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM101",
+    "StartedAt": "2026-08-03T15:33:48.3016686+07:00",
+    "FinishedAt": "2026-08-03T15:33:50.3886781+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "352981117735402",
+    "Ccid": "89840200011833719279",
+    "Cim": "452021183371927",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "352981117735402\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCCID: 89840200011833719279\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "452021183371927\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 31,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM102",
+    "StartedAt": "2026-08-03T15:33:50.3889178+07:00",
+    "FinishedAt": "2026-08-03T15:33:52.4677794+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "356890201226234",
+    "Ccid": "89840200011833719527",
+    "Cim": "452021183371952",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "356890201226234\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCCID: 89840200011833719527\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "452021183371952\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 32,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM103",
+    "StartedAt": "2026-08-03T15:33:52.4679202+07:00",
+    "FinishedAt": "2026-08-03T15:33:54.5457052+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "359182111833201",
+    "Ccid": "89840200011833719519",
+    "Cim": "452021183371951",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "359182111833201\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCCID: 89840200011833719519\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371951\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 31,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  },
+  {
+    "Port": "COM104",
+    "StartedAt": "2026-08-03T15:33:54.5457975+07:00",
+    "FinishedAt": "2026-08-03T15:33:56.6181974+07:00",
+    "Opened": true,
+    "OpenError": null,
+    "FirmwareRevision": "EC20CEFILGR06A05M1G",
+    "Manufacturer": "Quectel",
+    "Model": "EC20F",
+    "Imei": "356847842547964",
+    "Ccid": "89840200011833719493",
+    "Cim": "452021183371949",
+    "Cpin": "READY",
+    "Qsimstat": "1,1",
+    "Cfun": "4",
+    "Csq": "99,99",
+    "CsqRssi": 99,
+    "CsqBer": 99,
+    "Cops": "0",
+    "Creg": "0,0",
+    "Cgreg": "2,0",
+    "Cereg": "2,0",
+    "Qnwinfo": "No Service",
+    "NwscanMode": "0",
+    "NwscanSeq": "0302010405",
+    "Ims": "1",
+    "Band": "0x493",
+    "Ratacqorder": "",
+    "UrcPortUsb": false,
+    "Findings": [
+      "CFUN=4 (airplane). Modem RF OFF.",
+      "Not registered anywhere: CREG=\u00270,0\u0027 CGREG=\u00272,0\u0027 CEREG=\u00272,0\u0027",
+      "CSQ=99 (unknown).",
+      "band=\u00270x493\u0027 does not include common VN LTE bands (1/3/7/8/28/40)."
+    ],
+    "Ready": false,
+    "Score": 50,
+    "Results": [
+      {
+        "Key": "identity",
+        "Command": "AT",
+        "Status": "ok",
+        "ElapsedMs": 29,
+        "Response": "OK"
+      },
+      {
+        "Key": "revision",
+        "Command": "AT\u002BCGMR",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "EC20CEFILGR06A05M1G\r\n\r\nOK"
+      },
+      {
+        "Key": "manufacturer",
+        "Command": "AT\u002BCGMI",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "Quectel\r\n\r\nOK"
+      },
+      {
+        "Key": "model",
+        "Command": "AT\u002BCGMM",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "EC20F\r\n\r\nOK"
+      },
+      {
+        "Key": "imei",
+        "Command": "AT\u002BGSN",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "356847842547964\r\n\r\nOK"
+      },
+      {
+        "Key": "cfun",
+        "Command": "AT\u002BCFUN?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCFUN: 4\r\n\r\nOK"
+      },
+      {
+        "Key": "cpin",
+        "Command": "AT\u002BCPIN?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCPIN: READY\r\n\r\nOK"
+      },
+      {
+        "Key": "qsimstat",
+        "Command": "AT\u002BQSIMSTAT?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQSIMSTAT: 1,1\r\n\r\nOK"
+      },
+      {
+        "Key": "ccid",
+        "Command": "AT\u002BQCCID",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCCID: 89840200011833719493\r\n\r\nOK"
+      },
+      {
+        "Key": "cim",
+        "Command": "AT\u002BCIMI",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "452021183371949\r\n\r\nOK"
+      },
+      {
+        "Key": "csq",
+        "Command": "AT\u002BCSQ",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCSQ: 99,99\r\n\r\nOK"
+      },
+      {
+        "Key": "cops",
+        "Command": "AT\u002BCOPS?",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BCOPS: 0\r\n\r\nOK"
+      },
+      {
+        "Key": "creg",
+        "Command": "AT\u002BCREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCREG: 0,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cgreg",
+        "Command": "AT\u002BCGREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCGREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "cereg",
+        "Command": "AT\u002BCEREG?",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BCEREG: 2,0\r\n\r\nOK"
+      },
+      {
+        "Key": "qnwinfo",
+        "Command": "AT\u002BQNWINFO",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQNWINFO: No Service\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanmode",
+        "Command": "AT\u002BQCFG=\u0022nwscanmode\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022nwscanmode\u0022,0\r\n\r\nOK"
+      },
+      {
+        "Key": "nwscanseq",
+        "Command": "AT\u002BQCFG=\u0022nwscanseq\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQCFG: \u0022nwscanseq\u0022,0302010405\r\n\r\nOK"
+      },
+      {
+        "Key": "ims",
+        "Command": "AT\u002BQCFG=\u0022ims\u0022",
+        "Status": "ok",
+        "ElapsedMs": 30,
+        "Response": "\u002BQCFG: \u0022ims\u0022,1,0\r\n\r\nOK"
+      },
+      {
+        "Key": "band",
+        "Command": "AT\u002BQCFG=\u0022band\u0022",
+        "Status": "ok",
+        "ElapsedMs": 32,
+        "Response": "\u002BQCFG: \u0022band\u0022,0x493,0x1e200000095,0x21\r\n\r\nOK"
+      },
+      {
+        "Key": "ratacqorder",
+        "Command": "AT\u002BQCFG=\u0022ratacqorder\u0022",
+        "Status": "error",
+        "ElapsedMs": 31,
+        "Response": "ERROR"
+      },
+      {
+        "Key": "urcport",
+        "Command": "AT\u002BQURCCFG=\u0022urcport\u0022",
+        "Status": "ok",
+        "ElapsedMs": 31,
+        "Response": "\u002BQURCCFG: \u0022urcport\u0022,\u0022uart1\u0022\r\n\r\nOK"
+      }
+    ]
+  }
+]

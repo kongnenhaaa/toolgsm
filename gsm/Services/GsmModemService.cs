@@ -6151,6 +6151,70 @@ public class GsmModemService : IGsmModemService
                 ? $"[SMS_SIM_STORAGE_CRITICAL] Bộ nhớ SIM {used}/{total} ({percent}%); tin mới có thể bị modem từ chối trước khi vào tool."
                 : $"[SMS_SIM_STORAGE] Bộ nhớ SIM {used}/{total} ({percent}%)."
         });
+
+        // Khi vượt ngưỡng critical, tự xóa toàn bộ SMS trên SIM + ME để giải
+        // phóng bộ nhớ: tránh modem ngừng nhận tin mới và gây miss SMS khi tool
+        // chạy lâu dài mà không reconnect. Lệnh tương đương SAuto init sequence
+        // (CMGD=1,4 trên SM rồi ME) nhưng chạy runtime, không cần cắm lại cổng.
+        if (percent >= SimStorageCriticalPercent)
+        {
+            _ = Task.Run(async () => await PurgeFullSmsStorageAsync(portName, used, total));
+        }
+    }
+
+    private async Task PurgeFullSmsStorageAsync(string portName, int usedBefore, int totalBefore)
+    {
+        try
+        {
+            if (!_serialPorts.ContainsKey(portName))
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_SIM_PURGE_SKIPPED] cổng đã đóng; bỏ qua giải phóng bộ nhớ."
+                });
+                return;
+            }
+
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[SMS_SIM_PURGE_START] trước={usedBefore}/{totalBefore}; xóa toàn bộ SM rồi ME để giải phóng bộ nhớ."
+            });
+
+            await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5_000, silent: true);
+            await SendCommandAsync(portName, "AT+CMGD=1,4", 10_000, silent: true);
+            await SendCommandAsync(portName, "AT+CPMS=\"ME\",\"ME\",\"ME\"", 5_000, silent: true);
+            await SendCommandAsync(portName, "AT+CMGD=1,4", 10_000, silent: true);
+            await SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5_000, silent: true);
+
+            string after = await SendCommandAsync(portName, "AT+CPMS?", 5_000, silent: true);
+            if (TryParseSimStorageUsage(after, out int usedAfter, out int totalAfter))
+            {
+                int percentAfter = (int)Math.Round(usedAfter * 100d / totalAfter, MidpointRounding.AwayFromZero);
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_SIM_PURGE_DONE] sau={usedAfter}/{totalAfter} ({percentAfter}%); công cụ sẽ tiếp tục nhận SMS bình thường."
+                });
+            }
+            else
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_SIM_PURGE_DONE] sau=x; không đọc lại được AT+CPMS? nhưng lệnh CMGD đã hoàn tất."
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[SMS_SIM_PURGE_FAILED] {ex.GetType().Name}: {ex.Message}"
+            });
+        }
     }
 
     internal static bool TryParseSimStorageUsage(

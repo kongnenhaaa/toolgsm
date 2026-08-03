@@ -1639,27 +1639,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return $"{log.Time} {log.Level} {log.Message}";
     }
 
-    // Commit the complete decoded SMS to durable storage before allowing the
-    // modem service to delete the corresponding record from the SIM.
+    // Show the decoded SMS in the in-memory inbox. The record is intentionally
+    // NOT written to any file: the operator policy is that no SMS payload may
+    // be persisted to disk. OTP extraction, Telegram/Firebase/Webhook side
+    // effects and UI population still run from the callers.
     private bool TryPersistAndAddSms(
         SmsInboxRecord record,
         out SmsMessage? message)
     {
         message = null;
-
-        try
-        {
-            // Append flushes the record to disk before returning. A false result
-            // means this exact DeliveryId was already committed safely.
-            _smsInboxStore.Append(record);
-        }
-        catch (Exception ex)
-        {
-            AddLog(
-                $"[{record.PortName}] [SMS_INBOX_PERSIST_RETRY] delivery={record.DeliveryId}; {ex.GetType().Name}: {ex.Message}; giữ SMS trên SIM để thử lại.",
-                "ERROR");
-            return false;
-        }
 
         // A retry during this process must not duplicate the UI row or repeat
         // sounds, webhooks, OTP history or carrier-state side effects.
@@ -1675,30 +1663,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void LoadDurableSmsInbox()
     {
-        try
-        {
-            SmsMessages.Clear();
-            foreach (SmsInboxRecord record in _smsInboxStore.GetRecent(MaxSmsMessagesInMemory))
-                SmsMessages.Add(ToSmsMessage(record));
-
-            foreach (string warning in _smsInboxStore.RecoveryWarnings)
-                AddLog($"[SMS_INBOX_RECOVERY] {warning}", "WARNING");
-
-            if (SmsMessages.Count > 0)
-            {
-                AddLog(
-                    $"[SMS_INBOX_LOADED] Đã khôi phục {SmsMessages.Count} SMS từ {_smsInboxStore.DirectoryPath}.",
-                    "INFO");
-            }
-        }
-        catch (Exception ex)
-        {
-            // Keep operating, but no SIM record will be acknowledged/deleted
-            // unless a later durable append succeeds.
-            AddLog(
-                $"[SMS_INBOX_LOAD_FAILED] {ex.GetType().Name}: {ex.Message}; SMS mới vẫn được giữ trên SIM nếu chưa ghi được.",
-                "ERROR");
-        }
+        // No durable SMS storage on disk by policy. SMS shown in the UI is the
+        // set received during the current process only.
+        SmsMessages.Clear();
     }
 
     private void InsertSmsMessageBounded(SmsMessage message)

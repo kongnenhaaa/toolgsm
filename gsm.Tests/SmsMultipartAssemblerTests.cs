@@ -18,6 +18,20 @@ public class SmsMultipartAssemblerTests
     }
 
     [Fact]
+    public void TextModeGsm7SpecialCharacters_AreRestoredFromRawGsmCodes()
+    {
+        const string raw = "+CMGR: \"REC UNREAD\",\"888\",,\"27/07/26,14:22:00+28\"\r\n"
+            + "P#\u0000\u0011\u001B=q8\r\nOK\r\n";
+
+        DecodedSmsBody result = SmsBodyDecoder.Decode(raw);
+
+        Assert.Equal("P#@_~q8", result.Content);
+        Assert.DoesNotContain('\u0000', result.Content);
+        Assert.DoesNotContain('\u0011', result.Content);
+        Assert.DoesNotContain('\u001B', result.Content);
+    }
+
+    [Fact]
     public void FullGsm7DeliverPdu_IsDecodedInsteadOfExposedAsHex()
     {
         const string pdu = "069148192050444006D0381C0E000062707180817582A00500035D02015054610A347D83D0F53A08160331D3E3B27B5E06CDEB2072DD7D06ADD16FF719744EBFD32074D80D72BFD32072DD7D0641E5E576BADE06D1E56537C85D7683E861F71964153E9FCB39C81E06C560B0A610440ED3C32F190D0D5AA3D3203ABA5E0689C36F108E96A3D16A385B8C4603CDDF6137C82A7CD640E77A1A84C3E15CA061FD3D06D55C";
@@ -30,6 +44,16 @@ public class SmsMultipartAssemblerTests
         Assert.Equal(2, result.Concatenation?.Total);
         Assert.NotNull(result.Concatenation);
         Assert.NotEqual("Unknown", result.Sender);
+    }
+
+    [Fact]
+    public void Gsm7DefaultAndExtensionCharacters_AreDecodedWithoutBeingLost()
+    {
+        const string expected = "#@_!$%&*+-./:;<=>?^{}\\[~]|\u20AC";
+        DecodedSmsBody result = SmsBodyDecoder.Decode(BuildGsm7DeliverPdu(expected));
+
+        Assert.Equal(expected, result.Content);
+        Assert.DoesNotContain('\u001B', result.Content);
     }
 
     [Fact]
@@ -681,6 +705,63 @@ public class SmsMultipartAssemblerTests
             0x04,                         // 8-bit data
             0x62, 0x70, 0x72, 0x20, 0x10, 0x10, 0x00,
             (byte)payload.Length
+        };
+        pdu.AddRange(payload);
+        return Convert.ToHexString(pdu.ToArray());
+    }
+
+    private static string BuildGsm7DeliverPdu(string content)
+    {
+        const string alphabet = "@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e\u001b\u00c6\u00e6\u00df\u00c9 !\"#\u00a4%&'()*+,-./0123456789:;<=>?\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bfabcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0";
+        var septets = new List<int>();
+        foreach (char character in content)
+        {
+            int? extension = character switch
+            {
+                '^' => 0x14,
+                '{' => 0x28,
+                '}' => 0x29,
+                '\\' => 0x2F,
+                '[' => 0x3C,
+                '~' => 0x3D,
+                ']' => 0x3E,
+                '|' => 0x40,
+                '\u20AC' => 0x65,
+                _ => null
+            };
+            if (extension.HasValue)
+            {
+                septets.Add(0x1B);
+                septets.Add(extension.Value);
+                continue;
+            }
+
+            int value = alphabet.IndexOf(character);
+            Assert.True(value >= 0, $"Test character '{character}' is not in the GSM-7 fixture alphabet.");
+            septets.Add(value);
+        }
+
+        var payload = new byte[(septets.Count * 7 + 7) / 8];
+        for (int i = 0; i < septets.Count; i++)
+        {
+            int bit = i * 7;
+            int index = bit / 8;
+            int shift = bit % 8;
+            payload[index] |= (byte)(septets[i] << shift);
+            if (shift > 1)
+                payload[index + 1] |= (byte)(septets[i] >> (8 - shift));
+        }
+
+        var pdu = new List<byte>
+        {
+            0x00,                         // no SMSC address
+            0x00,                         // SMS-DELIVER, no UDH
+            0x0A, 0x91,                   // 10-digit international sender
+            0x48, 0x09, 0x21, 0x43, 0x65,
+            0x00,                         // PID
+            0x00,                         // DCS: GSM 7-bit default alphabet
+            0x62, 0x70, 0x72, 0x20, 0x10, 0x10, 0x00,
+            (byte)septets.Count
         };
         pdu.AddRange(payload);
         return Convert.ToHexString(pdu.ToArray());

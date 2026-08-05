@@ -16,6 +16,9 @@ namespace gsm
         private RealDeviceSmokeTestRunner? _realDeviceSmokeRunner;
         private CancellationTokenSource? _realDeviceSmokeCts;
         private Task? _realDeviceSmokeTask;
+        private ToolGsmApiService? _toolGsmApiService;
+        private CancellationTokenSource? _toolGsmApiCts;
+        private Task? _toolGsmApiTask;
 
         public App()
         {
@@ -55,6 +58,7 @@ namespace gsm
             serviceCollection.AddSingleton<IGsmBackgroundSupervisor, GsmBackgroundSupervisor>();
             serviceCollection.AddSingleton<MainViewModel>();
             serviceCollection.AddSingleton<RealDeviceSmokeTestRunner>();
+            serviceCollection.AddSingleton<ToolGsmApiService>();
             serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();
             serviceCollection.AddSingleton<IAudioService, AudioService>();
             serviceCollection.AddSingleton<INotifyService, NotifyService>();
@@ -82,6 +86,13 @@ namespace gsm
             _realDeviceSmokeTask = _realDeviceSmokeRunner
                 .RunIfRequestedAsync(e.Args, _realDeviceSmokeCts.Token);
             _ = ObserveRealDeviceSmokeTaskAsync(_realDeviceSmokeTask);
+
+            _toolGsmApiService = _serviceProvider
+                .GetRequiredService<ToolGsmApiService>();
+            _toolGsmApiCts = new CancellationTokenSource();
+            _toolGsmApiTask = _toolGsmApiService
+                .RunAsync(_toolGsmApiCts.Token);
+            _ = ObserveToolGsmApiTaskAsync(_toolGsmApiTask);
         }
 
         private async Task ObserveRealDeviceSmokeTaskAsync(Task task)
@@ -98,6 +109,23 @@ namespace gsm
             catch (Exception ex)
             {
                 LogCrash(ex, "Real_Device_Smoke_Runner");
+            }
+        }
+
+        private async Task ObserveToolGsmApiTaskAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                _mainViewModel?.AddLog(
+                    $"[LOCAL_API_FAILED] {ex.Message}", "ERROR");
+                LogCrash(ex, "ToolGSM_Local_API");
             }
         }
 
@@ -162,7 +190,12 @@ namespace gsm
         {
             try
             {
+                try { _toolGsmApiCts?.Cancel(); } catch { }
                 try { _realDeviceSmokeCts?.Cancel(); } catch { }
+
+                WaitForTaskBounded(
+                    _toolGsmApiTask,
+                    TimeSpan.FromSeconds(5));
 
                 // Give the runner's cancellation path time to issue ATH, confirm
                 // an empty CLCC snapshot and persist Ambiguous/Cancelled before
@@ -194,6 +227,11 @@ namespace gsm
                 _realDeviceSmokeCts = null;
                 _realDeviceSmokeTask = null;
                 _realDeviceSmokeRunner = null;
+
+                _toolGsmApiCts?.Dispose();
+                _toolGsmApiCts = null;
+                _toolGsmApiTask = null;
+                _toolGsmApiService = null;
 
                 // Không gọi MainViewModel.Dispose() trực tiếp: ServiceProvider sở hữu
                 // singleton này và là đường cleanup duy nhất của App.

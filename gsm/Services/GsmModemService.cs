@@ -9182,6 +9182,29 @@ public class GsmModemService : IGsmModemService
     internal const string SmsChannelRecoveryRequiredMarker =
         "[SMS_CHANNEL_RECOVERY_REQUIRED]";
 
+    /// <summary>
+    /// Returns true when the message can be entered through the modem's IRA
+    /// terminal character set and converted by the modem to GSM 03.38.
+    ///
+    /// IRA is required for ASCII symbols whose raw byte value differs from the
+    /// GSM alphabet. For example, the modem converts literal '[' and ']' to the
+    /// GSM extension sequences instead of interpreting 0x5B/0x5D as 'Ä'/'Ñ'.
+    /// </summary>
+    internal static bool CanSendSmsInIraTextMode(string? message)
+    {
+        foreach (char character in message ?? string.Empty)
+        {
+            // GSM 03.38 can represent printable IRA characters except the
+            // grave accent. CR/LF are also valid SMS text controls.
+            bool isRepresentable = character is '\n' or '\r'
+                || (character >= ' ' && character <= '~' && character != '`');
+            if (!isRepresentable)
+                return false;
+        }
+
+        return true;
+    }
+
     internal static int GetSmsPayloadTimeoutMs(int requestedTimeoutMs) =>
         Math.Max(requestedTimeoutMs, MinimumSmsPayloadTimeoutMs);
 
@@ -9227,9 +9250,9 @@ public class GsmModemService : IGsmModemService
             if (!channelPrepared)
                 return "ERROR: Modem channel cleanup failed before SMS";
 
-        // Kiểm tra xem message có ký tự nằm ngoài bảng mã GSM cơ bản hay không
-        // (Sử dụng cách kiểm tra đơn giản: nếu có bất kỳ ký tự nào > 127 thì coi là Unicode)
-        bool isGsm = (message ?? "").All(c => c <= 127);
+        // Use IRA for ASCII text so the modem converts GSM-extension symbols
+        // such as [ and ] correctly instead of sending them as Ä and Ñ.
+        bool isGsm = CanSendSmsInIraTextMode(message);
         int maxLen = isGsm ? MaxGsmPartLength : MaxUcs2PartLength;
         int maxChunk = isGsm ? MaxGsmChunkBodyLength : MaxUcs2ChunkBodyLength;
 
@@ -9482,7 +9505,7 @@ public class GsmModemService : IGsmModemService
             {
                 setupResponse = await SendInnerAsync("AT+CSMP=17,167,0,0", ct);
                 if (IsSmsSetupFailure(setupResponse)) return setupResponse;
-                setupResponse = await SendInnerAsync("AT+CSCS=\"GSM\"", ct);
+                setupResponse = await SendInnerAsync("AT+CSCS=\"IRA\"", ct);
                 if (IsSmsSetupFailure(setupResponse)) return setupResponse;
             }
             else
@@ -9545,7 +9568,7 @@ public class GsmModemService : IGsmModemService
             {
                 AtCommandTraceLogger.Tx(
                     portName,
-                    $"[SMS_PAYLOAD chars={message.Length}]<CTRL-Z>");
+                    $"[SMS_IRA_PAYLOAD chars={message.Length}]<CTRL-Z>");
                 sp.Write(message + "\x1A");
             }
             else

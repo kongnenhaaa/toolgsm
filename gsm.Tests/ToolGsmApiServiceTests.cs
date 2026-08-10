@@ -22,7 +22,7 @@ public sealed class ToolGsmApiServiceTests
         Assert.Equal("COM11", response.PortName);
         Assert.Single(host.Sends);
         Assert.Equal(
-            ("COM11", "84362669166", "[Zalo] 3zJzYNy2N320f9WhqHn82M3B4EoxcKXa"),
+            ("COM11", "0362669166", "[Zalo] 3zJzYNy2N320f9WhqHn82M3B4EoxcKXa"),
             host.Sends.Single());
     }
 
@@ -39,6 +39,31 @@ public sealed class ToolGsmApiServiceTests
 
         Assert.True(first.Ok);
         Assert.True(second.Ok);
+        Assert.False(first.Duplicate);
+        Assert.True(second.Duplicate);
+        Assert.Single(host.Sends);
+    }
+
+    [Fact]
+    public async Task SubmitSms_UncertainPayloadIsCachedWithoutResend()
+    {
+        const string uncertainResult =
+            "ERROR: [SMS_PAYLOAD_SUBMITTED] [SMS_CHANNEL_RECOVERY_REQUIRED] Timeout sending SMS payload; SMS result uncertain";
+        var host = new FakeApiHost(
+            [new ToolGsmApiPort("COM8", 8, "+84912345678", true)],
+            [uncertainResult]);
+        var service = new ToolGsmApiService(host);
+        ToolGsmSmsRequest request = Request();
+
+        ToolGsmSmsResponse first = await service.SubmitSmsAsync(request);
+        ToolGsmSmsResponse second = await service.SubmitSmsAsync(request);
+
+        Assert.False(first.Ok);
+        Assert.False(second.Ok);
+        Assert.Equal("maybe_sent", first.Status);
+        Assert.Equal("maybe_sent", second.Status);
+        Assert.Equal(202, first.HttpStatusCode);
+        Assert.Equal(202, second.HttpStatusCode);
         Assert.False(first.Duplicate);
         Assert.True(second.Duplicate);
         Assert.Single(host.Sends);

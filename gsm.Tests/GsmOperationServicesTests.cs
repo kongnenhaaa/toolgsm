@@ -514,12 +514,12 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
-    public async Task Sms_ChannelRecoveryFailure_KeepsEstablishedPortOnlineWithoutResendingPayload()
+    public async Task Sms_PayloadSubmittedUncertain_DoesNotRetryOrRequestReconnect()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM120", CcidA);
         const string uncertainResult =
-            "ERROR: Timeout sending SMS payload; SMS channel recovery failed";
+            "ERROR: [SMS_PAYLOAD_SUBMITTED] [SMS_CHANNEL_RECOVERY_REQUIRED] Timeout sending SMS payload; SMS result uncertain";
         var modem = new FakeGsmModemService
         {
             SmsHandler = (_, _, _) => Task.FromResult(uncertainResult)
@@ -539,12 +539,12 @@ public sealed class GsmOperationServicesTests
     }
 
     [Fact]
-    public async Task Sms_ChannelRecoveryFailure_NeverInvokesReconnectHandler()
+    public async Task Sms_PayloadSubmittedUncertain_NeverInvokesReconnectHandler()
     {
         using var sessions = new PortSessionRegistry();
         sessions.Begin("COM121", CcidA);
         const string uncertainResult =
-            "ERROR: Timeout sending SMS payload; SMS channel recovery failed";
+            "ERROR: [SMS_PAYLOAD_SUBMITTED] [SMS_CHANNEL_RECOVERY_REQUIRED] Timeout sending SMS payload; SMS result uncertain";
         var modem = new FakeGsmModemService
         {
             SmsHandler = (_, _, _) => Task.FromResult(uncertainResult),
@@ -611,11 +611,21 @@ public sealed class GsmOperationServicesTests
     }
 
     [Theory]
-    [InlineData(30_000, 90_000)]
-    [InlineData(90_000, 90_000)]
+    [InlineData(30_000, 45_000)]
+    [InlineData(45_000, 45_000)]
     [InlineData(120_000, 120_000)]
-    public void Sms_PayloadTimeout_WaitsAtLeastNinetySeconds(int requested, int expected) =>
+    public void Sms_PayloadTimeout_UsesMinimumSafetyWindow(int requested, int expected) =>
         Assert.Equal(expected, GsmModemService.GetSmsPayloadTimeoutMs(requested));
+
+    [Theory]
+    [InlineData(false, 30_000)]
+    [InlineData(true, 5_000)]
+    public void Sms_ChannelCleanup_KeepsStopFastButFullyVerifiesTimeout(
+        bool cancellationRequested,
+        int expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.GetSmsChannelCleanupTimeoutMs(cancellationRequested));
 
     [Theory]
     [InlineData("OK")]

@@ -186,7 +186,12 @@ public sealed class ToolGsmApiService
         CancellationToken cancellationToken)
     {
         string sourcePhone = MyVnptService.NormalizePhone(request.SourcePhone);
-        string destination = NormalizeVietnamPhone(request.Destination);
+        // Keep the destination in domestic 0xxxxxxxxx form for text-mode
+        // AT+CMGS. MyVnptService.NormalizePhone() is intentionally used for
+        // matching the source SIM, but its 84xxxxxxxxx output without a '+'
+        // makes the modem use the national TON/NPI for an international-looking
+        // number and can result in +CMS ERROR: 350.
+        string destination = NormalizeVietnamSmsDestination(request.Destination);
         IReadOnlyList<ToolGsmApiPort> matching = _host.GetPorts()
             .Where(port => string.Equals(
                 MyVnptService.NormalizePhone(port.PhoneNumber),
@@ -337,6 +342,14 @@ public sealed class ToolGsmApiService
 
     private static string NormalizeVietnamPhone(string? value) =>
         MyVnptService.NormalizePhone(value);
+
+    private static string NormalizeVietnamSmsDestination(string? value)
+    {
+        string normalized = MyVnptService.NormalizePhone(value);
+        return normalized.StartsWith("84", StringComparison.Ordinal)
+            ? "0" + normalized[2..]
+            : normalized;
+    }
 
     private static string[] ResolveUrls()
     {

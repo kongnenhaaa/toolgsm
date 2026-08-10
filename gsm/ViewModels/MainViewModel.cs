@@ -2250,7 +2250,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return false;
     }
 
-    private void ScheduleServiceReconnectRetry(string portName)
+    private void ScheduleServiceReconnectRetry(
+        string portName,
+        string? requeueMessage = null)
     {
         if (!_serviceReconnectRetryOwners.TryAdd(portName, 0)) return;
         _targetedRecoveryPorts[portName] = 0;
@@ -2266,7 +2268,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         portName,
                         StringComparison.OrdinalIgnoreCase)))
                 {
-                    AddLog($"[{portName}] [PORT_RECONNECT_REQUEUE] Reconnect trực tiếp thất bại; chuyển sang recovery riêng COM có backoff.", "WARN");
+                    AddLog(
+                        requeueMessage
+                            ?? $"[{portName}] [PORT_RECONNECT_REQUEUE] Reconnect trực tiếp thất bại; chuyển sang recovery riêng COM có backoff.",
+                        "WARN");
                     await RefreshPortAsync(portName);
                 }
             }
@@ -3664,8 +3669,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
             && Services.ImeiManagementService.AreEquivalentImei(current, verified);
     }
 
+    internal static bool IsFinalSmsChannelRecoveryFailure(string? data) =>
+        (data ?? string.Empty).StartsWith(
+            "[SMS_CHANNEL_RECOVERY_FAILED]",
+            StringComparison.Ordinal);
+
     private void ModemService_PortDisconnected(object? sender, GsmDataEventArgs e)
     {
+        // Only the final, isolated ESC/AT verification may request a reconnect.
+        // The earlier SMS_CHANNEL_RECOVERY_REQUIRED diagnostic must leave the
+        // active COM/SIM row untouched while the modem service cleans its UART.
+        if (IsFinalSmsChannelRecoveryFailure(e.Data))
+        {
+            _targetedRecoveryPorts[e.PortName] = 0;
+            ScheduleServiceReconnectRetry(
+                e.PortName,
+                $"[{e.PortName}] [SMS_CHANNEL_RECONNECT] Xác minh cuối không phục hồi được kênh lệnh; mở lại riêng COM.");
+        }
+
         bool targetedRecovery = _targetedRecoveryPorts.ContainsKey(e.PortName);
         var resettingPort = Ports.FirstOrDefault(port => port.PortName == e.PortName);
         if (!targetedRecovery && resettingPort?.IsRebooting != true)

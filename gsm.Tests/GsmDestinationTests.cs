@@ -29,6 +29,19 @@ public sealed class GsmDestinationTests
     }
 
     [Theory]
+    [InlineData("02873079214", "+842873079214")]
+    [InlineData("842873079214", "+842873079214")]
+    [InlineData("+842873079214", "+842873079214")]
+    [InlineData("0912345678", "0912345678")]
+    public void Dial_NormalizesVietnameseFixedLineForModem(
+        string input,
+        string expected)
+    {
+        Assert.True(GsmDestination.TryNormalizeDial(input, out string actual));
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
     [InlineData("900\rAT+CFUN=0")]
     [InlineData("900\nAT+CFUN=0")]
     [InlineData("900;AT+CFUN=0")]

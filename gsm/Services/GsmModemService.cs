@@ -9014,12 +9014,27 @@ public class GsmModemService : IGsmModemService
         }
     }
 
-    public async Task<string> SendCommandAsync(
+    public Task<string> SendCommandAsync(
         string portName,
         string command,
         int timeoutMs = 5000,
         bool silent = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        SendCommandCoreAsync(
+            portName,
+            command,
+            timeoutMs,
+            silent,
+            signalDisconnectOnIoFailure: true,
+            ct: ct);
+
+    private async Task<string> SendCommandCoreAsync(
+        string portName,
+        string command,
+        int timeoutMs,
+        bool silent,
+        bool signalDisconnectOnIoFailure,
+        CancellationToken ct)
     {
         // Kéo dài thời gian chờ cho các lệnh đặc biệt
         // CUSD=1 opens an asynchronous network session. CUSD=2 only closes it and
@@ -9090,7 +9105,14 @@ public class GsmModemService : IGsmModemService
         catch (IOException ex)
         {
             AtCommandTraceLogger.Error(portName, $"{command}: {ex.Message}");
-            PortDisconnected?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = "Cáp bị rút khi đang gửi lệnh!" });
+            if (signalDisconnectOnIoFailure)
+            {
+                PortDisconnected?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = "Cáp bị rút khi đang gửi lệnh!"
+                });
+            }
             return $"ERROR: Rút cáp đột ngột - {ex.Message}";
         }
         finally
@@ -9178,6 +9200,7 @@ public class GsmModemService : IGsmModemService
     private const int MaxUcs2ChunkBodyLength = 60;
     private const int MinimumSmsPayloadTimeoutMs = 45_000;
     private const int SmsStopCleanupTimeoutMs = 5_000;
+    private const int SmsTimeoutCleanupTimeoutMs = 30_000;
     internal const string SmsPayloadSubmittedMarker = "[SMS_PAYLOAD_SUBMITTED]";
     internal const string SmsChannelRecoveryRequiredMarker =
         "[SMS_CHANNEL_RECOVERY_REQUIRED]";
@@ -9208,10 +9231,167 @@ public class GsmModemService : IGsmModemService
     internal static int GetSmsPayloadTimeoutMs(int requestedTimeoutMs) =>
         Math.Max(requestedTimeoutMs, MinimumSmsPayloadTimeoutMs);
 
+    internal static int GetSmsChannelCleanupTimeoutMs(bool cancellationRequested) =>
+        cancellationRequested
+            ? SmsStopCleanupTimeoutMs
+            : SmsTimeoutCleanupTimeoutMs;
+
+    internal static async Task<bool> VerifySmsChannelOrHandleFailureAsync(
+        Func<CancellationToken, Task<bool>> verifyChannelAsync,
+        Action<string> handleFailure,
+        CancellationToken ct)
+    {
+        bool channelClean;
+        try
+        {
+            channelClean = await verifyChannelAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            try { handleFailure(ex.GetType().Name); } catch { }
+            return false;
+        }
+
+        if (channelClean) return true;
+        try { handleFailure("FINAL_VERIFICATION_RETURNED_FALSE"); } catch { }
+        return false;
+    }
+
     internal static bool IsCleanSmsRecoveryProbe(string response) =>
         Regex.IsMatch(response, @"(?:^|\r?\n)OK(?:\r?\n|$)", RegexOptions.IgnoreCase)
         && !response.Contains("+CMGS:", StringComparison.OrdinalIgnoreCase)
         && !response.Contains("ERROR", StringComparison.OrdinalIgnoreCase);
+
+    private async Task<bool> VerifySmsCommandChannelAsync(
+        string portName,
+        CancellationToken ct)
+    {
+        if (!EnsurePortOpen(portName, out SerialPort? serialPort)
+            || serialPort == null
+            || !_semaphores.TryGetValue(portName, out SemaphoreSlim? semaphore))
+            return false;
+
+        // Ctrl+Z has already submitted the payload. ESC cannot recall it, but it
+        // can leave any stale text-entry state before the clean AT probes below.
+        await semaphore.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (!serialPort.IsOpen) return false;
+            AtCommandTraceLogger.Tx(portName, "<ESC>");
+            serialPort.Write(new byte[] { 27 }, 0, 1);
+        }
+        catch (IOException ex)
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"SMS_CHANNEL_FINAL_ESC_FAILED;{ex.Message}");
+            return false;
+        }
+        finally
+        {
+            semaphore.Release();
+        }
+
+        int consecutiveCleanProbes = 0;
+        for (int attempt = 1; attempt <= 4; attempt++)
+        {
+            string response = await SendCommandCoreAsync(
+                portName,
+                "AT",
+                3000,
+                silent: true,
+                signalDisconnectOnIoFailure: false,
+                ct: ct).ConfigureAwait(false);
+            if (IsCleanSmsRecoveryProbe(response))
+            {
+                consecutiveCleanProbes++;
+                if (consecutiveCleanProbes >= 2)
+                    return true;
+            }
+            else
+            {
+                consecutiveCleanProbes = 0;
+            }
+
+            if (attempt < 4)
+                await Task.Delay(250, ct).ConfigureAwait(false);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A failed initial SMS command-channel probe is not evidence that the
+    /// USB/COM connection was lost. Keep the established port session while
+    /// the outer SMS workflow performs its final bounded channel verification.
+    /// </summary>
+    internal void ReportSmsChannelRecoveryRequired(string portName)
+    {
+        try
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"{SmsChannelRecoveryRequiredMarker} Không nhận được xác nhận AT sạch sau khi gửi; đây không phải lỗi SIM, đang đồng bộ lại kênh lệnh COM."
+            });
+        }
+        catch { }
+    }
+
+    private void DisconnectUnrecoverableSmsChannel(
+        string portName,
+        string diagnostic)
+    {
+        try
+        {
+            AtCommandTraceLogger.Error(
+                portName,
+                $"SMS_CHANNEL_FINAL_RECOVERY_FAILED;action=RECONNECT_PORT;detail={diagnostic}");
+        }
+        catch { }
+        try
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = "[SMS_CHANNEL_RECOVERY_FAILED] Kênh lệnh COM vẫn không phản hồi sau xác minh cuối; đóng cổng để kết nối lại. Đây không phải lỗi SIM."
+            });
+        }
+        catch { }
+
+        // Removing the serial session first lets the normal watcher reopen it
+        // instead of seeing an AlreadyConnected entry and rebuilding a phantom
+        // row around the stale channel. Keep ConnectAll/TryConnectPort outside
+        // this disconnect+notification boundary so a newly opened generation
+        // cannot be invalidated by the stale SMS failure event.
+        try
+        {
+            lock (_connectLock)
+            {
+                if (!_serialPorts.ContainsKey(portName)) return;
+                Disconnect(portName);
+                try
+                {
+                    PortDisconnected?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = "[SMS_CHANNEL_RECOVERY_FAILED] COM mất phản hồi sau khi gửi SMS; đang kết nối lại riêng cổng."
+                    });
+                }
+                catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                AtCommandTraceLogger.Error(
+                    portName,
+                    $"SMS_CHANNEL_DISCONNECT_FAILED;{ex.GetType().Name}");
+            }
+            catch { }
+        }
+    }
 
     public async Task<string> SendSmsAsync(
         string portName,
@@ -9309,44 +9489,67 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
-            using var cleanupCts = new CancellationTokenSource(SmsStopCleanupTimeoutMs);
+            using var cleanupCts = new CancellationTokenSource(
+                GetSmsChannelCleanupTimeoutMs(ct.IsCancellationRequested));
             try
             {
                 // A stop before Ctrl+Z already sends ESC in SendSmsPartAsync;
                 // do not make the user wait for optional receive-mode restore.
                 // A payload submitted through Ctrl+Z still requires the bounded
-                // RF recovery below before the COM is reused.
+                // channel verification below before the COM is reused.
                 if (channelPrepared
                     && (radioRecoveryRequired || !ct.IsCancellationRequested))
                 {
                     if (radioRecoveryRequired)
                     {
-                        bool recovered = await RecoverSautoRadioServiceAsync(
+                        // The four initial probes did not prove a clean channel.
+                        // Before treating that as a lost COM, run the complete
+                        // ESC plus two clean AT responses while this SMS still
+                        // owns both foreground and background leases. This avoids
+                        // false failures from firmware that rejects CLCC/CUSD when
+                        // no call or USSD session exists, while preventing a queued
+                        // sweep/poll from consuming a late +CMGS/OK frame.
+                        bool recovered = await VerifySmsChannelOrHandleFailureAsync(
+                            token => VerifySmsCommandChannelAsync(portName, token),
+                            diagnostic => DisconnectUnrecoverableSmsChannel(
                                 portName,
-                                "SMS",
-                                "CANCELLED_AFTER_CTRL_Z",
-                                cleanupCts.Token)
-                            .ConfigureAwait(false);
-                        if (!recovered)
+                                diagnostic),
+                            cleanupCts.Token).ConfigureAwait(false);
+                        if (recovered)
                         {
-                            AtCommandTraceLogger.Error(
-                                portName,
-                                "SMS_STOP_RECOVERY_FAILED;next_operation_must_clean=true");
+                            try
+                            {
+                                LogMessage?.Invoke(this, new GsmDataEventArgs
+                                {
+                                    PortName = portName,
+                                    Data = "[SMS_CHANNEL_RECOVERED] Kênh lệnh COM đã sạch; giữ nguyên phiên COM/SIM hiện tại."
+                                });
+                            }
+                            catch { }
                         }
                     }
-
-                    await PrepareForegroundChannelAsync(
-                        portName,
-                        radioRecoveryRequired
-                            ? "IDLE_AFTER_SMS_STOP_RECOVERY"
-                            : "IDLE_AFTER_SMS",
-                        cleanupCts.Token).ConfigureAwait(false);
+                    else
+                    {
+                        await PrepareForegroundChannelAsync(
+                            portName,
+                            "IDLE_AFTER_SMS",
+                            cleanupCts.Token).ConfigureAwait(false);
+                    }
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 // Never resend an irreversible payload. The next queued
-                // operation must pass its own cleanup before transmitting.
+                // operation must not reach this stale channel. A timeout or
+                // exception during the final verification is itself a failed
+                // verification, so close the serial session before releasing
+                // the foreground/background leases.
+                if (radioRecoveryRequired)
+                {
+                    DisconnectUnrecoverableSmsChannel(
+                        portName,
+                        ex.GetType().Name);
+                }
             }
         }
     }
@@ -9437,8 +9640,9 @@ public class GsmModemService : IGsmModemService
 
             // Ctrl+Z has already ended text-entry mode. Sending ESC here cannot
             // recall the submitted payload and can make a late +CMS response leak
-            // into the next workflow. Probe command mode directly and let the
-            // outer workflow reset RF only if acknowledged probes cannot clean it.
+            // into the next workflow. Probe command mode directly; if these first
+            // probes fail, the outer workflow performs ESC plus a final isolated
+            // AT verification while all background work is still suspended.
 
             int consecutiveCleanProbes = 0;
             for (int attempt = 1; attempt <= 4; attempt++)
@@ -9478,18 +9682,10 @@ public class GsmModemService : IGsmModemService
                 await Task.Delay(250);
             }
 
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = "[SMS_RECOVERY_FAILED] Modem chưa về trạng thái lệnh AT sạch; tự động hủy phiên cổng để tránh treo."
-            });
-            // Phiên SMS treo không phục hồi được → fire PortDisconnected để
-            // MainViewModel invalidate session và không nhận lệnh mới cho đến khi Refresh.
-            PortDisconnected?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = "[SMS_RECOVERY_FAILED] Phiên SMS không phục hồi được; cổng bị đưa về Connecting."
-            });
+            // This is only the initial probe failure. The outer SMS workflow
+            // still owns the COM and performs the final bounded verification
+            // before deciding whether a real reconnect is necessary.
+            ReportSmsChannelRecoveryRequired(portName);
             return (false, null);
         }
 
@@ -9585,7 +9781,7 @@ public class GsmModemService : IGsmModemService
             payloadSubmitted = true;
 
             // Sau Ctrl+Z, nhà mạng/modem có thể cần lâu mới trả +CMGS/OK. Chờ tối thiểu
-            // 90 giây; nếu vẫn quá hạn thì không retry vì SMS có thể đã được nhận.
+            // 45 giây; nếu vẫn quá hạn thì không retry vì SMS có thể đã được nhận.
             // Cancellation stops future queue items, but Ctrl+Z is irreversible.
             // Keep this COM lease and drain the terminal SMS response briefly so
             // +CMGS/+CMS can never be consumed by the following USSD transaction.
@@ -9632,7 +9828,7 @@ public class GsmModemService : IGsmModemService
                 if (!recovered)
                 {
                     channelRecoveryRequired = true;
-                    return $"ERROR: {SmsPayloadSubmittedMarker} {SmsChannelRecoveryRequiredMarker} {terminalReason}; SMS channel recovery failed";
+                    return $"ERROR: {SmsPayloadSubmittedMarker} {SmsChannelRecoveryRequiredMarker} {terminalReason}; SMS result uncertain";
                 }
 
                 return $"ERROR: {SmsPayloadSubmittedMarker} {terminalReason}";

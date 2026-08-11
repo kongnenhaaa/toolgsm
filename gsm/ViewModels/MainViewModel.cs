@@ -2262,6 +2262,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
+        var currentPort = GetPortsSnapshot().FirstOrDefault(p =>
+            p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+        if (currentPort != null
+            && string.IsNullOrWhiteSpace(ImeiProbe.ExtractImei(currentPort.Imei)))
+        {
+            string liveImei = await ReadLiveImeiAsync(
+                portName,
+                token,
+                attempts: 3);
+            if (!string.IsNullOrWhiteSpace(liveImei))
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    var livePort = Ports.FirstOrDefault(p =>
+                        p.PortName.Equals(portName, StringComparison.OrdinalIgnoreCase));
+                    if (livePort == null) return;
+                    livePort.Imei = liveImei;
+                    if (string.IsNullOrWhiteSpace(livePort.DeviceName)
+                        || livePort.DeviceName.Contains(
+                            "GSM Modem",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        livePort.DeviceName =
+                            Services.ImeiManagementService.GetDeviceNameFromImei(liveImei);
+                    }
+                });
+                AddLog(
+                    $"[{portName}] [IMEI_REFRESHED] Đã đọc lại IMEI {liveImei}.",
+                    "SUCCESS");
+            }
+            else
+            {
+                AddLog(
+                    $"[{portName}] [IMEI_READ_FAILED] AT+CGSN/AT+GSN không trả IMEI hợp lệ sau 3 lần; giữ nguyên kết nối SIM.",
+                    "WARN");
+            }
+        }
+
         await _modemService.SendCommandAsync(
             portName,
             "AT+ICCID",
@@ -2282,6 +2320,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ct: token);
         return true;
     }
+
+    private Task<string> ReadLiveImeiAsync(
+        string portName,
+        CancellationToken ct,
+        int attempts = 3) =>
+        ImeiProbe.ReadAsync(
+            (command, token) => _modemService.SendCommandAsync(
+                portName,
+                command,
+                4000,
+                silent: true,
+                ct: token),
+            attempts,
+            TimeSpan.FromMilliseconds(350),
+            ct);
 
     private (long Epoch, CancellationToken Token) StartSimSession(string portName, string ccid)
     {
@@ -2460,6 +2513,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         string portName = port.PortName;
         string currentImei = string.Empty;
+        string displayImei = string.Empty;
         bool pollingReady = false;
         if (!IsSimSessionCurrent(portName, ccid, epoch))
         {
@@ -2474,11 +2528,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             if (!IsSimSessionCurrent(portName, ccid, epoch)) return false;
 
-            currentImei = NormalizeImei(_modemService.GetObservedImei(portName));
-            if (!Services.ImeiManagementService.IsUsableObservedImei(currentImei))
-                currentImei = NormalizeImei(port.Imei);
-            if (!Services.ImeiManagementService.IsUsableObservedImei(currentImei))
-                currentImei = string.Empty;
+            displayImei = ImeiProbe.ExtractImei(
+                _modemService.GetObservedImei(portName));
+            if (string.IsNullOrWhiteSpace(displayImei))
+                displayImei = ImeiProbe.ExtractImei(port.Imei);
+            if (string.IsNullOrWhiteSpace(displayImei))
+            {
+                displayImei = await ReadLiveImeiAsync(
+                    portName,
+                    token,
+                    attempts: 3);
+            }
+
+            // Always display the exact 15 digits reported by the modem. Only a
+            // Luhn-usable value is used as a network-recovery expectation.
+            currentImei = Services.ImeiManagementService.IsUsableObservedImei(displayImei)
+                ? displayImei
+                : string.Empty;
 
             if (!IsSimSessionCurrent(portName, ccid, epoch)) return false;
 
@@ -2487,15 +2553,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (!IsSimSessionCurrent(portName, ccid, epoch)) return;
                 port.IsRebooting = false;
                 port.Serial = NormalizeCcid(ccid);
-                if (!string.IsNullOrWhiteSpace(currentImei))
-                    port.Imei = currentImei;
+                if (!string.IsNullOrWhiteSpace(displayImei))
+                    port.Imei = displayImei;
                 MarkPortReadyForNetwork(portName);
             });
             pollingReady = IsSimSessionCurrent(portName, ccid, epoch);
             if (pollingReady)
             {
                 AddLog(
-                    $"[{portName}] [SIM_AUTO_ACCEPT] CCID={NormalizeCcid(ccid)}; IMEI hiện có={(string.IsNullOrWhiteSpace(currentImei) ? "không đọc được" : currentImei)}; không tạo/khôi phục IMEI.",
+                    $"[{portName}] [SIM_AUTO_ACCEPT] CCID={NormalizeCcid(ccid)}; IMEI hiện có={(string.IsNullOrWhiteSpace(displayImei) ? "không đọc được" : displayImei)}; không tạo/khôi phục IMEI.",
                     "SUCCESS");
             }
             return pollingReady;

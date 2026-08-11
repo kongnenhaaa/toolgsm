@@ -82,6 +82,42 @@ public sealed class SautoInitializationSequenceTests
             expected,
             GsmModemService.GetHotplugReadOnlyImei(response));
 
+    [Fact]
+    public async Task ImeiProbe_RetriesThenUsesGsnFallback()
+    {
+        var commands = new List<string>();
+        int gsnCalls = 0;
+
+        string imei = await ImeiProbe.ReadAsync(
+            (command, _) =>
+            {
+                commands.Add(command);
+                if (command == "AT+GSN" && Interlocked.Increment(ref gsnCalls) == 2)
+                    return Task.FromResult("352590521091870\r\nOK");
+                return Task.FromResult("ERROR");
+            },
+            attempts: 3,
+            retryDelay: TimeSpan.Zero);
+
+        Assert.Equal("352590521091870", imei);
+        Assert.Equal(
+        [
+            "AT+CGSN", "AT+GSN",
+            "AT+CGSN", "AT+GSN"
+        ], commands);
+    }
+
+    [Theory]
+    [InlineData("352590521091870\r\nOK", "352590521091870")]
+    [InlineData("AT+CGSN\r\n352590521091870\r\nOK", "352590521091870")]
+    [InlineData("352590521091870\r\nERROR", "")]
+    [InlineData("12345678901234\r\nOK", "")]
+    [InlineData("1234567890123456\r\nOK", "")]
+    public void ImeiProbe_AcceptsOnlyExactSuccessfulFifteenDigitResponse(
+        string response,
+        string expected) =>
+        Assert.Equal(expected, ImeiProbe.ParseSuccessfulResponse(response));
+
     [Theory]
     [InlineData("+CME ERROR: 13", true)]
     [InlineData("\r\n+CME ERROR: 13\r\n", true)]

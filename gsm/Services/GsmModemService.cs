@@ -3907,28 +3907,25 @@ public class GsmModemService : IGsmModemService
                 $"HOTPLUG_RF_SKIPPED;reason=CFUN_QUERY_INVALID;result={GetSautoResponseOutcome(cfunResponse)}");
         }
 
-        string imei = string.Empty;
-        foreach (string command in new[] { "AT+CGSN", "AT+GSN" })
-        {
-            try
-            {
-                string response =
-                    await WriteSautoCommandForResponseWhileLockedAsync(
-                        portName,
-                        serialPort,
-                        command,
-                        TimeSpan.FromSeconds(3),
-                        operationToken);
-                imei = GetHotplugReadOnlyImei(response);
-                if (!string.IsNullOrWhiteSpace(imei)) break;
-            }
-            catch (TimeoutException)
-            {
-                // Read-only fallback below; failure never changes modem state.
-            }
-        }
+        string imei = await ImeiProbe.ReadAsync(
+            async (command, token) =>
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    command,
+                    TimeSpan.FromSeconds(3),
+                    token),
+            attempts: 3,
+            retryDelay: TimeSpan.FromMilliseconds(350),
+            cancellationToken: operationToken);
 
-        if (string.IsNullOrWhiteSpace(imei)) return;
+        if (string.IsNullOrWhiteSpace(imei))
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                "IMEI_READ_FAILED;commands=AT+CGSN,AT+GSN;attempts=3;modem_session_preserved=true");
+            return;
+        }
 
         bool imeiChanged = !string.Equals(
             GetSautoReceiveSnapshot(portName).Imei,

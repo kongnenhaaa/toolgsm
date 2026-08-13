@@ -90,6 +90,7 @@ internal sealed class SmsMultipartJournal
     private readonly object _gate = new();
     private readonly string _filePath;
     private readonly string _migrationManifestPath;
+    private readonly bool _inMemory;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private bool _loadFailed;
 
@@ -110,6 +111,15 @@ internal sealed class SmsMultipartJournal
         Load();
         ImportLegacyFiles(legacyPaths, stableJournalAlreadyExists);
     }
+
+    private SmsMultipartJournal()
+    {
+        _filePath = string.Empty;
+        _migrationManifestPath = string.Empty;
+        _inMemory = true;
+    }
+
+    internal static SmsMultipartJournal CreateInMemory() => new();
 
     public IReadOnlyList<Part> RecordAndGetParts(
         string scope,
@@ -936,7 +946,10 @@ internal sealed class SmsMultipartJournal
         SaveJsonAtomicallyLocked(_migrationManifestPath, manifest);
 
     private void SaveLocked()
-        => SaveJsonAtomicallyLocked(_filePath, _entries.Values.ToArray());
+    {
+        if (_inMemory) return;
+        SaveJsonAtomicallyLocked(_filePath, _entries.Values.ToArray());
+    }
 
     private static bool IsJournalReadWriteException(Exception ex) =>
         ex is JsonException

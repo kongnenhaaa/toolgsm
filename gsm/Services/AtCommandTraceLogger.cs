@@ -33,7 +33,9 @@ internal static class AtCommandTraceLogger
         Write("TX", portName, command);
 
     public static void Rx(string portName, string data) =>
-        Write("RX", portName, data);
+        // RX can contain +CMGR/+CMGL/+CMT payloads split at arbitrary byte
+        // boundaries. Store only the size so SMS content never reaches disk.
+        Write("RX", portName, $"[REDACTED chars={data?.Length ?? 0}]");
 
     public static void Timeout(string portName, string command) =>
         Write("TIMEOUT", portName, command);

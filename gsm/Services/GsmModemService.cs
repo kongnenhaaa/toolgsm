@@ -5,7 +5,6 @@ using System.IO;
 using System.IO.Ports;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Channels;
@@ -54,7 +53,9 @@ public interface IGsmModemService
         string portName,
         string expectedCcid,
         CancellationToken ct = default);
-    Task SweepUnreadSmsAsync(string portName);
+    Task SweepUnreadSmsAsync(
+        string portName,
+        CancellationToken ct = default);
     Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile);
     Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile);
     void StartPollingNetwork(
@@ -73,6 +74,11 @@ public interface IGsmModemService
     /// </summary>
     void SetSmsSimIdentity(string portName, string? ccid);
     List<string> GetAvailablePorts();
+    /// <summary>
+    /// Returns true only when this service currently owns an open handle for
+    /// the requested COM port. A row being visible in the UI is not enough.
+    /// </summary>
+    bool IsPortOpen(string portName);
     string ConnectAll(int baudRate = 115200);
     void Disconnect(string portName);
     void DisconnectAll();
@@ -115,9 +121,6 @@ public class GsmModemService : IGsmModemService
     private const int DirectCmtMaxPendingChars = 16 * 1024;
     private const int DirectCmtMaxDecodeAttempts = 4;
     private static readonly TimeSpan DirectCmtMaxPendingAge = TimeSpan.FromSeconds(12);
-    private const long DirectCmtQuarantineMaxBytes = 2L * 1024 * 1024;
-    private const int DirectCmtQuarantineArchiveCount = 3;
-    private const string DirectCmtQuarantineFileName = "sms_direct_quarantine.jsonl";
     private const string DirectCmtDecodeSentinel = "__TOOLGSM_DIRECT_CMT_BODY_END__";
 
     private static readonly Regex SmsMemoryFullRegex = new(
@@ -131,15 +134,6 @@ public class GsmModemService : IGsmModemService
         public int Attempts { get; set; }
         public int MaxObservedChars { get; set; }
     }
-
-    private sealed record DirectCmtQuarantineRecord(
-        DateTimeOffset QuarantinedAtUtc,
-        string PortName,
-        string Reason,
-        int Attempts,
-        int RawChars,
-        string Sha256,
-        string Raw);
 
     private sealed class SmsReadQueueState
     {
@@ -208,6 +202,8 @@ public class GsmModemService : IGsmModemService
     internal static IReadOnlyList<string> NofakeInitializationCommandOrder { get; } =
     [
         Uart1UrcRoutingCommand,
+        "AT+CGSN",
+        "AT+GSN",
         "AT+CPIN?"
     ];
 
@@ -799,6 +795,8 @@ public class GsmModemService : IGsmModemService
         CreateMultipartJournal();
     private readonly SmsSimCleanupJournal _simCleanupJournal =
         CreateSimCleanupJournal();
+    private readonly SmsDirectRecoveryStore _directRecoveryStore =
+        CreateDirectRecoveryStore();
     private readonly ConcurrentDictionary<string, DateTime> _deliveredStoredSms = new();
     private readonly ConcurrentDictionary<string, SmsReadQueueState> _smsReadQueues =
         new(StringComparer.OrdinalIgnoreCase);
@@ -814,7 +812,8 @@ public class GsmModemService : IGsmModemService
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DirectCmtRetryState> _directCmtRetryStates =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _directCmtQuarantineGate = new();
+    private readonly ConcurrentDictionary<string, byte> _directRecoveryReplayOwners =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _multipartReplayOwners =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _multipartCompletionRetryOwners =
@@ -884,6 +883,15 @@ public class GsmModemService : IGsmModemService
         string fallbackPath = Path.Combine(
             StableSmsDataDirectory, "sms_sim_cleanup_journal.pending.json");
         return new SmsSimCleanupJournal(primaryPath, fallbackPath);
+    }
+
+    private static SmsDirectRecoveryStore CreateDirectRecoveryStore()
+    {
+        string primaryPath = Path.Combine(
+            StableSmsDataDirectory, "sms_direct_recovery.json");
+        string fallbackPath = Path.Combine(
+            StableSmsDataDirectory, "sms_direct_recovery.backup.json");
+        return new SmsDirectRecoveryStore(primaryPath, fallbackPath);
     }
 
     internal static IReadOnlyList<string> DiscoverLegacyMultipartJournalPaths(
@@ -1037,6 +1045,9 @@ public class GsmModemService : IGsmModemService
         {
             EnsureSmsReceiveWatchdog(portName);
         }
+
+        if (!string.IsNullOrWhiteSpace(normalized))
+            ScheduleDirectRecoveryReplay(portName);
     }
 
     public async Task<IDisposable> HoldSmsReceiveMaintenanceUntilSautoReadyAsync(
@@ -1613,6 +1624,37 @@ public class GsmModemService : IGsmModemService
             _smsReadRetryAttempts.TryRemove(key, out _);
     }
 
+    internal static int RemoveSmsQueueClaimsForGeneration(
+        ConcurrentDictionary<string, int> claims,
+        string portName,
+        long generation)
+    {
+        ArgumentNullException.ThrowIfNull(claims);
+        ArgumentException.ThrowIfNullOrWhiteSpace(portName);
+
+        string prefix = $"{portName}\u001f{generation}\u001f";
+        int removed = 0;
+        foreach (string key in claims.Keys.Where(key => key.StartsWith(
+                     prefix,
+                     StringComparison.OrdinalIgnoreCase)))
+        {
+            if (claims.TryRemove(key, out _)) removed++;
+        }
+        return removed;
+    }
+
+    private static void RemoveSmsQueueMetadataForGeneration<TValue>(
+        ConcurrentDictionary<string, TValue> values,
+        string portName,
+        long generation)
+    {
+        string prefix = $"{portName}\u001f{generation}\u001f";
+        foreach (string key in values.Keys.Where(key => key.StartsWith(
+                     prefix,
+                     StringComparison.OrdinalIgnoreCase)))
+            values.TryRemove(key, out _);
+    }
+
     private static string BuildDeliveryId(string kind, params string?[] fields)
     {
         string identity = string.Join(
@@ -1667,17 +1709,35 @@ public class GsmModemService : IGsmModemService
                 port, command, 8000, silent: true, ct: ct);
             if (command.StartsWith("AT+QCMGR=", StringComparison.OrdinalIgnoreCase))
             {
-                if (IsCompleteStoredSmsResponse(response, "+QCMGR:")
-                    || HasUsableStoredSmsBody(response))
-                    return response;
+                bool usable =
+                    IsCompleteStoredSmsResponse(response, "+QCMGR:")
+                    || HasUsableStoredSmsBody(response);
+                if (usable)
+                {
+                    DecodedSmsBody decoded = SmsBodyDecoder.Decode(response);
+                    if (!ShouldRetryQcmgrInPduMode(decoded))
+                        return response;
+
+                    // Text mode did not expose uid/msg_seg/msg_total. Read the
+                    // same SIM slot in PDU mode so UDH ref/total/sequence decides
+                    // assembly. Never publish the ambiguous text fallback.
+                }
                 continue;
             }
             if (command.Equals("AT+CMGF=0", StringComparison.OrdinalIgnoreCase))
+            {
+                if (IsCommandFailure(response))
+                    return string.Empty;
                 continue;
+            }
             return response;
         }
         return string.Empty;
     }
+
+    internal static bool ShouldRetryQcmgrInPduMode(
+        DecodedSmsBody decoded) =>
+        decoded.Concatenation == null;
 
     internal static IReadOnlyList<string> GetStoredSmsReadCommandOrder(
         QuectelModemProfile? profile,
@@ -1685,7 +1745,9 @@ public class GsmModemService : IGsmModemService
         // If a firmware revision rejects QCMGR in text mode, switch this COM to
         // PDU mode before CMGR so UDH/ref/seq/total cannot be stripped.
         ? [$"AT+QCMGR={msgIndex}", "AT+CMGF=0", $"AT+CMGR={msgIndex}"]
-        : [$"AT+CMGR={msgIndex}"];
+        // CMGF=0/CMGR is standardized and keeps UDH intact. Do not depend on a
+        // successfully populated vendor profile to protect multipart metadata.
+        : ["AT+CMGF=0", $"AT+CMGR={msgIndex}"];
 
     internal static bool IsCompleteStoredSmsResponse(string response, string? requiredHeader = null)
     {
@@ -1836,18 +1898,15 @@ public class GsmModemService : IGsmModemService
         string msgIndex,
         string deliveryId,
         out List<string> indicesToDelete,
-        out string completedDeliveryId)
+        out string completedDeliveryId,
+        out bool incompleteMultipartSafelyRetained)
     {
         indicesToDelete = new List<string>();
         completedDeliveryId = deliveryId;
+        incompleteMultipartSafelyRetained = false;
         if (decoded.Concatenation == null)
         {
             TrimDeliveredStoredSms();
-            // Without UDH/QCMGR metadata, a 67/153-character standalone SMS is
-            // indistinguishable from a stripped multipart segment. Holding that
-            // heuristic in the SIM caused permanent storage deadlocks. Publish
-            // each uncertain record independently; the durable inbox may group
-            // it later without hiding or losing a real SMS.
             if (_deliveredStoredSms.ContainsKey(deliveryId))
             {
                 if (!string.IsNullOrWhiteSpace(msgIndex))
@@ -1855,6 +1914,10 @@ public class GsmModemService : IGsmModemService
                 return null;
             }
 
+            // Stored reads use PDU mode whenever QCMGR does not provide exact
+            // concatenation metadata. Reaching here without a concatenation
+            // header therefore means the raw PDU itself has no UDH and this is
+            // a genuine standalone SMS.
             if (!string.IsNullOrWhiteSpace(msgIndex))
                 indicesToDelete.Add(msgIndex);
             return decoded.Content;
@@ -1866,7 +1929,26 @@ public class GsmModemService : IGsmModemService
             // Slot này thuộc một tin đã phát xong. Đọc lại (do sweep hoặc CMGL
             // trùng lượt) chỉ để dọn slot; ghi lại vào journal sẽ tạo một nhóm
             // ghép dở mới không bao giờ đủ mảnh.
-            if (!string.IsNullOrWhiteSpace(msgIndex))
+            try
+            {
+                completedDeliveryId =
+                    _multipartJournal.GetMessageIdForPartIdentity(
+                        scope, deliveryId);
+            }
+            catch (Exception ex) when (ex is IOException
+                                          or UnauthorizedAccessException
+                                          or InvalidDataException)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = port,
+                    Data = $"[MULTIPART_CLEANUP_BLOCKED] Không xác minh được messageId của phần đã phát: {ex.Message}. Giữ nguyên trên SIM."
+                });
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(completedDeliveryId)
+                && !string.IsNullOrWhiteSpace(msgIndex))
                 indicesToDelete.Add(msgIndex);
             return null;
         }
@@ -1899,17 +1981,35 @@ public class GsmModemService : IGsmModemService
             return null;
         }
 
-        // The committed journal now owns this exact decoded segment, so a known
-        // SIM identity may release the current slot even before all parts arrive.
-        if (!string.IsNullOrWhiteSpace(msgIndex))
-            indicesToDelete.Add(msgIndex);
-
-        bool durableComplete = durableParts.Count == decoded.Concatenation.Total
-            && Enumerable.Range(1, decoded.Concatenation.Total)
-                .SequenceEqual(durableParts.Select(part => part.Sequence));
+        bool durableComplete = IsMultipartAssemblyComplete(
+            durableParts.Select(part => part.Sequence),
+            decoded.Concatenation.Total);
         if (durableComplete)
+        {
+            // Cleanup begins only after the complete message is assembled. Until
+            // then both the SIM and WAL own each part, so corruption of either
+            // storage alone cannot destroy the only copy.
+            if (!string.IsNullOrWhiteSpace(msgIndex))
+                indicesToDelete.Add(msgIndex);
             return string.Concat(durableParts.Select(part => part.Content));
+        }
+
+        incompleteMultipartSafelyRetained = true;
         return null;
+    }
+
+    internal static bool IsMultipartAssemblyComplete(
+        IEnumerable<int> presentSequences,
+        int total)
+    {
+        if (presentSequences == null || total is < 1 or > 255)
+            return false;
+        int[] sequences = presentSequences
+            .Distinct()
+            .OrderBy(sequence => sequence)
+            .ToArray();
+        return sequences.Length == total
+            && Enumerable.Range(1, total).SequenceEqual(sequences);
     }
 
     private void QueueStoredSmsRead(string port, string msgIndex)
@@ -2095,7 +2195,32 @@ public class GsmModemService : IGsmModemService
             // orphaned state that permanently coalesces every future CMTI.
             if (_smsReadQueues.TryRemove(
                     new KeyValuePair<string, SmsReadQueueState>(port, state)))
+            {
                 state.Queue.Writer.TryComplete();
+                int orphanedClaims = RemoveSmsQueueClaimsForGeneration(
+                    _queuedSmsIndices,
+                    port,
+                    state.Generation);
+                RemoveSmsQueueMetadataForGeneration(
+                    _smsReadRetryAttempts,
+                    port,
+                    state.Generation);
+                RemoveSmsQueueMetadataForGeneration(
+                    _smsRetryLogAt,
+                    port,
+                    state.Generation);
+
+                // A +CMTI can be coalesced while this worker is exiting. CMGL
+                // recreates the worker and rediscovers every retained SIM slot.
+                if (orphanedClaims > 0
+                    && IsCurrentSmsGeneration(port, state.Generation))
+                {
+                    ScheduleSafeUnreadSmsSweep(
+                        port,
+                        "sms-queue-worker-exited",
+                        initialDelayMs: 250);
+                }
+            }
         }
     }
 
@@ -2279,7 +2404,11 @@ public class GsmModemService : IGsmModemService
             {
                 if (IsCompleteStoredSmsResponse(response, "+QCMGR:")
                     || HasUsableStoredSmsBody(response))
-                    return new LockedStoredSmsRead(response, pduModeAttempted);
+                {
+                    DecodedSmsBody decoded = SmsBodyDecoder.Decode(response);
+                    if (!ShouldRetryQcmgrInPduMode(decoded))
+                        return new LockedStoredSmsRead(response, pduModeAttempted);
+                }
                 continue;
             }
 
@@ -2636,10 +2765,21 @@ public class GsmModemService : IGsmModemService
             msgIndex,
             storedDeliveryId,
             out List<string> indicesToDelete,
-            out string completedDeliveryId);
+            out string completedDeliveryId,
+            out bool incompleteMultipartSafelyRetained);
 
         if (fullContent == null)
         {
+            if (incompleteMultipartSafelyRetained)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = port,
+                    Data = $"[MULTIPART_RETAINED] sender={sender} ref={decoded.Concatenation!.Reference} seq={decoded.Concatenation.Sequence}/{decoded.Concatenation.Total}; giữ bản gốc trên SIM và bản WAL, chờ đủ phần."
+                });
+                return true;
+            }
+
             if (indicesToDelete.Count == 0)
                 return false;
 
@@ -3315,6 +3455,11 @@ public class GsmModemService : IGsmModemService
         return match.Success && int.TryParse(match.Value, out int value) ? value : int.MaxValue;
     }
 
+    public bool IsPortOpen(string portName) =>
+        !string.IsNullOrWhiteSpace(portName)
+        && _serialPorts.TryGetValue(portName, out SerialPort? serialPort)
+        && serialPort.IsOpen;
+
     public string ConnectAll(int baudRate = 115200)
     {
         var newlyOpenedPorts = new ConcurrentBag<string>();
@@ -3663,6 +3808,14 @@ public class GsmModemService : IGsmModemService
                     $"URC_ROUTE_UART1_FAILED;result={GetSautoResponseOutcome(urcRouteResponse)}");
             }
 
+            // IMEI belongs to the modem, not the SIM. Read and publish it as
+            // soon as the COM opens so the UI has the physical modem identity
+            // even while no SIM is inserted or CPIN/ICCID is still pending.
+            await ReadAndPublishImeiWhileLockedAsync(
+                portName,
+                serialPort,
+                ct);
+
             string cpinResponse =
                 await WriteSautoCommandForResponseWhileLockedAsync(
                     portName,
@@ -3818,6 +3971,43 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    private async Task<string> ReadAndPublishImeiWhileLockedAsync(
+        string portName,
+        SerialPort serialPort,
+        CancellationToken operationToken)
+    {
+        string imei = await ImeiProbe.ReadAsync(
+            async (command, token) =>
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    command,
+                    TimeSpan.FromSeconds(3),
+                    token),
+            attempts: 3,
+            retryDelay: TimeSpan.FromMilliseconds(350),
+            cancellationToken: operationToken);
+
+        if (string.IsNullOrWhiteSpace(imei))
+        {
+            AtCommandTraceLogger.State(
+                portName,
+                "IMEI_READ_FAILED;commands=AT+CGSN,AT+GSN;attempts=3;modem_session_preserved=true");
+            return string.Empty;
+        }
+
+        UpdateSautoReceiveState(portName, state => state.Imei = imei);
+
+        // Always republish after an explicit read. The service snapshot may
+        // already contain this IMEI while the UI was reset for a SIM change.
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = $"[PARSE_IMEI] {imei}"
+        });
+        return imei;
+    }
+
     private async Task PrepareAcceptedHotplugSimWhileLockedAsync(
         string portName,
         SerialPort serialPort,
@@ -3907,39 +4097,10 @@ public class GsmModemService : IGsmModemService
                 $"HOTPLUG_RF_SKIPPED;reason=CFUN_QUERY_INVALID;result={GetSautoResponseOutcome(cfunResponse)}");
         }
 
-        string imei = await ImeiProbe.ReadAsync(
-            async (command, token) =>
-                await WriteSautoCommandForResponseWhileLockedAsync(
-                    portName,
-                    serialPort,
-                    command,
-                    TimeSpan.FromSeconds(3),
-                    token),
-            attempts: 3,
-            retryDelay: TimeSpan.FromMilliseconds(350),
-            cancellationToken: operationToken);
-
-        if (string.IsNullOrWhiteSpace(imei))
-        {
-            AtCommandTraceLogger.State(
-                portName,
-                "IMEI_READ_FAILED;commands=AT+CGSN,AT+GSN;attempts=3;modem_session_preserved=true");
-            return;
-        }
-
-        bool imeiChanged = !string.Equals(
-            GetSautoReceiveSnapshot(portName).Imei,
-            imei,
-            StringComparison.Ordinal);
-        UpdateSautoReceiveState(portName, state => state.Imei = imei);
-        if (imeiChanged)
-        {
-            LogMessage?.Invoke(this, new GsmDataEventArgs
-            {
-                PortName = portName,
-                Data = $"[PARSE_IMEI] {imei}"
-            });
-        }
+        await ReadAndPublishImeiWhileLockedAsync(
+            portName,
+            serialPort,
+            operationToken);
     }
 
     private async Task RecoverRepeatedHotplugSimFailureWhileLockedAsync(
@@ -5840,7 +6001,9 @@ public class GsmModemService : IGsmModemService
     /// từ chối tin mới trước khi có URC nào để xử lý. Đọc AT+CPMS? theo nhịp và
     /// chỉ log khi mức dùng đã đáng lo, để trạng thái bình thường không gây nhiễu.
     /// </summary>
-    private async Task ReportSimStorageUsageAsync(string portName)
+    private async Task ReportSimStorageUsageAsync(
+        string portName,
+        CancellationToken ct = default)
     {
         long now = Environment.TickCount64;
         long previous = _simStorageReportTicks.GetOrAdd(portName, 0);
@@ -5853,15 +6016,15 @@ public class GsmModemService : IGsmModemService
         if (!_simStorageReportTicks.TryUpdate(portName, now, previous)) return;
 
         string response = await SendCommandAsync(
-            portName, "AT+CPMS?", 5000, silent: true);
+            portName, "AT+CPMS?", 5000, silent: true, ct: ct);
         if (!TryParseSimStorageUsage(response, out int used, out int total))
         {
             // Lượt đọc đầu có thể chỉ nhận được 'OK' khi dòng +CPMS: bị lệch
             // nhịp với lượt đọc trước. Thử lại một lần trước khi kết luận là
             // không giám sát được.
-            await Task.Delay(500);
+            await Task.Delay(500, ct);
             response = await SendCommandAsync(
-                portName, "AT+CPMS?", 5000, silent: true);
+                portName, "AT+CPMS?", 5000, silent: true, ct: ct);
         }
         if (!TryParseSimStorageUsage(response, out used, out total))
         {
@@ -5922,6 +6085,107 @@ public class GsmModemService : IGsmModemService
             == previous;
     }
 
+    private void ScheduleDirectRecoveryReplay(
+        string portName,
+        int delayMs = 250,
+        int attempt = 1)
+    {
+        if (string.IsNullOrWhiteSpace(portName)
+            || !_directRecoveryReplayOwners.TryAdd(portName, 0))
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            bool retryNeeded = false;
+            try
+            {
+                await Task.Delay(delayMs).ConfigureAwait(false);
+                if (!_serialPorts.ContainsKey(portName)) return;
+
+                long generation = CurrentSmsGeneration(portName);
+                string currentScope = TryGetSmsScope(
+                        portName, generation, out string simScope)
+                    ? simScope
+                    : portName.ToUpperInvariant();
+                IReadOnlyList<SmsDirectRecoveryStore.Pending> pendingFrames =
+                    _directRecoveryStore.GetRecoverable(
+                        portName,
+                        currentScope);
+                foreach (SmsDirectRecoveryStore.Pending pending in pendingFrames)
+                {
+                    if (!DirectScopeStillCurrent(portName, pending.Scope))
+                        continue;
+
+                    // Never publish a best-effort/raw fallback. The recovery copy
+                    // remains intact until the normal decoder can produce a
+                    // complete payload and its durable decoded WAL accepts it.
+                    if (string.IsNullOrWhiteSpace(
+                            DecodeDirectCmtFrame(pending.Raw).Content))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[SMS_DIRECT_RECOVERY_PENDING] id={pending.Id}; reason={pending.Reason}; raw vẫn được giữ bền vững, chưa phát nội dung chưa giải mã đủ."
+                        });
+                        continue;
+                    }
+
+                    if (!TryProcessDirectCmtFrame(
+                            portName,
+                            pending.Raw,
+                            pending.Id))
+                    {
+                        retryNeeded = true;
+                        continue;
+                    }
+
+                    bool stillPending = _directRecoveryStore
+                        .GetRecoverable(portName, currentScope)
+                        .Any(entry => string.Equals(
+                            entry.Id,
+                            pending.Id,
+                            StringComparison.Ordinal));
+                    if (stillPending)
+                    {
+                        retryNeeded = true;
+                    }
+                    else
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = $"[SMS_DIRECT_RECOVERED] id={pending.Id}; đã giải mã và chuyển an toàn vào inbox."
+                        });
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException
+                                          or UnauthorizedAccessException
+                                          or InvalidDataException)
+            {
+                retryNeeded = true;
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_DIRECT_RECOVERY_RETRY] {ex.Message}"
+                });
+            }
+            finally
+            {
+                _directRecoveryReplayOwners.TryRemove(portName, out _);
+                if (retryNeeded
+                    && attempt < MaxMultipartJournalRetryAttempts
+                    && _serialPorts.ContainsKey(portName))
+                {
+                    ScheduleDirectRecoveryReplay(
+                        portName,
+                        Math.Min(delayMs * 2, 30000),
+                        attempt + 1);
+                }
+            }
+        });
+    }
+
     private void ScheduleCompletedMultipartReplay(
         string scope,
         string portName,
@@ -5976,8 +6240,15 @@ public class GsmModemService : IGsmModemService
                     // slot. The normal CMGR path will delete that exact slot and
                     // then complete the journal. Direct CMT has no recyclable SIM
                     // slot, so its acknowledged journal can be removed now.
-                    if (!snapshot.RequiresSimCleanup
-                        || snapshot.SimCleanupConfirmed)
+                    if (!snapshot.RequiresSimCleanup)
+                    {
+                        CompleteAcceptedDirectRecoveryParts(
+                            portName,
+                            scope,
+                            snapshot.MessageId);
+                        _multipartJournal.Complete(snapshot.MessageId);
+                    }
+                    else if (snapshot.SimCleanupConfirmed)
                         _multipartJournal.Complete(snapshot.MessageId);
                 }
             }
@@ -6471,90 +6742,48 @@ public class GsmModemService : IGsmModemService
     {
         try
         {
-            string path = WriteDirectCmtQuarantine(
-                portName, raw, reason, state.Attempts);
+            long generation = CurrentSmsGeneration(portName);
+            string scope = TryGetSmsScope(
+                    portName, generation, out string currentScope)
+                ? currentScope
+                : portName.ToUpperInvariant();
+            SmsDirectRecoveryStore.Pending pending = _directRecoveryStore.Store(
+                portName,
+                scope,
+                raw,
+                reason,
+                state.Attempts);
+
+            // Only now may the serial buffer release its sole copy.
             ClearDirectCmtFailure(portName, raw);
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = $"[SMS_DIRECT_QUARANTINED] reason={reason}; attempts={state.Attempts}; chars={raw.Length}; file={path}. Khung há»ng Ä‘Ã£ lÆ°u bá»n vá»¯ng vÃ  bá» khá»i buffer."
+                Data = $"[SMS_DIRECT_RECOVERY_SAVED] id={pending.Id}; reason={reason}; attempts={state.Attempts}; chars={raw.Length}."
             });
+            ScheduleDirectRecoveryReplay(portName, 1000);
             return true;
         }
         catch (Exception ex) when (ex is IOException
                                       or UnauthorizedAccessException
-                                      or JsonException)
+                                      or InvalidDataException)
         {
-            // Never discard the only raw copy unless the quarantine append was
-            // flushed successfully. A storage failure therefore remains
-            // retryable even after the decode/time budget is exhausted.
+            // A failed flush means the volatile serial frame is still the only
+            // copy. Returning false prevents its removal from the receive buffer.
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = $"[SMS_DIRECT_QUARANTINE_WRITE_FAILED] {ex.Message}; giá»¯ nguyÃªn raw +CMT."
+                Data = $"[SMS_DIRECT_RECOVERY_WRITE_FAILED] {ex.Message}; giữ nguyên raw +CMT để thử lại."
             });
             ScheduleDirectCmtRetry(portName, 2000);
             return false;
         }
     }
 
-    private string WriteDirectCmtQuarantine(
-        string portName,
-        string raw,
-        string reason,
-        int attempts)
-    {
-        string directory = StableSmsDataDirectory;
-        string path = Path.Combine(directory, DirectCmtQuarantineFileName);
-        var record = new DirectCmtQuarantineRecord(
-            DateTimeOffset.UtcNow,
-            portName,
-            reason,
-            attempts,
-            raw.Length,
-            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))
-                .ToLowerInvariant(),
-            raw);
-        byte[] payload = Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize(record) + Environment.NewLine);
-
-        lock (_directCmtQuarantineGate)
-        {
-            Directory.CreateDirectory(directory);
-            if (File.Exists(path)
-                && new FileInfo(path).Length + payload.Length
-                    > DirectCmtQuarantineMaxBytes)
-            {
-                for (int archive = DirectCmtQuarantineArchiveCount;
-                     archive >= 1;
-                     archive--)
-                {
-                    string source = archive == 1
-                        ? path
-                        : path + $".{archive - 1}";
-                    string destination = path + $".{archive}";
-                    if (File.Exists(destination)) File.Delete(destination);
-                    if (File.Exists(source)) File.Move(source, destination);
-                }
-            }
-
-            using var stream = new FileStream(
-                path,
-                FileMode.Append,
-                FileAccess.Write,
-                FileShare.Read,
-                4096,
-                FileOptions.WriteThrough);
-            stream.Write(payload);
-            stream.Flush(flushToDisk: true);
-        }
-
-        return path;
-    }
-
     private bool TryProcessDirectCmtFrame(
         string portName,
-        string rawDirect)
+        string rawDirect,
+        string? existingRecoveryId = null)
     {
         DecodedSmsBody decoded = DecodeDirectCmtFrame(rawDirect);
         if (string.IsNullOrWhiteSpace(decoded.Content))
@@ -6590,6 +6819,31 @@ public class GsmModemService : IGsmModemService
             ? simScope
             : portName;
         string normalizedRaw = NormalizeStoredSmsForIdentity(rawDirect);
+        string recoveryId = existingRecoveryId ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(recoveryId))
+        {
+            try
+            {
+                recoveryId = _directRecoveryStore.Store(
+                    portName,
+                    scope,
+                    rawDirect,
+                    "decoded-frame-pending-inbox",
+                    1).Id;
+            }
+            catch (Exception ex) when (ex is IOException
+                                          or UnauthorizedAccessException
+                                          or InvalidDataException)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_DIRECT_RECOVERY_WRITE_FAILED] Khung đã giải mã nhưng chưa ghi được hai bản phục hồi: {ex.Message}. Giữ nguyên buffer."
+                });
+                ScheduleDirectCmtRetry(portName, 2000);
+                return false;
+            }
+        }
 
         if (decoded.Concatenation == null)
         {
@@ -6662,6 +6916,24 @@ public class GsmModemService : IGsmModemService
                 ScheduleCompletedMultipartReplay(scope, portName, 1000);
             }
 
+            try
+            {
+                _directRecoveryStore.Complete(recoveryId);
+            }
+            catch (Exception ex) when (ex is IOException
+                                          or UnauthorizedAccessException
+                                          or InvalidDataException)
+            {
+                // Inbox is already durable. Keeping the raw recovery copy is
+                // safe and its stable DeliveryId makes any replay idempotent.
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = $"[SMS_DIRECT_RECOVERY_CLEANUP_RETRY] id={recoveryId}: {ex.Message}"
+                });
+                ScheduleDirectRecoveryReplay(portName, 1000);
+            }
+
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
@@ -6716,6 +6988,7 @@ public class GsmModemService : IGsmModemService
                 PortName = portName,
                 Data = $"[MULTIPART] direct sender={sender} ref={decoded.Concatenation.Reference} seq={decoded.Concatenation.Sequence}/{decoded.Concatenation.Total}; phần đã lưu bền vững."
             });
+            ScheduleDirectRecoveryReplay(portName, 5000);
             return true;
         }
 
@@ -6741,6 +7014,10 @@ public class GsmModemService : IGsmModemService
             if (!alreadyAccepted)
                 _multipartJournal.MarkDeliveryAcknowledged(messageId);
             RememberDeliveredSms(messageId);
+            CompleteAcceptedDirectRecoveryParts(
+                portName,
+                scope,
+                messageId);
             _multipartJournal.Complete(messageId);
         }
         catch (Exception ex) when (ex is IOException
@@ -6755,6 +7032,7 @@ public class GsmModemService : IGsmModemService
                 Data = $"[MULTIPART_JOURNAL_WARN] Inbox đã nhận +CMT nhưng journal cần thử dọn lại: {ex.Message}"
             });
             ScheduleCompletedMultipartReplay(scope, portName, 1000);
+            ScheduleDirectRecoveryReplay(portName, 1000);
         }
 
         LogMessage?.Invoke(this, new GsmDataEventArgs
@@ -6763,6 +7041,35 @@ public class GsmModemService : IGsmModemService
             Data = $"[SMS_DELIVERY] direct multipart delivery={messageId} sender={sender} chars={content.Length} otp={ExtractOtp(content) ?? string.Empty}"
         });
         return true;
+    }
+
+    private void CompleteAcceptedDirectRecoveryParts(
+        string portName,
+        string scope,
+        string messageId)
+    {
+        HashSet<string> acceptedPartIdentities = _multipartJournal
+            .GetPartIdentities(messageId)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (SmsDirectRecoveryStore.Pending pending in
+                 _directRecoveryStore.GetRecoverable(portName, scope))
+        {
+            DecodedSmsBody decoded = DecodeDirectCmtFrame(pending.Raw);
+            if (decoded.Concatenation == null
+                || string.IsNullOrWhiteSpace(decoded.Content))
+                continue;
+            string sender = ParseSenderFromCmgr(pending.Raw);
+            if (sender == "Unknown" && !string.IsNullOrWhiteSpace(decoded.Sender))
+                sender = DecodeSmsSender(decoded.Sender);
+            if (string.IsNullOrWhiteSpace(sender)) sender = "Unknown";
+            string identity = BuildDeliveryId(
+                "direct-part",
+                scope,
+                sender,
+                NormalizeStoredSmsForIdentity(pending.Raw));
+            if (acceptedPartIdentities.Contains(identity))
+                _directRecoveryStore.Complete(pending.Id);
+        }
     }
 
     private async Task<string> ReadUntilAsync(SerialPort sp, string keyword, int timeoutMs)
@@ -10722,9 +11029,17 @@ public class GsmModemService : IGsmModemService
         }
     }
 
-    public async Task SweepUnreadSmsAsync(string portName)
+    public async Task SweepUnreadSmsAsync(
+        string portName,
+        CancellationToken ct = default)
     {
         if (!_serialPorts.TryGetValue(portName, out var sp) || !sp.IsOpen) return;
+        CancellationToken portLifetime = TryGetPortLifetimeToken(portName);
+        using var operationCts = CancellationTokenSource.CreateLinkedTokenSource(
+            ct,
+            portLifetime);
+        CancellationToken operationToken = operationCts.Token;
+        operationToken.ThrowIfCancellationRequested();
         if (!IsSmsReceiveMaintenanceEnabled(portName))
         {
             ScheduleSafeUnreadSmsSweep(
@@ -10745,7 +11060,7 @@ public class GsmModemService : IGsmModemService
         // One global turn across every COM. Recovery sweeps and periodic
         // watchdog probes cannot issue CMGL concurrently on a 64-port rig.
         using IDisposable scanTurn =
-            await AcquireSmsScanTurnAsync(CancellationToken.None)
+            await AcquireSmsScanTurnAsync(operationToken)
                 .ConfigureAwait(false);
         if (!CanRunSmsScanTurn(portName))
         {
@@ -10757,7 +11072,7 @@ public class GsmModemService : IGsmModemService
         }
 
         SemaphoreSlim sweepLock = _smsSweepLocks.GetOrAdd(portName, static _ => new SemaphoreSlim(1, 1));
-        await sweepLock.WaitAsync();
+        await sweepLock.WaitAsync(operationToken);
 
         try
         {
@@ -10765,7 +11080,7 @@ public class GsmModemService : IGsmModemService
                 await AcquireForegroundOperationAsync(
                     portName,
                     "SMS_SWEEP",
-                    CancellationToken.None).ConfigureAwait(false);
+                    operationToken).ConfigureAwait(false);
             // State may have changed while this recovery waited behind a user
             // operation. Defer without dropping the request.
             if (!IsSmsReceiveMaintenanceEnabled(portName)
@@ -10801,7 +11116,8 @@ public class GsmModemService : IGsmModemService
                     portName,
                     restoreCommand,
                     5000,
-                    silent: true);
+                    silent: true,
+                    ct: operationToken);
             }
             if (GetModemProfile(portName)?.IsQuectel == true)
             {
@@ -10811,7 +11127,8 @@ public class GsmModemService : IGsmModemService
                     portName,
                     Uart1UrcRoutingCommand,
                     5000,
-                    silent: true);
+                    silent: true,
+                    ct: operationToken);
             }
 
             // ALL is intentional: CMGR marks a multipart segment REC READ before the remaining
@@ -10825,7 +11142,12 @@ public class GsmModemService : IGsmModemService
             const string command = "AT+CMGL=\"ALL\"";
             if (!IsSmsReceiveMaintenanceEnabled(portName))
                 return;
-            string sweepResponse = await SendCommandAsync(portName, command, 25000, silent: true);
+            string sweepResponse = await SendCommandAsync(
+                portName,
+                command,
+                25000,
+                silent: true,
+                ct: operationToken);
             if (IsCommandFailure(sweepResponse)
                 && GetModemProfile(portName)?.IsQuectel == true)
             {
@@ -10859,13 +11181,14 @@ public class GsmModemService : IGsmModemService
             // vừa được ghép đủ mảnh sẽ được chính lượt replay này đẩy vào inbox.
             TryRepairMultipartJournal(portName);
             if (IsSmsReceiveMaintenanceEnabled(portName))
-                await ReportSimStorageUsageAsync(portName);
+                await ReportSimStorageUsageAsync(portName, operationToken);
             if (TryGetSmsScope(
                     portName, generation, out string replayScope))
                 ScheduleCompletedMultipartReplay(
                     replayScope,
                     portName,
                     delayMs: 1000);
+            ScheduleDirectRecoveryReplay(portName, delayMs: 1000);
             if (sweepResponse.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
                 || sweepResponse.Contains("+CMS ERROR", StringComparison.OrdinalIgnoreCase))
             {

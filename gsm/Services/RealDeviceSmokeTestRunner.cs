@@ -2095,7 +2095,6 @@ internal interface IRealDeviceSmokeHost
 internal sealed class MainViewModelSmokeHost : IRealDeviceSmokeHost
 {
     private readonly MainViewModel _viewModel;
-    private readonly SmsInboxStore _inboxStore = new();
 
     public MainViewModelSmokeHost(MainViewModel viewModel)
     {
@@ -2174,7 +2173,7 @@ internal sealed class MainViewModelSmokeHost : IRealDeviceSmokeHost
             portName, recipient, content, cancellationToken, expectedCcid);
 
     public IReadOnlyList<SmsInboxRecord> GetRecentSms(int count) =>
-        _inboxStore.GetRecent(count);
+        _viewModel.GetRecentSmsSnapshot(count);
 
     public void Log(string message, string level) =>
         _viewModel.AddLog(message, level);

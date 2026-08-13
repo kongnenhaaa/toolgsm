@@ -79,12 +79,6 @@
                     Lịch sử tin nhắn nhận được
                 </MudText>
                 <MudStack Row="true" Spacing="1">
-                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.FileDownload"
-                               OnClick="ExportSmsHistory"
-                               Disabled="@(!IncomingSms.Any())">
-                        Xuất CSV
-                    </MudButton>
                     <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
                                StartIcon="@Icons.Material.Filled.DeleteSweep" OnClick="ClearHistory"
                                Disabled="@(!IncomingSms.Any())">
@@ -332,11 +326,11 @@
         (Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>())
             // ReceivedTime is display-only HH:mm:ss and has no date. Sorting it
             // made yesterday's 20:47 SMS appear above today's 11:xx SMS.
-            // Prefer the carrier timestamp; legacy rows without it remain below
-            // timestamped messages and use their durable processing time only as
-            // a stable fallback.
-            .OrderByDescending(x => x.SmsTimestampUtc.HasValue)
-            .ThenByDescending(x => x.SmsTimestampUtc ?? x.ReceivedAtUtc);
+            // Carrier time is preferred when available. A fresh SMS without a
+            // carrier timestamp must still sort by its durable receive time;
+            // placing every timestamp-less row below all historic rows made a
+            // successfully received message look as though it disappeared.
+            .OrderByDescending(x => x.SmsTimestampUtc ?? x.ReceivedAtUtc);
 
     private int IncomingSmsCount => Vm.SmsMessages?.Count ?? 0;
 
@@ -885,32 +879,6 @@
     {
         _templates.Remove(tpl);
         Snackbar.Add("Đã xóa mẫu", Severity.Normal);
-    }
-
-    // ========== 9. XUẤT CSV ==========
-    async Task ExportSmsHistory()
-    {
-        try
-        {
-            static string Csv(string? value) => $"\"{(value ?? string.Empty).Replace("\"", "\"\"")}\"";
-            var lines = new System.Text.StringBuilder();
-            lines.AppendLine("Thời gian,Cổng,SIM nhận,Người gửi,Nội dung,OTP");
-            foreach (var sms in IncomingSms)
-            {
-                lines.AppendLine(string.Join(",",
-                    Csv(sms.ReceivedTime), Csv(sms.PortName), Csv(GetReceiverDisplay(sms)),
-                    Csv(sms.Sender), Csv(sms.DisplayContent), Csv(sms.Otp)));
-            }
-            string fileName = $"sms_history_{DateTime.Now:yyyyMMdd_HHmmss}.csv";
-            string path = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.Desktop), fileName);
-            await System.IO.File.WriteAllTextAsync(path, lines.ToString(), new System.Text.UTF8Encoding(true));
-            Snackbar.Add($"Đã xuất {IncomingSmsCount} tin → Desktop/{fileName}", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add("Xuất CSV lỗi: " + ex.Message, Severity.Error);
-        }
     }
 
     // ========== 10. COPY / DELETE ==========

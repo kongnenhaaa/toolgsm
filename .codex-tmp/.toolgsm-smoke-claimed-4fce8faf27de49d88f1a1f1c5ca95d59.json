@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "requestId": "sms-multipart-live-retest-20260813",
+  "confirmTelecomActions": true,
+  "scenario": "SmsOnly",
+  "portName": "COM111",
+  "expectedCcid": "89840200011704493087",
+  "portWaitSeconds": 600,
+  "stablePortSeconds": 5,
+  "imeiWaitSeconds": 600,
+  "automaticUssdWaitSeconds": 900,
+  "postOperationWaitSeconds": 15,
+  "smsResponseWaitSeconds": 240
+}

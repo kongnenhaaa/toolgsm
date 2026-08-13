@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Windows;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,9 +19,12 @@ namespace gsm
         private RealDeviceSmokeTestRunner? _realDeviceSmokeRunner;
         private CancellationTokenSource? _realDeviceSmokeCts;
         private Task? _realDeviceSmokeTask;
+        private ToolGsmApiService? _toolGsmApiService;
+        private CancellationTokenSource? _toolGsmApiCts;
+        private Task? _toolGsmApiTask;
         private Mutex? _singleInstanceMutex;
         private bool _ownsSingleInstanceMutex;
-
+        private int _shutdownStarted;
         public App()
         {
             RegisterGlobalExceptionHandlers();
@@ -34,7 +36,10 @@ namespace gsm
             // WebView2 child processes inherit it and can keep that folder locked
             // briefly after the main window has closed.
 
-            // TỰ TẠO FILE + FOLDER TRƯỚC MỌI THỨ
+            // Recovery journals and the durable inbox are intentionally kept
+            // across restarts. Deleting them here would reopen the crash window
+            // where the modem has accepted CMGD but the application no longer
+            // owns a recoverable copy of the SMS.
             gsm.Services.AppBootstrap.EnsureAll();
 
             var serviceCollection = new ServiceCollection();
@@ -61,6 +66,7 @@ namespace gsm
             serviceCollection.AddSingleton<IGsmBackgroundSupervisor, GsmBackgroundSupervisor>();
             serviceCollection.AddSingleton<MainViewModel>();
             serviceCollection.AddSingleton<RealDeviceSmokeTestRunner>();
+            serviceCollection.AddSingleton<ToolGsmApiService>();
             serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();
             serviceCollection.AddSingleton<IAudioService, AudioService>();
             serviceCollection.AddSingleton<INotifyService, NotifyService>();
@@ -72,11 +78,11 @@ namespace gsm
 
         protected override void OnStartup(StartupEventArgs e)
         {
-            if (!TryClaimSingleInstance(out string existingInstance))
+            if (!TryClaimSingleInstance(TimeSpan.FromSeconds(5)))
             {
                 MessageBox.Show(
-                    $"ToolGSM đã chạy{existingInstance}.\n\n" +
-                    "Bản vừa mở đã được đóng để không tranh chấp cổng COM và không làm GSM báo mất phản hồi.",
+                    "ToolGSM đang chạy hoặc chưa tắt xong. " +
+                    "Hãy chờ tiến trình cũ đóng hoàn toàn rồi mở lại.",
                     "ToolGSM đang chạy",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
@@ -100,6 +106,34 @@ namespace gsm
             _realDeviceSmokeTask = _realDeviceSmokeRunner
                 .RunIfRequestedAsync(e.Args, _realDeviceSmokeCts.Token);
             _ = ObserveRealDeviceSmokeTaskAsync(_realDeviceSmokeTask);
+
+            _toolGsmApiService = _serviceProvider
+                .GetRequiredService<ToolGsmApiService>();
+            _toolGsmApiCts = new CancellationTokenSource();
+            _toolGsmApiTask = _toolGsmApiService
+                .RunAsync(_toolGsmApiCts.Token);
+            _ = ObserveToolGsmApiTaskAsync(_toolGsmApiTask);
+        }
+
+        internal void BeginShutdown()
+        {
+            if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0) return;
+
+            try { _toolGsmApiCts?.Cancel(); } catch { }
+            try { _realDeviceSmokeCts?.Cancel(); } catch { }
+
+            bool keepModemForEmergencyHangup =
+                !string.IsNullOrWhiteSpace(
+                    _realDeviceSmokeRunner?.PotentialActiveCallPort);
+            try
+            {
+                _mainViewModel?.BeginShutdown(
+                    disconnectModems: !keepModemForEmergencyHangup);
+            }
+            catch (Exception ex)
+            {
+                LogCrash(ex, "Shutdown_Begin");
+            }
         }
 
         private async Task ObserveRealDeviceSmokeTaskAsync(Task task)
@@ -116,6 +150,23 @@ namespace gsm
             catch (Exception ex)
             {
                 LogCrash(ex, "Real_Device_Smoke_Runner");
+            }
+        }
+
+        private async Task ObserveToolGsmApiTaskAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                _mainViewModel?.AddLog(
+                    $"[LOCAL_API_FAILED] {ex.Message}", "ERROR");
+                LogCrash(ex, "ToolGSM_Local_API");
             }
         }
 
@@ -180,14 +231,19 @@ namespace gsm
         {
             try
             {
-                try { _realDeviceSmokeCts?.Cancel(); } catch { }
+                BeginShutdown();
 
-                // Give the runner's cancellation path time to issue ATH, confirm
-                // an empty CLCC snapshot and persist Ambiguous/Cancelled before
-                // the DI container closes every serial handle.
-                WaitForTaskBounded(
-                    _realDeviceSmokeTask,
-                    TimeSpan.FromSeconds(9));
+                Task[] shutdownTasks =
+                    new[] { _toolGsmApiTask, _realDeviceSmokeTask }
+                        .Where(static task => task != null)
+                        .Cast<Task>()
+                        .ToArray();
+                if (shutdownTasks.Length > 0)
+                {
+                    WaitForTaskBounded(
+                        Task.WhenAll(shutdownTasks),
+                        TimeSpan.FromSeconds(5));
+                }
 
                 string emergencyCallPort =
                     _realDeviceSmokeRunner?.PotentialActiveCallPort
@@ -208,10 +264,19 @@ namespace gsm
                         TimeSpan.FromSeconds(6));
                 }
 
+                // Close every COM even if a smoke-test cancellation or the
+                // local API ignored its bounded shutdown window.
+                try { _mainViewModel?.DisconnectModemsForShutdown(); } catch { }
+
                 _realDeviceSmokeCts?.Dispose();
                 _realDeviceSmokeCts = null;
                 _realDeviceSmokeTask = null;
                 _realDeviceSmokeRunner = null;
+
+                _toolGsmApiCts?.Dispose();
+                _toolGsmApiCts = null;
+                _toolGsmApiTask = null;
+                _toolGsmApiService = null;
 
                 // Không gọi MainViewModel.Dispose() trực tiếp: ServiceProvider sở hữu
                 // singleton này và là đường cleanup duy nhất của App.
@@ -226,69 +291,39 @@ namespace gsm
             }
         }
 
-        private bool TryClaimSingleInstance(out string existingInstance)
+        private bool TryClaimSingleInstance(TimeSpan waitTimeout)
         {
-            existingInstance = string.Empty;
             _singleInstanceMutex = new Mutex(
-                initiallyOwned: true,
-                SingleInstanceMutexName,
-                out bool createdNew);
-            _ownsSingleInstanceMutex = createdNew;
-
-            if (!createdNew)
+                initiallyOwned: false,
+                SingleInstanceMutexName);
+            try
             {
-                _singleInstanceMutex.Dispose();
-                _singleInstanceMutex = null;
-                existingInstance = FindExistingToolGsmDescription();
-                return false;
+                _ownsSingleInstanceMutex =
+                    _singleInstanceMutex.WaitOne(waitTimeout);
+            }
+            catch (AbandonedMutexException)
+            {
+                _ownsSingleInstanceMutex = true;
             }
 
-            // Các bản publish cũ chưa có mutex. Kiểm tra theo cùng tên tiến
-            // trình để lần chạy đầu tiên của bản mới cũng không giành COM với
-            // một ToolGSM cũ vẫn còn mở.
-            existingInstance = FindExistingToolGsmDescription();
-            if (!string.IsNullOrEmpty(existingInstance))
-            {
-                ReleaseSingleInstance();
-                return false;
-            }
-
-            return true;
-        }
-
-        private static string FindExistingToolGsmDescription()
-        {
-            using Process current = Process.GetCurrentProcess();
-            foreach (Process process in Process.GetProcessesByName(
-                         current.ProcessName))
-            {
-                using (process)
-                {
-                    if (process.Id == current.Id) continue;
-
-                    string path = string.Empty;
-                    try { path = process.MainModule?.FileName ?? string.Empty; }
-                    catch { }
-
-                    return string.IsNullOrWhiteSpace(path)
-                        ? $" (PID {process.Id})"
-                        : $" (PID {process.Id}, {path})";
-                }
-            }
-
-            return string.Empty;
+            if (_ownsSingleInstanceMutex) return true;
+            _singleInstanceMutex.Dispose();
+            _singleInstanceMutex = null;
+            return false;
         }
 
         private void ReleaseSingleInstance()
         {
-            if (_singleInstanceMutex == null) return;
+            Mutex? mutex = Interlocked.Exchange(
+                ref _singleInstanceMutex,
+                null);
+            if (mutex == null) return;
             if (_ownsSingleInstanceMutex)
             {
-                try { _singleInstanceMutex.ReleaseMutex(); }
+                try { mutex.ReleaseMutex(); }
                 catch (ApplicationException) { }
             }
-            _singleInstanceMutex.Dispose();
-            _singleInstanceMutex = null;
+            mutex.Dispose();
             _ownsSingleInstanceMutex = false;
         }
 

@@ -1,6 +1,7 @@
 ﻿using System.Text;
 using System.Windows;
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 
 namespace gsm
 {
@@ -9,6 +10,9 @@ namespace gsm
     /// </summary>
     public partial class MainWindow : Window
     {
+        internal static TimeSpan WebViewShutdownTimeout { get; } =
+            TimeSpan.FromSeconds(3);
+
         private bool _closeAfterWebViewDisposed;
         private bool _webViewDisposing;
 
@@ -30,15 +34,22 @@ namespace gsm
 
             _webViewDisposing = true;
             Hide();
+            (Application.Current as App)?.BeginShutdown();
             try
             {
-                // Wait for WebView2 to release child processes and file
-                // mappings before WPF tears down the final window.
-                await BlazorHost.DisposeAsync();
+                // A stuck WebView renderer must never keep the hidden ToolGSM
+                // process and its GSM cycles alive forever.
+                await BlazorHost.DisposeAsync()
+                    .AsTask()
+                    .WaitAsync(WebViewShutdownTimeout);
             }
-            catch
+            catch (Exception ex) when (ex is TimeoutException
+                                           or ObjectDisposedException
+                                           or InvalidOperationException
+                                           or InvalidCastException
+                                           or COMException)
             {
-                // Shutdown must continue if Windows already tore WebView2 down.
+                // App.OnExit owns the remaining bounded cleanup.
             }
             finally
             {

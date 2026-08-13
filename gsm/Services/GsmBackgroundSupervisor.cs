@@ -81,7 +81,12 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
                     try
                     {
                         if (!_sessions.TryGet(port.PortName, out var session)) return;
-                        string response = await _modem.SendCommandAsync(port.PortName, "AT+CSQ", 5000, true);
+                        string response = await _modem.SendCommandAsync(
+                            port.PortName,
+                            "AT+CSQ",
+                            5000,
+                            true,
+                            ct);
                         if (!_sessions.IsCurrent(port.PortName, session.Ccid, session.Epoch)) return;
                         var match = Regex.Match(response, @"\+CSQ:\s*(\d+)");
                         if (match.Success && int.TryParse(match.Groups[1].Value, out int csq))
@@ -117,7 +122,7 @@ public sealed class GsmBackgroundSupervisor : IGsmBackgroundSupervisor
                     try
                     {
                         if (!_sessions.TryGet(port.PortName, out var session)) return;
-                        await _modem.SweepUnreadSmsAsync(port.PortName);
+                        await _modem.SweepUnreadSmsAsync(port.PortName, ct);
                         if (!_sessions.IsCurrent(port.PortName, session.Ccid, session.Epoch)) return;
                         context.MarkSmsSweep(port);
                     }

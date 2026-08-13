@@ -39,6 +39,7 @@ internal sealed class SmsSimCleanupJournal
     private readonly object _gate = new();
     private readonly string _primaryPath;
     private readonly string _fallbackPath;
+    private readonly bool _inMemory;
     private Dictionary<string, Intent> _intents = new(StringComparer.Ordinal);
     private long _revision;
     private bool _loadFailed;
@@ -51,6 +52,15 @@ internal sealed class SmsSimCleanupJournal
         _fallbackPath = Path.GetFullPath(fallbackPath);
         Load();
     }
+
+    private SmsSimCleanupJournal()
+    {
+        _primaryPath = string.Empty;
+        _fallbackPath = string.Empty;
+        _inMemory = true;
+    }
+
+    internal static SmsSimCleanupJournal CreateInMemory() => new();
 
     public Intent Prepare(
         string scope,
@@ -224,6 +234,13 @@ internal sealed class SmsSimCleanupJournal
     private void Commit(Dictionary<string, Intent> next)
     {
         long revision = Math.Max(_revision + 1, DateTime.UtcNow.Ticks);
+        if (_inMemory)
+        {
+            _intents = next;
+            _revision = revision;
+            return;
+        }
+
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(new Document
         {
             Revision = revision,

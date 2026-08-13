@@ -173,7 +173,13 @@ public static class SmsBodyDecoder
         // instead of publishing a non-printable U+0011 in the inbox/UI.
         decoded = decoded with
         {
-            Content = NormalizeGsm7CompatibilityControls(decoded.Content)
+            // PDU content is already decoded from packed GSM-7/UCS2. Only
+            // apply the control-byte repair to text-mode responses; applying
+            // it to a real UCS2 payload could reinterpret an intentional
+            // control character as a GSM symbol.
+            Content = decoded.WasHex
+                ? decoded.Content
+                : NormalizeGsm7CompatibilityControls(decoded.Content)
         };
         if (decoded.SmsTimestampUtc == null
             && TryParseTextModeTimestamp(raw, out DateTimeOffset timestampUtc))
@@ -185,10 +191,47 @@ public static class SmsBodyDecoder
             : decoded;
     }
 
-    private static string NormalizeGsm7CompatibilityControls(string content) =>
-        content.IndexOf('\u0011') >= 0
-            ? content.Replace('\u0011', '_')
-            : content;
+    private static string NormalizeGsm7CompatibilityControls(string content)
+    {
+        // With AT+CSCS="GSM", some EC20 text-mode paths return GSM-7 code
+        // values as single Unicode control characters because the serial port
+        // is read as UTF-8. Detect that signature before translating; ordinary
+        // ASCII text containing #/@-like characters must remain untouched.
+        bool containsGsmControl = content.Any(c => c < ' ' && c is not '\r' and not '\n');
+        if (!containsGsmControl) return content;
+
+        var result = new StringBuilder(content.Length);
+        for (int i = 0; i < content.Length; i++)
+        {
+            char character = content[i];
+            if (character != '\u001B')
+            {
+                if (character < Gsm7DefaultAlphabet.Length
+                    && character < ' '
+                    && character is not '\r' and not '\n')
+                {
+                    result.Append(Gsm7DefaultAlphabet[character]);
+                }
+                else
+                {
+                    result.Append(character);
+                }
+                continue;
+            }
+
+            if (i + 1 < content.Length
+                && Gsm7ExtensionAlphabet.TryGetValue((byte)content[++i], out char special))
+            {
+                result.Append(special);
+            }
+            else
+            {
+                result.Append('\uFFFD');
+            }
+        }
+
+        return result.ToString();
+    }
 
     private static string StripInterleavedModemUrc(string line)
     {
@@ -642,19 +685,64 @@ public static class SmsBodyDecoder
         return result.ToString();
     }
 
+    private const string Gsm7DefaultAlphabet = "@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e\u001b\u00c6\u00e6\u00df\u00c9 !\"#\u00a4%&'()*+,-./0123456789:;<=>?\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bfabcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0";
+
+    private static readonly IReadOnlyDictionary<byte, char> Gsm7ExtensionAlphabet =
+        new Dictionary<byte, char>
+        {
+            [0x0A] = '\f',
+            [0x14] = '^',
+            [0x28] = '{',
+            [0x29] = '}',
+            [0x2F] = '\\',
+            [0x3C] = '[',
+            [0x3D] = '~',
+            [0x3E] = ']',
+            [0x40] = '|',
+            [0x65] = '\u20AC'
+        };
+
+    private static int ReadGsm7Septet(ReadOnlySpan<byte> data, int ordinal, int startBit)
+    {
+        int bit = startBit + ordinal * 7;
+        int index = bit / 8;
+        if (index >= data.Length) return -1;
+
+        int shift = bit % 8;
+        int value = (data[index] >> shift) & 0x7F;
+        if (shift > 1 && index + 1 < data.Length)
+            value |= (data[index + 1] << (8 - shift)) & 0x7F;
+        return value;
+    }
+
     private static string DecodeGsm7(ReadOnlySpan<byte> data, int septetCount, int startBit)
     {
-        const string alphabet = "@\u00a3$\u00a5\u00e8\u00e9\u00f9\u00ec\u00f2\u00c7\n\u00d8\u00f8\r\u00c5\u00e5\u0394_\u03a6\u0393\u039b\u03a9\u03a0\u03a8\u03a3\u0398\u039e\u001b\u00c6\u00e6\u00df\u00c9 !\"#\u00a4%&'()*+,-./0123456789:;<=>?\u00a1ABCDEFGHIJKLMNOPQRSTUVWXYZ\u00c4\u00d6\u00d1\u00dc\u00a7\u00bfabcdefghijklmnopqrstuvwxyz\u00e4\u00f6\u00f1\u00fc\u00e0";
         var result = new StringBuilder(septetCount);
         for (int i = 0; i < septetCount; i++)
         {
-            int bit = startBit + i * 7;
-            int index = bit / 8;
-            int shift = bit % 8;
-            if (index >= data.Length) break;
-            int value = (data[index] >> shift) & 0x7F;
-            if (shift > 1 && index + 1 < data.Length) value |= (data[index + 1] << (8 - shift)) & 0x7F;
-            result.Append(value < alphabet.Length ? alphabet[value] : '\uFFFD');
+            int value = ReadGsm7Septet(data, i, startBit);
+            if (value < 0) break;
+
+            // 0x1B is an escape septet. The following septet belongs to the
+            // GSM 7-bit extension table and must not be emitted as a control
+            // character or be allowed to look like a missing/blank symbol.
+            if (value == 0x1B)
+            {
+                if (i + 1 >= septetCount)
+                {
+                    result.Append('\uFFFD');
+                    continue;
+                }
+
+                int extension = ReadGsm7Septet(data, ++i, startBit);
+                if (extension >= 0 && Gsm7ExtensionAlphabet.TryGetValue((byte)extension, out char special))
+                    result.Append(special);
+                else
+                    result.Append('\uFFFD');
+                continue;
+            }
+
+            result.Append(value < Gsm7DefaultAlphabet.Length ? Gsm7DefaultAlphabet[value] : '\uFFFD');
         }
         return result.ToString();
     }
@@ -748,7 +836,12 @@ public sealed class SmsImplicitMultipartAssembler
     public SmsImplicitMultipartAssembler(TimeSpan? timeout = null) =>
         _timeout = timeout ?? TimeSpan.FromMinutes(10);
 
-    public SmsAssemblyResult Add(string port, string sender, string content, string index, DateTimeOffset? now = null)
+    public SmsAssemblyResult Add(
+        string port,
+        string sender,
+        string content,
+        string index,
+        DateTimeOffset? now = null)
     {
         DateTimeOffset timestamp = now ?? DateTimeOffset.UtcNow;
         bool fullSegment = content.Length is 67 or 153;
@@ -822,7 +915,10 @@ public sealed class SmsImplicitMultipartAssembler
 }
 
 public enum SmsAssemblyStatus { Waiting, Completed, Duplicate, Invalid, Conflict }
-public sealed record SmsAssemblyResult(SmsAssemblyStatus Status, string? Content, IReadOnlyList<string> MessageIndices);
+public sealed record SmsAssemblyResult(
+    SmsAssemblyStatus Status,
+    string? Content,
+    IReadOnlyList<string> MessageIndices);
 
 public sealed class SmsMultipartAssembler
 {

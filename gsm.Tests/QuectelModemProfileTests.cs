@@ -59,13 +59,13 @@ public class QuectelModemProfileTests
     }
 
     [Fact]
-    public void GenericStoredSms_UsesStandardCmgrOnly()
+    public void GenericStoredSms_UsesStandardPduModeSoUdhIsPreserved()
     {
         QuectelModemProfile profile = QuectelModemProfile.FromIdentity(
             "Generic", "LTE Modem", "1.0");
 
         Assert.Equal(
-            ["AT+CMGR=3"],
+            ["AT+CMGF=0", "AT+CMGR=3"],
             GsmModemService.GetStoredSmsReadCommandOrder(profile, "3"));
     }
 

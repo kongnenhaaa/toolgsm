@@ -35,7 +35,7 @@ GSM Pro là phần mềm chuyên nghiệp dùng để kết nối, điều khi�
 [Giao Diện & Tiện Ích]
 - UI hiện đại bằng WPF Material Design, hỗ trợ Dark Mode.
 - Tính năng "Click-to-copy": Bấm vào bất kỳ ô Số điện thoại hay Mã OTP nào để copy nhanh vào Clipboard.
-- Lịch sử OTP (OTP History) lưu cục bộ trên file CSV, tự động dọn dẹp dữ liệu cũ (sau 10 ngày).
+- Lịch sử SMS/OTP chỉ tồn tại trong RAM của phiên hiện tại và được xóa khi tắt tool.
 - Đẩy thông báo OTP trực tiếp qua Bot Telegram.
 - Xem Log toàn hệ thống thời gian thực với tính năng Copy/Làm mới nhanh chóng.
 
@@ -54,7 +54,6 @@ GSM Pro là phần mềm chuyên nghiệp dùng để kết nối, điều khi�
 
 5. CẤU TRÚC LƯU TRỮ DỮ LIỆU
 ---------------------------
-- otp_history.csv: File lưu trữ lịch sử nhận mã OTP.
 - system_log.txt: Nhật ký hoạt động của tool.
 - settings.json: Cấu hình cá nhân hóa (Settings).
 - imei_backup.xlsx: Dữ liệu cũ/nhập thủ công chỉ để tra cứu; nhánh nofake không tự tạo mapping, không khôi phục và không ghi IMEI modem.

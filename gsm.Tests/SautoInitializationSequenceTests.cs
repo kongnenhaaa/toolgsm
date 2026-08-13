@@ -10,6 +10,8 @@ public sealed class SautoInitializationSequenceTests
         string[] expected =
         [
             "AT+QURCCFG=\"urcport\",\"uart1\"",
+            "AT+CGSN",
+            "AT+GSN",
             "AT+CPIN?"
         ];
 

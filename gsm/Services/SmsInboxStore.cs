@@ -41,7 +41,9 @@ public sealed class SmsInboxStore
     private readonly object _gate = new();
     private readonly string _directoryPath;
     private readonly bool _durableWrites;
+    private readonly bool _inMemory;
     private readonly Action? _beforeFlushForTests;
+    private readonly List<SmsInboxRecord> _inMemoryRecords = new();
     private readonly Dictionary<string, string> _recentDeliveryFingerprints =
         new(StringComparer.Ordinal);
     private readonly Queue<string> _recentDeliveryOrder = new();
@@ -63,6 +65,19 @@ public sealed class SmsInboxStore
         : this(directoryPath, durableWrites: true, beforeFlushForTests: null)
     {
     }
+
+    private SmsInboxStore(bool inMemory)
+    {
+        _inMemory = inMemory;
+        _directoryPath = string.Empty;
+        _durableWrites = false;
+    }
+
+    /// <summary>
+    /// Session-only inbox. Records are never read from or written to disk and
+    /// disappear when ToolGSM exits.
+    /// </summary>
+    public static SmsInboxStore CreateInMemory() => new(inMemory: true);
 
     internal SmsInboxStore(
         string? directoryPath,
@@ -123,6 +138,13 @@ public sealed class SmsInboxStore
                 return false;
             }
 
+            if (_inMemory)
+            {
+                _inMemoryRecords.Add(record);
+                RememberDelivery(record, fingerprint);
+                return true;
+            }
+
             Directory.CreateDirectory(_directoryPath);
             string filePath = FilePathFor(record.ReceivedAtUtc);
             string json = JsonSerializer.Serialize(record, JsonOptions);
@@ -167,6 +189,15 @@ public sealed class SmsInboxStore
 
         lock (_gate)
         {
+            if (_inMemory)
+            {
+                return _inMemoryRecords
+                    .OrderByDescending(record => record.SmsTimestampUtc
+                        ?? record.ReceivedAtUtc)
+                    .Take(count)
+                    .ToArray();
+            }
+
             if (!Directory.Exists(_directoryPath))
                 return Array.Empty<SmsInboxRecord>();
 
@@ -217,6 +248,19 @@ public sealed class SmsInboxStore
 
         lock (_gate)
         {
+            if (_inMemory)
+            {
+                int sessionDeleted = _inMemoryRecords.RemoveAll(record =>
+                    targets.Contains(record.DeliveryId));
+                if (sessionDeleted > 0)
+                {
+                    ResetIndexesLocked();
+                    foreach (SmsInboxRecord record in _inMemoryRecords)
+                        RememberDelivery(record, PayloadFingerprint(record));
+                }
+                return sessionDeleted;
+            }
+
             if (!Directory.Exists(_directoryPath)) return 0;
 
             int deleted = 0;
@@ -255,6 +299,14 @@ public sealed class SmsInboxStore
     {
         lock (_gate)
         {
+            if (_inMemory)
+            {
+                int sessionDeleted = _inMemoryRecords.Count;
+                _inMemoryRecords.Clear();
+                ResetIndexesLocked();
+                return sessionDeleted;
+            }
+
             if (!Directory.Exists(_directoryPath))
             {
                 ResetIndexesLocked();

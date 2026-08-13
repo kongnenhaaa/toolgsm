@@ -178,7 +178,9 @@ public sealed class FakeGsmModemService : IGsmModemService
     public string GetObservedCcid(string portName) => ObservedCcid;
     public QuectelModemProfile? GetModemProfile(string portName) => ModemProfile;
 
-    public Task SweepUnreadSmsAsync(string portName) => Task.CompletedTask;
+    public Task SweepUnreadSmsAsync(
+        string portName,
+        CancellationToken ct = default) => Task.CompletedTask;
     public Task<string> DownloadFileFromModemAsync(string portName, string remoteFile, string localFile) => Task.FromResult("OK");
     public Task<bool> UploadFileToModemAsync(string portName, string localFile, string remoteFile) => Task.FromResult(true);
     public void StartPollingNetwork(
@@ -186,6 +188,8 @@ public sealed class FakeGsmModemService : IGsmModemService
         string expectedCcid,
         string expectedImei) { }
     public List<string> GetAvailablePorts() => ["COM1", "COM2"];
+    public bool IsPortOpen(string portName) =>
+        portName is "COM1" or "COM2";
     public string ConnectAll(int baudRate = 115200) => "OK";
     public void Disconnect(string portName) { }
     public void DisconnectAll() { }

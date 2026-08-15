@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Codex local build, publish, and smoke-test artifacts
+/.codex-tmp/

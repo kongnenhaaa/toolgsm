@@ -161,11 +161,11 @@
                 <MudDivider Class="my-2" />
 
                 <MudSwitch T="bool" @bind-Value="_telegramOnOtp"
-                           Label="Gửi Telegram khi có OTP"
-                           Color="Color.Primary" Class="mb-1" />
+                           Label="Luôn gửi Telegram khi có OTP"
+                           Color="Color.Primary" Class="mb-1" Disabled="true" />
                 <MudSwitch T="bool" @bind-Value="_telegramOnSms"
-                           Label="Gửi Telegram khi có SMS thường (không OTP)"
-                           Color="Color.Primary" Class="mb-1" />
+                           Label="Luôn gửi Telegram khi có SMS thường"
+                           Color="Color.Primary" Class="mb-1" Disabled="true" />
                 <MudSwitch T="bool" @bind-Value="_telegramOnCall"
                            Label="Gửi Telegram khi có cuộc gọi đến"
                            Color="Color.Primary" Class="mb-1" />
@@ -363,7 +363,7 @@
     private bool _soundOnCall = true;
     private bool _soundOnOtp = true;
     private bool _telegramOnOtp = true;
-    private bool _telegramOnSms = false;
+    private bool _telegramOnSms = true;
     private bool _telegramOnCall = true;
     private bool _telegramOnError = true;
 
@@ -495,8 +495,8 @@
             cfg.SoundOnSms = _soundOnSms;
             cfg.SoundOnCall = _soundOnCall;
             cfg.SoundOnOtp = _soundOnOtp;
-            cfg.TelegramOnOtp = _telegramOnOtp;
-            cfg.TelegramOnSms = _telegramOnSms;
+            cfg.TelegramOnOtp = true;
+            cfg.TelegramOnSms = true;
             cfg.TelegramOnCall = _telegramOnCall;
             cfg.TelegramOnError = _telegramOnError;
 
@@ -525,7 +525,11 @@
             cfg.NewSimIntake = _newSimIntake;
             cfg.AutoAccept = _autoAccept;
 
-            gsm.Services.SettingsService.SaveSettings(cfg);
+            if (!gsm.Services.SettingsService.SaveSettings(cfg))
+            {
+                Snackbar.Add("Không lưu được appsettings.json; cấu hình chưa được áp dụng.", Severity.Error);
+                return;
+            }
 
             // Chỉ báo thành công sau khi backend đã áp dụng xong lên các cổng Active.
             await Vm.ApplySettingsAsync();
@@ -559,7 +563,7 @@
         _soundOnCall = true;
         _soundOnOtp = true;
         _telegramOnOtp = true;
-        _telegramOnSms = false;
+        _telegramOnSms = true;
         _telegramOnCall = true;
         _telegramOnError = true;
         _telegramBotToken = "";
@@ -625,7 +629,11 @@
                 return;
             }
 
-            gsm.Services.SettingsService.SaveSettings(cfg);
+            if (!gsm.Services.SettingsService.SaveSettings(cfg))
+            {
+                Snackbar.Add("Không lưu được file cấu hình đã import.", Severity.Error);
+                return;
+            }
             LoadSettings();
             Snackbar.Add("✓ Đã import + áp dụng cấu hình thành công", Severity.Success);
         }
@@ -679,7 +687,20 @@
             }
 
             if (allOk)
-                Snackbar.Add($"✓ Gửi Telegram thành công tới {chatIds.Count} Chat ID", Severity.Success);
+            {
+                var cfg = gsm.Services.SettingsService.Current;
+                cfg.TelegramBotToken = _telegramBotToken.Trim();
+                cfg.TelegramChatId = _telegramChatId.Trim();
+                cfg.TelegramChatIds = _telegramChatId.Trim();
+                cfg.TelegramOnOtp = true;
+                cfg.TelegramOnSms = true;
+                if (!gsm.Services.SettingsService.SaveSettings(cfg))
+                {
+                    Snackbar.Add("Test thành công nhưng không lưu được cấu hình Telegram.", Severity.Error);
+                    return;
+                }
+                Snackbar.Add($"✓ Đã test và lưu Telegram cho {chatIds.Count} Chat ID", Severity.Success);
+            }
         }
         catch (Exception ex)
         {

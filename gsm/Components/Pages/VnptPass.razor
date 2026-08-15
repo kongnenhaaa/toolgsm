@@ -200,9 +200,15 @@
 
     private System.Threading.Timer? _timer;
 
+    [Parameter] public bool IsPageActive { get; set; }
+
     protected override void OnInitialized()
     {
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+        _timer = new System.Threading.Timer(_ =>
+        {
+            if (IsPageActive)
+                _ = InvokeAsync(StateHasChanged);
+        }, null, 1500, 1500);
     }
 
     // ========== HELPERS ==========

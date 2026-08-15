@@ -5,7 +5,7 @@ namespace gsm.Tests;
 public sealed class SmsSimCleanupJournalTests
 {
     [Fact]
-    public void PreparedIntent_SurvivesRestart_AndExactCompletionIsDurable()
+    public void PreparedIntent_IsSessionOnlyAndCreatesNoFiles()
     {
         using var temp = new TemporaryDirectory();
         string primary = Path.Combine(temp.Path, "cleanup.json");
@@ -18,17 +18,18 @@ public sealed class SmsSimCleanupJournalTests
             "sms-mp-operation",
             "sms-stored-part");
 
-        var restarted = new SmsSimCleanupJournal(primary, fallback);
-        Assert.Equal(intent, Assert.Single(restarted.GetForScope(
-            "ccid:89840200011639721552")));
-        Assert.False(restarted.Complete(intent.IntentId, "wrong-message"));
-        Assert.True(restarted.Complete(intent.IntentId, intent.MessageId));
+        Assert.False(File.Exists(primary));
+        Assert.False(File.Exists(fallback));
+        Assert.False(first.Complete(intent.IntentId, "wrong-message"));
+        Assert.True(first.Complete(intent.IntentId, intent.MessageId));
+        Assert.Empty(first.GetForScope(
+            "ccid:89840200011639721552"));
         Assert.Empty(new SmsSimCleanupJournal(primary, fallback).GetForScope(
             "ccid:89840200011639721552"));
     }
 
     [Fact]
-    public void CorruptExistingIntentJournal_FailsClosedWithoutOverwrite()
+    public void ExistingFile_IsIgnoredAndNeverOverwritten()
     {
         using var temp = new TemporaryDirectory();
         string primary = Path.Combine(temp.Path, "cleanup.json");
@@ -36,17 +37,18 @@ public sealed class SmsSimCleanupJournalTests
         File.WriteAllText(primary, "{broken");
         var journal = new SmsSimCleanupJournal(primary, fallback);
 
-        Assert.Throws<InvalidDataException>(() => journal.Prepare(
+        journal.Prepare(
             "ccid:89840200011639721552",
             "COM86",
             "7",
             "sms-mp-operation",
-            "sms-stored-part"));
+            "sms-stored-part");
         Assert.Equal("{broken", File.ReadAllText(primary));
+        Assert.False(File.Exists(fallback));
     }
 
     [Fact]
-    public void OneCorruptSiblingAndOneValidCopy_FailsClosedAsNewestIsAmbiguous()
+    public void NewInstance_DoesNotRestorePreviousSessionIntent()
     {
         using var temp = new TemporaryDirectory();
         string primary = Path.Combine(temp.Path, "cleanup.json");
@@ -58,13 +60,12 @@ public sealed class SmsSimCleanupJournalTests
             "7",
             "sms-mp-operation",
             "sms-stored-part");
-        File.WriteAllText(fallback, "{newer-but-corrupt");
-
         var restarted = new SmsSimCleanupJournal(primary, fallback);
 
-        Assert.Throws<InvalidDataException>(() => restarted.GetForScope(
+        Assert.Empty(restarted.GetForScope(
             "ccid:89840200011639721552"));
-        Assert.Equal("{newer-but-corrupt", File.ReadAllText(fallback));
+        Assert.False(File.Exists(primary));
+        Assert.False(File.Exists(fallback));
     }
 
     [Fact]

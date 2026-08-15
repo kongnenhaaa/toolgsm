@@ -326,13 +326,14 @@
         (Vm.SmsMessages ?? Enumerable.Empty<SmsMessage>())
             // ReceivedTime is display-only HH:mm:ss and has no date. Sorting it
             // made yesterday's 20:47 SMS appear above today's 11:xx SMS.
-            // Carrier time is preferred when available. A fresh SMS without a
-            // carrier timestamp must still sort by its durable receive time;
-            // placing every timestamp-less row below all historic rows made a
-            // successfully received message look as though it disappeared.
-            .OrderByDescending(x => x.SmsTimestampUtc ?? x.ReceivedAtUtc);
+            // Always show the item just ingested by this app first. Carrier
+            // timestamps can be stale, delayed or have a wrong time zone and
+            // therefore are metadata, not the live inbox ordering key.
+            .OrderByDescending(MainViewModel.GetSmsDisplayTime);
 
     private int IncomingSmsCount => Vm.SmsMessages?.Count ?? 0;
+
+    [Parameter] public bool IsPageActive { get; set; }
 
     private IEnumerable<CommandQueueItem> SmsQueue =>
         (Vm.CommandQueue ?? Enumerable.Empty<CommandQueueItem>())
@@ -349,7 +350,11 @@
     protected override void OnInitialized()
     {
         Vm.SmsMessages.CollectionChanged += OnSmsMessagesChanged;
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+        _timer = new System.Threading.Timer(_ =>
+        {
+            if (IsPageActive)
+                _ = InvokeAsync(StateHasChanged);
+        }, null, 1500, 1500);
     }
 
     private void OnSmsMessagesChanged(
@@ -359,7 +364,8 @@
         // ObservableCollection is updated by the WPF dispatcher, but Blazor does
         // not observe it automatically. Render as soon as an SMS is inserted so
         // the inbox does not have to wait for the 1.5-second fallback timer.
-        _ = InvokeAsync(StateHasChanged);
+        if (IsPageActive)
+            _ = InvokeAsync(StateHasChanged);
     }
 
     // ========== HELPERS ==========

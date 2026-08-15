@@ -340,7 +340,7 @@ public sealed class RealDeviceSmokeTestRunner
                 state,
                 RealDeviceSmokeStepStatus.AwaitingResponse,
                 smsDisposition == RealDeviceSmsSubmitDisposition.Confirmed
-                    ? $"Modem đã xác nhận submit; đang chờ phản hồi mới từ {SmsRecipient} trong durable inbox."
+                    ? $"Modem đã xác nhận submit; đang chờ phản hồi mới từ {SmsRecipient} trong inbox phiên hiện tại."
                     : $"Payload đã qua Ctrl+Z nhưng phản hồi modem không chắc chắn; tuyệt đối không retry, đang chờ phản hồi mới từ {SmsRecipient} để chứng minh carrier đã nhận.");
             Checkpoint(store, state, logs);
 
@@ -618,7 +618,7 @@ public sealed class RealDeviceSmokeTestRunner
 
     /// <summary>
     /// Chỉ kiểm tra đường nhận SMS: gửi đúng một SMS 'data' tới 888 rồi chờ
-    /// phản hồi xuất hiện trong durable inbox. Không chạm vào IMEI, không gọi.
+    /// phản hồi xuất hiện trong inbox phiên hiện tại. Không chạm vào IMEI, không gọi.
     /// </summary>
     private async Task ExecuteSmsOnlyRequestAsync(
         RealDeviceSmokeClaim claim,
@@ -696,7 +696,7 @@ public sealed class RealDeviceSmokeTestRunner
                 state,
                 RealDeviceSmokeStepStatus.AwaitingResponse,
                 smsDisposition == RealDeviceSmsSubmitDisposition.Confirmed
-                    ? $"Modem đã xác nhận submit; đang chờ phản hồi mới từ {SmsRecipient} trong durable inbox."
+                    ? $"Modem đã xác nhận submit; đang chờ phản hồi mới từ {SmsRecipient} trong inbox phiên hiện tại."
                     : $"Payload đã qua Ctrl+Z nhưng phản hồi modem không chắc chắn; tuyệt đối không retry, đang chờ phản hồi mới từ {SmsRecipient}.");
             Checkpoint(store, state, logs);
 
@@ -1398,7 +1398,7 @@ public sealed class RealDeviceSmokeTestRunner
         }
 
         throw new RealDeviceSmokeRunException(
-            $"Đã gửi SMS nhưng hết hạn {timeoutSeconds}s mà durable inbox chưa có phản hồi mới từ {SmsRecipient} trên {portName}.");
+            $"Đã gửi SMS nhưng hết hạn {timeoutSeconds}s mà inbox phiên hiện tại chưa có phản hồi mới từ {SmsRecipient} trên {portName}.");
     }
 
     private static bool SameIdentity(
@@ -2016,7 +2016,7 @@ public enum RealDeviceSmokeScenario
     ImeiUssdBatch,
     /// <summary>
     /// Chỉ kiểm tra đường nhận SMS trên một cổng đã Active: gửi 'data' tới 888
-    /// rồi chờ phản hồi vào durable inbox. Không đổi IMEI, không gọi, không USSD.
+    /// rồi chờ phản hồi vào inbox phiên hiện tại. Không đổi IMEI, không gọi, không USSD.
     /// </summary>
     SmsOnly
 }

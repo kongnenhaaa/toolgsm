@@ -78,7 +78,6 @@
         new("imei", "imei", "IMEI", Icons.Material.Filled.Fingerprint),
         new("ezcom", "ezcom", "EZ COM", Icons.Material.Filled.Router),
         new("vnptpass", "vnpt-pass", "Pass VNPT", Icons.Material.Filled.Key),
-        new("logs", "logs", "Vận hành", Icons.Material.Filled.Terminal),
         new("settings", "settings", "Cài đặt", Icons.Material.Filled.Settings)
     };
 
@@ -133,14 +132,18 @@
         }
     };
 
-    private System.Threading.Timer? _timer;
+    private readonly HashSet<gsm.Models.SimPort> _observedPorts = new();
+    private int _layoutRenderScheduled;
+    private bool _disposed;
 
     protected override void OnInitialized()
     {
         _isDarkMode = gsm.Services.SettingsService.Current.DarkMode;
         SyncCurrentRoute();
         Nav.LocationChanged += OnLocationChanged;
-        _timer = new System.Threading.Timer(_ => _ = InvokeAsync(StateHasChanged), null, 1000, 1000);
+        Vm.Ports.CollectionChanged += OnPortsChanged;
+        foreach (gsm.Models.SimPort port in Vm.Ports)
+            AttachPort(port);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -169,6 +172,86 @@
         });
     }
 
+    private void OnPortsChanged(
+        object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems != null)
+        {
+            foreach (gsm.Models.SimPort port in e.OldItems)
+                DetachPort(port);
+        }
+
+        if (e.NewItems != null)
+        {
+            foreach (gsm.Models.SimPort port in e.NewItems)
+                AttachPort(port);
+        }
+
+        if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+        {
+            foreach (gsm.Models.SimPort port in _observedPorts.ToArray())
+                DetachPort(port);
+            foreach (gsm.Models.SimPort port in Vm.Ports)
+                AttachPort(port);
+        }
+
+        RequestLayoutRender();
+    }
+
+    private void AttachPort(gsm.Models.SimPort port)
+    {
+        if (_observedPorts.Add(port))
+            port.PropertyChanged += OnPortPropertyChanged;
+    }
+
+    private void DetachPort(gsm.Models.SimPort port)
+    {
+        if (_observedPorts.Remove(port))
+            port.PropertyChanged -= OnPortPropertyChanged;
+    }
+
+    private void OnPortPropertyChanged(
+        object? sender,
+        System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.PropertyName)
+            || string.Equals(
+                e.PropertyName,
+                nameof(gsm.Models.SimPort.Status),
+                StringComparison.Ordinal))
+        {
+            RequestLayoutRender();
+        }
+    }
+
+    private void RequestLayoutRender()
+    {
+        if (_disposed
+            || Interlocked.Exchange(ref _layoutRenderScheduled, 1) != 0)
+            return;
+
+        try
+        {
+            _ = InvokeAsync(() =>
+            {
+                try
+                {
+                    if (!_disposed)
+                        StateHasChanged();
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _layoutRenderScheduled, 0);
+                }
+            });
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _layoutRenderScheduled, 0);
+        }
+    }
+
     private void SyncCurrentRoute()
     {
         var path = Nav.ToBaseRelativePath(Nav.Uri).Trim('/').ToLowerInvariant();
@@ -186,7 +269,10 @@
 
     public void Dispose()
     {
+        _disposed = true;
         Nav.LocationChanged -= OnLocationChanged;
-        _timer?.Dispose();
+        Vm.Ports.CollectionChanged -= OnPortsChanged;
+        foreach (gsm.Models.SimPort port in _observedPorts.ToArray())
+            DetachPort(port);
     }
 }

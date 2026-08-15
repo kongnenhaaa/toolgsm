@@ -148,6 +148,8 @@
 
 @code {
     // ========== BINDINGS ==========
+    [Parameter] public bool IsPageActive { get; set; }
+
     private string _search = "";
     private string _filterLevel = "all";
     private bool _autoScroll = true;
@@ -157,6 +159,7 @@
     private ElementReference _logContainer;
     private int _renderScheduled;
     private bool _disposed;
+    private bool _wasPageActive;
 
     // Stats counters (cập nhật realtime)
     private int _smsSuccess, _smsError, _ussdSuccess, _ussdError;
@@ -191,28 +194,42 @@
         try
         {
             Vm.LogAdded += OnVmLogAdded;
-            
-            // Lấy 500 log cũ đã có trong Vm (nếu có)
-            foreach (var log in Vm.SystemLogs.Reverse())
-            {
-                OnVmLogAdded(log);
-            }
         }
         catch { }
 
-        // Log khởi động
+        _timer = new System.Threading.Timer(_ => RequestRender(), null, 1000, 1000);
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (IsPageActive && !_wasPageActive)
+            ReloadFromViewModel();
+        _wasPageActive = IsPageActive;
+    }
+
+    private void ReloadFromViewModel()
+    {
+        _logs.Clear();
+        _smsSuccess = _smsError = 0;
+        _ussdSuccess = _ussdError = 0;
+        _callSuccess = _callError = 0;
+        _acceptSuccess = _acceptError = 0;
+
+        foreach (LogMessage log in Vm.SystemLogs.Reverse())
+            AddViewModelLog(log);
+
         if (_logs.Count == 0)
         {
             AddLog("system", "info", "Tool GSM đã khởi động");
             AddLog("system", "info", "Sẵn sàng kết nối thiết bị");
         }
-
-        _timer = new System.Threading.Timer(_ => RequestRender(), null, 1000, 1000);
     }
 
     private void RequestRender()
     {
-        if (_disposed || Interlocked.Exchange(ref _renderScheduled, 1) != 0)
+        if (_disposed
+            || !IsPageActive
+            || Interlocked.Exchange(ref _renderScheduled, 1) != 0)
             return;
 
         try
@@ -221,7 +238,7 @@
             {
                 try
                 {
-                    if (!_disposed)
+                    if (!_disposed && IsPageActive)
                         StateHasChanged();
                 }
                 finally
@@ -240,6 +257,21 @@
     // NHẬN LOG TỪ BACKEND
     // =====================================================
     private void OnVmLogAdded(LogMessage logMsg)
+    {
+        // PersistentPageHost keeps this component alive while hidden. Avoid one
+        // renderer callback per modem line for an invisible page; reload the
+        // bounded ViewModel snapshot when the user opens the page again.
+        if (_disposed || !IsPageActive)
+            return;
+
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed && IsPageActive)
+                AddViewModelLog(logMsg);
+        });
+    }
+
+    private void AddViewModelLog(LogMessage logMsg)
     {
         var level = logMsg.Level?.ToLowerInvariant() ?? "info";
         var msg = logMsg.Message ?? "";
@@ -264,13 +296,7 @@
         else if (msg.Contains("WARN", StringComparison.OrdinalIgnoreCase))
             level = "warning";
 
-        // Marshal to the Blazor renderer, but let the once-per-second timer
-        // below own rendering instead of repainting for every incoming line.
-        _ = InvokeAsync(() =>
-        {
-            if (!_disposed)
-                AddLog(port, level, msg);
-        });
+        AddLog(port, level, msg);
     }
 
     void AddLog(string port, string level, string message)

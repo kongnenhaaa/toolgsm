@@ -171,11 +171,17 @@
     private IEnumerable<SimPort> ActivePorts => Ports.Where(p => p.Status == SimStatus.Active);
     private List<SimPort> FilteredPorts => Ports;
 
+    [Parameter] public bool IsPageActive { get; set; }
+
     private System.Threading.Timer? _timer;
 
     protected override void OnInitialized()
     {
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 1500, 1500);
+        _timer = new System.Threading.Timer(_ =>
+        {
+            if (IsPageActive)
+                _ = InvokeAsync(StateHasChanged);
+        }, null, 1500, 1500);
     }
 
     // ========== HELPERS ==========

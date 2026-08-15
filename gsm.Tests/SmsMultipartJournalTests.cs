@@ -530,7 +530,7 @@ public sealed class SmsMultipartJournalTests
     }
 
     [Fact]
-    public void LegacyPublishJournal_IsImportedOnlyOnceAndNeverResurrected()
+    public void LegacyPublishJournal_IsIgnoredAndNoManifestIsCreated()
     {
         string stablePath = TempJournalPath();
         string legacyPath = TempJournalPath();
@@ -559,9 +559,9 @@ public sealed class SmsMultipartJournalTests
             var firstRun = new SmsMultipartJournal(
                 stablePath,
                 legacyPaths: [legacyPath]);
-            SmsMultipartJournal.CompletedSnapshot imported = Assert.Single(
-                firstRun.GetCompletedSnapshots("COM101"));
-            firstRun.Complete(imported.MessageId);
+            Assert.Empty(firstRun.GetCompletedSnapshots("COM101"));
+            Assert.False(File.Exists(
+                stablePath + ".legacy-migration.json"));
 
             var secondRun = new SmsMultipartJournal(
                 stablePath,
@@ -607,7 +607,7 @@ public sealed class SmsMultipartJournalTests
             Assert.Empty(upgraded.GetCompletedSnapshots(
                 "COM101",
                 includeAcknowledged: true));
-            Assert.True(File.Exists(stablePath + ".legacy-migration.json"));
+            Assert.False(File.Exists(stablePath + ".legacy-migration.json"));
             Assert.Empty(new SmsMultipartJournal(
                     stablePath,
                     legacyPaths: [legacyPath])
@@ -635,7 +635,7 @@ public sealed class SmsMultipartJournalTests
             var firstRun = new SmsMultipartJournal(
                 stablePath,
                 legacyPaths: [firstLegacyPath, lateLegacyPath]);
-            Assert.Single(firstRun.GetCompletedSnapshots("COM101"));
+            Assert.Empty(firstRun.GetCompletedSnapshots("COM101"));
 
             // The stable file now exists, but the sidecar still knows that this
             // source was missing and must be retried rather than skipped forever.
@@ -646,10 +646,10 @@ public sealed class SmsMultipartJournalTests
                 stablePath,
                 legacyPaths: [firstLegacyPath, lateLegacyPath]);
 
-            Assert.Single(secondRun.GetCompletedSnapshots("COM101"));
-            Assert.Equal(
-                "late-source",
-                Assert.Single(secondRun.GetCompletedSnapshots("COM102")).Content);
+            Assert.Empty(secondRun.GetCompletedSnapshots("COM101"));
+            Assert.Empty(secondRun.GetCompletedSnapshots("COM102"));
+            Assert.False(File.Exists(
+                stablePath + ".legacy-migration.json"));
         }
         finally
         {
@@ -675,19 +675,17 @@ public sealed class SmsMultipartJournalTests
             var failedMigration = new SmsMultipartJournal(
                 stablePath,
                 legacyPaths: [legacyPath]);
-            Assert.Throws<InvalidDataException>(() =>
-                failedMigration.GetCompletedSnapshots("COM103"));
-            Assert.Throws<InvalidDataException>(() =>
-                failedMigration.Complete("unrelated-message-id"));
+            Assert.Empty(failedMigration.GetCompletedSnapshots("COM103"));
+            failedMigration.Complete("unrelated-message-id");
             Assert.False(File.Exists(stablePath));
 
             File.WriteAllText(legacyPath, $"[{validEntry}]");
             var repairedMigration = new SmsMultipartJournal(
                 stablePath,
                 legacyPaths: [legacyPath]);
-            Assert.Equal(
-                "must-not-partially-import",
-                Assert.Single(repairedMigration.GetCompletedSnapshots("COM103")).Content);
+            Assert.Empty(repairedMigration.GetCompletedSnapshots("COM103"));
+            Assert.False(File.Exists(
+                stablePath + ".legacy-migration.json"));
         }
         finally
         {
@@ -699,7 +697,7 @@ public sealed class SmsMultipartJournalTests
     [Theory]
     [InlineData("null")]
     [InlineData("{not-json")]
-    public void CorruptLegacySource_FailsClosedWithoutPublishingPartialState(string json)
+    public void CorruptLegacySource_IsIgnoredWithoutBlockingCurrentJournal(string json)
     {
         string stablePath = TempJournalPath();
         string legacyPath = TempJournalPath();
@@ -710,11 +708,13 @@ public sealed class SmsMultipartJournalTests
                 stablePath,
                 legacyPaths: [legacyPath]);
 
-            Assert.Throws<InvalidDataException>(() => journal.GetParts(
+            Assert.Empty(journal.GetParts(
                 "COM9", "888", new(1, 2, 1)));
-            Assert.Throws<InvalidDataException>(() => journal.RecordAndGetParts(
+            Assert.Single(journal.RecordAndGetParts(
                 "COM9", "888", new(1, 2, 1), "part-one"));
-            Assert.False(File.Exists(stablePath));
+            Assert.True(File.Exists(stablePath));
+            Assert.False(File.Exists(
+                stablePath + ".legacy-migration.json"));
         }
         finally
         {

@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text;
 using System.Text.RegularExpressions;
 using gsm.Services;
 
@@ -8,30 +7,50 @@ namespace gsm.Tests;
 public sealed class TelegramOutboxStoreTests
 {
     [Fact]
-    public void EnqueuedNotification_SurvivesRestartWithoutContentLoss()
+    public void EnqueuedNotification_IsSessionOnlyAndCreatesNoFiles()
     {
         using var temp = new TempDirectory();
         const string text = "Tin dài phần 1\nphần 2 🔐 & <safe>";
-        var firstRun = new TelegramOutboxStore(temp.Path);
-        TelegramOutboxStore.Job created = Assert.Single(firstRun.Enqueue(
+        var store = new TelegramOutboxStore(temp.Path);
+
+        TelegramOutboxStore.Job created = Assert.Single(store.Enqueue(
             "token",
             "chat",
             [(text, false)]));
 
-        var afterRestart = new TelegramOutboxStore(temp.Path);
-        TelegramOutboxStore.Job recovered =
-            Assert.Single(afterRestart.GetPending());
-
-        Assert.Equal(created.Id, recovered.Id);
-        Assert.Equal(text, recovered.Text);
-        Assert.False(recovered.UseHtml);
+        TelegramOutboxStore.Job queued = Assert.Single(store.GetPending());
+        Assert.Equal(created.Id, queued.Id);
+        Assert.Equal(text, queued.Text);
+        Assert.False(queued.UseHtml);
+        Assert.False(File.Exists(Path.Combine(
+            temp.Path, "telegram_outbox.json")));
+        Assert.False(File.Exists(Path.Combine(
+            temp.Path, "telegram_outbox.backup.json")));
+        Assert.Empty(new TelegramOutboxStore(temp.Path).GetPending());
     }
 
     [Fact]
-    public void RetryAndCompletion_AreDurableAcrossRestart()
+    public void MissingDestination_IsRetainedOnlyWithinCurrentSession()
     {
         using var temp = new TempDirectory();
         var store = new TelegramOutboxStore(temp.Path);
+
+        TelegramOutboxStore.Job created = Assert.Single(store.Enqueue(
+            string.Empty,
+            string.Empty,
+            [("SMS phải chờ cấu hình", true)]));
+
+        TelegramOutboxStore.Job queued = Assert.Single(store.GetPending());
+        Assert.Equal(created.Id, queued.Id);
+        Assert.Empty(queued.BotToken);
+        Assert.Empty(queued.ChatId);
+        Assert.Empty(new TelegramOutboxStore(temp.Path).GetPending());
+    }
+
+    [Fact]
+    public void RetryAndCompletion_WorkWithinCurrentSession()
+    {
+        var store = new TelegramOutboxStore();
         TelegramOutboxStore.Job job = Assert.Single(store.Enqueue(
             "token",
             "chat",
@@ -39,15 +58,12 @@ public sealed class TelegramOutboxStoreTests
         DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddMinutes(2);
 
         Assert.True(store.Retry(job.Id, retryAt, "offline"));
-        var afterRetry = new TelegramOutboxStore(temp.Path);
-        TelegramOutboxStore.Job retried =
-            Assert.Single(afterRetry.GetPending());
+        TelegramOutboxStore.Job retried = Assert.Single(store.GetPending());
         Assert.Equal(1, retried.AttemptCount);
         Assert.Equal("offline", retried.LastError);
         Assert.Equal(retryAt, retried.NextAttemptUtc, TimeSpan.FromMilliseconds(1));
-
-        Assert.True(afterRetry.Complete(job.Id));
-        Assert.Empty(new TelegramOutboxStore(temp.Path).GetPending());
+        Assert.True(store.Complete(job.Id));
+        Assert.Empty(store.GetPending());
     }
 
     [Fact]
@@ -74,37 +90,33 @@ public sealed class TelegramOutboxStoreTests
     }
 
     [Fact]
-    public void ValidBackup_RecoversWhenPrimaryOutboxIsCorrupt()
+    public void TelegramTargets_UseSavedConfigForWaitingJob_AndKeepAllChatIds()
     {
-        using var temp = new TempDirectory();
-        var store = new TelegramOutboxStore(temp.Path);
-        store.Enqueue("token", "chat", [("message", true)]);
-        File.WriteAllText(
-            Path.Combine(temp.Path, "telegram_outbox.json"),
-            "{corrupt");
+        (string token, IReadOnlyList<string> chatIds) =
+            NotifyService.ResolveTelegramTargets(
+                string.Empty,
+                string.Empty,
+                " token-1 , token-ignored ",
+                " chat-a; chat-b,chat-a ",
+                "fallback-chat");
 
-        Assert.Single(new TelegramOutboxStore(temp.Path).GetPending());
+        Assert.Equal("token-1", token);
+        Assert.Equal(["chat-a", "chat-b"], chatIds);
     }
 
     [Fact]
-    public void BothCorruptOutboxCopies_FailClosedWithoutOverwritingJobs()
+    public void TelegramTargets_PreferDestinationCapturedAtEnqueue()
     {
-        using var temp = new TempDirectory();
-        var store = new TelegramOutboxStore(temp.Path);
-        store.Enqueue("token", "chat", [("first", true)]);
-        string primary = Path.Combine(temp.Path, "telegram_outbox.json");
-        string fallback = Path.Combine(
-            temp.Path, "telegram_outbox.backup.json");
-        File.WriteAllText(primary, "{primary-corrupt");
-        File.WriteAllText(fallback, "{fallback-corrupt");
-        var blocked = new TelegramOutboxStore(temp.Path);
+        (string token, IReadOnlyList<string> chatIds) =
+            NotifyService.ResolveTelegramTargets(
+                "job-token",
+                "job-chat-1;job-chat-2",
+                "new-token",
+                "new-chat",
+                string.Empty);
 
-        Assert.Throws<InvalidDataException>(() => blocked.Enqueue(
-            "token",
-            "chat",
-            [("second", true)]));
-        Assert.Equal("{primary-corrupt", File.ReadAllText(primary));
-        Assert.Equal("{fallback-corrupt", File.ReadAllText(fallback));
+        Assert.Equal("job-token", token);
+        Assert.Equal(["job-chat-1", "job-chat-2"], chatIds);
     }
 
     private static void AssertNoUnpairedSurrogates(string value)
@@ -144,7 +156,6 @@ public sealed class TelegramOutboxStoreTests
             }
             catch
             {
-                // Best-effort test cleanup.
             }
         }
     }

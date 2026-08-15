@@ -44,4 +44,34 @@ public sealed class AppPathsTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void StartupCleanup_RemovesOnlyObsoleteSidecarsAndKeepsMultipartJournal()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "toolgsm-obsolete-state-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            foreach (string fileName in AppBootstrap.ObsoleteLocalStateFiles)
+                File.WriteAllText(Path.Combine(directory, fileName), "old");
+            string multipart = Path.Combine(
+                directory, "sms_multipart_journal.json");
+            string unrelated = Path.Combine(directory, "imei_pending_no_sim.json");
+            File.WriteAllText(multipart, "[]");
+            File.WriteAllText(unrelated, "{}");
+
+            AppBootstrap.DeleteObsoleteLocalStateFiles(directory);
+
+            Assert.All(AppBootstrap.ObsoleteLocalStateFiles, fileName =>
+                Assert.False(File.Exists(Path.Combine(directory, fileName))));
+            Assert.True(File.Exists(multipart));
+            Assert.True(File.Exists(unrelated));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
 }

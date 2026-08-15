@@ -79,17 +79,9 @@ internal sealed class SmsMultipartJournal
         };
     }
 
-    private sealed class LegacyMigrationManifest
-    {
-        public int Version { get; set; } = 1;
-        public HashSet<string> CompletedSources { get; set; } =
-            new(StringComparer.OrdinalIgnoreCase);
-    }
-
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly object _gate = new();
     private readonly string _filePath;
-    private readonly string _migrationManifestPath;
     private readonly bool _inMemory;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private bool _loadFailed;
@@ -101,21 +93,20 @@ internal sealed class SmsMultipartJournal
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         _filePath = Path.GetFullPath(filePath);
-        _migrationManifestPath = _filePath + ".legacy-migration.json";
         // `timeout` remains in the signature for binary/source compatibility
         // with older callers. Once a part has been durably committed, its SIM
         // slot may already have been released; expiring that part by time would
         // therefore be irreversible data loss.
         _ = timeout;
-        bool stableJournalAlreadyExists = File.Exists(_filePath);
+        // Legacy journal migration was removed. Keep the optional argument only
+        // for source compatibility; no sidecar manifest is created or read.
+        _ = legacyPaths;
         Load();
-        ImportLegacyFiles(legacyPaths, stableJournalAlreadyExists);
     }
 
     private SmsMultipartJournal()
     {
         _filePath = string.Empty;
-        _migrationManifestPath = string.Empty;
         _inMemory = true;
     }
 
@@ -617,7 +608,7 @@ internal sealed class SmsMultipartJournal
                 pair.Value.LastPortName = portName;
                 pair.Value.LastUpdated = reboundAt;
                 // Keep MessageId stable. It may already be present in the
-                // durable inbox, and it is the at-least-once deduplication key.
+                // session inbox, and it is the at-least-once deduplication key.
                 _entries[UniqueKeyLocked(pair.Value)] = pair.Value;
             }
             try
@@ -688,113 +679,6 @@ internal sealed class SmsMultipartJournal
         }
     }
 
-    private void ImportLegacyFiles(
-        IEnumerable<string>? legacyPaths,
-        bool stableJournalAlreadyExists)
-    {
-        if (legacyPaths == null || _loadFailed) return;
-        string[] sources;
-        try
-        {
-            sources = legacyPaths
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Select(Path.GetFullPath)
-                .Where(path => !string.Equals(
-                    path,
-                    _filePath,
-                    StringComparison.OrdinalIgnoreCase))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        }
-        catch (Exception ex) when (IsJournalReadWriteException(ex))
-        {
-            _loadFailed = true;
-            return;
-        }
-        if (sources.Length == 0) return;
-
-        lock (_gate)
-        {
-            LegacyMigrationManifest manifest;
-            bool manifestExists;
-            try
-            {
-                manifest = LoadLegacyMigrationManifestLocked(out manifestExists);
-            }
-            catch (Exception ex) when (IsJournalReadWriteException(ex))
-            {
-                _loadFailed = true;
-                return;
-            }
-
-            if (!manifestExists)
-            {
-                // An existing stable journal from an older build has already
-                // established the migration baseline. Mark every configured
-                // source as handled without reading it; importing it now could
-                // resurrect messages that the stable journal already completed.
-                if (stableJournalAlreadyExists)
-                    manifest.CompletedSources.UnionWith(sources);
-                try
-                {
-                    // Write the empty manifest before the first import. If the
-                    // process stops after committing the stable file but before
-                    // marking a source complete, the next run can safely retry it.
-                    SaveLegacyMigrationManifestLocked(manifest);
-                }
-                catch (Exception ex) when (IsJournalReadWriteException(ex))
-                {
-                    _loadFailed = true;
-                    return;
-                }
-                if (stableJournalAlreadyExists) return;
-            }
-
-            foreach (string source in sources)
-            {
-                if (manifest.CompletedSources.Contains(source)
-                    || !File.Exists(source))
-                    continue;
-
-                Entry[] imported;
-                try
-                {
-                    // Parse and validate the whole source before touching the
-                    // live dictionary. A null/corrupt trailing entry therefore
-                    // cannot leak a valid prefix into the stable journal.
-                    imported = ReadValidatedEntries(source);
-                }
-                catch (Exception ex) when (IsJournalReadWriteException(ex))
-                {
-                    _loadFailed = true;
-                    return;
-                }
-
-                Dictionary<string, Entry> rollback = CloneEntriesLocked();
-                bool stableCommitFinished = false;
-                try
-                {
-                    bool changed = MergeImportedEntriesLocked(imported);
-                    if (changed) SaveLocked();
-                    stableCommitFinished = true;
-
-                    manifest.CompletedSources.Add(source);
-                    SaveLegacyMigrationManifestLocked(manifest);
-                }
-                catch (Exception ex) when (IsJournalReadWriteException(ex))
-                {
-                    if (!stableCommitFinished)
-                        RestoreAllLocked(rollback);
-                    // The source remains absent from the durable manifest, so a
-                    // future clean startup retries it. Block this instance from
-                    // replaying or mutating state whose migration is incomplete.
-                    _loadFailed = true;
-                    return;
-                }
-            }
-        }
-    }
-
     private static Entry[] ReadValidatedEntries(string path)
     {
         Entry?[]? deserialized = JsonSerializer.Deserialize<Entry?[]>(
@@ -847,103 +731,6 @@ internal sealed class SmsMultipartJournal
                 "Multipart journal contains an invalid entry.");
         }
     }
-
-    private bool MergeImportedEntriesLocked(IEnumerable<Entry> imported)
-    {
-        bool changed = false;
-        foreach (Entry source in imported)
-        {
-            string key = Key(source);
-            if (!_entries.TryGetValue(key, out Entry? existing))
-            {
-                Entry? messageIdOwner = _entries.Values.FirstOrDefault(entry =>
-                    string.Equals(
-                        entry.MessageId,
-                        source.MessageId,
-                        StringComparison.Ordinal));
-                if (messageIdOwner != null
-                    && !string.Equals(
-                        messageIdOwner.GenerationId,
-                        source.GenerationId,
-                        StringComparison.Ordinal))
-                {
-                    throw new InvalidDataException(
-                        "Legacy multipart source reuses a delivery identity.");
-                }
-
-                _entries[key] = source.Clone();
-                changed = true;
-                continue;
-            }
-
-            if (!string.Equals(
-                    existing.MessageId,
-                    source.MessageId,
-                    StringComparison.Ordinal)
-                || !EntriesAreCompatible(existing, source)
-                || existing.PartIdentities.Any(identity =>
-                    source.PartIdentities.TryGetValue(identity.Key, out string? other)
-                    && !string.Equals(identity.Value, other, StringComparison.Ordinal)))
-            {
-                throw new InvalidDataException(
-                    "Legacy multipart source conflicts with stable state.");
-            }
-
-            foreach (KeyValuePair<int, string> part in source.Parts)
-                if (existing.Parts.TryAdd(part.Key, part.Value)) changed = true;
-            foreach (KeyValuePair<int, string> identity in source.PartIdentities)
-                if (existing.PartIdentities.TryAdd(identity.Key, identity.Value)) changed = true;
-            foreach (string identity in source.CleanedPartIdentities)
-                if (existing.CleanedPartIdentities.Add(identity)) changed = true;
-            foreach (string sender in source.AcceptedSenders)
-                if (existing.AcceptedSenders.Add(sender)) changed = true;
-            if (source.LastUpdated > existing.LastUpdated)
-            {
-                existing.LastUpdated = source.LastUpdated;
-                if (!string.IsNullOrWhiteSpace(source.LastPortName))
-                    existing.LastPortName = source.LastPortName;
-                changed = true;
-            }
-            if (!existing.DeliveryAcknowledged && source.DeliveryAcknowledged)
-            {
-                existing.DeliveryAcknowledged = true;
-                changed = true;
-            }
-        }
-        return changed;
-    }
-
-    private LegacyMigrationManifest LoadLegacyMigrationManifestLocked(
-        out bool exists)
-    {
-        exists = File.Exists(_migrationManifestPath);
-        if (!exists) return new LegacyMigrationManifest();
-
-        LegacyMigrationManifest? manifest =
-            JsonSerializer.Deserialize<LegacyMigrationManifest>(
-                File.ReadAllText(_migrationManifestPath), JsonOptions);
-        if (manifest == null
-            || manifest.Version != 1
-            || manifest.CompletedSources == null)
-        {
-            throw new InvalidDataException(
-                "Multipart legacy-migration manifest is invalid.");
-        }
-
-        var normalized = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (string source in manifest.CompletedSources)
-        {
-            if (string.IsNullOrWhiteSpace(source))
-                throw new InvalidDataException(
-                    "Multipart legacy-migration manifest contains an invalid source.");
-            normalized.Add(Path.GetFullPath(source));
-        }
-        manifest.CompletedSources = normalized;
-        return manifest;
-    }
-
-    private void SaveLegacyMigrationManifestLocked(LegacyMigrationManifest manifest) =>
-        SaveJsonAtomicallyLocked(_migrationManifestPath, manifest);
 
     private void SaveLocked()
     {

@@ -277,6 +277,18 @@ public class GsmModemService : IGsmModemService
     internal static TimeSpan SautoDataPortLoopDelay { get; } =
         TimeSpan.FromMilliseconds(400);
 
+    // Keep initial network acquisition responsive, then release UART/log/CPU
+    // pressure once the SIM is registered. Incoming URCs remain asynchronous;
+    // this delay only controls the health polling cadence.
+    internal static TimeSpan SautoOnlineDataPortLoopDelay { get; } =
+        TimeSpan.FromSeconds(5);
+
+    internal static TimeSpan SelectSautoDataPortLoopDelay(
+        bool networkRegistered) =>
+        networkRegistered
+            ? SautoOnlineDataPortLoopDelay
+            : SautoDataPortLoopDelay;
+
     internal static IReadOnlyList<string> SmsReceiveRestoreCommandOrder { get; } =
     [
         "AT+CMGF=1",
@@ -794,9 +806,9 @@ public class GsmModemService : IGsmModemService
     private readonly SmsMultipartJournal _multipartJournal =
         CreateMultipartJournal();
     private readonly SmsSimCleanupJournal _simCleanupJournal =
-        CreateSimCleanupJournal();
+        SmsSimCleanupJournal.CreateInMemory();
     private readonly SmsDirectRecoveryStore _directRecoveryStore =
-        CreateDirectRecoveryStore();
+        SmsDirectRecoveryStore.CreateInMemory();
     private readonly ConcurrentDictionary<string, DateTime> _deliveredStoredSms = new();
     private readonly ConcurrentDictionary<string, SmsReadQueueState> _smsReadQueues =
         new(StringComparer.OrdinalIgnoreCase);
@@ -871,65 +883,7 @@ public class GsmModemService : IGsmModemService
     {
         string stablePath = Path.Combine(
             StableSmsDataDirectory, "sms_multipart_journal.json");
-        return new SmsMultipartJournal(
-            stablePath,
-            legacyPaths: DiscoverLegacyMultipartJournalPaths(stablePath));
-    }
-
-    private static SmsSimCleanupJournal CreateSimCleanupJournal()
-    {
-        string primaryPath = Path.Combine(
-            StableSmsDataDirectory, "sms_sim_cleanup_journal.json");
-        string fallbackPath = Path.Combine(
-            StableSmsDataDirectory, "sms_sim_cleanup_journal.pending.json");
-        return new SmsSimCleanupJournal(primaryPath, fallbackPath);
-    }
-
-    private static SmsDirectRecoveryStore CreateDirectRecoveryStore()
-    {
-        string primaryPath = Path.Combine(
-            StableSmsDataDirectory, "sms_direct_recovery.json");
-        string fallbackPath = Path.Combine(
-            StableSmsDataDirectory, "sms_direct_recovery.backup.json");
-        return new SmsDirectRecoveryStore(primaryPath, fallbackPath);
-    }
-
-    internal static IReadOnlyList<string> DiscoverLegacyMultipartJournalPaths(
-        string stablePath)
-    {
-        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            Path.Combine(AppBootstrap.DataDir, "sms_multipart_journal.json")
-        };
-        try
-        {
-            string appDirectory = AppBootstrap.AppDir.TrimEnd(
-                Path.DirectorySeparatorChar,
-                Path.AltDirectorySeparatorChar);
-            string? publishRoot = Directory.GetParent(appDirectory)?.FullName;
-            if (!string.IsNullOrWhiteSpace(publishRoot)
-                && Directory.Exists(publishRoot))
-            {
-                foreach (string directory in Directory.EnumerateDirectories(
-                             publishRoot, "publish*"))
-                {
-                    paths.Add(Path.Combine(
-                        directory, "Data", "sms_multipart_journal.json"));
-                }
-            }
-        }
-        catch (Exception ex) when (ex is IOException
-                                      or UnauthorizedAccessException
-                                      or DirectoryNotFoundException)
-        {
-            // Migration is best effort and never deletes/mutates a legacy file.
-        }
-
-        paths.RemoveWhere(path => string.Equals(
-            Path.GetFullPath(path),
-            Path.GetFullPath(stablePath),
-            StringComparison.OrdinalIgnoreCase));
-        return paths.ToArray();
+        return new SmsMultipartJournal(stablePath);
     }
 
     private void TrimDeliveredStoredSms()
@@ -1068,7 +1022,7 @@ public class GsmModemService : IGsmModemService
         long generation = InvalidateSmsReceiveMaintenance(portName);
         AtCommandTraceLogger.State(
             portName,
-            $"SMS_MAINTENANCE_HELD;reason=SAUTO_IMEI_FLOW;generation={generation};next=AUTOMATIC_USSD_COMPLETE_AND_UART_RELEASED");
+            $"SMS_MAINTENANCE_HELD;reason=SAUTO_IMEI_FLOW;generation={generation};next=NETWORK_READY_AND_UART_RELEASED");
         return lifecycleLease;
     }
 
@@ -1092,9 +1046,9 @@ public class GsmModemService : IGsmModemService
         string? expectedCcid,
         string? smsCcid,
         string? networkCcid,
-        bool automaticUssdCompleted)
+        bool networkReadyForSms)
     {
-        return automaticUssdCompleted
+        return networkReadyForSms
             && expectedGeneration == currentGeneration
             && !string.IsNullOrWhiteSpace(expectedCcid)
             && string.Equals(expectedCcid, smsCcid, StringComparison.Ordinal)
@@ -1108,20 +1062,20 @@ public class GsmModemService : IGsmModemService
     {
         _smsSimIdentities.TryGetValue(portName, out string? smsCcid);
         _networkSimIdentities.TryGetValue(portName, out string? networkCcid);
-        bool completed = _sautoNetworkStates.TryGetValue(
+        bool networkReadyForSms = _sautoNetworkStates.TryGetValue(
                 portName, out SautoNetworkState? networkState)
             && string.Equals(
                 networkState.Ccid,
                 expectedCcid,
                 StringComparison.Ordinal)
-            && networkState.AutomaticUssdCompleted;
+            && IsSautoCarrierRegistered(networkState.Carrier);
         return CanOpenSmsReceiveMaintenanceGate(
             expectedGeneration,
             CurrentSmsReceiveMaintenanceGeneration(portName),
             expectedCcid,
             smsCcid,
             networkCcid,
-            completed);
+            networkReadyForSms);
     }
 
     private bool IsSmsReceiveMaintenanceEnabled(string portName)
@@ -1171,10 +1125,10 @@ public class GsmModemService : IGsmModemService
                         out SemaphoreSlim? semaphore))
                     return;
 
-                // This request is raised from inside DataPort's UART critical
-                // section. Acquiring the same semaphore here is the condition
-                // that proves the completed automatic *101# owner has released
-                // the COM; no guessed post-USSD millisecond delay is used.
+                // This request may be raised from inside DataPort's UART
+                // critical section. Acquiring the same semaphore proves the
+                // network-registration owner has released the COM before SMS
+                // maintenance starts; no guessed millisecond delay is used.
                 await semaphore.WaitAsync(lifetime.Token).ConfigureAwait(false);
                 bool opened = false;
                 bool firstEnable = false;
@@ -1209,13 +1163,13 @@ public class GsmModemService : IGsmModemService
                 {
                     AtCommandTraceLogger.State(
                         portName,
-                        $"SMS_MAINTENANCE_ENABLED;ccid={normalized};generation={expectedGeneration};reason={reason};after=SAUTO_AUTO_USSD_AND_UART_RELEASE");
+                        $"SMS_MAINTENANCE_ENABLED;ccid={normalized};generation={expectedGeneration};reason={reason};after=SAUTO_NETWORK_READY_AND_UART_RELEASE");
                 }
 
                 EnsureSmsReceiveWatchdog(portName);
                 ScheduleSafeUnreadSmsSweep(
                     portName,
-                    $"sauto-post-ussd:{reason}");
+                    $"sauto-network-ready:{reason}");
             }
             catch (OperationCanceledException)
             {
@@ -2319,7 +2273,7 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = port,
-                Data = $"[SMS_SIM_CLEANUP_BLOCKED] index={simIndex} delivery={messageId}; không ghi bền vững được ý định xóa: {ex.Message}. Giữ nguyên SMS trên SIM."
+                Data = $"[SMS_SIM_CLEANUP_BLOCKED] index={simIndex} delivery={messageId}; không giữ được trạng thái cleanup trong RAM: {ex.Message}. Giữ nguyên SMS trên SIM."
             });
             return null;
         }
@@ -2660,7 +2614,7 @@ public class GsmModemService : IGsmModemService
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = port,
-                            Data = "[SMS_RECEIVE_MODE_RESTORE_BLOCKED] Chưa xác minh lại được CMGF=1/CSCS=GSM/CNMI=1,1; giữ cleanup intent để tự phục hồi lần sau."
+                            Data = "[SMS_RECEIVE_MODE_RESTORE_BLOCKED] Chưa xác minh lại được CMGF=1/CSCS=GSM/CNMI=1,1; giữ cleanup intent trong phiên để thử lại."
                         });
                     }
                 }
@@ -4562,6 +4516,23 @@ public class GsmModemService : IGsmModemService
             expectedCcid,
             expectedImei);
 
+    internal static string GetNetworkRegistrationPublicationKey(
+        string portName,
+        string registrationType) =>
+        $"{portName.Trim().ToUpperInvariant()}\u001f{registrationType.Trim().ToUpperInvariant()}";
+
+    private void ClearPublishedNetworkRegistrations(string portName)
+    {
+        foreach (string registrationType in new[] { "CREG", "CGREG", "CEREG" })
+        {
+            _lastPublishedNetworkRegistration.TryRemove(
+                GetNetworkRegistrationPublicationKey(
+                    portName,
+                    registrationType),
+                out _);
+        }
+    }
+
     public void StartPollingNetwork(
         string portName,
         string expectedCcid,
@@ -4577,7 +4548,7 @@ public class GsmModemService : IGsmModemService
         if (string.IsNullOrWhiteSpace(normalizedExpectedCcid))
             return;
 
-        _lastPublishedNetworkRegistration.TryRemove(portName, out _);
+        ClearPublishedNetworkRegistrations(portName);
 
         var expectedIdentity = new NetworkPollingIdentity(
             normalizedExpectedCcid,
@@ -4631,13 +4602,13 @@ public class GsmModemService : IGsmModemService
                 cached.LastAutomaticUssdAttemptUtc;
         }
 
-        if (automaticUssdCompleted)
+        if (IsSautoCarrierRegistered(carrier))
         {
             EnableSmsReceiveMaintenanceAfterSauto(
                 portName,
                 normalizedExpectedCcid,
                 smsReceiveMaintenanceGeneration,
-                "cached-automatic-ussd-complete");
+                "cached-network-registered");
         }
 
         _ = Task.Run(async () =>
@@ -4847,6 +4818,14 @@ public class GsmModemService : IGsmModemService
                                                 automaticUssdCompleted,
                                             LastAutomaticUssdAttemptUtc:
                                                 lastAutomaticUssdAttemptUtc);
+                                    if (!IsSmsReceiveMaintenanceEnabled(portName))
+                                    {
+                                        EnableSmsReceiveMaintenanceAfterSauto(
+                                            portName,
+                                            normalizedExpectedCcid,
+                                            smsReceiveMaintenanceGeneration,
+                                            "network-registered");
+                                    }
                                     string networkStatus = $"{carrier}|{networkType}";
                                     if (!string.Equals(
                                             lastReportedNetworkStatus,
@@ -5115,7 +5094,9 @@ public class GsmModemService : IGsmModemService
                     });
                 }
 
-                try { await Task.Delay(SautoDataPortLoopDelay, token); }
+                TimeSpan loopDelay = SelectSautoDataPortLoopDelay(
+                    IsSautoCarrierRegistered(carrier));
+                try { await Task.Delay(loopDelay, token); }
                 catch (OperationCanceledException) { break; }
             }
 
@@ -6116,16 +6097,16 @@ public class GsmModemService : IGsmModemService
                     if (!DirectScopeStillCurrent(portName, pending.Scope))
                         continue;
 
-                    // Never publish a best-effort/raw fallback. The recovery copy
-                    // remains intact until the normal decoder can produce a
-                    // complete payload and its durable decoded WAL accepts it.
+                    // Never publish a best-effort/raw fallback. The in-memory
+                    // recovery frame remains until the normal decoder can
+                    // produce a complete payload and the session inbox accepts it.
                     if (string.IsNullOrWhiteSpace(
                             DecodeDirectCmtFrame(pending.Raw).Content))
                     {
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = portName,
-                            Data = $"[SMS_DIRECT_RECOVERY_PENDING] id={pending.Id}; reason={pending.Reason}; raw vẫn được giữ bền vững, chưa phát nội dung chưa giải mã đủ."
+                            Data = $"[SMS_DIRECT_RECOVERY_PENDING] id={pending.Id}; reason={pending.Reason}; raw đang được giữ trong RAM, chưa phát nội dung chưa giải mã đủ."
                         });
                         continue;
                     }
@@ -6232,7 +6213,7 @@ public class GsmModemService : IGsmModemService
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = portName,
-                            Data = $"[MULTIPART_REPLAYED] delivery={snapshot.MessageId}; inbox đã nhận bản ghép bền vững."
+                            Data = $"[MULTIPART_REPLAYED] delivery={snapshot.MessageId}; inbox phiên hiện tại đã nhận bản ghép."
                         });
                     }
 
@@ -6544,7 +6525,7 @@ public class GsmModemService : IGsmModemService
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = portName,
-                            Data = $"[MULTIPART_SLOT_STATE_DEFERRED] delivery={messageId}; hết retry nhanh, cleanup intent còn bền vững để sweep phục hồi."
+                            Data = $"[MULTIPART_SLOT_STATE_DEFERRED] delivery={messageId}; hết retry nhanh, cleanup intent còn trong RAM để sweep thử lại trong phiên."
                         });
                         ScheduleSafeUnreadSmsSweep(
                             portName,
@@ -6759,7 +6740,7 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = $"[SMS_DIRECT_RECOVERY_SAVED] id={pending.Id}; reason={reason}; attempts={state.Attempts}; chars={raw.Length}."
+                Data = $"[SMS_DIRECT_RECOVERY_HELD] id={pending.Id}; reason={reason}; attempts={state.Attempts}; chars={raw.Length}; storage=RAM."
             });
             ScheduleDirectRecoveryReplay(portName, 1000);
             return true;
@@ -6773,7 +6754,7 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = $"[SMS_DIRECT_RECOVERY_WRITE_FAILED] {ex.Message}; giữ nguyên raw +CMT để thử lại."
+                Data = $"[SMS_DIRECT_RECOVERY_HOLD_FAILED] {ex.Message}; giữ nguyên raw +CMT trong buffer để thử lại."
             });
             ScheduleDirectCmtRetry(portName, 2000);
             return false;
@@ -6838,7 +6819,7 @@ public class GsmModemService : IGsmModemService
                 LogMessage?.Invoke(this, new GsmDataEventArgs
                 {
                     PortName = portName,
-                    Data = $"[SMS_DIRECT_RECOVERY_WRITE_FAILED] Khung đã giải mã nhưng chưa ghi được hai bản phục hồi: {ex.Message}. Giữ nguyên buffer."
+                    Data = $"[SMS_DIRECT_RECOVERY_HOLD_FAILED] Khung đã giải mã nhưng chưa giữ được trong RAM: {ex.Message}. Giữ nguyên buffer."
                 });
                 ScheduleDirectCmtRetry(portName, 2000);
                 return false;
@@ -6924,8 +6905,8 @@ public class GsmModemService : IGsmModemService
                                           or UnauthorizedAccessException
                                           or InvalidDataException)
             {
-                // Inbox is already durable. Keeping the raw recovery copy is
-                // safe and its stable DeliveryId makes any replay idempotent.
+                // The session inbox already accepted this delivery. Keeping
+                // the raw recovery state in RAM makes a later replay idempotent.
                 LogMessage?.Invoke(this, new GsmDataEventArgs
                 {
                     PortName = portName,
@@ -7024,7 +7005,7 @@ public class GsmModemService : IGsmModemService
                                       or UnauthorizedAccessException
                                       or InvalidDataException)
         {
-            // The durable inbox already owns this delivery. Replay/cleanup is
+            // The session inbox already owns this delivery. Replay/cleanup is
             // idempotent by MessageId, so consuming the CMT frame remains safe.
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
@@ -7640,6 +7621,8 @@ public class GsmModemService : IGsmModemService
                     string stat = isRequestedResponse && match.Groups["second"].Success
                         ? match.Groups["second"].Value
                         : match.Groups["first"].Value;
+                    string registrationKey =
+                        GetNetworkRegistrationPublicationKey(portName, regType);
                     if (stat == "1" || stat == "5")
                     {
                         string netName = regType switch
@@ -7650,14 +7633,14 @@ public class GsmModemService : IGsmModemService
                         };
                         string registrationMessage = $"[NETWORK_REG] Đã đăng ký mạng {netName}";
                         if (!_lastPublishedNetworkRegistration.TryGetValue(
-                                portName,
+                                registrationKey,
                                 out string? previousMessage)
                             || !string.Equals(
                                 previousMessage,
                                 registrationMessage,
                                 StringComparison.Ordinal))
                         {
-                            _lastPublishedNetworkRegistration[portName] = registrationMessage;
+                            _lastPublishedNetworkRegistration[registrationKey] = registrationMessage;
                             LogMessage?.Invoke(
                                 this,
                                 new GsmDataEventArgs
@@ -7666,6 +7649,14 @@ public class GsmModemService : IGsmModemService
                                     Data = registrationMessage
                                 });
                         }
+                    }
+                    else
+                    {
+                        // Re-publish only after a genuine transition back from
+                        // an unregistered state for this exact REG family.
+                        _lastPublishedNetworkRegistration.TryRemove(
+                            registrationKey,
+                            out _);
                     }
                     if (!isRequestedResponse)
                         buffer.Replace(match.Value, "");
@@ -7942,7 +7933,7 @@ public class GsmModemService : IGsmModemService
                 if (hasUndeliveredDirectCmt)
                 {
                     // Never let a command terminator consume the prefix that
-                    // contains a direct SMS whose durable inbox hand-off failed.
+                    // contains a direct SMS whose session-inbox hand-off failed.
                     ScheduleDirectCmtRetry(portName);
                 }
                 else
@@ -8179,7 +8170,7 @@ public class GsmModemService : IGsmModemService
             out _);
         _networkSimIdentities.TryRemove(portName, out _);
         _networkIdentityGenerations.TryRemove(portName, out _);
-        _lastPublishedNetworkRegistration.TryRemove(portName, out _);
+        ClearPublishedNetworkRegistrations(portName);
         InvalidateNetworkRecoveryForIdentityChange(portName);
         _incomingCalls.TryRemove(portName, out _);
         _incomingCallNotifications.TryRemove(portName, out _);
@@ -10954,7 +10945,7 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = $"[SMS_SIM_CLEANUP_RECOVERY_BLOCKED] Không đọc được journal ý định xóa: {ex.Message}. Không suy đoán trạng thái SIM."
+                Data = $"[SMS_SIM_CLEANUP_RECOVERY_BLOCKED] Không đọc được trạng thái cleanup trong RAM: {ex.Message}. Không suy đoán trạng thái SIM."
             });
             return;
         }
@@ -10975,7 +10966,7 @@ public class GsmModemService : IGsmModemService
             LogMessage?.Invoke(this, new GsmDataEventArgs
             {
                 PortName = portName,
-                Data = "[SMS_SIM_CLEANUP_RECOVERY_RETRY] Chưa lấy được snapshot PDU hoàn chỉnh; giữ nguyên journal và không suy đoán slot."
+                Data = "[SMS_SIM_CLEANUP_RECOVERY_RETRY] Chưa lấy được snapshot PDU hoàn chỉnh; giữ trạng thái cleanup trong RAM và không suy đoán slot."
             });
             return;
         }

@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using gsm.Models;
 
 namespace gsm.Services;
 
@@ -38,20 +39,21 @@ public class NotifyService : INotifyService
 
     public Task SendTelegramAsync(string botToken, string chatId, string text)
     {
-        if (string.IsNullOrWhiteSpace(botToken)
-            || string.IsNullOrWhiteSpace(chatId)
-            || string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(text))
             return Task.CompletedTask;
 
-        // This call is intentionally synchronous up to the durable commit.
-        // Fire-and-forget callers cannot exit between scheduling and the first
-        // outbox flush because no await occurs before both snapshots are tried.
+        // Enqueue synchronously so fire-and-forget callers still place the
+        // notification in the current process's retry queue before returning.
         IReadOnlyList<TelegramOutboxStore.Job> jobs = _telegramOutbox.Enqueue(
-            botToken,
-            chatId,
+            botToken ?? string.Empty,
+            chatId ?? string.Empty,
             PrepareTelegramMessages(text));
+        bool waitingForConfiguration = string.IsNullOrWhiteSpace(botToken)
+            || string.IsNullOrWhiteSpace(chatId);
         PublishTelegramStatus(
-            $"[TELEGRAM_QUEUED] jobs={jobs.Count}; đã ghi bền vững trước khi gửi.");
+            waitingForConfiguration
+                ? $"[TELEGRAM_QUEUED_WAITING_CONFIG] jobs={jobs.Count}; đang giữ trong RAM, chờ Bot Token/Chat ID."
+                : $"[TELEGRAM_QUEUED] jobs={jobs.Count}; đã đưa vào hàng đợi RAM.");
         EnsureTelegramWorker();
         return Task.CompletedTask;
     }
@@ -168,12 +170,12 @@ public class NotifyService : INotifyService
         }
         catch (Exception ex)
         {
-            // The outbox is still durable. The next enqueue or app start will
-            // restart this worker without forgetting any pending job.
+            // Pending jobs remain in RAM while this process is alive. They are
+            // intentionally not restored after an application restart.
             System.Diagnostics.Debug.WriteLine(
                 $"Telegram outbox worker paused: {ex.Message}");
             PublishTelegramStatus(
-                $"[TELEGRAM_OUTBOX_PAUSED] {ex.GetType().Name}: {ex.Message}; dữ liệu vẫn còn trên đĩa.");
+                $"[TELEGRAM_OUTBOX_PAUSED] {ex.GetType().Name}: {ex.Message}; dữ liệu vẫn còn trong RAM phiên hiện tại.");
         }
         finally
         {
@@ -196,33 +198,79 @@ public class NotifyService : INotifyService
     {
         try
         {
-            var url = $"https://api.telegram.org/bot{job.BotToken}/sendMessage";
-            var body = new Dictionary<string, object>
+            AppSettings settings = SettingsService.Current ?? new AppSettings();
+            (string botToken, IReadOnlyList<string> chatIds) =
+                ResolveTelegramTargets(
+                    job.BotToken,
+                    job.ChatId,
+                    settings.TelegramBotToken,
+                    settings.TelegramChatIds,
+                    settings.TelegramChatId);
+            if (string.IsNullOrWhiteSpace(botToken) || chatIds.Count == 0)
+                return (false, "CONFIG_MISSING: chưa có Bot Token/Chat ID; job vẫn được giữ trong outbox");
+
+            foreach (string chatId in chatIds)
             {
-                ["chat_id"] = job.ChatId,
-                ["text"] = job.Text,
-                ["disable_web_page_preview"] = true
-            };
-            if (job.UseHtml) body["parse_mode"] = "HTML";
+                var url = $"https://api.telegram.org/bot{botToken}/sendMessage";
+                var body = new Dictionary<string, object>
+                {
+                    ["chat_id"] = chatId,
+                    ["text"] = job.Text,
+                    ["disable_web_page_preview"] = true
+                };
+                if (job.UseHtml) body["parse_mode"] = "HTML";
 
-            string json = JsonSerializer.Serialize(body);
-            using var content = new StringContent(
-                json, Encoding.UTF8, "application/json");
-            using HttpResponseMessage response =
-                await Http.PostAsync(url, content).ConfigureAwait(false);
-            if (response.IsSuccessStatusCode)
-                return (true, string.Empty);
+                string json = JsonSerializer.Serialize(body);
+                using var content = new StringContent(
+                    json, Encoding.UTF8, "application/json");
+                using HttpResponseMessage response =
+                    await Http.PostAsync(url, content).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode) continue;
 
-            string error = await response.Content
-                .ReadAsStringAsync()
-                .ConfigureAwait(false);
-            return (false, $"HTTP {(int)response.StatusCode}: {error}");
+                string error = await response.Content
+                    .ReadAsStringAsync()
+                    .ConfigureAwait(false);
+                return (false, $"chat={chatId}; HTTP {(int)response.StatusCode}: {error}");
+            }
+
+            return (true, string.Empty);
         }
         catch (Exception ex)
         {
             return (false, $"{ex.GetType().Name}: {ex.Message}");
         }
     }
+
+    internal static (string BotToken, IReadOnlyList<string> ChatIds)
+        ResolveTelegramTargets(
+            string? jobBotToken,
+            string? jobChatIds,
+            string? settingsBotToken,
+            string? settingsChatIds,
+            string? settingsChatId)
+    {
+        string tokenSource = !string.IsNullOrWhiteSpace(jobBotToken)
+            ? jobBotToken
+            : settingsBotToken ?? string.Empty;
+        string botToken = SplitTelegramValues(tokenSource).FirstOrDefault()
+            ?? string.Empty;
+
+        string chatSource = !string.IsNullOrWhiteSpace(jobChatIds)
+            ? jobChatIds
+            : !string.IsNullOrWhiteSpace(settingsChatIds)
+                ? settingsChatIds
+                : settingsChatId ?? string.Empty;
+        string[] chatIds = SplitTelegramValues(chatSource)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return (botToken, chatIds);
+    }
+
+    private static IEnumerable<string> SplitTelegramValues(string? value) =>
+        (value ?? string.Empty)
+            .Split([',', ';', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(item => item.Trim())
+            .Where(item => item.Length > 0);
 
     private void PublishTelegramStatus(string status)
     {
@@ -232,7 +280,7 @@ public class NotifyService : INotifyService
         }
         catch (Exception ex)
         {
-            // Observability must never alter the durable notification state.
+            // Observability must never alter the in-memory notification state.
             System.Diagnostics.Debug.WriteLine(
                 $"Telegram status listener failed: {ex.Message}");
         }

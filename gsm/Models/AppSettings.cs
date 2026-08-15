@@ -10,7 +10,7 @@ public class AppSettings
     public string TelegramChatIds { get; set; } = "";
     public string TelegramChatId { get; set; } = ""; // Mapped from TelegramChatIds or standalone
     public bool TelegramOnOtp { get; set; } = true;
-    public bool TelegramOnSms { get; set; } = false;
+    public bool TelegramOnSms { get; set; } = true;
     public bool PushOtpToWeb { get; set; } = true;
     public string OtpWebhookUrl { get; set; } = "";
     public bool SoundOnOtp { get; set; } = true;

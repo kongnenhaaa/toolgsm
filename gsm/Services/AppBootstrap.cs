@@ -16,6 +16,19 @@ namespace gsm.Services
         public static string RecordingsDir => Path.Combine(AppDir, "Recordings");
         public static string ConfigDir => Path.Combine(AppDir, "Config");
 
+        internal static IReadOnlyList<string> ObsoleteLocalStateFiles { get; } =
+        [
+            "sms_multipart_journal.json.legacy-migration.json",
+            "sms_multipart_journal.json.legacy-migration.json.tmp",
+            "sms_multipart_journal.json.tmp",
+            "sms_sim_cleanup_journal.json",
+            "sms_sim_cleanup_journal.pending.json",
+            "sms_direct_recovery.json",
+            "sms_direct_recovery.backup.json",
+            "telegram_outbox.json",
+            "telegram_outbox.backup.json"
+        ];
+
         /// <summary>Gọi đầu tiên khi mở tool – tạo folder + settings nếu thiếu.</summary>
         public static void EnsureAll()
         {
@@ -25,6 +38,7 @@ namespace gsm.Services
                 Directory.CreateDirectory(LogsDir);
                 Directory.CreateDirectory(RecordingsDir);
                 Directory.CreateDirectory(ConfigDir);
+                DeleteObsoleteLocalStateFiles();
                 EnsureSettingsFile();
             }
             catch (Exception ex)
@@ -37,6 +51,27 @@ namespace gsm.Services
                         $"{DateTime.Now:o} {ex}\n");
                 }
                 catch { /* ignore */ }
+            }
+        }
+
+        internal static void DeleteObsoleteLocalStateFiles(
+            string? dataDirectory = null)
+        {
+            string directory = Path.GetFullPath(
+                string.IsNullOrWhiteSpace(dataDirectory)
+                    ? AppPaths.UserDataDirectory
+                    : dataDirectory);
+            foreach (string fileName in ObsoleteLocalStateFiles)
+            {
+                string path = Path.Combine(directory, fileName);
+                try
+                {
+                    if (File.Exists(path)) File.Delete(path);
+                }
+                catch
+                {
+                    // A locked old file can be retried on the next startup.
+                }
             }
         }
 

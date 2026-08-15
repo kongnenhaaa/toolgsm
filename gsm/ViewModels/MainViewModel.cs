@@ -33,10 +33,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private GsmBackgroundSupervisorContext? _backgroundSupervisorContext;
     private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
     private readonly gsm.Services.IFirebaseOtpService _firebaseOtpService = new gsm.Services.FirebaseOtpService();
-    // A SIM slot is acknowledged only after this durable inbox has flushed the
-    // complete decoded message. This is the application's last line of defence
-    // against process crashes and power loss after CMGD.
-    private readonly SmsInboxStore _smsInboxStore = new();
+    // SMS history is session-only. It is displayed while ToolGSM is open and
+    // is never restored from or written to a local inbox file.
+    private readonly SmsInboxStore _smsInboxStore =
+        SmsInboxStore.CreateInMemory();
     private const int MaxSmsMessagesInMemory = 5000;
     private const int MaxOtpHistoryInMemory = 2000;
 
@@ -1185,7 +1185,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _modemService.IncomingCallEnded += ModemService_IncomingCallEnded;
 
         InitializeHardware();
-        LoadDurableSmsInbox();
         OtpHistoryList.Clear();
         
         ConnectionSeries = new ISeries[]
@@ -1704,29 +1703,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         return $"{log.Time} {log.Level} {log.Message}";
     }
 
-    // Commit before acknowledging the modem. A false return deliberately keeps
-    // the original SIM slot (or direct-CMT WAL entry) available for replay.
-    private bool TryPersistAndAddSms(
+    // Add the decoded SMS to the current session before acknowledging the
+    // modem. Nothing in this path is persisted to an SMS history file.
+    private bool TryAddSmsToSession(
         SmsInboxRecord record,
         out SmsMessage? message)
     {
         message = null;
 
-        try
-        {
-            // Append uses WriteThrough + Flush(true). A false result means this
-            // exact DeliveryId was committed by this or an earlier process.
-            _smsInboxStore.Append(record);
-        }
-        catch (Exception ex) when (ex is IOException
-                                      or UnauthorizedAccessException
-                                      or InvalidDataException)
-        {
-            AddLog(
-                $"[{record.PortName}] [SMS_INBOX_PERSIST_RETRY] delivery={record.DeliveryId}; {ex.GetType().Name}: {ex.Message}; giữ bản gốc để thử lại.",
-                "ERROR");
-            return false;
-        }
+        _smsInboxStore.Append(record);
 
         // A retry during this process must not duplicate the UI row or repeat
         // sounds, webhooks, OTP history or carrier-state side effects.
@@ -1738,39 +1723,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         InsertSmsMessageBounded(message);
 
         return true;
-    }
-
-    private void LoadDurableSmsInbox()
-    {
-        try
-        {
-            SmsMessages.Clear();
-            foreach (SmsInboxRecord record in
-                     _smsInboxStore.GetRecent(MaxSmsMessagesInMemory))
-            {
-                SmsMessages.Add(ToSmsMessage(record));
-            }
-
-            foreach (string warning in _smsInboxStore.RecoveryWarnings)
-                AddLog($"[SMS_INBOX_RECOVERY] {warning}", "WARNING");
-
-            if (SmsMessages.Count > 0)
-            {
-                AddLog(
-                    $"[SMS_INBOX_LOADED] Đã khôi phục {SmsMessages.Count} SMS từ {_smsInboxStore.DirectoryPath}.",
-                    "INFO");
-            }
-        }
-        catch (Exception ex) when (ex is IOException
-                                      or UnauthorizedAccessException
-                                      or InvalidDataException)
-        {
-            // Continue running, but a new stored SMS will not be acknowledged
-            // unless a later durable append succeeds.
-            AddLog(
-                $"[SMS_INBOX_LOAD_FAILED] {ex.GetType().Name}: {ex.Message}; SMS mới sẽ được giữ ở nguồn để thử lại.",
-                "ERROR");
-        }
     }
 
     private void InsertSmsMessageBounded(SmsMessage message)
@@ -1787,11 +1739,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             SmsMessages.RemoveAt(SmsMessages.Count - 1);
     }
 
-    private static DateTimeOffset GetSmsDisplayTime(SmsMessage message) =>
-        message.SmsTimestampUtc
-        ?? (message.ReceivedAtUtc == default
-            ? DateTimeOffset.UtcNow
-            : message.ReceivedAtUtc);
+    internal static DateTimeOffset GetSmsDisplayTime(SmsMessage message) =>
+        message.ReceivedAtUtc != default
+            ? message.ReceivedAtUtc
+            : message.SmsTimestampUtc ?? DateTimeOffset.UtcNow;
+
+    internal static bool CanAcknowledgeSmsDelivery(
+        bool inboxRecorded,
+        string deliveryId,
+        IEnumerable<SmsMessage> messages) =>
+        inboxRecorded
+        && !string.IsNullOrWhiteSpace(deliveryId)
+        && messages.Any(message => string.Equals(
+            message.DeliveryId,
+            deliveryId,
+            StringComparison.Ordinal));
 
     private void InsertOtpHistoryBounded(Services.OtpRecord record)
     {
@@ -2630,8 +2592,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
-            bool isInternalEvent = e.Data.StartsWith("[PARSE_") || e.Data == "[STATUS_ACTIVE]";
-            if (!isInternalEvent) AddLog($"[{e.PortName}] {e.Data}");
+            bool isInternalEvent = e.Data.StartsWith("[PARSE_")
+                || e.Data == "[STATUS_ACTIVE]";
+            bool isHighFrequencyTelemetry = e.Data.StartsWith(
+                "+CSQ:",
+                StringComparison.OrdinalIgnoreCase);
+            // Keep the live signal row updated below without flooding the UI
+            // and log table with every five-second RSSI sample. The raw UART
+            // trace still records the complete command cadence.
+            if (!isInternalEvent && !isHighFrequencyTelemetry)
+                AddLog($"[{e.PortName}] {e.Data}");
 
             var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
 
@@ -3280,7 +3250,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Ma xac nhan Zalo cua ban la 123456
 
         // The modem service deletes the recyclable SIM index only after this
-        // handler returns. Keep the durable-ack ordering, but cap how long a
+        // handler returns. Keep the acknowledgement ordering, but cap how long a
         // blocked WPF/Blazor dispatcher can hold the serial receive pipeline.
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher == null)
@@ -3295,6 +3265,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 string extractedOtp = "N/A";
                 string cleanContent = TextEncodingNormalizer.RepairMojibake(e.Data);
                 bool inboxRecorded = false;
+                string uiDeliveryId = string.Empty;
 
                 // Nếu quá trình đọc tin nhắn gặp lỗi (VD: Lỗi Timeout Semaphore do đang kẹt gửi SMS)
                 if (cleanContent.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase)
@@ -3357,6 +3328,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             senderPhone,
                             cleanContent)
                         : e.DeliveryId;
+                    uiDeliveryId = deliveryId;
                     var smsRecord = new SmsInboxRecord
                     {
                         DeliveryId = deliveryId,
@@ -3375,13 +3347,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         CallCount = "0",
                         ForwardContent = string.Empty
                     };
-                    if (!TryPersistAndAddSms(
+                    if (!TryAddSmsToSession(
                             smsRecord,
-                            out SmsMessage? newlyPersistedMessage))
+                            out SmsMessage? newlyAddedMessage))
                         return;
 
                     inboxRecorded = true;
-                    if (newlyPersistedMessage == null)
+                    if (newlyAddedMessage == null)
                     {
                         string replayReceiver = !string.IsNullOrWhiteSpace(
                             port?.PhoneNumber)
@@ -3395,8 +3367,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             extractedOtp,
                             cleanContent);
                         e.DeliveryAccepted = true;
+                        AtCommandTraceLogger.State(
+                            e.PortName,
+                            $"SMS_UI_COMMIT_ACCEPTED;delivery={deliveryId};session=true;ui=true;replay=true");
                         AddLog(
-                            $"[{e.PortName}] [SMS_REPLAY_ACK] delivery={deliveryId}; inbox đã có và Telegram đã được ghi vào outbox nếu cấu hình bật.",
+                            $"[{e.PortName}] [SMS_REPLAY_ACK] delivery={deliveryId}; SMS đã có trong phiên hiện tại.",
                             "INFO");
                         return;
                     }
@@ -3532,8 +3507,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 // ---------- 1. TELEGRAM ----------
-                // This call commits the notification to the durable outbox
-                // synchronously. The SIM is acknowledged only afterwards.
+                // This call queues the notification in RAM synchronously. The
+                // SIM is acknowledged only afterwards.
                 QueueTelegramSmsNotification(
                     cfg,
                     e.PortName,
@@ -3586,10 +3561,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
                 }
 
-                // Acknowledge only after the current session owns the decoded
-                // message. The modem may then release its SIM slot.
-                if (inboxRecorded)
+                // Acknowledge only after the record is present in the live UI
+                // collection. The history remains session-only.
+                bool visibleInUi = CanAcknowledgeSmsDelivery(
+                    inboxRecorded,
+                    uiDeliveryId,
+                    SmsMessages);
+                if (visibleInUi)
+                {
                     e.DeliveryAccepted = true;
+                    AtCommandTraceLogger.State(
+                        e.PortName,
+                        $"SMS_UI_COMMIT_ACCEPTED;delivery={uiDeliveryId};session=true;ui=true;replay=false");
+                    AddLog(
+                        $"[{e.PortName}] [SMS_DELIVERY_ACCEPTED] delivery={uiDeliveryId}; session=true; ui=true; SIM slot có thể giải phóng.",
+                        "INFO");
+                }
+                else if (inboxRecorded)
+                {
+                    AtCommandTraceLogger.Error(
+                        e.PortName,
+                        $"SMS_UI_ACK_BLOCKED;delivery={uiDeliveryId};session=true;ui=false;source_retained=true");
+                    AddLog(
+                        $"[{e.PortName}] [SMS_UI_ACK_BLOCKED] delivery={uiDeliveryId}; chưa xác nhận có hàng trên UI, giữ nguyên SMS ở SIM để thử lại.",
+                        "ERROR");
+                }
                 
                 if (extractedOtp != "N/A")
                 {
@@ -3666,6 +3662,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             catch (Exception ex)
             {
+                AtCommandTraceLogger.Error(
+                    e.PortName,
+                    $"SMS_UI_PROCESSING_FAILED;error={ex.GetType().Name};source_retained=true");
                 AddLog($"[{e.PortName}] Lỗi xử lý SMS: {ex.Message}", "ERROR");
             }
         }
@@ -3683,6 +3682,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // Do not acknowledge here. GsmModemService keeps the exact SIM
                 // record and its retry/sweep path will deliver it later.
+                AtCommandTraceLogger.Error(
+                    e.PortName,
+                    $"SMS_UI_DISPATCH_TIMEOUT;seconds={SmsUiDispatchTimeout.TotalSeconds:0};source_retained=true");
                 AddLog(
                     $"[{e.PortName}] [SMS_UI_DISPATCH_TIMEOUT] UI bận quá {SmsUiDispatchTimeout.TotalSeconds:0}s; giữ SMS trên SIM để tự thử lại.",
                     "ERROR");
@@ -3693,6 +3695,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
+            AtCommandTraceLogger.Error(
+                e.PortName,
+                $"SMS_UI_DISPATCH_FAILED;error={ex.GetType().Name};source_retained=true");
             AddLog(
                 $"[{e.PortName}] [SMS_UI_DISPATCH_FAILED] Không đưa được SMS vào UI: {ex.Message}; giữ SMS trên SIM.",
                 "ERROR");
@@ -3793,8 +3798,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             CallCount = "0",
             ForwardContent = "Không"
         };
-        if (!TryPersistAndAddSms(smsRecord, out SmsMessage? newlyPersistedMessage)
-            || newlyPersistedMessage == null)
+        if (!TryAddSmsToSession(smsRecord, out SmsMessage? newlyAddedMessage)
+            || newlyAddedMessage == null)
             return;
 
         if (extractedOtp != "N/A")
@@ -6501,40 +6506,54 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string extractedOtp,
         string content)
     {
-        bool hasToken = !string.IsNullOrWhiteSpace(config.TelegramBotToken)
-            && !string.IsNullOrWhiteSpace(config.TelegramChatId);
-        if (!hasToken) return;
-
-        string? text = null;
-        if (config.TelegramOnOtp && extractedOtp != "N/A")
+        string chatIds = !string.IsNullOrWhiteSpace(config.TelegramChatIds)
+            ? config.TelegramChatIds
+            : config.TelegramChatId;
+        if (string.IsNullOrWhiteSpace(config.TelegramBotToken)
+            || string.IsNullOrWhiteSpace(chatIds))
         {
-            text =
-                $"🔐 OTP mới\n" +
-                $"Port: {portName}\n" +
-                $"SĐT: {receiverPhone}\n" +
-                $"Từ: {System.Net.WebUtility.HtmlEncode(senderPhone)}\n" +
-                $"OTP: <b>{extractedOtp}</b>\n" +
-                $"Nội dung: {System.Net.WebUtility.HtmlEncode(content)}\n" +
-                $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-        }
-        else if (config.TelegramOnSms)
-        {
-            text =
-                $"📩 SMS mới\n" +
-                $"Port: {portName}\n" +
-                $"SĐT: {receiverPhone}\n" +
-                $"Từ: {System.Net.WebUtility.HtmlEncode(senderPhone)}\n" +
-                $"Nội dung: {System.Net.WebUtility.HtmlEncode(content)}\n" +
-                $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+            AddLog(
+                $"[{portName}] [TELEGRAM_CONFIG_MISSING] SMS chỉ được giữ trong hàng đợi RAM; hãy lưu Bot Token và Chat ID.",
+                "WARNING");
+            SnackbarMessageQueue.Enqueue(
+                $"[{portName}] Telegram chưa cấu hình; SMS chỉ chờ gửi trong phiên hiện tại.");
         }
 
-        if (text != null)
+        string text = BuildTelegramSmsNotification(
+            portName,
+            receiverPhone,
+            senderPhone,
+            extractedOtp,
+            content,
+            DateTime.Now);
+        _ = _notifyService.SendTelegramAsync(
+            config.TelegramBotToken,
+            chatIds,
+            text);
+    }
+
+    internal static string BuildTelegramSmsNotification(
+        string portName,
+        string receiverPhone,
+        string senderPhone,
+        string extractedOtp,
+        string content,
+        DateTime receivedAt)
+    {
+        bool hasOtp = !string.IsNullOrWhiteSpace(extractedOtp)
+            && !string.Equals(extractedOtp, "N/A", StringComparison.OrdinalIgnoreCase);
+        var lines = new List<string>
         {
-            _ = _notifyService.SendTelegramAsync(
-                config.TelegramBotToken,
-                config.TelegramChatId,
-                text);
-        }
+            hasOtp ? "🔐 OTP mới" : "📩 SMS mới",
+            $"Port: {System.Net.WebUtility.HtmlEncode(portName)}",
+            $"SĐT: {System.Net.WebUtility.HtmlEncode(receiverPhone)}",
+            $"Từ: {System.Net.WebUtility.HtmlEncode(senderPhone)}"
+        };
+        if (hasOtp)
+            lines.Add($"OTP: <b>{System.Net.WebUtility.HtmlEncode(extractedOtp)}</b>");
+        lines.Add($"Nội dung: {System.Net.WebUtility.HtmlEncode(content)}");
+        lines.Add($"Time: {receivedAt:HH:mm:ss dd/MM}");
+        return string.Join("\n", lines);
     }
 
     internal void DisconnectModemsForShutdown()

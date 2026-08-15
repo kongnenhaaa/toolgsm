@@ -199,10 +199,16 @@
 
     private System.Threading.Timer? _timer;
 
+    [Parameter] public bool IsPageActive { get; set; }
+
     protected override void OnInitialized()
     {
         LoadBackup();
-        _timer = new System.Threading.Timer(_ => InvokeAsync(StateHasChanged), null, 2000, 2000);
+        _timer = new System.Threading.Timer(_ =>
+        {
+            if (IsPageActive)
+                _ = InvokeAsync(StateHasChanged);
+        }, null, 2000, 2000);
     }
 
     void LoadBackup()

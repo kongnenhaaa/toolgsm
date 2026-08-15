@@ -422,11 +422,40 @@ public sealed class SautoInitializationSequenceTests
         Assert.Equal(
             TimeSpan.FromMilliseconds(400),
             GsmModemService.SautoDataPortLoopDelay);
+        Assert.Equal(
+            TimeSpan.FromSeconds(5),
+            GsmModemService.SautoOnlineDataPortLoopDelay);
+        Assert.Equal(
+            GsmModemService.SautoDataPortLoopDelay,
+            GsmModemService.SelectSautoDataPortLoopDelay(
+                networkRegistered: false));
+        Assert.Equal(
+            GsmModemService.SautoOnlineDataPortLoopDelay,
+            GsmModemService.SelectSautoDataPortLoopDelay(
+                networkRegistered: true));
         Assert.DoesNotContain(
             GsmModemService.SautoNetworkPollingCommandOrder,
             command => command.Contains(
                 "CREG",
                 StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NetworkRegistrationLogDedupe_TracksEachRegFamilyIndependently()
+    {
+        string ps = GsmModemService.GetNetworkRegistrationPublicationKey(
+            "COM110",
+            "CGREG");
+        string eps = GsmModemService.GetNetworkRegistrationPublicationKey(
+            "COM110",
+            "CEREG");
+
+        Assert.NotEqual(ps, eps);
+        Assert.Equal(
+            ps,
+            GsmModemService.GetNetworkRegistrationPublicationKey(
+                "com110",
+                "cgreg"));
     }
 
     [Fact]
@@ -752,13 +781,13 @@ public sealed class SautoInitializationSequenceTests
     [InlineData(8, 8, "89840200011768850016", "89840200011768850016", "89840200011768850016", false, false)]
     [InlineData(8, 8, "89840200011768850016", "89840200011768859999", "89840200011768850016", true, false)]
     [InlineData(8, 8, "89840200011768850016", "89840200011768850016", "89840200011768859999", true, false)]
-    public void SmsMaintenance_GateRejectsStale101AndIdentityChanges(
+    public void SmsMaintenance_GateRejectsUnreadyNetworkAndIdentityChanges(
         long expectedGeneration,
         long currentGeneration,
         string expectedCcid,
         string smsCcid,
         string networkCcid,
-        bool automatic111Completed,
+        bool networkReadyForSms,
         bool expected) =>
         Assert.Equal(
             expected,
@@ -768,7 +797,7 @@ public sealed class SautoInitializationSequenceTests
                 expectedCcid,
                 smsCcid,
                 networkCcid,
-                automatic111Completed));
+                networkReadyForSms));
 
     [Theory]
     [InlineData("+COPS: 0,0,\"VINAPHONE\",2\r\nOK", "VINAPHONE", "2")]

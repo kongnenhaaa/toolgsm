@@ -38,18 +38,46 @@ public static class SettingsService
         return Normalize(new AppSettings());
     }
 
-    public static void SaveSettings(AppSettings settings)
+    public static bool SaveSettings(AppSettings settings)
     {
+        string temporaryPath = $"{SettingsFilePath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            Current = Normalize(settings);
+            AppSettings normalized = Normalize(settings);
             var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(Current, options);
-            File.WriteAllText(SettingsFilePath, json);
+            var json = JsonSerializer.Serialize(normalized, options);
+            Directory.CreateDirectory(Path.GetDirectoryName(SettingsFilePath)!);
+            using (var stream = new FileStream(
+                       temporaryPath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       4096,
+                       FileOptions.WriteThrough))
+            using (var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)))
+            {
+                writer.Write(json);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, SettingsFilePath, overwrite: true);
+            Current = normalized;
+            return true;
         }
         catch (Exception)
         {
-            // Ignored
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+            catch
+            {
+                // A temporary file is never considered saved settings.
+            }
         }
     }
 
@@ -62,6 +90,11 @@ public static class SettingsService
         settings.FirebaseDbUrl = FirebaseService.DatabaseUrl;
         settings.FirebaseAuthToken = "";
         settings.WriteOtpToFirebase = true;
+        // Incoming GSM messages are operational data, not optional marketing
+        // notifications. Once Telegram has a destination, every received SMS
+        // must be mirrored regardless of whether OTP extraction succeeded.
+        settings.TelegramOnOtp = true;
+        settings.TelegramOnSms = true;
         settings.SignalScanIntervalSeconds = Math.Clamp(
             settings.SignalScanIntervalSeconds, 5, 300);
         if (string.IsNullOrWhiteSpace(settings.MachineId))

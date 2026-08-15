@@ -5,77 +5,34 @@ namespace gsm.Tests;
 public sealed class SmsDirectRecoveryStoreTests
 {
     [Fact]
-    public void UndecodableRawFrame_SurvivesRestartExactly()
+    public void RawFrame_IsHeldOnlyInCurrentSessionAndCreatesNoFiles()
     {
         using var temp = new TempDirectory();
         string primary = Path.Combine(temp.Path, "direct.json");
         string fallback = Path.Combine(temp.Path, "direct.backup.json");
         const string raw = "+CMT: ,32\r\nDEADBEEF\r\n+CMT: �\r\n";
+        var store = new SmsDirectRecoveryStore(primary, fallback);
 
-        var firstRun = new SmsDirectRecoveryStore(primary, fallback);
-        SmsDirectRecoveryStore.Pending stored = firstRun.Store(
+        SmsDirectRecoveryStore.Pending pending = store.Store(
             "COM84",
             "ccid:8984048000000000000",
             raw,
             "complete-frame-undecodable",
             4);
 
-        var afterRestart = new SmsDirectRecoveryStore(primary, fallback);
-        SmsDirectRecoveryStore.Pending recovered =
-            Assert.Single(afterRestart.GetForPort("com84"));
-        Assert.Equal(stored.Id, recovered.Id);
-        Assert.Equal(raw, recovered.Raw);
-        Assert.Equal("ccid:8984048000000000000", recovered.Scope);
-    }
-
-    [Fact]
-    public void ValidFallback_RecoversWhenPrimaryCopyIsCorrupt()
-    {
-        using var temp = new TempDirectory();
-        string primary = Path.Combine(temp.Path, "direct.json");
-        string fallback = Path.Combine(temp.Path, "direct.backup.json");
-        var firstRun = new SmsDirectRecoveryStore(primary, fallback);
-        firstRun.Store(
-            "COM101",
-            "COM101",
-            "+CMT: ???\r\nBROKEN\r\n",
-            "retry-limit",
-            4);
-        File.WriteAllText(primary, "{corrupt");
-
-        var recovered = new SmsDirectRecoveryStore(primary, fallback);
-
-        Assert.Single(recovered.GetForPort("COM101"));
-    }
-
-    [Fact]
-    public void Completion_IsDurableAcrossRestart()
-    {
-        using var temp = new TempDirectory();
-        string primary = Path.Combine(temp.Path, "direct.json");
-        string fallback = Path.Combine(temp.Path, "direct.backup.json");
-        var store = new SmsDirectRecoveryStore(primary, fallback);
-        SmsDirectRecoveryStore.Pending pending = store.Store(
-            "COM7",
-            "COM7",
-            "+CMT: ???\r\nBROKEN\r\n",
-            "retry-limit",
-            4);
-
+        Assert.Equal(raw, Assert.Single(store.GetForPort("com84")).Raw);
+        Assert.False(File.Exists(primary));
+        Assert.False(File.Exists(fallback));
+        Assert.Empty(new SmsDirectRecoveryStore(primary, fallback)
+            .GetForPort("COM84"));
         Assert.True(store.Complete(pending.Id));
-
-        var afterRestart = new SmsDirectRecoveryStore(primary, fallback);
-        Assert.Empty(afterRestart.GetForPort("COM7"));
     }
 
     [Fact]
-    public void SameCcid_CanRecoverFrameAfterSimMovesToAnotherPort()
+    public void SameCcid_CanRecoverFrameOnAnotherPortWithinSession()
     {
-        using var temp = new TempDirectory();
-        string primary = Path.Combine(temp.Path, "direct.json");
-        string fallback = Path.Combine(temp.Path, "direct.backup.json");
         const string scope = "ccid:8984048000000000000";
-        var store = new SmsDirectRecoveryStore(primary, fallback);
+        var store = SmsDirectRecoveryStore.CreateInMemory();
         SmsDirectRecoveryStore.Pending pending = store.Store(
             "COM84",
             scope,
@@ -84,38 +41,27 @@ public sealed class SmsDirectRecoveryStoreTests
             4);
 
         SmsDirectRecoveryStore.Pending recovered = Assert.Single(
-            new SmsDirectRecoveryStore(primary, fallback)
-                .GetRecoverable("COM111", scope));
+            store.GetRecoverable("COM111", scope));
 
         Assert.Equal(pending.Id, recovered.Id);
     }
 
     [Fact]
-    public void BothCorruptRecoveryCopies_FailClosedWithoutOverwrite()
+    public void InvalidFrame_IsRejectedWithoutCreatingFiles()
     {
         using var temp = new TempDirectory();
         string primary = Path.Combine(temp.Path, "direct.json");
         string fallback = Path.Combine(temp.Path, "direct.backup.json");
         var store = new SmsDirectRecoveryStore(primary, fallback);
-        store.Store(
-            "COM84",
-            "COM84",
-            "+CMT: ???\r\nBROKEN\r\n",
-            "retry-limit",
-            4);
-        File.WriteAllText(primary, "{primary-corrupt");
-        File.WriteAllText(fallback, "{fallback-corrupt");
 
-        var blocked = new SmsDirectRecoveryStore(primary, fallback);
-
-        Assert.Throws<InvalidDataException>(() => blocked.Store(
+        Assert.Throws<InvalidDataException>(() => store.Store(
             "COM84",
             "COM84",
-            "+CMT: ???\r\nSECOND\r\n",
+            "not-a-cmt-frame",
             "retry-limit",
             4));
-        Assert.Equal("{primary-corrupt", File.ReadAllText(primary));
-        Assert.Equal("{fallback-corrupt", File.ReadAllText(fallback));
+        Assert.False(File.Exists(primary));
+        Assert.False(File.Exists(fallback));
     }
 
     private sealed class TempDirectory : IDisposable
@@ -138,7 +84,6 @@ public sealed class SmsDirectRecoveryStoreTests
             }
             catch
             {
-                // Best-effort test cleanup.
             }
         }
     }

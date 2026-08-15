@@ -4,25 +4,22 @@
 
 <div class="persistent-page-host">
     <div class="persistent-page" style="@PageStyle("ussd")" aria-hidden="@(!IsActive("ussd"))">
-        <Ussd />
+        <Ussd IsPageActive="@IsActive("ussd")" />
     </div>
     <div class="persistent-page" style="@PageStyle("sms")" aria-hidden="@(!IsActive("sms"))">
-        <Sms />
+        <Sms IsPageActive="@IsActive("sms")" />
     </div>
     <div class="persistent-page" style="@PageStyle("call")" aria-hidden="@(!IsActive("call"))">
-        <Call />
+        <Call IsPageActive="@IsActive("call")" />
     </div>
     <div class="persistent-page" style="@PageStyle("imei")" aria-hidden="@(!IsActive("imei"))">
-        <ImeiManager />
+        <ImeiManager IsPageActive="@IsActive("imei")" />
     </div>
     <div class="persistent-page" style="@PageStyle("ezcom")" aria-hidden="@(!IsActive("ezcom"))">
-        <EzCom />
+        <EzCom IsPageActive="@IsActive("ezcom")" />
     </div>
     <div class="persistent-page" style="@PageStyle("vnptpass")" aria-hidden="@(!IsActive("vnptpass"))">
-        <VnptPass />
-    </div>
-    <div class="persistent-page" style="@PageStyle("logs")" aria-hidden="@(!IsActive("logs"))">
-        <Logs />
+        <VnptPass IsPageActive="@IsActive("vnptpass")" />
     </div>
     <div class="persistent-page" style="@PageStyle("settings")" aria-hidden="@(!IsActive("settings"))">
         <Settings />
@@ -64,7 +61,6 @@
             "call" => "call",
             "imei" => "imei",
             "ezcom" => "ezcom",
-            "logs" => "logs",
             "settings" => "settings",
             _ => "ussd"
         };

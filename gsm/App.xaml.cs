@@ -36,10 +36,9 @@ namespace gsm
             // WebView2 child processes inherit it and can keep that folder locked
             // briefly after the main window has closed.
 
-            // Recovery journals and the durable inbox are intentionally kept
-            // across restarts. Deleting them here would reopen the crash window
-            // where the modem has accepted CMGD but the application no longer
-            // owns a recoverable copy of the SMS.
+            // Only sms_multipart_journal.json persists so a long SMS can be
+            // assembled across restarts. Inbox history, cleanup/recovery state
+            // and Telegram retries are session-only.
             gsm.Services.AppBootstrap.EnsureAll();
 
             var serviceCollection = new ServiceCollection();

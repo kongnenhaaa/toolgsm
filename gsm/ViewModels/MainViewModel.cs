@@ -4048,12 +4048,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // profiles. This event is only a notification hook; the old message
             // claimed that auto-answer was disabled even while the modem service
             // had already answered and started recording.
-            var profile = _modemService.GetModemProfile(e.PortName);
-            bool autoAnswerSupported = profile?.Supports(ModemCapability.VoiceCall) == true
-                && profile.Supports(ModemCapability.AudioRecord);
-            AddLog(autoAnswerSupported
-                ? $"[{e.PortName}] Đã nhận cuộc gọi; đang tự động nghe máy và ghi âm."
-                : $"[{e.PortName}] Chỉ thông báo cuộc gọi đến; modem chưa hỗ trợ tự động nghe máy/ghi âm.", "INFO");
+            AddLog($"[{e.PortName}] Đã nhận cuộc gọi; đang tự động nghe máy và ghi âm.", "INFO");
         });
     }
 
@@ -4196,11 +4191,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Application.Current.Dispatcher.Invoke(() =>
         {
             var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
+            string displayCaller = string.IsNullOrWhiteSpace(session.Caller) || string.Equals(session.Caller, "Unknown", StringComparison.OrdinalIgnoreCase) ? "Số ẩn" : session.Caller;
             if (port != null)
             {
-                port.LastCallResult = $"Ringing: {session.Caller}";
+                port.LastCallResult = $"Ringing: {displayCaller}";
                 port.UpdateDisplayResult("Call");
-                AddLog($"[{session.Port}] Đang đổ chuông từ {session.Caller}", "INFO");
+                AddLog($"[{session.Port}] Đang đổ chuông từ {displayCaller}", "INFO");
             }
         });
     }

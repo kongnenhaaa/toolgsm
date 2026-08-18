@@ -4,8 +4,11 @@
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @using gsm.Models
+@using gsm.Services
 @using gsm.Components.Shared
 @using System.Collections.Concurrent
+@using System.IO
+@using System.Diagnostics
 @implements IDisposable
 
 <!-- ========== ACTION FORM ========== -->
@@ -67,6 +70,11 @@
                                Disabled="@(string.IsNullOrWhiteSpace(_dtmf) || !_isCalling)">
                         DTMF
                     </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="OpenRecordingsFolder"
+                               title="Mở thư mục ghi âm cuộc gọi">
+                        Folder ghi âm
+                    </MudButton>
                 </MudStack>
             </MudStack>
         </MudItem>
@@ -99,11 +107,17 @@
                 <MudText Typo="Typo.subtitle2" Style="font-weight:600;">
                     Lịch sử cuộc gọi thực hiện
                 </MudText>
-                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
-                           StartIcon="@Icons.Material.Filled.DeleteSweep" OnClick="ClearCallHistory"
-                           Disabled="@(!_callHistory.Any())">
-                    Xóa lịch sử
-                </MudButton>
+                <MudStack Row="true" Spacing="2">
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info"
+                               StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="OpenRecordingsFolder">
+                        Mở folder ghi âm
+                    </MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                               StartIcon="@Icons.Material.Filled.DeleteSweep" OnClick="ClearCallHistory"
+                               Disabled="@(!_callHistory.Any())">
+                        Xóa lịch sử
+                    </MudButton>
+                </MudStack>
             </MudStack>
             <MudTable Items="@_callHistory" Dense="true" Hover="true" Elevation="0"
                       Height="calc(100vh - 280px)" FixedHeader="true">
@@ -1051,6 +1065,30 @@
         catch (Exception ex)
         {
             Snackbar.Add("Không mở được hộp thoại: " + ex.Message, Severity.Error);
+        }
+    }
+
+    // ========== 12. MỞ THƯ MỤC GHI ÂM ==========
+    void OpenRecordingsFolder()
+    {
+        try
+        {
+            string folder = Path.Combine(AppBootstrap.DataDir, "CallRecordings");
+            if (!Directory.Exists(folder))
+            {
+                Directory.CreateDirectory(folder);
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = folder,
+                UseShellExecute = true
+            });
+            Snackbar.Add("Đã mở thư mục ghi âm cuộc gọi", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Không thể mở thư mục ghi âm: " + ex.Message, Severity.Error);
         }
     }
 

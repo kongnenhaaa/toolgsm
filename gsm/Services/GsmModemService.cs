@@ -3770,6 +3770,41 @@ public class GsmModemService : IGsmModemService
                 serialPort,
                 ct);
 
+            // Bật hiển thị số gọi đến (AT+CLIP=1), chuông CRC (AT+CRC=1) và nhận diện DTMF (AT+QTONEDET=1)
+            try
+            {
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+CLIP=1",
+                    TimeSpan.FromSeconds(2),
+                    ct);
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+CRC=1",
+                    TimeSpan.FromSeconds(2),
+                    ct);
+                await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "AT+QTONEDET=1",
+                    TimeSpan.FromSeconds(2),
+                    ct);
+
+                string ati = await WriteSautoCommandForResponseWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    "ATI",
+                    TimeSpan.FromSeconds(2),
+                    ct);
+                if (IsSautoOkResponse(ati))
+                {
+                    _modemProfiles[portName] = QuectelModemProfile.FromIdentity("Quectel", ati, ati);
+                }
+            }
+            catch { }
+
             string cpinResponse =
                 await WriteSautoCommandForResponseWhileLockedAsync(
                     portName,
@@ -5274,7 +5309,7 @@ public class GsmModemService : IGsmModemService
             return string.Empty;
         }
 
-        if (!_portVendors.TryGetValue(portName, out var v) || !v.Contains("QUECTEL"))
+        if (_portVendors.TryGetValue(portName, out var v) && !v.Contains("QUECTEL", StringComparison.OrdinalIgnoreCase))
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi: Tính năng tải file chỉ hỗ trợ trên modem Quectel." });
             return string.Empty;
@@ -5403,7 +5438,7 @@ public class GsmModemService : IGsmModemService
             return false;
         }
 
-        if (!_portVendors.TryGetValue(portName, out var v) || !v.Contains("QUECTEL"))
+        if (_portVendors.TryGetValue(portName, out var v) && !v.Contains("QUECTEL", StringComparison.OrdinalIgnoreCase))
         {
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"Lỗi: Tính năng tải file lên chỉ hỗ trợ trên modem Quectel." });
             return false;
@@ -11787,12 +11822,14 @@ public class GsmModemService : IGsmModemService
         if (session.Caller == "Unknown" && caller != "Unknown")
             session.Caller = caller;
 
-        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"📞 Cuộc gọi đến từ {session.Caller}" });
+        string displayCaller = string.Equals(session.Caller, "Unknown", StringComparison.OrdinalIgnoreCase)
+            ? "Số ẩn"
+            : session.Caller;
 
-        // Khôi phục event tương thích nhánh dev để UI, âm báo và Telegram nhận cuộc gọi đến.
-        // Chỉ phát một lần cho mỗi phiên và đợi +CLIP nếu RING đến trước số gọi.
-        if (!string.Equals(session.Caller, "Unknown", StringComparison.OrdinalIgnoreCase)
-            && _incomingCallNotifications.TryAdd(portName, 0))
+        LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = $"📞 Cuộc gọi đến từ {displayCaller}" });
+
+        // Luôn phát sự kiện CallIncoming ngay lập tức khi có chuông để UI thông báo, phát âm thanh và Telegram
+        if (_incomingCallNotifications.TryAdd(portName, 0))
         {
             CallIncoming?.Invoke(this, new GsmDataEventArgs
             {
@@ -11800,20 +11837,24 @@ public class GsmModemService : IGsmModemService
                 Data = session.Caller
             });
         }
+        else if (!string.Equals(caller, "Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            // Cập nhật lại số gọi thực tế nếu trước đó là Unknown và sau đó nhận được +CLIP
+            CallIncoming?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = caller
+            });
+        }
 
         IncomingCallRinging?.Invoke(this, session);
 
-        // Auto-answer and record only real voice-capable modem profiles. This is
-        // deliberately started once per incoming session; repeated RING URCs do
-        // not create another ATA/QAUDRD sequence.
-        QuectelModemProfile? profile = GetModemProfile(portName);
-        if (profile?.Supports(ModemCapability.VoiceCall) == true
-            && profile.Supports(ModemCapability.AudioRecord))
+        // Tự động nghe máy và ghi âm cho mọi cuộc gọi đến
+        string remoteFileName = $"incoming-{portName}-{DateTime.Now:yyyyMMdd-HHmmss}.wav";
+        var state = new IncomingCallRecordingState(remoteFileName);
+        if (_incomingCallRecordings.TryAdd(portName, state))
         {
-            string remoteFileName = $"incoming-{portName}-{DateTime.Now:yyyyMMdd-HHmmss}.wav";
-            var state = new IncomingCallRecordingState(remoteFileName);
-            if (_incomingCallRecordings.TryAdd(portName, state))
-                _ = AutoAnswerAndRecordIncomingCallAsync(portName, state);
+            _ = AutoAnswerAndRecordIncomingCallAsync(portName, state);
         }
     }
 

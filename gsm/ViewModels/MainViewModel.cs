@@ -1,4 +1,4 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -4596,16 +4596,128 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             try
             {
-                string result = await _modemService.SendCommandAsync(port.PortName, "AT+CMGD=1,4");
-                if (IsSimSessionCurrent(port.PortName, ccid, epoch)
-                    && result.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
-                    AddLog($"[{port.PortName}] Xóa SMS thất bại: {result.Trim()}", "ERROR");
+                var (success, msg) = await WipeAllSmsFromPortAsync(port.PortName);
+                if (IsSimSessionCurrent(port.PortName, ccid, epoch))
+                    AddLog($"[{port.PortName}] {msg}", success ? "SUCCESS" : "ERROR");
             }
             catch (Exception ex)
             {
                 AddLog($"[{port.PortName}] Xóa SMS lỗi: {ex.Message}", "ERROR");
             }
         }));
+    }
+
+    public async Task<(bool Success, string Message)> WipeAllSmsFromPortAsync(
+        string portName,
+        CancellationToken ct = default)
+    {
+        if (!IsPortReadyForOperation(portName)
+            || !TryGetCurrentSimSession(portName, out var ccid, out var epoch, out var simToken))
+        {
+            return (false, "Cổng không còn Active hoặc phiên SIM đã thay đổi");
+        }
+
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, simToken);
+        var token = linkedCts.Token;
+
+        using var bgLease = _modemService.SuspendPortBackgroundOperations(portName);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+
+            // 1. Đặt vùng nhớ thao tác sang "SM" (SIM card storage)
+            await _modemService.SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, token);
+
+            // 2. Thử xóa nhanh toàn bộ bằng cờ delflag 4
+            string bulkRes = await _modemService.SendCommandAsync(portName, "AT+CMGD=1,4", 8000, silent: true, token);
+
+            // 3. Kiểm tra số lượng tin còn lại trên SIM
+            string cpmsSm = await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, token);
+            bool smClean = GsmModemService.TryParseSimStorageUsage(cpmsSm, out int usedSm, out int totalSm) && usedSm == 0;
+
+            // Nếu vẫn còn tin hoặc lệnh CMGD=1,4 bị modem từ chối -> Quét đọc và xóa từng slot
+            if (!smClean || bulkRes.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                var indices = new HashSet<int>();
+
+                // Thử đọc danh sách index bằng text mode
+                await _modemService.SendCommandAsync(portName, "AT+CMGF=1", 3000, silent: true, token);
+                string listRes = await _modemService.SendCommandAsync(portName, "AT+CMGL=\"ALL\"", 8000, silent: true, token);
+                foreach (Match m in Regex.Matches(listRes, @"\+CMGL:\s*(\d+)", RegexOptions.IgnoreCase))
+                {
+                    if (int.TryParse(m.Groups[1].Value, out int idx))
+                        indices.Add(idx);
+                }
+
+                // Thử thêm PDU mode để quét cạn tin nhắn PDU/Class 0/đặc biệt
+                await _modemService.SendCommandAsync(portName, "AT+CMGF=0", 3000, silent: true, token);
+                string pduList = await _modemService.SendCommandAsync(portName, "AT+CMGL=4", 8000, silent: true, token);
+                foreach (Match m in Regex.Matches(pduList, @"\+CMGL:\s*(\d+)", RegexOptions.IgnoreCase))
+                {
+                    if (int.TryParse(m.Groups[1].Value, out int idx))
+                        indices.Add(idx);
+                }
+
+                // Xóa từng index cụ thể tìm thấy
+                foreach (int idx in indices)
+                {
+                    await _modemService.SendCommandAsync(portName, $"AT+CMGD={idx},0", 3000, silent: true, token);
+                }
+
+                // Nếu vẫn còn báo có tin sau khi xóa index, quét xóa vét toàn bộ dải slot 1..total (hoặc 1..50)
+                cpmsSm = await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, token);
+                if (GsmModemService.TryParseSimStorageUsage(cpmsSm, out usedSm, out totalSm) && usedSm > 0)
+                {
+                    int maxSlots = totalSm > 0 ? Math.Min(totalSm, 100) : 50;
+                    for (int i = 1; i <= maxSlots; i++)
+                    {
+                        if (token.IsCancellationRequested) break;
+                        await _modemService.SendCommandAsync(portName, $"AT+CMGD={i},0", 1500, silent: true, token);
+                    }
+                }
+            }
+
+            // 4. Đồng thời dọn sạch cả bộ nhớ thiết bị "ME" nếu có lưu tin nhắn
+            try
+            {
+                await _modemService.SendCommandAsync(portName, "AT+CPMS=\"ME\",\"ME\",\"ME\"", 5000, silent: true, token);
+                await _modemService.SendCommandAsync(portName, "AT+CMGD=1,4", 5000, silent: true, token);
+                string cpmsMe = await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, token);
+                if (GsmModemService.TryParseSimStorageUsage(cpmsMe, out int usedMe, out _) && usedMe > 0)
+                {
+                    string meList = await _modemService.SendCommandAsync(portName, "AT+CMGL=\"ALL\"", 5000, silent: true, token);
+                    foreach (Match m in Regex.Matches(meList, @"\+CMGL:\s*(\d+)", RegexOptions.IgnoreCase))
+                    {
+                        if (int.TryParse(m.Groups[1].Value, out int idx))
+                            await _modemService.SendCommandAsync(portName, $"AT+CMGD={idx},0", 2000, silent: true, token);
+                    }
+                }
+            }
+            catch { /* Bỏ qua lỗi ME nếu modem không hỗ trợ ME */ }
+
+            // 5. Khôi phục vùng nhớ chuẩn "SM" cho SIM
+            await _modemService.SendCommandAsync(portName, "AT+CPMS=\"SM\",\"SM\",\"SM\"", 5000, silent: true, token);
+
+            // 6. Kiểm tra lại lần cuối
+            string finalCpms = await _modemService.SendCommandAsync(portName, "AT+CPMS?", 5000, silent: true, token);
+            if (GsmModemService.TryParseSimStorageUsage(finalCpms, out int finalUsed, out int finalTotal))
+            {
+                if (finalUsed == 0)
+                    return (true, $"Đã xóa sạch toàn bộ SMS trong SIM ({finalUsed}/{finalTotal})");
+                else
+                    return (false, $"Còn lại {finalUsed}/{finalTotal} tin chưa thể xóa");
+            }
+
+            return (true, "Đã xóa toàn bộ SMS trong SIM");
+        }
+        catch (OperationCanceledException)
+        {
+            return (false, "Đã hủy thao tác xóa SMS");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Lỗi xóa SMS: {ex.Message}");
+        }
     }
 
     public async Task<string> CheckBalanceForPortAsync(string portName)

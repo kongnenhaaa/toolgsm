@@ -915,13 +915,8 @@
             {
                 try
                 {
-                    string response = await ModemService.SendCommandAsync(
-                        port.PortName, "AT+CMGD=1,4", timeoutMs: 10000, silent: true);
-                    bool success = !response.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
-                        && response.Contains("OK", StringComparison.OrdinalIgnoreCase);
-                    Vm.AddLog(
-                        $"[{port.PortName}] {(success ? "Đã xóa toàn bộ SMS trong SIM." : $"Xóa SMS trong SIM thất bại: {response}")}",
-                        success ? "SUCCESS" : "ERROR");
+                    var (success, msg) = await Vm.WipeAllSmsFromPortAsync(port.PortName);
+                    Vm.AddLog($"[{port.PortName}] {msg}", success ? "SUCCESS" : "ERROR");
                     return (port.PortName, Success: success);
                 }
                 catch (Exception ex)

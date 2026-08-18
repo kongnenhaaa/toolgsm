@@ -26,7 +26,17 @@ public static class SettingsService
             {
                 var json = File.ReadAllText(SettingsFilePath);
                 var settings = JsonSerializer.Deserialize<AppSettings>(json);
-                return Normalize(settings ?? new AppSettings());
+                settings ??= new AppSettings();
+                bool needsInstallationId = string.IsNullOrWhiteSpace(settings.InstallationId)
+                    || !Guid.TryParseExact(settings.InstallationId, "N", out _);
+                AppSettings normalized = Normalize(settings);
+                if (needsInstallationId)
+                {
+                    // Upgrade old settings once so the identity remains stable
+                    // after every restart. Failure is non-fatal for startup.
+                    PersistSettings(normalized);
+                }
+                return normalized;
             }
             catch (Exception)
             {
@@ -40,12 +50,26 @@ public static class SettingsService
 
     public static bool SaveSettings(AppSettings settings)
     {
-        string temporaryPath = $"{SettingsFilePath}.{Guid.NewGuid():N}.tmp";
         try
         {
             AppSettings normalized = Normalize(settings);
+            if (!PersistSettings(normalized)) return false;
+            Current = normalized;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool PersistSettings(AppSettings settings)
+    {
+        string temporaryPath = $"{SettingsFilePath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
             var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(normalized, options);
+            var json = JsonSerializer.Serialize(settings, options);
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsFilePath)!);
             using (var stream = new FileStream(
                        temporaryPath,
@@ -61,10 +85,9 @@ public static class SettingsService
                 stream.Flush(flushToDisk: true);
             }
             File.Move(temporaryPath, SettingsFilePath, overwrite: true);
-            Current = normalized;
             return true;
         }
-        catch (Exception)
+        catch
         {
             return false;
         }
@@ -74,10 +97,7 @@ public static class SettingsService
             {
                 if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
             }
-            catch
-            {
-                // A temporary file is never considered saved settings.
-            }
+            catch { }
         }
     }
 
@@ -99,6 +119,11 @@ public static class SettingsService
             settings.SignalScanIntervalSeconds, 5, 300);
         if (string.IsNullOrWhiteSpace(settings.MachineId))
             settings.MachineId = Environment.MachineName;
+        if (string.IsNullOrWhiteSpace(settings.InstallationId)
+            || !Guid.TryParseExact(settings.InstallationId, "N", out _))
+        {
+            settings.InstallationId = Guid.NewGuid().ToString("N");
+        }
         return settings;
     }
 }

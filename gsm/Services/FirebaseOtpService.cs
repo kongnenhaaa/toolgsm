@@ -27,11 +27,12 @@ public class FirebaseOtpService : IFirebaseOtpService
 
     public async Task WritePortOtpAsync(string machineId, string portId, string? otp, string? content, string? phone)
     {
-        if (string.IsNullOrEmpty(DbUrl) || string.IsNullOrEmpty(machineId) || string.IsNullOrEmpty(portId))
+        if (string.IsNullOrEmpty(DbUrl) || string.IsNullOrEmpty(portId))
             return;
 
         try
         {
+            machineId = await FirebaseService.EnsureUniqueMachineIdAsync();
             // Path toolweb đang listen: machines/{machineId}/ports/{portId}/otp
             var otpUrl = Path($"machines/{machineId}/ports/{portId}/otp");
             var body = System.Text.Json.JsonSerializer.Serialize(otp ?? "");
@@ -60,6 +61,7 @@ public class FirebaseOtpService : IFirebaseOtpService
         if (string.IsNullOrEmpty(DbUrl)) return;
         try
         {
+            machineId = await FirebaseService.EnsureUniqueMachineIdAsync();
             var url = Path($"machines/{machineId}/ports/{port.PortId}");
             // SyncPortsAsync là writer chính và dùng schema camelCase. Chỉ PATCH
             // các giá trị thực có ở snapshot tức thời để không xóa/đổi casing

@@ -25,6 +25,10 @@ namespace gsm.Services
         private readonly CancellationTokenSource _cts = new();
         private Task? _listenTask;
         private Task? _syncTask;
+        private static readonly SemaphoreSlim MachineIdentityGate = new(1, 1);
+        private static string? _resolvedMachineId;
+        private static string? _resolvedRequestedMachineId;
+        private static string? _resolvedInstallationId;
         private long _lastStaleCleanupAt;
         private readonly ConcurrentDictionary<string, byte> _scheduledCommands =
             new(StringComparer.OrdinalIgnoreCase);
@@ -38,15 +42,66 @@ namespace gsm.Services
             }
         }
         public const string DatabaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
-        public static string MachineId => SanitizeFirebaseKey(
+        private static string RequestedMachineId => SanitizeFirebaseKey(
             string.IsNullOrWhiteSpace(SettingsService.Current.MachineId)
                 ? Environment.MachineName
                 : SettingsService.Current.MachineId);
+        public static string MachineId
+        {
+            get
+            {
+                // Once claimed, never fall back to an unclaimed requested name.
+                // If settings change, EnsureUniqueMachineIdAsync atomically moves
+                // the process to the newly claimed name.
+                return Volatile.Read(ref _resolvedMachineId) ?? RequestedMachineId;
+            }
+        }
         private static string _machineId => MachineId;
 
-        private static string SanitizeFirebaseKey(string value) => value.Trim()
+        internal static string SanitizeFirebaseKey(string value) => value.Trim()
             .Replace(".", "_").Replace("$", "").Replace("#", "")
             .Replace("[", "").Replace("]", "").Replace("/", "_");
+
+        public static async Task<string> EnsureUniqueMachineIdAsync(
+            CancellationToken cancellationToken = default)
+        {
+            string requested = RequestedMachineId;
+                string installationId = FirebaseMachineIdentity.GetDeviceScopedInstallationId(
+                    SettingsService.Current.InstallationId);
+            if (string.Equals(
+                    Volatile.Read(ref _resolvedRequestedMachineId), requested,
+                    StringComparison.OrdinalIgnoreCase)
+                && string.Equals(
+                    Volatile.Read(ref _resolvedInstallationId), installationId,
+                    StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(Volatile.Read(ref _resolvedMachineId)))
+            {
+                return Volatile.Read(ref _resolvedMachineId)!;
+            }
+
+            await MachineIdentityGate.WaitAsync(cancellationToken);
+            try
+            {
+                if (string.Equals(_resolvedRequestedMachineId, requested, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(_resolvedInstallationId, installationId, StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(_resolvedMachineId))
+                {
+                    return _resolvedMachineId;
+                }
+
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                string resolved = await FirebaseMachineIdentity.ClaimAsync(
+                    client, DatabaseUrl, requested, installationId, cancellationToken);
+                Volatile.Write(ref _resolvedMachineId, resolved);
+                Volatile.Write(ref _resolvedRequestedMachineId, requested);
+                Volatile.Write(ref _resolvedInstallationId, installationId);
+                return resolved;
+            }
+            finally
+            {
+                MachineIdentityGate.Release();
+            }
+        }
 
         private static string GetDatabaseUrl()
         {
@@ -116,29 +171,65 @@ namespace gsm.Services
         public void Start()
         {
             if (_listenTask != null || _syncTask != null) return;
+            _listenTask = RunBridgeAsync(_cts.Token);
+            _syncTask = _listenTask;
+        }
 
-            // Xóa sạch trạng thái web_states của máy này khi bật toolgsm lên để hiển thị đầy đủ hết
-            _ = Task.Run(async () =>
+        private async Task RunBridgeAsync(CancellationToken ct)
+        {
+            try
             {
-                try
+                string requested = RequestedMachineId;
+                string resolved;
+                while (true)
                 {
-                    if (SettingsService.Current.EnableWebNotification)
+                    try
                     {
-                        // Giữ nguyên commandId/reservation để request web đang chờ không
-                        // bị mất liên kết khi ToolGSM khởi động lại.
-                        _vm.AddLog("[FIREBASE] Khởi động cầu nối Web; giữ nguyên các request đang chờ.", "INFO");
+                        resolved = await EnsureUniqueMachineIdAsync(ct);
+                        break;
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        _vm.AddLog(
+                            $"[FIREBASE_IDENTITY_RETRY] Chưa cấp được tên máy: {ex.Message}; sẽ thử lại.",
+                            "WARN");
+                        await Task.Delay(TimeSpan.FromSeconds(3), ct);
                     }
                 }
-                catch { }
-            });
+                if (!string.Equals(requested, resolved, StringComparison.OrdinalIgnoreCase))
+                {
+                    _vm.AddLog(
+                        $"[FIREBASE] Tên '{requested}' đã có ToolGSM khác sử dụng; " +
+                        $"máy này tự đổi thành '{resolved}'.", "WARN");
+                }
+                else
+                {
+                    _vm.AddLog($"[FIREBASE] Đã giữ tên máy duy nhất '{resolved}'.", "INFO");
+                }
 
-            _ = Task.Run(CleanupStaleOwnedCommandsAsync);
+                if (SettingsService.Current.EnableWebNotification)
+                {
+                    _vm.AddLog(
+                        "[FIREBASE] Khởi động cầu nối Web; giữ nguyên các request đang chờ.",
+                        "INFO");
+                }
 
-            // Bắt đầu lắng nghe lệnh gửi SMS từ web
-            _listenTask = ListenForCommandsAsync(_cts.Token);
-
-            // Đồng bộ định kỳ mỗi 2 giây
-            _syncTask = PeriodicSyncAsync(_cts.Token);
+                await CleanupStaleOwnedCommandsAsync();
+                Task listenTask = ListenForCommandsAsync(ct);
+                Task syncTask = PeriodicSyncAsync(ct);
+                await Task.WhenAll(listenTask, syncTask);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                _vm.AddLog(
+                    $"[FIREBASE_IDENTITY_ERROR] Không thể cấp tên máy duy nhất: {ex.Message}",
+                    "ERROR");
+            }
         }
 
         public void Stop()
@@ -242,6 +333,9 @@ namespace gsm.Services
             if (!SettingsService.Current.EnableWebNotification) return;
             try
             {
+                // Also applies a Machine ID edited while the app is running,
+                // but only after the new name has been claimed successfully.
+                await EnsureUniqueMachineIdAsync(ct);
                 // Dữ liệu cần thiết cho Web
                 var portsData = _vm.Ports.ToDictionary(p => p.PortName, p => new {
                     id = p.PortName,
@@ -275,6 +369,9 @@ namespace gsm.Services
                 var statusJson = JsonSerializer.Serialize(new Dictionary<string, object?>
                 {
                     ["machineId"] = _machineId,
+                    ["requestedMachineId"] = RequestedMachineId,
+                    ["installationId"] = FirebaseMachineIdentity.GetDeviceScopedInstallationId(
+                        SettingsService.Current.InstallationId),
                     ["deviceName"] = Environment.MachineName,
                     ["lastSync"] = new Dictionary<string, string> { [".sv"] = "timestamp" }
                 });
@@ -364,7 +461,10 @@ namespace gsm.Services
                         // Toàn bộ commands hiện tại lúc mới kết nối
                         foreach (var prop in dataElement.EnumerateObject())
                         {
-                            ExecuteAndRemoveCommand(prop.Name, prop.Value);
+                            if (HasCompleteCommandPayload(prop.Value))
+                                ExecuteAndRemoveCommand(prop.Name, prop.Value);
+                            else
+                                _ = Task.Run(() => FetchAndProcessCommandAsync(prop.Name, _cts.Token));
                         }
                     }
                     else
@@ -373,7 +473,9 @@ namespace gsm.Services
                         var segments = path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
                         if (segments.Length == 0) return;
                         string cmdId = segments[0];
-                        if (segments.Length == 1 && dataElement.ValueKind == JsonValueKind.Object)
+                        if (segments.Length == 1
+                            && dataElement.ValueKind == JsonValueKind.Object
+                            && HasCompleteCommandPayload(dataElement))
                             ExecuteAndRemoveCommand(cmdId, dataElement);
                         else
                             _ = Task.Run(() => FetchAndProcessCommandAsync(cmdId, _cts.Token));
@@ -384,6 +486,17 @@ namespace gsm.Services
             {
                 _vm.AddLog($"[FIREBASE_EVENT_ERROR] Không đọc được sự kiện command: {ex.Message}", "WARN");
             }
+        }
+
+        private static bool HasCompleteCommandPayload(JsonElement command)
+        {
+            return command.ValueKind == JsonValueKind.Object
+                && command.TryGetProperty("portId", out var portId)
+                && command.TryGetProperty("recipient", out var recipient)
+                && command.TryGetProperty("content", out var content)
+                && portId.ValueKind == JsonValueKind.String
+                && recipient.ValueKind == JsonValueKind.String
+                && content.ValueKind == JsonValueKind.String;
         }
 
         private async Task FetchAndProcessCommandAsync(string cmdId, CancellationToken ct)

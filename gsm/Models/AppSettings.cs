@@ -40,6 +40,10 @@ public class AppSettings
     
     // Web to GSM Bridge & Firebase
     public string MachineId { get; set; } = Environment.MachineName;
+    // Stable identity of this ToolGSM installation. This is deliberately
+    // separate from MachineId so two installations may request the same name
+    // without ever writing to the same Firebase machine node.
+    public string InstallationId { get; set; } = "";
     public string FirebaseDbUrl { get; set; } = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
     public string FirebaseAuthToken { get; set; } = "";
     public bool WriteOtpToFirebase { get; set; } = true;

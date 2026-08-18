@@ -92,6 +92,7 @@ namespace gsm.Services
             
             // Gán default an toàn cho máy mới
             defaults.MachineId = Environment.MachineName; // hoặc "machine-1"
+            defaults.InstallationId = Guid.NewGuid().ToString("N");
             defaults.WriteOtpToFirebase = true;
             defaults.FirebaseUrl = FirebaseService.DatabaseUrl;
             defaults.FirebaseDbUrl = FirebaseService.DatabaseUrl;

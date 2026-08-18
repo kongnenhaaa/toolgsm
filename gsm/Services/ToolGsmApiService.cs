@@ -24,13 +24,14 @@ public sealed class ToolGsmApiService
     public const string DefaultUrl = "http://127.0.0.1:17890";
     public const string SendSmsPath = "/api/v1/sms/send";
     public const string HealthPath = "/api/v1/health";
+    public const string PollOtpPath = "/api/v1/otp/poll";
     private const string RequiredClientHeader = "ZaloTool";
     private const string RequiredPurpose = "zalo-manual-mo";
     private static readonly Regex RequestIdPattern = new(
         "^[A-Za-z0-9_-]{8,80}$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex ZaloMoPattern = new(
-        @"^\[Zalo\]\s+[A-Za-z0-9_-]{8,160}$",
+        @"^(?:\[Zalo\]\s+[A-Za-z0-9_-]{8,160}|ZALO)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly IToolGsmApiHost _host;
@@ -38,6 +39,8 @@ public sealed class ToolGsmApiService
         string,
         Lazy<Task<ToolGsmSmsResponse>>> _requests =
             new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _claimedDeliveryIds =
+        new(StringComparer.OrdinalIgnoreCase);
     private CancellationToken _serviceCancellation = CancellationToken.None;
 
     public ToolGsmApiService(MainViewModel viewModel)
@@ -124,6 +127,109 @@ public sealed class ToolGsmApiService
             ToolGsmSmsResponse response = await SubmitSmsAsync(
                 request, context.RequestAborted);
             return Results.Json(response, statusCode: response.HttpStatusCode);
+        });
+
+        app.MapGet(PollOtpPath, (HttpContext context) =>
+        {
+            IResult? denied = Authorize(context, apiToken);
+            if (denied != null) return denied;
+
+            string sourcePhone = context.Request.Query["sourcePhone"].ToString().Trim();
+            string requestId   = context.Request.Query["requestId"].ToString().Trim();
+            long afterMs = long.TryParse(
+                context.Request.Query["afterMs"].ToString(), out long v) ? v : 0L;
+            DateTimeOffset afterUtc = afterMs > 0
+                ? DateTimeOffset.FromUnixTimeMilliseconds(afterMs).AddSeconds(-5)
+                : DateTimeOffset.UtcNow.AddSeconds(-60);
+
+            string normalizedSource = NormalizeVietnamPhone(sourcePhone);
+
+            var ports = _host.GetPorts();
+            var portMap = ports.ToDictionary(
+                p => p.PortName,
+                p => NormalizeVietnamPhone(p.PhoneNumber),
+                StringComparer.OrdinalIgnoreCase);
+
+            IReadOnlyList<SmsInboxRecord> recent = _host.GetOtpInbox()
+                .OrderByDescending(r => r.ReceivedAtUtc != default ? r.ReceivedAtUtc : (r.SmsTimestampUtc ?? DateTimeOffset.UtcNow))
+                .ToArray();
+
+            SmsInboxRecord? match = null;
+            string matchedOtp = string.Empty;
+
+            foreach (var r in recent)
+            {
+                DateTimeOffset ts = r.ReceivedAtUtc != default
+                    ? r.ReceivedAtUtc
+                    : (r.SmsTimestampUtc ?? DateTimeOffset.UtcNow);
+                if (ts < afterUtc) continue;
+
+                // Do not claim an SMS that was already claimed by a different requestId
+                if (!string.IsNullOrEmpty(r.DeliveryId)
+                    && _claimedDeliveryIds.TryGetValue(r.DeliveryId, out string? claimedReqId)
+                    && !string.Equals(claimedReqId, requestId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string recvPhone = NormalizeVietnamPhone(r.ReceiverPhone);
+                if (string.IsNullOrEmpty(recvPhone) && portMap.TryGetValue(r.PortName, out string? portPhone))
+                {
+                    recvPhone = portPhone;
+                }
+
+                if (!string.IsNullOrEmpty(normalizedSource)
+                    && !string.Equals(recvPhone, normalizedSource, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string otp = (!string.IsNullOrWhiteSpace(r.Otp) && !string.Equals(r.Otp, "N/A", StringComparison.OrdinalIgnoreCase))
+                    ? r.Otp.Trim()
+                    : (GsmModemService.ExtractOtp(r.Content) ?? string.Empty).Trim();
+
+                if (string.IsNullOrEmpty(otp))
+                {
+                    var m = Regex.Match(r.Content ?? string.Empty, @"\b(\d{4,8})\b");
+                    if (m.Success) otp = m.Groups[1].Value;
+                }
+
+                if (!string.IsNullOrEmpty(otp))
+                {
+                    match = r;
+                    matchedOtp = otp;
+                    if (!string.IsNullOrEmpty(r.DeliveryId) && !string.IsNullOrEmpty(requestId))
+                    {
+                        _claimedDeliveryIds[r.DeliveryId] = requestId;
+                    }
+                    break;
+                }
+            }
+
+            if (match == null || string.IsNullOrEmpty(matchedOtp))
+            {
+                return Results.Json(new
+                {
+                    ok = false,
+                    status = "waiting",
+                    requestId,
+                    sourcePhone
+                }, statusCode: StatusCodes.Status200OK);
+            }
+
+            return Results.Json(new
+            {
+                ok = true,
+                status = "otp_received",
+                requestId,
+                sourcePhone = !string.IsNullOrEmpty(match.ReceiverPhone) ? match.ReceiverPhone : sourcePhone,
+                otp = matchedOtp,
+                smsContent = match.Content,
+                sender = match.Sender,
+                portName = match.PortName,
+                receivedAtMs = (match.ReceivedAtUtc != default ? match.ReceivedAtUtc : (match.SmsTimestampUtc ?? DateTimeOffset.UtcNow))
+                    .ToUnixTimeMilliseconds()
+            }, statusCode: StatusCodes.Status200OK);
         });
 
         _serviceCancellation = cancellationToken;
@@ -321,8 +427,8 @@ public sealed class ToolGsmApiService
             return Invalid("requestId không hợp lệ.");
         if (string.IsNullOrEmpty(MyVnptService.NormalizePhone(request.SourcePhone)))
             return Invalid("sourcePhone không phải số điện thoại Việt Nam hợp lệ.");
-        if (string.IsNullOrEmpty(NormalizeVietnamPhone(request.Destination)))
-            return Invalid("destination không phải số điện thoại Việt Nam hợp lệ.");
+        if (string.IsNullOrEmpty(NormalizeVietnamSmsDestination(request.Destination)))
+            return Invalid("destination không hợp lệ (cần số điện thoại VN hoặc shortcode 4-8 số).");
         if (!ZaloMoPattern.IsMatch(request.Message ?? string.Empty))
             return Invalid("message không đúng định dạng SMS MO [Zalo] token.");
         if (!string.IsNullOrWhiteSpace(request.PortName)
@@ -345,6 +451,15 @@ public sealed class ToolGsmApiService
 
     private static string NormalizeVietnamSmsDestination(string? value)
     {
+        string digits = new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+        // Shortcode (carrier short number): 3-8 digits, send as-is
+        if (digits.Length >= 3 && digits.Length <= 8
+            && !digits.StartsWith("0", StringComparison.Ordinal)
+            && !digits.StartsWith("84", StringComparison.Ordinal))
+        {
+            return digits;
+        }
+        // Full VN phone number: normalize then convert to domestic 0xxxxxxxxx
         string normalized = MyVnptService.NormalizePhone(value);
         return normalized.StartsWith("84", StringComparison.Ordinal)
             ? "0" + normalized[2..]
@@ -464,6 +579,7 @@ internal sealed record ToolGsmApiPort(
 internal interface IToolGsmApiHost
 {
     IReadOnlyList<ToolGsmApiPort> GetPorts();
+    IReadOnlyList<SmsInboxRecord> GetOtpInbox();
     Task<string> SendSmsAsync(
         string portName,
         string destination,
@@ -498,6 +614,9 @@ internal sealed class MainViewModelToolGsmApiHost : IToolGsmApiHost
             port.Status == SimStatus.Active
                 && _viewModel.IsPortReadyForOperation(port.PortName)))
         .ToArray();
+
+    public IReadOnlyList<SmsInboxRecord> GetOtpInbox() =>
+        _viewModel.GetRecentSmsSnapshot(200);
 
     public Task<string> SendSmsAsync(
         string portName,

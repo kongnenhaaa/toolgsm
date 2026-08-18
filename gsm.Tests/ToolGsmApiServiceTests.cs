@@ -152,6 +152,9 @@ public sealed class ToolGsmApiServiceTests
 
         public IReadOnlyList<ToolGsmApiPort> GetPorts() => _ports;
 
+        public IReadOnlyList<SmsInboxRecord> GetOtpInbox() =>
+            Array.Empty<SmsInboxRecord>();
+
         public Task<string> SendSmsAsync(
             string portName,
             string destination,

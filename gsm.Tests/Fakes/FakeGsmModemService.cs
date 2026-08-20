@@ -34,6 +34,7 @@ public sealed class FakeGsmModemService : IGsmModemService
     public event EventHandler<GsmDataEventArgs>? CallIncoming;
     public event EventHandler<GsmDataEventArgs>? CallEnded;
     public event EventHandler<GsmDataEventArgs>? DtmfReceived;
+    public event EventHandler<GsmDataEventArgs>? CallRecordingSaved;
     public event EventHandler<IncomingCallSession>? IncomingCallRinging;
     public event EventHandler<IncomingCallSession>? IncomingCallEnded;
 
@@ -214,6 +215,8 @@ public sealed class FakeGsmModemService : IGsmModemService
     public void RaiseCallIncoming(string portName) => CallIncoming?.Invoke(this, new GsmDataEventArgs { PortName = portName });
     public void RaiseCallEnded(string portName) => CallEnded?.Invoke(this, new GsmDataEventArgs { PortName = portName });
     public void RaiseDtmf(string portName, string data) => DtmfReceived?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = data });
+    public void RaiseRecordingSaved(string portName, string path, string sender) =>
+        CallRecordingSaved?.Invoke(this, new GsmDataEventArgs { PortName = portName, Data = path, Sender = sender });
     public void RaiseRinging(IncomingCallSession session) => IncomingCallRinging?.Invoke(this, session);
     public void RaiseIncomingEnded(IncomingCallSession session) => IncomingCallEnded?.Invoke(this, session);
 

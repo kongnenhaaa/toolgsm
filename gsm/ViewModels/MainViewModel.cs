@@ -221,6 +221,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _disposed;
     
     public event Action<string, string>? OtpReceivedEvent;
+    public event Action<string, MudBlazor.Severity>? SnackbarRequested;
+
+    public void ShowToast(string message, MudBlazor.Severity severity = MudBlazor.Severity.Info)
+    {
+        try
+        {
+            SnackbarRequested?.Invoke(message, severity);
+        }
+        catch { }
+    }
 
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly PortCooldownGate _portCooldown = new();
@@ -1183,6 +1193,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _modemService.DtmfReceived += ModemService_DtmfReceived;
         _modemService.IncomingCallRinging += ModemService_IncomingCallRinging;
         _modemService.IncomingCallEnded += ModemService_IncomingCallEnded;
+        _modemService.CallRecordingSaved += ModemService_CallRecordingSaved;
 
         InitializeHardware();
         OtpHistoryList.Clear();
@@ -4024,6 +4035,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             AddLog($"[{e.PortName}] Có cuộc gọi đến từ SĐT: {callerDisplay}", "INFO");
             SnackbarMessageQueue.Enqueue($"[{e.PortName}] Có cuộc gọi từ {callerDisplay}");
+            ShowToast($"[{e.PortName}] 📞 Có cuộc gọi từ {callerDisplay}", MudBlazor.Severity.Warning);
+            Services.ToastService.Show($"📞 Cuộc gọi đến [{e.PortName}]", $"Người gọi: {callerDisplay}\nSIM: {receiverPhone}");
 
             // Phát âm thanh cảnh báo cuộc gọi đến
             Services.SoundAlertService.PlayCall();
@@ -4197,6 +4210,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 port.LastCallResult = $"Ringing: {displayCaller}";
                 port.UpdateDisplayResult("Call");
                 AddLog($"[{session.Port}] Đang đổ chuông từ {displayCaller}", "INFO");
+                ShowToast($"[{session.Port}] 📞 Đang đổ chuông: {displayCaller}", MudBlazor.Severity.Info);
             }
         });
     }
@@ -4276,6 +4290,173 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         });
     }
+
+    private void ModemService_CallRecordingSaved(object? sender, GsmDataEventArgs e)
+    {
+        string localWav = e.Data;
+        string portName = e.PortName;
+
+        if (string.IsNullOrWhiteSpace(localWav) || !File.Exists(localWav))
+            return;
+
+        // Chạy tiến trình STT và bóc tách Voice OTP trên luồng background
+        _ = Task.Run(async () =>
+        {
+            AddLog($"[{portName}] 🎧 Whisper đang dịch file ghi âm ({Path.GetFileName(localWav)})...", "INFO");
+
+            var result = await Services.VoiceTranscriptionService.TranscribeAudioAsync(localWav);
+            if (!string.IsNullOrWhiteSpace(result.Error))
+            {
+                AddLog($"[{portName}] [VOICE_STT_ERROR] {result.Error}", "WARN");
+                return;
+            }
+
+            string text = result.Text?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                AddLog($"[{portName}] [VOICE_STT] File ghi âm không có giọng nói hoặc quá ngắn.", "INFO");
+                return;
+            }
+
+            var port = Ports.FirstOrDefault(p => p.PortName == portName);
+            string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                AddLog($"[{portName}] 📝 Voice STT: \"{text}\"", "INFO");
+
+                // Tìm bản ghi tin nhắn cuộc gọi vừa kết thúc
+                var existingMsg = SmsMessages.FirstOrDefault(m => m.PortName == portName && (m.Content == "Cuộc gọi đến đã kết thúc." || m.Content.StartsWith("[VOICE]")));
+
+                // Ưu tiên giữ lại số người gọi thực tế nếu có
+                string senderPhone = !string.IsNullOrWhiteSpace(e.Sender) && e.Sender != "Unknown" && e.Sender != "Ẩn số"
+                    ? e.Sender
+                    : (existingMsg != null && !string.IsNullOrWhiteSpace(existingMsg.Sender) && existingMsg.Sender != "Ẩn số" && existingMsg.Sender != "Unknown"
+                        ? existingMsg.Sender
+                        : (port != null && !string.IsNullOrWhiteSpace(port.Sender) && port.Sender != "Ẩn số" && port.Sender != "Unknown" ? port.Sender : "Ẩn số"));
+
+                // Cập nhật hoặc chèn bản ghi vào danh sách Tin nhắn tới (SmsMessages)
+                if (existingMsg != null)
+                {
+                    int idx = SmsMessages.IndexOf(existingMsg);
+                    if (idx >= 0)
+                    {
+                        SmsMessages[idx] = new SmsMessage
+                        {
+                            PortName = portName,
+                            ReceivedTime = existingMsg.ReceivedTime,
+                            ReceivedAtUtc = existingMsg.ReceivedAtUtc,
+                            SmsTimestampUtc = existingMsg.SmsTimestampUtc,
+                            Content = $"[VOICE] {text}",
+                            Sender = senderPhone,
+                            Otp = result.Otp ?? string.Empty,
+                            ReceiverPhone = receiverPhone,
+                            NetworkProvider = port?.NetworkProvider ?? existingMsg.NetworkProvider,
+                            Status = port?.Status ?? existingMsg.Status,
+                            CallCount = port?.CallCount.ToString() ?? existingMsg.CallCount,
+                            ForwardContent = existingMsg.ForwardContent
+                        };
+                    }
+                }
+                else
+                {
+                    InsertSmsMessageBounded(new SmsMessage
+                    {
+                        PortName = portName,
+                        ReceivedTime = DateTime.Now.ToString("HH:mm:ss"),
+                        Content = $"[VOICE] {text}",
+                        Sender = senderPhone,
+                        Otp = result.Otp ?? string.Empty,
+                        ReceiverPhone = receiverPhone,
+                        NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
+                        Status = port?.Status ?? SimStatus.Connecting,
+                        CallCount = port?.CallCount.ToString() ?? "1",
+                        ForwardContent = ""
+                    });
+                }
+
+                if (port != null)
+                {
+                    port.LastMessageContent = $"[VOICE] {text}";
+                    port.Otp = result.Otp ?? string.Empty;
+                    port.LastCallResult = $"STT: {text}";
+                    port.Sender = senderPhone;
+                    port.LastReceivedTime = DateTime.Now.ToString("HH:mm:ss");
+                    port.UpdateDisplayResult("Call");
+                    UpdateDashboard();
+                }
+
+                OnPropertyChanged(nameof(SmsMessages));
+                OnPropertyChanged(nameof(FilteredSmsMessages));
+                OnPropertyChanged(nameof(SmsReceivedCount));
+
+                // Nếu là thông báo SIM bị khóa từ tổng đài
+                if (result.Locked)
+                {
+                    AddLog($"[{portName}] 🔒 SIM BỊ KHÓA: Tổng đài thông báo thuê bao/SIM bị khóa.", "ERROR");
+                    ShowToast($"[{portName}] ⚠️ SIM bị khóa!", MudBlazor.Severity.Error);
+                }
+
+                // Nếu bóc tách được mã OTP
+                if (!string.IsNullOrWhiteSpace(result.Otp))
+                {
+                    AddLog($"[{portName}] 🔑 ĐÃ BẮT ĐƯỢC VOICE OTP: {result.Otp} từ {senderPhone}", "SUCCESS");
+
+                    InsertOtpHistoryBounded(new Services.OtpRecord
+                    {
+                        Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        Port = portName,
+                        SimPhone = receiverPhone,
+                        Sender = $"[VOICE] {senderPhone}",
+                        Otp = result.Otp,
+                        Content = text
+                    });
+
+                    if (SelectedTabIndex != 3) IncrementUnreadOtp();
+                    OnPropertyChanged(nameof(FilteredOtpHistory));
+                    OnPropertyChanged(nameof(FilteredOtpHistoryCount));
+
+                    // Phát âm thanh OTP
+                    Services.SoundAlertService.PlayOtp();
+
+                    // Toast UI và Windows Toast
+                    ShowToast($"[{portName}] 🔑 Voice OTP: {result.Otp} (từ {senderPhone})", MudBlazor.Severity.Success);
+                    Services.ToastService.Show($"🔑 Voice OTP — {portName}", $"SIM: {receiverPhone} | Từ: {senderPhone}\nOTP: {result.Otp}\n\"{text}\"");
+
+                    // Gửi Telegram
+                    var clipCfg = SettingsService.Current;
+                    if (clipCfg != null &&
+                        !string.IsNullOrWhiteSpace(clipCfg.TelegramBotToken) &&
+                        !string.IsNullOrWhiteSpace(clipCfg.TelegramChatId) &&
+                        clipCfg.TelegramOnCall)
+                    {
+                        string safeCallerHtml = System.Net.WebUtility.HtmlEncode(senderPhone);
+                        string safeTextHtml = System.Net.WebUtility.HtmlEncode(text);
+                        string tgText =
+                            $"🔑 <b>Voice OTP Mới [{portName}]</b>\n" +
+                            $"📱 SIM nhận: {receiverPhone}\n" +
+                            $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
+                            $"🔑 OTP: <code>{result.Otp}</code>\n" +
+                            $"📝 Lời thoại: <i>{safeTextHtml}</i>\n" +
+                            $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
+                        _ = _notifyService.SendTelegramAsync(clipCfg.TelegramBotToken, clipCfg.TelegramChatId, tgText);
+                    }
+
+                    // Tự động forward Webhook
+                    var webhookRules = AppSettings?.WebhookRules ?? new List<Models.WebhookRule>();
+                    foreach (var rule in webhookRules)
+                    {
+                        _ = Services.WebhookService.TriggerAsync(rule, portName, receiverPhone, $"[VOICE] {senderPhone}", result.Otp, text);
+                    }
+                }
+                else
+                {
+                    ShowToast($"[{portName}] 📝 Dịch ghi âm: {text}", MudBlazor.Severity.Info);
+                }
+            });
+        });
+    }
+
     [RelayCommand]
     private void SwitchTab(string tabIndex)
     {

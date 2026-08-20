@@ -99,6 +99,7 @@ public interface IGsmModemService
     event EventHandler<GsmDataEventArgs> CallIncoming;
     event EventHandler<GsmDataEventArgs> CallEnded;
     event EventHandler<GsmDataEventArgs> DtmfReceived;
+    event EventHandler<GsmDataEventArgs> CallRecordingSaved;
     
     event EventHandler<gsm.Models.IncomingCallSession> IncomingCallRinging;
     event EventHandler<gsm.Models.IncomingCallSession> IncomingCallEnded;
@@ -178,6 +179,7 @@ public class GsmModemService : IGsmModemService
         }
 
         public string RemoteFileName { get; }
+        public string CallerNumber { get; set; } = string.Empty;
         public object Sync { get; } = new();
         public TaskCompletionSource<bool> SetupCompleted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -3245,6 +3247,7 @@ public class GsmModemService : IGsmModemService
     public event EventHandler<GsmDataEventArgs>? CallIncoming;
     public event EventHandler<GsmDataEventArgs>? CallEnded;
     public event EventHandler<GsmDataEventArgs>? DtmfReceived;
+    public event EventHandler<GsmDataEventArgs>? CallRecordingSaved;
 
     public event EventHandler<gsm.Models.IncomingCallSession>? IncomingCallRinging;
     public event EventHandler<gsm.Models.IncomingCallSession>? IncomingCallEnded;
@@ -11609,6 +11612,16 @@ public class GsmModemService : IGsmModemService
                             ? $"[CALL_RECORDING_FAILED] Could not download {recordingRemoteName} from modem."
                             : $"[CALL_RECORDING_SAVED] {downloaded}"
                     });
+
+                    if (!string.IsNullOrWhiteSpace(downloaded))
+                    {
+                        CallRecordingSaved?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = downloaded,
+                            Sender = phoneNumber
+                        });
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -11851,7 +11864,10 @@ public class GsmModemService : IGsmModemService
 
         // Tự động nghe máy và ghi âm cho mọi cuộc gọi đến
         string remoteFileName = $"incoming-{portName}-{DateTime.Now:yyyyMMdd-HHmmss}.wav";
-        var state = new IncomingCallRecordingState(remoteFileName);
+        var state = new IncomingCallRecordingState(remoteFileName)
+        {
+            CallerNumber = session.Caller
+        };
         if (_incomingCallRecordings.TryAdd(portName, state))
         {
             _ = AutoAnswerAndRecordIncomingCallAsync(portName, state);
@@ -12019,6 +12035,20 @@ public class GsmModemService : IGsmModemService
                     ? $"[INCOMING_RECORDING_FAILED] Không tải được {state.RemoteFileName}."
                     : $"[INCOMING_RECORDING_SAVED] {downloaded}"
             });
+
+            if (!string.IsNullOrWhiteSpace(downloaded))
+            {
+                string callerNum = !string.IsNullOrWhiteSpace(state.CallerNumber) && state.CallerNumber != "Unknown"
+                    ? state.CallerNumber
+                    : (_incomingCalls.TryGetValue(portName, out var s) ? s.Caller : "");
+
+                CallRecordingSaved?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = portName,
+                    Data = downloaded,
+                    Sender = callerNum
+                });
+            }
         }
         catch (Exception ex)
         {

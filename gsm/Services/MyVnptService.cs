@@ -30,6 +30,13 @@ public static class MyVnptService
     // Mọi COM dùng chung một IP/API token nhưng mỗi workflow được phát độc lập,
     // đồng thời. Lỗi 429/503 vẫn được xử lý bằng retry riêng của request đó.
     private const int MaxTransientAttempts = 3;
+    // VNPT có thể trả lỗi trạng thái nếu authen_check_account, otp_send và
+    // request kế tiếp đến quá sát nhau. Các COM vẫn chạy độc lập, nhưng các
+    // request dùng chung API phải được giãn cách ở một điểm trung tâm.
+    private static readonly object ApiPacingLock = new();
+    private static readonly TimeSpan MinimumApiRequestSpacing =
+        TimeSpan.FromMilliseconds(1200);
+    private static DateTimeOffset NextApiRequestUtc = DateTimeOffset.MinValue;
 
     public static async Task<MyVnptOtpSession> PreparePasswordRequestAsync(
         string phone,
@@ -254,6 +261,7 @@ public static class MyVnptService
         for (int attempt = 1; attempt <= MaxTransientAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            await WaitForApiRequestTurnAsync(cancellationToken);
             var stopwatch = Stopwatch.StartNew();
                 using var request = new HttpRequestMessage(HttpMethod.Post, ApiRoot + service)
                 {
@@ -292,6 +300,24 @@ public static class MyVnptService
         }
 
         throw new HttpRequestException("VNPT không phản hồi sau các lần thử lại");
+    }
+
+    private static async Task WaitForApiRequestTurnAsync(
+        CancellationToken cancellationToken)
+    {
+        TimeSpan delay;
+        lock (ApiPacingLock)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            DateTimeOffset start = NextApiRequestUtc > now
+                ? NextApiRequestUtc
+                : now;
+            delay = start - now;
+            NextApiRequestUtc = start + MinimumApiRequestSpacing;
+        }
+
+        if (delay > TimeSpan.Zero)
+            await Task.Delay(delay, cancellationToken);
     }
 
     private static bool IsTransientStatusCode(HttpStatusCode statusCode) =>

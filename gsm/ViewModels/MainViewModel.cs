@@ -65,6 +65,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         public required CancellationToken CancellationToken { get; init; }
         public TaskCompletionSource<MyVnptPasswordResult> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // SMS có thể về ngay sau khi otp_send được server nhận nhưng trước
+        // khi request otp_send trả response về tool. Không được gọi set-pass
+        // trong khoảng race này, nếu không VNPT có thể trả "Chưa yêu cầu
+        // otp/pin cho dịch vụ này".
+        public TaskCompletionSource<bool> OtpSendCompleted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool TryClaimOtp(string otp)
         {
@@ -158,6 +164,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
+            bool otpRequestAccepted = await pending.OtpSendCompleted.Task.WaitAsync(
+                pending.CancellationToken);
+            if (!otpRequestAccepted)
+            {
+                pending.Completion.TrySetResult(new MyVnptPasswordResult(
+                    false,
+                    "Không xác nhận được yêu cầu OTP MyVNPT"));
+                return;
+            }
+
             if (!IsSimSessionCurrent(pending.PortName, pending.Ccid, pending.Epoch))
             {
                 pending.Completion.TrySetResult(new MyVnptPasswordResult(false, "SIM đã thay đổi trước khi nhận OTP"));
@@ -582,6 +598,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         apiSession,
                         operationToken,
                         (message, type) => AddLog($"[{port.PortName}] {message}", type));
+                    pending.OtpSendCompleted.TrySetResult(true);
                     if (!IsSimSessionCurrent(port.PortName, vnptCcid, vnptEpoch)
                         || port.Status != SimStatus.Active)
                         throw new OperationCanceledException(operationToken);
@@ -658,6 +675,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
                 finally
                 {
+                    // Unblock a very early SMS if the otp_send workflow fails
+                    // or is cancelled before it can publish its success gate.
+                    pending?.OtpSendCompleted.TrySetResult(false);
                     if (pending != null)
                     {
                         ((ICollection<KeyValuePair<string, PendingMyVnptPasswordOperation>>)_pendingMyVnptPasswordPorts)
@@ -670,7 +690,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // VNPT requests like cuibap. Starting 30+ authen_check_account /
             // otp_send calls in the same millisecond causes burst throttling
             // and unstable account-branch responses.
-            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+            // Giãn nhịp khởi động giữa các COM để authen_check_account/otp_send
+            // không dồn thành burst lên cùng API VNPT. MyVnptService còn có
+            // pacing trung tâm cho từng HTTP request.
+            await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellationToken);
         }
 
         await Task.WhenAll(requestTasks);
@@ -2288,6 +2311,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // pipeline đọc được CCID của SIM mới.
         _portSessions.Invalidate(portName);
         _initializingPorts.TryRemove(portName, out _);
+        var keysToRemove = _initialUssdCleanupCompleted.Keys
+            .Where(k => k.StartsWith($"{portName}#", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        foreach (var k in keysToRemove)
+        {
+            _initialUssdCleanupCompleted.TryRemove(k, out _);
+        }
     }
 
     private bool TryBeginPortInitialization(string portName, out Guid lease)
@@ -2927,6 +2957,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     UpdateDashboard(); // Refresh online/offline count when Balance is updated
 
+                    TriggerAutoClearSmsAfterUssd(e.PortName);
+
                     // SnackbarMessageQueue.Enqueue($"[{e.PortName}] USSD: {ussdContent}");
                 }
             }
@@ -3041,6 +3073,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 else
                 {
                     port.NetworkProvider = "No Signal";
+                }
+            }
+            else if (e.Data.StartsWith("[SAUTO_AUTO_USSD_RESULT]", StringComparison.Ordinal))
+            {
+                if (e.Data.Contains("completed=True", StringComparison.OrdinalIgnoreCase))
+                {
+                    TriggerAutoClearSmsAfterUssd(e.PortName);
                 }
             }
             else if (e.Data.StartsWith("[PARSE_IMEI]"))
@@ -4895,6 +4934,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             return (false, $"Lỗi xóa SMS: {ex.Message}");
         }
+    }
+
+    private readonly ConcurrentDictionary<string, byte> _initialUssdCleanupCompleted =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public void TriggerAutoClearSmsAfterUssd(string portName)
+    {
+        if (AppSettings?.AutoClearSmsAfterUssd == false) return;
+        if (!TryGetCurrentSimSession(portName, out var ccid, out var epoch, out var token)) return;
+
+        string sessionKey = $"{portName}#{ccid}#{epoch}";
+        if (!_initialUssdCleanupCompleted.TryAdd(sessionKey, 0)) return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Chờ 1.5 giây để chu trình USSD nhả cổng hoàn toàn
+                await Task.Delay(1500, token).ConfigureAwait(false);
+                if (!IsSimSessionCurrent(portName, ccid, epoch) || !IsPortReadyForOperation(portName))
+                    return;
+
+                AddLog($"[{portName}] 🧹 Tự động xóa sạch SMS (SIM & Thiết bị) sau khi USSD *101# xong để tránh kẹt nghẽn bộ nhớ...", "INFO");
+                var (success, msg) = await WipeAllSmsFromPortAsync(portName, token).ConfigureAwait(false);
+                if (IsSimSessionCurrent(portName, ccid, epoch))
+                {
+                    AddLog($"[{portName}] 🧹 {msg}", success ? "SUCCESS" : "WARN");
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                if (IsSimSessionCurrent(portName, ccid, epoch))
+                    AddLog($"[{portName}] ⚠️ Lỗi tự động xóa sạch SMS: {ex.Message}", "WARN");
+            }
+        }, token);
     }
 
     public async Task<string> CheckBalanceForPortAsync(string portName)

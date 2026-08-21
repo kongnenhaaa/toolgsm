@@ -66,6 +66,9 @@
                 <MudSwitch T="bool" @bind-Value="_receiveAllSms"
                            Label="Nhận tất cả SMS (kể cả không OTP)"
                            Color="Color.Primary" Class="mb-2" />
+                <MudSwitch T="bool" @bind-Value="_autoClearSmsAfterUssd"
+                           Label="Tự động xóa sạch SMS (SIM & Thiết bị) sau khi USSD 101 hoàn tất"
+                           Color="Color.Primary" Class="mb-2" />
             </MudPaper>
 
             <!-- WHITELIST / BLACKLIST -->
@@ -343,6 +346,7 @@
 
     // ========== SMS & USSD ==========
     private bool _receiveAllSms = true;
+    private bool _autoClearSmsAfterUssd = true;
 
     // ========== WHITELIST / BLACKLIST ==========
     private bool _enableSenderBlacklist = false;
@@ -414,6 +418,7 @@
             _signalScanIntervalSeconds = cfg.SignalScanIntervalSeconds;
 
             _receiveAllSms = cfg.ReceiveAllSms;
+            _autoClearSmsAfterUssd = cfg.AutoClearSmsAfterUssd;
 
             _enableSenderBlacklist = cfg.EnableSenderBlacklist;
             _senderBlacklist = cfg.SenderBlacklist ?? "";
@@ -480,6 +485,7 @@
             cfg.SignalScanIntervalSeconds = _signalScanIntervalSeconds;
 
             cfg.ReceiveAllSms = _receiveAllSms;
+            cfg.AutoClearSmsAfterUssd = _autoClearSmsAfterUssd;
 
             cfg.EnableSenderBlacklist = _enableSenderBlacklist;
             cfg.SenderBlacklist = _senderBlacklist.Trim();
@@ -547,6 +553,7 @@
         _signalScanIntervalSeconds = 15;
 
         _receiveAllSms = true;
+        _autoClearSmsAfterUssd = true;
 
         _enableSenderBlacklist = false;
         _senderBlacklist = "";

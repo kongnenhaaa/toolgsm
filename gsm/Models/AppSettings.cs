@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace gsm.Models;
 
@@ -18,6 +18,7 @@ public class AppSettings
     public bool SoundOnCall { get; set; } = true;
 
     public bool ReceiveAllSms { get; set; } = true;
+    public bool AutoClearSmsAfterUssd { get; set; } = true;
     public bool EnableTelegramNotification { get => true; set { } }
     public bool EnableWebNotification { get => true; set { } }
     public string FirebaseUrl { get; set; } = "";

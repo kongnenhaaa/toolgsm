@@ -52,6 +52,71 @@ public sealed class SmsSessionStorageTests
         Assert.Equal("new", ordered[0].DeliveryId);
     }
 
+    [Fact]
+    public void LiveInboxOrdering_MessageWithoutTimestampDoesNotStayAboveNewMessages()
+    {
+        DateTimeOffset now = new(2026, 8, 23, 2, 0, 0, TimeSpan.Zero);
+        var callEndedWithoutTimestamp = new SmsMessage
+        {
+            DeliveryId = "call-ended",
+            Content = "Cuộc gọi đến đã kết thúc."
+        };
+        var newlyReceivedSms = new SmsMessage
+        {
+            DeliveryId = "new-sms",
+            ReceivedAtUtc = now
+        };
+
+        SmsMessage[] ordered = new[] { callEndedWithoutTimestamp, newlyReceivedSms }
+            .OrderByDescending(MainViewModel.GetSmsDisplayTime)
+            .ToArray();
+
+        Assert.Equal("new-sms", ordered[0].DeliveryId);
+        Assert.Equal(
+            DateTimeOffset.MinValue,
+            MainViewModel.GetSmsDisplayTime(callEndedWithoutTimestamp));
+    }
+
+    [Fact]
+    public void ReceivedOtp_UpdatesEveryPortColumnUsedByTheSmsTable()
+    {
+        var port = new SimPort { Otp = "old-otp" };
+        DateTimeOffset receivedAt = new(
+            2026, 8, 25, 3, 4, 5, TimeSpan.Zero);
+
+        MainViewModel.ApplyReceivedSmsToPort(
+            port,
+            "VinaPhone",
+            "123456",
+            "Ma OTP cua ban la 123456",
+            receivedAt);
+
+        Assert.Equal("VinaPhone", port.Sender);
+        Assert.Equal("VinaPhone", port.LastSmsSender);
+        Assert.Equal("123456", port.Otp);
+        Assert.Equal("Ma OTP cua ban la 123456", port.LastMessageContent);
+        Assert.Equal(
+            receivedAt.ToLocalTime().ToString("HH:mm:ss"),
+            port.LastReceivedTime);
+    }
+
+    [Fact]
+    public void OrdinarySms_DoesNotOverwriteTheMostRecentOtp()
+    {
+        var port = new SimPort { Otp = "654321" };
+
+        MainViewModel.ApplyReceivedSmsToPort(
+            port,
+            "INFO",
+            "N/A",
+            "Thong bao thong thuong",
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal("654321", port.Otp);
+        Assert.Equal("INFO", port.LastSmsSender);
+        Assert.Equal("Thong bao thong thuong", port.LastMessageContent);
+    }
+
     [Theory]
     [InlineData(true, "delivery-1", "delivery-1", true)]
     [InlineData(false, "delivery-1", "delivery-1", false)]

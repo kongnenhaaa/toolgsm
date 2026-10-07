@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +16,11 @@ public interface INotifyService
         string chatId,
         string text,
         string? deduplicationKey = null);
+    Task SendTelegramDocumentAsync(
+        string botToken,
+        string chatId,
+        string filePath,
+        string caption);
     Task PushWebhookAsync(string url, object payload);
 }
 
@@ -78,6 +84,96 @@ public class NotifyService : INotifyService
                 : $"[TELEGRAM_QUEUED] jobs={jobs.Count}; đã đưa vào hàng đợi RAM.");
         EnsureTelegramWorker();
         return Task.CompletedTask;
+    }
+
+    public async Task SendTelegramDocumentAsync(
+        string botToken,
+        string chatId,
+        string filePath,
+        string caption)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            PublishTelegramStatus(
+                $"[TELEGRAM_AUDIO_FAILED] Không tìm thấy file ghi âm: {Path.GetFileName(filePath)}");
+            return;
+        }
+
+        AppSettings settings = SettingsService.Current ?? new AppSettings();
+        (string resolvedToken, IReadOnlyList<string> chatIds) =
+            ResolveTelegramTargets(
+                botToken,
+                chatId,
+                settings.TelegramBotToken,
+                settings.TelegramChatIds,
+                settings.TelegramChatId);
+        if (string.IsNullOrWhiteSpace(resolvedToken) || chatIds.Count == 0)
+        {
+            PublishTelegramStatus(
+                "[TELEGRAM_AUDIO_FAILED] Chưa có Bot Token/Chat ID.");
+            return;
+        }
+
+        const long telegramUploadLimit = 50L * 1024L * 1024L;
+        var fileInfo = new FileInfo(filePath);
+        if (fileInfo.Length > telegramUploadLimit)
+        {
+            PublishTelegramStatus(
+                $"[TELEGRAM_AUDIO_FAILED] {fileInfo.Name} vượt giới hạn tải lên 50 MB.");
+            return;
+        }
+
+        string safeCaption = caption?.Length > 1000
+            ? caption[..1000]
+            : caption ?? string.Empty;
+        foreach (string destination in chatIds)
+        {
+            try
+            {
+                string url =
+                    $"https://api.telegram.org/bot{resolvedToken}/sendDocument";
+                using var form = new MultipartFormDataContent();
+                form.Add(new StringContent(destination), "chat_id");
+                form.Add(
+                    new StringContent(safeCaption, Encoding.UTF8),
+                    "caption");
+                form.Add(new StringContent("HTML"), "parse_mode");
+
+                await using var stream = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    81920,
+                    useAsync: true);
+                using var fileContent = new StreamContent(stream);
+                fileContent.Headers.ContentType =
+                    new System.Net.Http.Headers.MediaTypeHeaderValue(
+                        "audio/wav");
+                form.Add(fileContent, "document", fileInfo.Name);
+
+                using HttpResponseMessage response = await TelegramHttp
+                    .PostAsync(url, form)
+                    .ConfigureAwait(false);
+                if (response.IsSuccessStatusCode)
+                {
+                    PublishTelegramStatus(
+                        $"[TELEGRAM_AUDIO_DELIVERED] chat={destination}; file={fileInfo.Name}");
+                    continue;
+                }
+
+                string error = await response.Content
+                    .ReadAsStringAsync()
+                    .ConfigureAwait(false);
+                PublishTelegramStatus(
+                    $"[TELEGRAM_AUDIO_FAILED] chat={destination}; HTTP {(int)response.StatusCode}: {error}");
+            }
+            catch (Exception ex)
+            {
+                PublishTelegramStatus(
+                    $"[TELEGRAM_AUDIO_FAILED] chat={destination}; {ex.GetType().Name}: {ex.Message}");
+            }
+        }
     }
 
     internal static IReadOnlyList<(string Text, bool UseHtml)>

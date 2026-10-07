@@ -46,10 +46,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ProxyManagerService ProxyManager { get; }
     private readonly ConcurrentDictionary<string, string> _callFailures = new();
     private readonly ConcurrentDictionary<string, string> _activeCallers = new();
+    private readonly ConcurrentDictionary<string, int>
+        _completedIncomingCallDurations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SimPort> _stateTrackedPorts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _lastLoggedPortStatuses =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<
+        string,
+        (string Ccid, long Epoch, string Phone)> _observedPhoneNumbers =
+            new(StringComparer.OrdinalIgnoreCase);
     private sealed class PendingMyVnptPasswordOperation
     {
         private readonly object _otpClaimLock = new();
@@ -1056,7 +1062,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public async Task RunDeviceUnlockBatchAsync(
         IEnumerable<SimPort> requestedPorts,
-        int maxParallelism = 5,
+        int maxParallelism = 10,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(requestedPorts);
@@ -1089,7 +1095,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             int effectiveParallelism = Math.Clamp(
                 maxParallelism,
                 1,
-                Math.Min(64, targetPorts.Count));
+                Math.Min(MaxConcurrentMyVnptWorkflows, targetPorts.Count));
 
             Application.Current.Dispatcher.Invoke(() =>
             {
@@ -1108,29 +1114,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             });
 
             AddLog(
-                $"[DKTTTB_BATCH] Bắt đầu {targetPorts.Count} cổng với {effectiveParallelism} luồng; mỗi luồng dùng fingerprint MyVNPT riêng.",
+                $"[DKTTTB_BATCH] Xếp hàng {targetPorts.Count} cổng; chạy tối đa {effectiveParallelism} COM cùng lúc, fingerprint thiết bị cố định theo COM.",
                 "INFO");
-            using var workerGate = new SemaphoreSlim(
+            await BoundedAsyncWorkRunner.RunAsync(
+                targetPorts,
                 effectiveParallelism,
-                effectiveParallelism);
-            Task[] tasks = targetPorts.Select(RunQueuedPortAsync).ToArray();
-            await Task.WhenAll(tasks);
-
-            async Task RunQueuedPortAsync(SimPort port)
-            {
-                await workerGate.WaitAsync(cancellationToken);
-                try
-                {
-                    await RunDeviceUnlockForPortAsync(
-                        port,
-                        TimeSpan.Zero,
-                        cancellationToken);
-                }
-                finally
-                {
-                    workerGate.Release();
-                }
-            }
+                (port, token) => RunDeviceUnlockForPortAsync(
+                    port,
+                    TimeSpan.Zero,
+                    token),
+                cancellationToken);
         }
         finally
         {
@@ -1227,6 +1220,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             DeviceUnlockOtpRequestResult otpRequest =
                 await _deviceUnlockService.RequestLoginOtpAsync(
                 normalizedPhone,
+                port.PortName,
                 message => AddLog(
                     $"[{port.PortName}] [DKTTTB] {message}",
                     "INFO"),
@@ -1249,7 +1243,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             using (var otpTimeout =
                    CancellationTokenSource.CreateLinkedTokenSource(operationToken))
             {
-                otpTimeout.CancelAfter(TimeSpan.FromMinutes(2));
+                otpTimeout.CancelAfter(MyVnptOtpWaitTimeout);
                 try
                 {
                     otp = await pending.OtpCompletion.Task.WaitAsync(
@@ -1258,7 +1252,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 catch (OperationCanceledException)
                     when (!operationToken.IsCancellationRequested)
                 {
-                    string timeoutMessage = "Không nhận được SMS OTP trong 2 phút";
+                    string timeoutMessage = "Không nhận được SMS OTP trong 1 phút";
                     Application.Current.Dispatcher.Invoke(() =>
                     {
                         port.DeviceUnlockStatus = timeoutMessage;
@@ -2934,6 +2928,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Tắt cờ của phiên cũ khi SIM bị mất/thay; cờ sẽ được bật lại ngay khi
         // pipeline đọc được CCID của SIM mới.
         _portSessions.Invalidate(portName);
+        _observedPhoneNumbers.TryRemove(portName, out _);
         _initializingPorts.TryRemove(portName, out _);
         _initialSmsCleanupBarrier.RemovePort(portName);
     }
@@ -3247,8 +3242,64 @@ public partial class MainViewModel : ObservableObject, IDisposable
         port.LastError = string.Empty;
     }
 
+    private void CacheObservedPhoneNumber(GsmDataEventArgs e)
+    {
+        if (!e.Data.Contains("+CUSD:", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        Match payload = Regex.Match(
+            e.Data,
+            @"\+CUSD:.*?""(.*?)(?:""|$)",
+            RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        if (!payload.Success) return;
+
+        string content = UssdResponseDecoder.DecodePayload(
+            payload.Groups[1].Value);
+        string phone = ExtractPhoneNumberFromUssd(content);
+        if (string.IsNullOrWhiteSpace(phone)
+            || !TryGetCurrentSimSession(
+                e.PortName,
+                out string ccid,
+                out long epoch,
+                out _))
+        {
+            return;
+        }
+
+        _observedPhoneNumbers[e.PortName] = (ccid, epoch, phone);
+    }
+
+    private string ResolveCurrentReceiverPhone(
+        SimPort? port,
+        string portName)
+    {
+        if (!string.IsNullOrWhiteSpace(port?.PhoneNumber))
+            return port.PhoneNumber;
+
+        if (!_observedPhoneNumbers.TryGetValue(
+                portName,
+                out var observed)
+            || !IsSimSessionCurrent(
+                portName,
+                observed.Ccid,
+                observed.Epoch))
+        {
+            return string.Empty;
+        }
+
+        if (port != null)
+        {
+            port.PhoneNumber = observed.Phone;
+            UpdateSmsReceiverPhone(portName, observed.Phone);
+        }
+
+        return observed.Phone;
+    }
+
     private void ModemService_LogMessage(object? sender, GsmDataEventArgs e)
     {
+        CacheObservedPhoneNumber(e);
+
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
             bool isInternalEvent = e.Data.StartsWith("[PARSE_")
@@ -3991,6 +4042,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         "INFO");
                 }
 
+                string resolvedReceiverPhone = ResolveCurrentReceiverPhone(
+                    port,
+                    e.PortName);
+
                 // Commit every complete decoded SMS before GsmModemService may
                 // release its exact SIM slot.
                 if (!string.IsNullOrWhiteSpace(cleanContent))
@@ -4016,7 +4071,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         Content = cleanContent,
                         Sender = senderPhone,
                         Otp = extractedOtp,
-                        ReceiverPhone = port?.PhoneNumber ?? "",
+                        ReceiverPhone = resolvedReceiverPhone,
                         NetworkProvider = port?.NetworkProvider ?? "UNKNOWN",
                         Status = port?.Status ?? SimStatus.Connecting,
                         CallCount = "0",
@@ -4031,8 +4086,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     if (newlyAddedMessage == null)
                     {
                         string replayReceiver = !string.IsNullOrWhiteSpace(
-                            port?.PhoneNumber)
-                            ? port.PhoneNumber
+                            resolvedReceiverPhone)
+                            ? resolvedReceiverPhone
                             : "Chưa lấy được số";
                         QueueTelegramSmsNotification(
                             SettingsService.Current ?? new AppSettings(),
@@ -4143,7 +4198,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 extractedOtp = ExtractOtp(cleanContent);
 
                 // 3. Tìm cổng tương ứng để lấy thông tin SIM (SĐT, Nhà mạng)
-                string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber) ? port.PhoneNumber : "Chưa lấy được số";
+                string receiverPhone = !string.IsNullOrWhiteSpace(
+                    resolvedReceiverPhone)
+                    ? resolvedReceiverPhone
+                    : "Chưa lấy được số";
 
                 // Commit the per-port summary before Telegram, webhook, Firebase
                 // and other optional subscribers. A failure in an integration
@@ -4591,10 +4649,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 // Dùng _notifyService (với token đã lưu trong Settings) thay vì TelegramService static cũ
                 var cfg2 = SettingsService.Current;
-                bool hasTgToken = !string.IsNullOrWhiteSpace(cfg2.TelegramBotToken) &&
-                                  !string.IsNullOrWhiteSpace(cfg2.TelegramChatId);
-
-                if (hasTgToken && cfg2.TelegramOnOtp)
+                if (cfg2.TelegramOnOtp)
                 {
                     string tgText =
                         $"🔐 <b>OTP MỚI (ghép SMS)</b>\n" +
@@ -4604,7 +4659,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         $"OTP: <b>{newOtp}</b>\n" +
                         $"Nội dung: {System.Net.WebUtility.HtmlEncode(existing.Content)}\n" +
                         $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                    await _notifyService.SendTelegramAsync(cfg2.TelegramBotToken, cfg2.TelegramChatId, tgText);
+                    QueueTelegramForReceiver(cfg2, simPhone, tgText);
                 }
 
                 // Webhook rules
@@ -4658,10 +4713,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     _multipartTelegramDebounce.TryRemove(debounceKey, out _);
 
                     var cfg2 = SettingsService.Current;
-                    bool hasTgToken = !string.IsNullOrWhiteSpace(cfg2.TelegramBotToken) &&
-                                      !string.IsNullOrWhiteSpace(cfg2.TelegramChatId);
-
-                    if (hasTgToken && cfg2.TelegramOnSms)
+                    if (cfg2.TelegramOnSms)
                     {
                         string safeContent = System.Net.WebUtility.HtmlEncode(capturedContent);
                         string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
@@ -4671,7 +4723,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             $"Từ: {safeSender}\n" +
                             $"Nội dung: <i>{safeContent}</i>\n" +
                             $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                        await _notifyService.SendTelegramAsync(cfg2.TelegramBotToken, cfg2.TelegramChatId, tgText);
+                        QueueTelegramForReceiver(cfg2, simPhone, tgText);
                     }
                 }
                 catch (TaskCanceledException) { } // Bị hủy vì có đoạn mới đến — bình thường
@@ -4743,17 +4795,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
             // Thông báo Telegram cuộc gọi đến (kiểm tra TelegramOnCall trước khi gửi)
             var clipCfg = SettingsService.Current;
-            if (clipCfg != null &&
-                !string.IsNullOrWhiteSpace(clipCfg.TelegramBotToken) &&
-                !string.IsNullOrWhiteSpace(clipCfg.TelegramChatId) &&
-                clipCfg.TelegramOnCall)
+            if (clipCfg != null && clipCfg.TelegramOnCall)
             {
                 string callText =
                     $"📞 <b>Cuộc gọi đến [{e.PortName}]</b>\n" +
                     $"📱 SIM nhận: {receiverPhone}\n" +
                     $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
                     $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                _ = _notifyService.SendTelegramAsync(clipCfg.TelegramBotToken, clipCfg.TelegramChatId, callText);
+                QueueTelegramForReceiver(
+                    clipCfg,
+                    receiverPhone,
+                    callText);
             }
 
             AddLog($"[{e.PortName}] Đã nhận cuộc gọi; đang tự động nghe máy và ghi âm.", "INFO");
@@ -4879,17 +4931,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             // Gửi thông báo Telegram qua _notifyService (dùng token đã lưu trong Settings)
             var dtmfCfg = SettingsService.Current;
-            if (dtmfCfg != null &&
-                !string.IsNullOrWhiteSpace(dtmfCfg.TelegramBotToken) &&
-                !string.IsNullOrWhiteSpace(dtmfCfg.TelegramChatId) &&
-                dtmfCfg.TelegramOnCall)
+            if (dtmfCfg != null && dtmfCfg.TelegramOnCall)
             {
                 string dtmfText =
                     $"🎹 <b>Phím DTMF [{e.PortName}]</b>\n" +
                     $"📱 SIM nhận: {receiverPhone}\n" +
                     $"Pressed: <b>{e.Data}</b>\n" +
                     $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                _ = _notifyService.SendTelegramAsync(dtmfCfg.TelegramBotToken, dtmfCfg.TelegramChatId, dtmfText);
+                QueueTelegramForReceiver(
+                    dtmfCfg,
+                    receiverPhone,
+                    dtmfText);
             }
         });
     }
@@ -4912,12 +4964,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void ModemService_IncomingCallEnded(object? sender, gsm.Models.IncomingCallSession session)
     {
+        int connectedDurationSeconds = session.AnsweredAt.HasValue
+            && session.EndedAt.HasValue
+            ? Math.Max(
+                0,
+                (int)Math.Ceiling(
+                    (session.EndedAt.Value
+                        - session.AnsweredAt.Value).TotalSeconds))
+            : 0;
+        _completedIncomingCallDurations[session.Port] =
+            connectedDurationSeconds;
+
         Application.Current.Dispatcher.Invoke(() =>
         {
             var port = Ports.FirstOrDefault(p => p.PortName == session.Port);
             if (port != null)
             {
-                port.LastCallResult = $"Ended: {session.Caller}";
+                port.LastCallResult =
+                    $"Ended: {session.Caller} " +
+                    $"({FormatCallDuration(connectedDurationSeconds)})";
                 port.UpdateDisplayResult("Call");
             }
         });
@@ -4937,11 +5002,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (!_activeCallers.TryRemove(e.PortName, out var callerDisplay))
                 return;
 
-            AddLog($"[{e.PortName}] Cuộc gọi đã kết thúc. ({e.Data})");
+            _completedIncomingCallDurations.TryRemove(
+                e.PortName,
+                out int connectedDurationSeconds);
+            string connectedDuration = FormatCallDuration(
+                connectedDurationSeconds);
+
+            AddLog(
+                $"[{e.PortName}] Cuộc gọi đã kết thúc. " +
+                $"Thời lượng nghe: {connectedDuration}. ({e.Data})");
 
             var port = Ports.FirstOrDefault(p => p.PortName == e.PortName);
             string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
-            const string content = "Cuộc gọi đến đã kết thúc.";
+            string content =
+                $"Cuộc gọi đến đã kết thúc. Thời lượng nghe: {connectedDuration}.";
             DateTimeOffset receivedAtUtc = DateTimeOffset.UtcNow;
 
             InsertSmsMessageBounded(new SmsMessage
@@ -4973,17 +5047,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             string safeCallerHtml = System.Net.WebUtility.HtmlEncode(callerDisplay);
             // Thông báo Telegram khi cuộc gọi kết thúc (check TelegramOnCall)
             var callEndCfg = SettingsService.Current;
-            if (callEndCfg != null &&
-                !string.IsNullOrWhiteSpace(callEndCfg.TelegramBotToken) &&
-                !string.IsNullOrWhiteSpace(callEndCfg.TelegramChatId) &&
-                callEndCfg.TelegramOnCall)
+            if (callEndCfg != null && callEndCfg.TelegramOnCall)
             {
                 string endText =
                     $"📞 <b>Cuộc gọi kết thúc [{e.PortName}]</b>\n" +
                     $"📱 SIM nhận: {receiverPhone}\n" +
                     $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
+                    $"⏱️ Thời lượng nghe: <b>{connectedDuration}</b>\n" +
                     $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                _ = _notifyService.SendTelegramAsync(callEndCfg.TelegramBotToken, callEndCfg.TelegramChatId, endText);
+                QueueTelegramForReceiver(
+                    callEndCfg,
+                    receiverPhone,
+                    endText);
             }
         });
     }
@@ -5002,35 +5077,65 @@ public partial class MainViewModel : ObservableObject, IDisposable
             AddLog($"[{portName}] 🎧 Whisper đang dịch file ghi âm ({Path.GetFileName(localWav)})...", "INFO");
 
             var result = await Services.VoiceTranscriptionService.TranscribeAudioAsync(localWav);
+            var port = Ports.FirstOrDefault(p => p.PortName == portName);
+            string receiverPhone = !string.IsNullOrWhiteSpace(port?.PhoneNumber)
+                ? port.PhoneNumber
+                : "Chưa lấy được số";
+            string senderPhone = !string.IsNullOrWhiteSpace(e.Sender)
+                && e.Sender != "Unknown"
+                && e.Sender != "Ẩn số"
+                    ? e.Sender
+                    : "Ẩn số";
+            string text = result.Text?.Trim() ?? string.Empty;
+
             if (!string.IsNullOrWhiteSpace(result.Error))
             {
                 AddLog($"[{portName}] [VOICE_STT_ERROR] {result.Error}", "WARN");
+                await SendCallRecordingToTelegramAsync(
+                    portName,
+                    receiverPhone,
+                    senderPhone,
+                    e.ConnectedDurationSeconds ?? 0,
+                    localWav,
+                    string.Empty,
+                    result.Error);
                 return;
             }
 
-            string text = result.Text?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(text))
             {
                 AddLog($"[{portName}] [VOICE_STT] File ghi âm không có giọng nói hoặc quá ngắn.", "INFO");
+                await SendCallRecordingToTelegramAsync(
+                    portName,
+                    receiverPhone,
+                    senderPhone,
+                    e.ConnectedDurationSeconds ?? 0,
+                    localWav,
+                    string.Empty,
+                    "Không nhận dạng được lời thoại hoặc file quá ngắn.");
                 return;
             }
             string languageInfo = string.IsNullOrWhiteSpace(result.Language)
                 ? string.Empty
                 : $" [{result.Language.ToUpperInvariant()} {result.LanguageProbability:P0}]";
 
-            var port = Ports.FirstOrDefault(p => p.PortName == portName);
-            string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
-
             Application.Current.Dispatcher.Invoke(() =>
             {
                 AddLog($"[{portName}] 📝 Voice STT{languageInfo}: \"{text}\"", "INFO");
 
                 // Tìm bản ghi tin nhắn cuộc gọi vừa kết thúc
-                var existingMsg = SmsMessages.FirstOrDefault(m => m.PortName == portName && (m.Content == "Cuộc gọi đến đã kết thúc." || m.Content.StartsWith("[VOICE]")));
+                var existingMsg = SmsMessages.FirstOrDefault(m =>
+                    m.PortName == portName
+                    && (m.Content.StartsWith(
+                            "Cuộc gọi đến đã kết thúc.",
+                            StringComparison.Ordinal)
+                        || m.Content.StartsWith(
+                            "[VOICE]",
+                            StringComparison.Ordinal)));
 
                 // Ưu tiên giữ lại số người gọi thực tế nếu có
-                string senderPhone = !string.IsNullOrWhiteSpace(e.Sender) && e.Sender != "Unknown" && e.Sender != "Ẩn số"
-                    ? e.Sender
+                senderPhone = senderPhone != "Ẩn số"
+                    ? senderPhone
                     : (existingMsg != null && !string.IsNullOrWhiteSpace(existingMsg.Sender) && existingMsg.Sender != "Ẩn số" && existingMsg.Sender != "Unknown"
                         ? existingMsg.Sender
                         : (port != null && !string.IsNullOrWhiteSpace(port.Sender) && port.Sender != "Ẩn số" && port.Sender != "Unknown" ? port.Sender : "Ẩn số"));
@@ -5125,25 +5230,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     ShowToast($"[{portName}] 🔑 Voice OTP: {result.Otp} (từ {senderPhone})", MudBlazor.Severity.Success);
                     Services.ToastService.Show($"🔑 Voice OTP — {portName}", $"SIM: {receiverPhone} | Từ: {senderPhone}\nOTP: {result.Otp}\n\"{text}\"");
 
-                    // Gửi Telegram
-                    var clipCfg = SettingsService.Current;
-                    if (clipCfg != null &&
-                        !string.IsNullOrWhiteSpace(clipCfg.TelegramBotToken) &&
-                        !string.IsNullOrWhiteSpace(clipCfg.TelegramChatId) &&
-                        clipCfg.TelegramOnCall)
-                    {
-                        string safeCallerHtml = System.Net.WebUtility.HtmlEncode(senderPhone);
-                        string safeTextHtml = System.Net.WebUtility.HtmlEncode(text);
-                        string tgText =
-                            $"🔑 <b>Voice OTP Mới [{portName}]</b>\n" +
-                            $"📱 SIM nhận: {receiverPhone}\n" +
-                            $"☎️ Người gọi: <code>{safeCallerHtml}</code>\n" +
-                            $"🔑 OTP: <code>{result.Otp}</code>\n" +
-                            $"📝 Lời thoại: <i>{safeTextHtml}</i>\n" +
-                            $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                        _ = _notifyService.SendTelegramAsync(clipCfg.TelegramBotToken, clipCfg.TelegramChatId, tgText);
-                    }
-
                     // Tự động forward Webhook
                     var webhookRules = AppSettings?.WebhookRules ?? new List<Models.WebhookRule>();
                     foreach (var rule in webhookRules)
@@ -5156,7 +5242,86 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     ShowToast($"[{portName}] 📝 Dịch ghi âm: {text}", MudBlazor.Severity.Info);
                 }
             });
+
+            await SendCallRecordingToTelegramAsync(
+                portName,
+                receiverPhone,
+                senderPhone,
+                e.ConnectedDurationSeconds ?? 0,
+                localWav,
+                text,
+                string.Empty,
+                result.Otp);
         });
+    }
+
+    private async Task SendCallRecordingToTelegramAsync(
+        string portName,
+        string receiverPhone,
+        string senderPhone,
+        int connectedDurationSeconds,
+        string recordingPath,
+        string transcript,
+        string transcriptionError,
+        string? otp = null)
+    {
+        AppSettings config = SettingsService.Current ?? new AppSettings();
+        IReadOnlyList<TelegramRouteSettings> routes =
+            TelegramPhoneWhitelist.GetEligibleRoutes(
+                config,
+                receiverPhone);
+        if (!config.TelegramOnCall || routes.Count == 0)
+        {
+            return;
+        }
+
+        string duration = FormatCallDuration(connectedDurationSeconds);
+        string safePort = System.Net.WebUtility.HtmlEncode(portName);
+        string safeReceiver = System.Net.WebUtility.HtmlEncode(receiverPhone);
+        string safeSender = System.Net.WebUtility.HtmlEncode(senderPhone);
+        string caption =
+            $"🎧 <b>Ghi âm cuộc gọi [{safePort}]</b>\n" +
+            $"📱 SIM nhận: {safeReceiver}\n" +
+            $"☎️ Người gọi: <code>{safeSender}</code>\n" +
+            $"⏱️ Thời lượng nghe: <b>{duration}</b>";
+
+        string transcriptStatus = string.IsNullOrWhiteSpace(transcriptionError)
+            ? string.Empty
+            : $"\n⚠️ Nhận dạng giọng nói: {System.Net.WebUtility.HtmlEncode(transcriptionError)}";
+        string safeTranscript = string.IsNullOrWhiteSpace(transcript)
+            ? "Không có nội dung nhận dạng. Hãy nghe file ghi âm đính kèm."
+            : System.Net.WebUtility.HtmlEncode(transcript);
+        string otpLine = string.IsNullOrWhiteSpace(otp)
+            ? string.Empty
+            : $"\n🔑 OTP: <code>{System.Net.WebUtility.HtmlEncode(otp)}</code>";
+        string transcriptText =
+            $"📝 <b>Lời thoại cuộc gọi [{safePort}]</b>\n" +
+            $"📱 SIM nhận: {safeReceiver}\n" +
+            $"☎️ Người gọi: <code>{safeSender}</code>\n" +
+            $"⏱️ Thời lượng nghe: <b>{duration}</b>" +
+            otpLine +
+            $"\n\n{safeTranscript}" +
+            transcriptStatus +
+            "\n\n<i>Bản nhận dạng có thể chưa chính xác; file ghi âm là nội dung gốc đầy đủ.</i>";
+        foreach (TelegramRouteSettings route in routes)
+        {
+            await _notifyService.SendTelegramDocumentAsync(
+                route.BotToken,
+                route.ChatIds,
+                recordingPath,
+                caption);
+            await _notifyService.SendTelegramAsync(
+                route.BotToken,
+                route.ChatIds,
+                transcriptText);
+        }
+    }
+
+    private static string FormatCallDuration(int totalSeconds)
+    {
+        TimeSpan duration = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        return $"{(int)duration.TotalHours:00}:" +
+               $"{duration.Minutes:00}:{duration.Seconds:00}";
     }
 
     [RelayCommand]
@@ -7502,6 +7667,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     ? "WARNING"
                     : "INFO");
 
+    private int QueueTelegramForReceiver(
+        AppSettings config,
+        string receiverPhone,
+        string text,
+        string? deduplicationKey = null)
+    {
+        IReadOnlyList<TelegramRouteSettings> routes =
+            TelegramPhoneWhitelist.GetEligibleRoutes(
+                config,
+                receiverPhone);
+        foreach (TelegramRouteSettings route in routes)
+        {
+            string? routeDeduplicationKey =
+                string.IsNullOrWhiteSpace(deduplicationKey)
+                    ? null
+                    : $"{deduplicationKey}|telegram-route:{route.Id}";
+            _ = _notifyService.SendTelegramAsync(
+                route.BotToken,
+                route.ChatIds,
+                text,
+                routeDeduplicationKey);
+        }
+
+        return routes.Count;
+    }
+
     private void QueueTelegramSmsNotification(
         AppSettings config,
         string portName,
@@ -7511,19 +7702,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string content,
         DateTimeOffset? smsTimestampUtc)
     {
-        string chatIds = !string.IsNullOrWhiteSpace(config.TelegramChatIds)
-            ? config.TelegramChatIds
-            : config.TelegramChatId;
-        if (string.IsNullOrWhiteSpace(config.TelegramBotToken)
-            || string.IsNullOrWhiteSpace(chatIds))
-        {
-            AddLog(
-                $"[{portName}] [TELEGRAM_CONFIG_MISSING] SMS chỉ được giữ trong hàng đợi RAM; hãy lưu Bot Token và Chat ID.",
-                "WARNING");
-            SnackbarMessageQueue.Enqueue(
-                $"[{portName}] Telegram chưa cấu hình; SMS chỉ chờ gửi trong phiên hiện tại.");
-        }
-
         string text = BuildTelegramSmsNotification(
             portName,
             receiverPhone,
@@ -7531,15 +7709,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
             extractedOtp,
             content,
             DateTime.Now);
-        _ = _notifyService.SendTelegramAsync(
-            config.TelegramBotToken,
-            chatIds,
+        int queuedRouteCount = QueueTelegramForReceiver(
+            config,
+            receiverPhone,
             text,
             BuildTelegramSmsDeduplicationKey(
                 portName,
                 senderPhone,
                 content,
                 smsTimestampUtc));
+        if (queuedRouteCount > 0) return;
+
+        bool hasConfiguredRoute =
+            (config.TelegramRoutes ?? []).Any(route =>
+                !string.IsNullOrWhiteSpace(route.BotToken)
+                && !string.IsNullOrWhiteSpace(route.ChatIds))
+            || (!string.IsNullOrWhiteSpace(config.TelegramBotToken)
+                && (!string.IsNullOrWhiteSpace(config.TelegramChatIds)
+                    || !string.IsNullOrWhiteSpace(
+                        config.TelegramChatId)));
+        if (hasConfiguredRoute)
+        {
+            AddLog(
+                $"[{portName}] [TELEGRAM_PHONE_FILTERED] SIM {receiverPhone} không nằm trong whitelist của cấu hình Telegram nào.",
+                "INFO");
+            return;
+        }
+
+        AddLog(
+            $"[{portName}] [TELEGRAM_CONFIG_MISSING] Chưa có Bot Token và Chat ID hợp lệ.",
+            "WARNING");
+        SnackbarMessageQueue.Enqueue(
+            $"[{portName}] Telegram chưa có cấu hình Bot/Chat hợp lệ.");
     }
 
     internal static string BuildTelegramSmsDeduplicationKey(

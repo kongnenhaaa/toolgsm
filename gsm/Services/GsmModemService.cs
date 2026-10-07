@@ -115,6 +115,7 @@ public class GsmDataEventArgs : EventArgs
     public string DeliveryId { get; set; } = string.Empty;
     public bool DeliveryAccepted { get; set; }
     public DateTimeOffset? SmsTimestampUtc { get; set; }
+    public int? ConnectedDurationSeconds { get; set; }
 }
 
 public class GsmModemService : IGsmModemService
@@ -186,6 +187,8 @@ public class GsmModemService : IGsmModemService
         public bool Ended { get; set; }
         public bool RecordingStarted { get; set; }
         public bool FinalizationStarted { get; set; }
+        public DateTimeOffset? AnsweredAtUtc { get; set; }
+        public DateTimeOffset? EndedAtUtc { get; set; }
         public IDisposable? BackgroundLease { get; set; }
     }
 
@@ -12174,12 +12177,16 @@ public class GsmModemService : IGsmModemService
             });
             if (!answered) return;
 
+            DateTimeOffset answeredAtUtc = DateTimeOffset.UtcNow;
             lock (state.Sync)
             {
                 if (state.Ended) return;
+                state.AnsweredAtUtc = answeredAtUtc;
                 state.BackgroundLease = backgroundLease;
                 backgroundLease = null;
             }
+            if (_incomingCalls.TryGetValue(portName, out var activeSession))
+                activeSession.AnsweredAt = answeredAtUtc.LocalDateTime;
 
             _activeCalls[portName] = true;
             await Task.Delay(250);
@@ -12237,6 +12244,7 @@ public class GsmModemService : IGsmModemService
         lock (state.Sync)
         {
             state.Ended = true;
+            state.EndedAtUtc ??= DateTimeOffset.UtcNow;
             if (state.FinalizationStarted) return;
             state.FinalizationStarted = true;
         }
@@ -12293,12 +12301,25 @@ public class GsmModemService : IGsmModemService
                 string callerNum = !string.IsNullOrWhiteSpace(state.CallerNumber) && state.CallerNumber != "Unknown"
                     ? state.CallerNumber
                     : (_incomingCalls.TryGetValue(portName, out var s) ? s.Caller : "");
+                int connectedDurationSeconds;
+                lock (state.Sync)
+                {
+                    connectedDurationSeconds = state.AnsweredAtUtc.HasValue
+                        && state.EndedAtUtc.HasValue
+                        ? Math.Max(
+                            0,
+                            (int)Math.Ceiling(
+                                (state.EndedAtUtc.Value
+                                    - state.AnsweredAtUtc.Value).TotalSeconds))
+                        : 0;
+                }
 
                 CallRecordingSaved?.Invoke(this, new GsmDataEventArgs
                 {
                     PortName = portName,
                     Data = downloaded,
-                    Sender = callerNum
+                    Sender = callerNum,
+                    ConnectedDurationSeconds = connectedDurationSeconds
                 });
             }
         }

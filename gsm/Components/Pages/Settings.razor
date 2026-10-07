@@ -179,30 +179,65 @@
 
             <!-- TELEGRAM -->
             <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
-                <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight:600;">
+                <MudText Typo="Typo.subtitle1" Class="mb-1" Style="font-weight:600;">
                     <MudIcon Icon="@Icons.Material.Filled.Message" Class="mr-1" Size="Size.Small" />
-                    Telegram Bot
+                    Danh sách Telegram Bot / Chat
+                </MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-3">
+                    Mỗi mục có whitelist riêng. Một SIM có thể gửi đồng thời tới nhiều mục nếu cùng khớp whitelist.
                 </MudText>
 
-                <MudTextField @bind-Value="_telegramBotToken"
-                              Label="Bot Token"
-                              Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2"
-                              InputType="@(_showToken ? InputType.Text : InputType.Password)"
-                              Adornment="Adornment.End"
-                              AdornmentIcon="@(_showToken ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
-                              OnAdornmentClick="@(() => _showToken = !_showToken)"
-                              HelperText="Lay tu BotFather tren Telegram" />
+                @foreach (var route in _telegramRoutes)
+                {
+                    <MudPaper Class="pa-3 mb-3" Elevation="0"
+                              Style="border:1px solid #CBD5E1; border-radius:10px; background:#F8FAFC;">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-2">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:600;">
+                                Bot / Chat @(_telegramRoutes.IndexOf(route) + 1)
+                            </MudText>
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                           Color="Color.Error" Size="Size.Small"
+                                           OnClick="@(() => RemoveTelegramRoute(route))" />
+                        </MudStack>
 
-                <MudTextField @bind-Value="_telegramChatId"
-                              Label="Chat ID (hoặc nhiều ID phân cách dấu phẩy)"
-                              Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
-                              HelperText="VD: -1001234567890 hoặc 123456789,987654321" />
+                        <MudTextField @bind-Value="route.BotToken"
+                                      Label="Bot Token"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2"
+                                      InputType="@(route.ShowToken ? InputType.Text : InputType.Password)"
+                                      Adornment="Adornment.End"
+                                      AdornmentIcon="@(route.ShowToken ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                                      OnAdornmentClick="@(() => route.ShowToken = !route.ShowToken)"
+                                      HelperText="Lấy từ BotFather trên Telegram" />
 
-                <MudStack Row="true" Spacing="2">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
-                               OnClick="TestTelegram"
-                               Disabled="@(string.IsNullOrWhiteSpace(_telegramBotToken) || string.IsNullOrWhiteSpace(_telegramChatId))">
-                        ✈ Test gửi tin
+                        <MudTextField @bind-Value="route.ChatIds"
+                                      Label="Chat ID (có thể nhập nhiều ID)"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2"
+                                      HelperText="Phân cách nhiều Chat ID bằng dấu phẩy hoặc dấu chấm phẩy." />
+
+                        <MudSwitch T="bool" @bind-Value="route.EnablePhoneWhitelist"
+                                   Label="Chỉ gửi cho SĐT SIM trong whitelist của mục này"
+                                   Color="Color.Primary" Class="mb-1" />
+                        <MudTextField @bind-Value="route.PhoneWhitelist"
+                                      Label="Whitelist SĐT SIM riêng"
+                                      Placeholder="0855998879, 84916845506"
+                                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                                      Lines="3" Class="mb-3"
+                                      Disabled="@(!route.EnablePhoneWhitelist)"
+                                      HelperText="Tắt whitelist = cho phép tất cả. Chấp nhận đầu 0, 84 hoặc +84." />
+
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                   OnClick="@(() => TestTelegramRoute(route))"
+                                   Disabled="@(string.IsNullOrWhiteSpace(route.BotToken) || string.IsNullOrWhiteSpace(route.ChatIds))">
+                            ✈ Test mục này
+                        </MudButton>
+                    </MudPaper>
+                }
+
+                <MudStack Row="true" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Add"
+                               OnClick="AddTelegramRoute">
+                        Thêm Bot / Chat
                     </MudButton>
                     <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
                                OnClick="OpenTelegramGuide">
@@ -372,9 +407,17 @@
     private bool _telegramOnError = true;
 
     // ========== TELEGRAM ==========
-    private string _telegramBotToken = "";
-    private string _telegramChatId = "";
-    private bool _showToken = false;
+    private sealed class TelegramRouteEditor
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        public string BotToken { get; set; } = "";
+        public string ChatIds { get; set; } = "";
+        public bool EnablePhoneWhitelist { get; set; }
+        public string PhoneWhitelist { get; set; } = "";
+        public bool ShowToken { get; set; }
+    }
+
+    private List<TelegramRouteEditor> _telegramRoutes = new();
 
     // ========== WEBHOOK ==========
     private string _otpWebhookUrl = "";
@@ -439,8 +482,24 @@
             _telegramOnCall = cfg.TelegramOnCall;
             _telegramOnError = cfg.TelegramOnError;
 
-            _telegramBotToken = cfg.TelegramBotToken ?? "";
-            _telegramChatId = cfg.TelegramChatId ?? "";
+            _telegramRoutes = (cfg.TelegramRoutes ?? new())
+                .Select(route => new TelegramRouteEditor
+                {
+                    Id = string.IsNullOrWhiteSpace(route.Id)
+                        ? Guid.NewGuid().ToString("N")
+                        : route.Id,
+                    BotToken = route.BotToken ?? "",
+                    ChatIds = route.ChatIds ?? "",
+                    EnablePhoneWhitelist = route.EnablePhoneWhitelist,
+                    PhoneWhitelist = route.PhoneWhitelist ?? ""
+                })
+                .ToList();
+            if (_telegramRoutes.Count == 0)
+            {
+                _telegramRoutes.Add(ToEditor(
+                    gsm.Services.SettingsService
+                        .CreateDefaultTelegramRoute()));
+            }
 
             _otpWebhookUrl = cfg.OtpWebhookUrl ?? "";
             _pushOtpToWeb = cfg.PushOtpToWeb;
@@ -479,6 +538,29 @@
                 Snackbar.Add("Hãy nhập số chuyển tiếp trước khi bật chuyển tiếp cuộc gọi.", Severity.Warning);
                 return;
             }
+            TelegramRouteEditor? incompleteRoute = _telegramRoutes
+                .FirstOrDefault(route =>
+                    string.IsNullOrWhiteSpace(route.BotToken)
+                    != string.IsNullOrWhiteSpace(route.ChatIds));
+            if (incompleteRoute != null)
+            {
+                Snackbar.Add(
+                    "Mỗi cấu hình Telegram phải có đủ Bot Token và Chat ID.",
+                    Severity.Warning);
+                return;
+            }
+            TelegramRouteEditor? invalidWhitelistRoute = _telegramRoutes
+                .FirstOrDefault(route =>
+                    route.EnablePhoneWhitelist
+                    && gsm.Services.TelegramPhoneWhitelist
+                        .Parse(route.PhoneWhitelist).Count == 0);
+            if (invalidWhitelistRoute != null)
+            {
+                Snackbar.Add(
+                    "Có cấu hình Telegram đang bật whitelist nhưng chưa có SĐT hợp lệ.",
+                    Severity.Warning);
+                return;
+            }
 
             var cfg = gsm.Services.SettingsService.Current;
 
@@ -506,9 +588,7 @@
             cfg.TelegramOnCall = _telegramOnCall;
             cfg.TelegramOnError = _telegramOnError;
 
-            cfg.TelegramBotToken = _telegramBotToken.Trim();
-            cfg.TelegramChatId = _telegramChatId.Trim();
-            cfg.TelegramChatIds = _telegramChatId.Trim(); // Sync cả TelegramChatIds
+            ApplyTelegramRoutesToSettings(cfg);
 
             cfg.OtpWebhookUrl = _otpWebhookUrl.Trim();
             cfg.PushOtpToWeb = _pushOtpToWeb;
@@ -573,8 +653,11 @@
         _telegramOnSms = true;
         _telegramOnCall = true;
         _telegramOnError = true;
-        _telegramBotToken = "";
-        _telegramChatId = "";
+        _telegramRoutes =
+        [
+            ToEditor(gsm.Services.SettingsService
+                .CreateDefaultTelegramRoute())
+        ];
 
         _otpWebhookUrl = "";
         _pushOtpToWeb = false;
@@ -650,12 +733,80 @@
         }
     }
 
-    // ========== TEST TELEGRAM ==========
-    async Task TestTelegram()
+    // ========== TELEGRAM ROUTES ==========
+    void AddTelegramRoute()
     {
-        if (string.IsNullOrWhiteSpace(_telegramBotToken) || string.IsNullOrWhiteSpace(_telegramChatId))
+        _telegramRoutes.Add(new TelegramRouteEditor());
+    }
+
+    void RemoveTelegramRoute(TelegramRouteEditor route)
+    {
+        _telegramRoutes.Remove(route);
+        if (_telegramRoutes.Count == 0)
+            _telegramRoutes.Add(new TelegramRouteEditor());
+    }
+
+    static TelegramRouteEditor ToEditor(TelegramRouteSettings route) =>
+        new()
+        {
+            Id = string.IsNullOrWhiteSpace(route.Id)
+                ? Guid.NewGuid().ToString("N")
+                : route.Id,
+            BotToken = route.BotToken ?? "",
+            ChatIds = route.ChatIds ?? "",
+            EnablePhoneWhitelist = route.EnablePhoneWhitelist,
+            PhoneWhitelist = route.PhoneWhitelist ?? ""
+        };
+
+    void ApplyTelegramRoutesToSettings(AppSettings cfg)
+    {
+        cfg.TelegramRoutes = _telegramRoutes
+            .Where(route =>
+                !string.IsNullOrWhiteSpace(route.BotToken)
+                && !string.IsNullOrWhiteSpace(route.ChatIds))
+            .Select(route => new TelegramRouteSettings
+            {
+                Id = string.IsNullOrWhiteSpace(route.Id)
+                    ? Guid.NewGuid().ToString("N")
+                    : route.Id,
+                BotToken = route.BotToken.Trim(),
+                ChatIds = route.ChatIds.Trim(),
+                EnablePhoneWhitelist = route.EnablePhoneWhitelist,
+                PhoneWhitelist = gsm.Services.TelegramPhoneWhitelist
+                    .NormalizeList(route.PhoneWhitelist)
+            })
+            .ToList();
+
+        if (cfg.TelegramRoutes.Count == 0)
+        {
+            cfg.TelegramRoutes.Add(gsm.Services.SettingsService
+                .CreateDefaultTelegramRoute());
+        }
+
+        TelegramRouteSettings primary = cfg.TelegramRoutes[0];
+        cfg.TelegramBotToken = primary.BotToken;
+        cfg.TelegramChatId = primary.ChatIds;
+        cfg.TelegramChatIds = primary.ChatIds;
+        cfg.EnableTelegramPhoneWhitelist =
+            primary.EnablePhoneWhitelist;
+        cfg.TelegramPhoneWhitelist = primary.PhoneWhitelist;
+    }
+
+    async Task TestTelegramRoute(TelegramRouteEditor route)
+    {
+        if (string.IsNullOrWhiteSpace(route.BotToken)
+            || string.IsNullOrWhiteSpace(route.ChatIds))
         {
             Snackbar.Add("Nhập Bot Token và Chat ID trước", Severity.Warning);
+            return;
+        }
+        if (route.EnablePhoneWhitelist
+            && gsm.Services.TelegramPhoneWhitelist
+                .Parse(route.PhoneWhitelist).Count == 0)
+        {
+            Snackbar.Add(
+                "Whitelist của mục này đang bật nhưng chưa có SĐT hợp lệ.",
+                Severity.Warning);
             return;
         }
 
@@ -664,7 +815,7 @@
         try
         {
             // Hỗ trợ nhiều Chat ID phân cách dấu phẩy
-            var chatIds = _telegramChatId.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            var chatIds = route.ChatIds.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
                                          .Select(x => x.Trim())
                                          .Where(x => !string.IsNullOrEmpty(x))
                                          .ToList();
@@ -674,7 +825,7 @@
 
             foreach (var chatId in chatIds)
             {
-                var url = $"https://api.telegram.org/bot{_telegramBotToken}/sendMessage";
+                var url = $"https://api.telegram.org/bot{route.BotToken.Trim()}/sendMessage";
                 var payload = new
                 {
                     chat_id = chatId,
@@ -696,9 +847,7 @@
             if (allOk)
             {
                 var cfg = gsm.Services.SettingsService.Current;
-                cfg.TelegramBotToken = _telegramBotToken.Trim();
-                cfg.TelegramChatId = _telegramChatId.Trim();
-                cfg.TelegramChatIds = _telegramChatId.Trim();
+                ApplyTelegramRoutesToSettings(cfg);
                 cfg.TelegramOnOtp = true;
                 cfg.TelegramOnSms = true;
                 if (!gsm.Services.SettingsService.SaveSettings(cfg))

@@ -7,8 +7,10 @@ of the eKYC/DKTTTB API flow.
 """
 
 import importlib.util
+import hashlib
 import json
 import os
+import random
 import sys
 
 
@@ -138,9 +140,62 @@ def fallback_ekyc_output_detail(line):
     return detail
 
 
-def request_login_otp(module, phone):
-    """Use the OTP-login request from pass_myvnpt, not request_otp."""
-    profile = module._random_device_profile()
+def stable_device_profile(device_key):
+    """Build one reproducible VNPT Android profile for a COM port."""
+    normalized_key = str(device_key or "").strip().upper()
+    if not normalized_key:
+        raise ValueError("Thiếu tên COM để tạo fingerprint thiết bị ổn định")
+
+    seed_material = hashlib.sha256(
+        ("ToolGSM.MyVNPT.DeviceUnlock.v1:" + normalized_key).encode("utf-8")
+    ).digest()
+    generator = random.Random(int.from_bytes(seed_material, "big"))
+    models = [
+        ("V2057", "11"),
+        ("CPH2179", "11"),
+        ("V2206", "12"),
+        ("SM-A037F", "12"),
+        ("M2103K19G", "11"),
+        ("RMX3430", "12"),
+        ("SM-A135F", "12"),
+        ("CPH2269", "12"),
+        ("SM-A225F", "11"),
+        ("RMX3195", "11"),
+        ("SM-A536B", "13"),
+        ("V2218", "12"),
+        ("CPH2325", "12"),
+        ("M2012K11AG", "12"),
+    ]
+    model, android_ver = generator.choice(models)
+    # Keep this UUID derivation in sync with MyVnptService.CreateStableDeviceInfo
+    # so the same COM has the same VNPT device ID in both ToolGSM tabs.
+    identity_hex = hashlib.sha256(
+        ("ToolGSM.MyVNPT.Device.v1:" + normalized_key).encode("utf-8")
+    ).hexdigest()
+    dev_uuid = (
+        f"{identity_hex[:8]}-{identity_hex[8:12]}-{identity_hex[12:16]}-"
+        f"{identity_hex[16:20]}-{identity_hex[20:32]}"
+    )
+    fcm_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_:"
+    fcm_token = "".join(generator.choices(fcm_chars, k=168))
+    mac = "".join(generator.choices("0123456789abcdef", k=16))
+    di = (
+        f"{dev_uuid}|{dev_uuid}|unknown|Android||3.3.99.Prd|"
+        f"{model}|{android_ver}|"
+    )
+    return {
+        "uuid": dev_uuid,
+        "model": model,
+        "android_ver": android_ver,
+        "fcm_token": fcm_token,
+        "mac": mac,
+        "di": di,
+    }
+
+
+def request_login_otp(module, phone, device_key):
+    """Use OTP login with a stable fingerprint assigned to this COM port."""
+    profile = stable_device_profile(device_key)
     required = ("di", "model", "android_ver", "fcm_token", "mac")
     if any(not str(profile.get(field) or "").strip() for field in required):
         raise RuntimeError("eKYC không tạo đủ thông tin thiết bị")
@@ -243,7 +298,11 @@ def main():
         spec.loader.exec_module(module)
 
         if action == "requestOtp":
-            return request_login_otp(module, phone)
+            return request_login_otp(
+                module,
+                phone,
+                str(request.get("deviceKey") or ""),
+            )
 
         otp = str(request.get("otp") or "").strip()
         device_profile = request.get("deviceProfile") or {}

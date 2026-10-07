@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +15,9 @@ namespace gsm
     {
         private const string SingleInstanceMutexName =
             @"Local\ToolGSM.Nofake.SingleInstance";
+        private const string SingleInstanceActivationEventName =
+            @"Local\ToolGSM.Nofake.ActivateExistingInstance";
+        private const int SwRestore = 9;
 
         private ServiceProvider? _serviceProvider;
         private MainViewModel? _mainViewModel;
@@ -24,6 +29,9 @@ namespace gsm
         private Task? _toolGsmApiTask;
         private Mutex? _singleInstanceMutex;
         private bool _ownsSingleInstanceMutex;
+        private EventWaitHandle? _singleInstanceActivationEvent;
+        private RegisteredWaitHandle? _singleInstanceActivationRegistration;
+        private int _activationQueued;
         private int _shutdownStarted;
         public App()
         {
@@ -78,18 +86,14 @@ namespace gsm
 
         protected override void OnStartup(StartupEventArgs e)
         {
-            if (!TryClaimSingleInstance(TimeSpan.FromSeconds(5)))
+            if (!TryClaimSingleInstance(TimeSpan.Zero))
             {
-                MessageBox.Show(
-                    "ToolGSM đang chạy hoặc chưa tắt xong. " +
-                    "Hãy chờ tiến trình cũ đóng hoàn toàn rồi mở lại.",
-                    "ToolGSM đang chạy",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
+                ActivateExistingInstance();
                 Shutdown();
                 return;
             }
 
+            StartSingleInstanceActivationListener();
             base.OnStartup(e);
 
             // Resolve từ chính container mà Blazor sử dụng. Container sẽ gọi
@@ -274,10 +278,124 @@ namespace gsm
             {
                 _mainViewModel = null;
                 UnregisterGlobalExceptionHandlers();
+                StopSingleInstanceActivationListener();
                 ReleaseSingleInstance();
                 base.OnExit(e);
             }
         }
+
+        private void StartSingleInstanceActivationListener()
+        {
+            _singleInstanceActivationEvent = new EventWaitHandle(
+                initialState: false,
+                EventResetMode.AutoReset,
+                SingleInstanceActivationEventName);
+            _singleInstanceActivationRegistration =
+                ThreadPool.RegisterWaitForSingleObject(
+                    _singleInstanceActivationEvent,
+                    static (state, _) =>
+                        ((App)state!).QueueMainWindowActivation(),
+                    this,
+                    Timeout.Infinite,
+                    executeOnlyOnce: false);
+        }
+
+        private void StopSingleInstanceActivationListener()
+        {
+            RegisteredWaitHandle? registration = Interlocked.Exchange(
+                ref _singleInstanceActivationRegistration,
+                null);
+            try { registration?.Unregister(null); } catch { }
+
+            EventWaitHandle? activationEvent = Interlocked.Exchange(
+                ref _singleInstanceActivationEvent,
+                null);
+            activationEvent?.Dispose();
+        }
+
+        private void QueueMainWindowActivation()
+        {
+            if (Volatile.Read(ref _shutdownStarted) != 0
+                || Interlocked.Exchange(ref _activationQueued, 1) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    Interlocked.Exchange(ref _activationQueued, 0);
+                    if (Volatile.Read(ref _shutdownStarted) != 0) return;
+
+                    Window? window = MainWindow
+                        ?? Windows.OfType<Window>().FirstOrDefault();
+                    if (window == null) return;
+
+                    if (!window.IsVisible) window.Show();
+                    if (window.WindowState == WindowState.Minimized)
+                    {
+                        window.WindowState = WindowState.Normal;
+                    }
+
+                    window.Activate();
+                    window.Topmost = true;
+                    window.Topmost = false;
+                    window.Focus();
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                Interlocked.Exchange(ref _activationQueued, 0);
+            }
+        }
+
+        private static void ActivateExistingInstance()
+        {
+            try
+            {
+                using var activationEvent = new EventWaitHandle(
+                    initialState: false,
+                    EventResetMode.AutoReset,
+                    SingleInstanceActivationEventName);
+                activationEvent.Set();
+            }
+            catch
+            {
+                // Native window activation below still handles older builds.
+            }
+
+            string processName = Process.GetCurrentProcess().ProcessName;
+            foreach (Process process in Process.GetProcessesByName(processName))
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (process.Id == Environment.ProcessId) continue;
+
+                        IntPtr windowHandle = process.MainWindowHandle;
+                        if (windowHandle == IntPtr.Zero) continue;
+
+                        ShowWindowAsync(windowHandle, SwRestore);
+                        SetForegroundWindow(windowHandle);
+                        return;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // The existing process may have exited during lookup.
+                    }
+                }
+            }
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         private bool TryClaimSingleInstance(TimeSpan waitTimeout)
         {

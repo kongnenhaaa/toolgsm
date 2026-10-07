@@ -68,12 +68,15 @@ public sealed class DeviceUnlockService
 
     public async Task<DeviceUnlockOtpRequestResult> RequestLoginOtpAsync(
         string phone,
+        string deviceKey,
         Action<string>? progress = null,
         CancellationToken cancellationToken = default)
     {
         string normalizedPhone = MyVnptService.NormalizePhone(phone);
         if (string.IsNullOrWhiteSpace(normalizedPhone))
             return OtpFailure("Số điện thoại không hợp lệ");
+        if (string.IsNullOrWhiteSpace(deviceKey))
+            return OtpFailure("Thiếu tên COM để tạo fingerprint thiết bị ổn định");
 
         string? sourcePath = ResolveSourceScriptPath();
         if (sourcePath == null)
@@ -81,6 +84,12 @@ public sealed class DeviceUnlockService
         string? bridgePath = ResolveBridgeScriptPath();
         if (bridgePath == null)
             return OtpFailure("Thiếu run_unlock.py cạnh ToolGSM.exe");
+
+        TimeSpan pacingDelay = await MyVnptService.WaitForOtpSendTurnAsync(
+            cancellationToken);
+        MyVnptService.LogOtpSendPacingDelay(
+            pacingDelay,
+            (message, _) => progress?.Invoke(message));
 
         using var process = new Process
         {
@@ -94,7 +103,8 @@ public sealed class DeviceUnlockService
             string requestJson = JsonSerializer.Serialize(new
             {
                 action = "requestOtp",
-                phone = normalizedPhone
+                phone = normalizedPhone,
+                deviceKey
             });
             await process.StandardInput.WriteLineAsync(
                 requestJson.AsMemory(), cancellationToken);

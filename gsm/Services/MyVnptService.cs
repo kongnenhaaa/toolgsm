@@ -111,14 +111,8 @@ public static class MyVnptService
         // starts silently dropping SMS after roughly twenty OTP requests in a
         // short window. Keep otp_send at about twenty starts per minute;
         // account checks and OTP waiting still overlap normally.
-        TimeSpan pacingDelay = await OtpSendPacer.WaitForTurnAsync(
-            cancellationToken);
-        if (pacingDelay >= TimeSpan.FromMilliseconds(100))
-        {
-            addLogCallback?.Invoke(
-                $"[VNPT_HTTP] otp_send chờ giãn nhịp {pacingDelay.TotalSeconds:0.0} giây để tránh dồn yêu cầu.",
-                "INFO");
-        }
+        TimeSpan pacingDelay = await WaitForOtpSendTurnAsync(cancellationToken);
+        LogOtpSendPacingDelay(pacingDelay, addLogCallback);
 
         string otpService = session.AccountExists ? "authen_miss_password" : "authen_register";
         string otpContent = await PostAsync(
@@ -143,6 +137,22 @@ public static class MyVnptService
         }
 
         return session;
+    }
+
+    internal static Task<TimeSpan> WaitForOtpSendTurnAsync(
+        CancellationToken cancellationToken = default) =>
+        OtpSendPacer.WaitForTurnAsync(cancellationToken);
+
+    internal static void LogOtpSendPacingDelay(
+        TimeSpan pacingDelay,
+        Action<string, string>? addLogCallback)
+    {
+        if (pacingDelay >= TimeSpan.FromMilliseconds(100))
+        {
+            addLogCallback?.Invoke(
+                $"[VNPT_HTTP] otp_send chờ giãn nhịp {pacingDelay.TotalSeconds:0.0} giây để tránh dồn yêu cầu.",
+                "INFO");
+        }
     }
 
     public static async Task<MyVnptPasswordResult> SetPasswordAsync(

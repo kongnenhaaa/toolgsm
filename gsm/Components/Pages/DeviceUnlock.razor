@@ -23,7 +23,7 @@
         </MudItem>
         <MudItem xs="12" md="2">
             <MudNumericField T="int" @bind-Value="_parallelism"
-                             Label="Số luồng" Min="1" Max="64"
+                             Label="Số luồng (tối đa 10)" Min="1" Max="10"
                              Variant="Variant.Outlined"
                              Margin="Margin.Dense" Disabled="@_isRunning" />
         </MudItem>
@@ -323,7 +323,7 @@
     [Parameter] public bool IsPageActive { get; set; }
 
     private string _sendMode = "selected";
-    private int _parallelism = 5;
+    private int _parallelism = 10;
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab;
     private bool _isRunning;
@@ -768,7 +768,7 @@
             {
                 await Vm.RunDeviceUnlockBatchAsync(
                     targets,
-                    Math.Clamp(_parallelism, 1, 64),
+                    Math.Clamp(_parallelism, 1, 10),
                     _cts.Token);
             }
             catch (OperationCanceledException)

@@ -2,6 +2,15 @@ using System;
 
 namespace gsm.Models;
 
+public class TelegramRouteSettings
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string BotToken { get; set; } = "";
+    public string ChatIds { get; set; } = "";
+    public bool EnablePhoneWhitelist { get; set; }
+    public string PhoneWhitelist { get; set; } = "";
+}
+
 public class AppSettings
 {
     public bool DarkMode { get; set; } = false;
@@ -9,6 +18,10 @@ public class AppSettings
     public string TelegramBotToken { get; set; } = "";
     public string TelegramChatIds { get; set; } = "";
     public string TelegramChatId { get; set; } = ""; // Mapped from TelegramChatIds or standalone
+    public bool EnableTelegramPhoneWhitelist { get; set; } = false;
+    public string TelegramPhoneWhitelist { get; set; } = "";
+    public System.Collections.Generic.List<TelegramRouteSettings>
+        TelegramRoutes { get; set; } = new();
     public bool TelegramOnOtp { get; set; } = true;
     public bool TelegramOnSms { get; set; } = true;
     public bool PushOtpToWeb { get; set; } = true;

@@ -54,7 +54,7 @@ GSM Pro là phần mềm chuyên nghiệp dùng để kết nối, điều khi�
 
 5. CẤU TRÚC LƯU TRỮ DỮ LIỆU
 ---------------------------
-- system_log.txt: Nhật ký hoạt động của tool.
+- Nhật ký hoạt động chỉ hiển thị trong RAM; ToolGSM không tạo system_log.txt.
 - settings.json: Cấu hình cá nhân hóa (Settings).
 - imei_backup.xlsx: Dữ liệu cũ/nhập thủ công chỉ để tra cứu; nhánh nofake không tự tạo mapping, không khôi phục và không ghi IMEI modem.
 

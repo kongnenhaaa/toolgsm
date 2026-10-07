@@ -118,7 +118,7 @@ body { overflow: hidden; }
 .status-idle { color: #64748b; background: #f8fafc; border-color: #e2e8f0; }
 
 /* COM table */
-.com-table-shell { overflow: hidden; background: rgb(255 255 255 / .96) !important; border: 1px solid var(--gsm-border) !important; border-radius: var(--gsm-radius-lg) !important; box-shadow: var(--gsm-shadow-sm); }
+.com-table-shell { position: relative; overflow: hidden; background: rgb(255 255 255 / .96) !important; border: 1px solid var(--gsm-border) !important; border-radius: var(--gsm-radius-lg) !important; box-shadow: var(--gsm-shadow-sm); }
 .com-toolbar { min-height: 54px !important; padding: 8px 12px !important; gap: 5px; overflow-x: auto; background: linear-gradient(180deg, #fbfdff, #f8fafc) !important; border-bottom: 1px solid var(--gsm-border); }
 .com-toolbar::-webkit-scrollbar { height: 5px; }
 .com-stat-chip {
@@ -141,7 +141,8 @@ body { overflow: hidden; }
 .com-table .mud-table-row.row-pending { background: #fffdf5; box-shadow: inset 3px 0 #fbbf24; }
 .com-table .mud-table-row.row-processing { background: #f5fbff; box-shadow: inset 3px 0 #38bdf8; }
 .com-table .mud-table-row.row-error { background: #fff8f8; box-shadow: inset 3px 0 #f87171; }
-.empty-state { color: #64748b; padding: 60px 24px; text-align: center; }
+.com-empty-overlay { position: absolute; z-index: 3; inset: 96px 0 0; display: flex; align-items: center; justify-content: center; background: rgb(255 255 255 / .98); }
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; color: #64748b; padding: 24px; text-align: center; }
 
 /* Feature pages */
 .feature-page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 10px 22px 12px; }
@@ -217,6 +218,7 @@ html.theme-dark .mud-popover { background-color: var(--gsm-surface) !important; 
 
 html.theme-dark .feature-toolbar,
 html.theme-dark .com-table-shell { background: rgb(17 20 26 / .97) !important; }
+html.theme-dark .com-empty-overlay { background: rgb(17 20 26 / .98); }
 html.theme-dark .com-toolbar { background: linear-gradient(180deg, #181c24, #11141a) !important; }
 html.theme-dark .com-table .mud-table-head .mud-table-cell,
 html.theme-dark .feature-tabs .mud-table-head .mud-table-cell { background: #181c24 !important; color: #aeb6c4 !important; border-bottom-color: var(--gsm-border) !important; }

@@ -18,6 +18,7 @@ public sealed class OtpExtractionTests
     [InlineData("123456 la ma xac thuc cua ban", "123456")]
     [InlineData("123456 is your security code", "123456")]
     [InlineData("419955", "419955")]
+    [InlineData("607718 la ma xac thuc OTP tren MyVNPT cua Quy Khach, hieu luc trong 2 phut. De dam bao an toan, vui long khong chia se ma nay voi bat ky ai.", "607718")]
     [InlineData("(Zalo) Day la ma xac thuc OTP cho SDT (***7003): 419955", "419955")]
     [InlineData("Mã WhatsApp của bạn: 825-024 Đừng cho ai biết mã này", "825024")]
     [InlineData("Your WhatsApp code: 825–024", "825024")]

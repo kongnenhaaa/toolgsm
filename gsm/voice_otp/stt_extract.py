@@ -44,14 +44,45 @@ def is_sim_locked(text: str) -> bool:
     return any(kw in norm for kw in SIM_LOCKED_KEYWORDS)
 
 
-_ANCHOR_RE = re.compile(
-    r"(?:ma\s+)?(?:xac thuc|sac that|xac nhan|otp|xep|he luc)?\s*(?:cua\s*)?(?:ban|ba)?\s*(?:la\b|:|\.)\s*"
+_CODE_ANCHOR_RE = re.compile(
+    r"\b(?:verification\s+code|security\s+code|authentication\s+code|"
+    r"one\s*time\s+password|otp|ma\s+(?:xac\s+thuc|xac\s+nhan|"
+    r"sac\s+that|sat\s+thuc|sac\s+thuc|xep))\b"
 )
+_REPEAT_ANCHOR_RE = re.compile(r"\b(?:i\s+repeat|repeat|xin\s+nhac\s+lai|nhac\s+lai)\b")
+_VALUE_ANCHOR_RE = re.compile(r"\b(?:is|la)\b")
+_DIGIT_TOKEN_RE = re.compile(r"[a-z]+|\d+|[^a-z\d]+")
+
+
+def _digit_runs(s: str):
+    """Join adjacent spoken digits without crossing ordinary words.
+
+    This keeps modem-style output such as "6.38205" intact, but prevents
+    "six digit verification code is 638205" from becoming 6638205.
+    """
+    runs = []
+    current = []
+
+    def flush():
+        if current:
+            runs.append("".join(current))
+            current.clear()
+
+    for token in _DIGIT_TOKEN_RE.findall(_norm_vn(s or "").lower()):
+        if token.isdigit():
+            current.append(token)
+        elif token in _NORM_WORD2DIG:
+            current.append(_NORM_WORD2DIG[token])
+        elif re.fullmatch(r"[\s.,:;_\-/]+", token):
+            continue
+        else:
+            flush()
+    flush()
+    return runs
 
 
 def _digits_of(s: str) -> str:
-    tokens = re.findall(r"[a-z]+|\d+", _norm_vn(s or "").lower())
-    return "".join(t if t.isdigit() else _NORM_WORD2DIG.get(t, "") for t in tokens)
+    return "".join(_digit_runs(s))
 
 
 def _norm_otp(run: str) -> str:
@@ -66,16 +97,25 @@ def _norm_otp(run: str) -> str:
         return run[:6]
     if n % 4 == 0 and run == run[:4] * (n // 4):
         return run[:4]
-    if n > 6:
-        return run[:6]
     return ""
 
 
-def _first_otp_in(digits_str: str) -> str:
-    for m in re.finditer(r"\d{4,}", digits_str):
-        o = _norm_otp(m.group(0))
+def _otp_candidates(text: str):
+    candidates = []
+    for run in _digit_runs(text):
+        o = _norm_otp(run)
         if o:
-            return o
+            candidates.append(o)
+    return candidates
+
+
+def _candidate_after_matches(norm: str, pattern, window: int = 180):
+    # Automated calls normally repeat the OTP, so inspect the last matching
+    # context first. It is less likely to contain a noisy preamble.
+    for match in reversed(list(pattern.finditer(norm))):
+        candidates = _otp_candidates(norm[match.end():match.end() + window])
+        if candidates:
+            return candidates[0]
     return ""
 
 
@@ -102,42 +142,48 @@ def extract_otp(text: str):
     if is_sim_locked(text):
         return "", _digits_of(low)
 
-    # 1) Uu tien cat sau tu khoa anchor 'la' / ':'
-    p_la = norm.rfind("la")
-    if p_la >= 0 and p_la < len(norm) - 2:
-        seg_after_la = norm[p_la + 2:]
-        dig_la = _digits_of(seg_after_la)
-        o = _first_otp_in(dig_la)
-        if o:
-            return o, _digits_of(low)
-
-    matches = list(_ANCHOR_RE.finditer(norm))
-    if matches:
-        seg = _digits_of(norm[matches[-1].end():matches[-1].end() + 120])
-        o = _first_otp_in(seg)
-        if o:
-            return o, _digits_of(low)
-
-    for kw in ("sac that", "xac thuc", "xac nhan", "otp"):
-        start = len(norm)
-        while True:
-            i = norm.rfind(kw, 0, start)
-            if i < 0:
-                break
-            seg = _digits_of(norm[i:i + 150])
-            o = _first_otp_in(seg)
-            if o:
-                return o, _digits_of(low)
-            start = i
-
     all_digits = _digits_of(low)
-    o = _first_otp_in(all_digits)
-    return o, all_digits
+    for pattern in (_CODE_ANCHOR_RE, _REPEAT_ANCHOR_RE, _VALUE_ANCHOR_RE):
+        o = _candidate_after_matches(norm, pattern)
+        if o:
+            return o, all_digits
+
+    candidates = _otp_candidates(norm)
+    if not candidates:
+        return "", all_digits
+
+    # Prefer a value spoken more than once. This accepts calls that only say
+    # "please use ... again ..." without an OTP keyword.
+    winner = max(
+        range(len(candidates)),
+        key=lambda index: (candidates.count(candidates[index]), index)
+    )
+    selected = candidates[winner]
+    if candidates.count(selected) >= 2:
+        return selected, all_digits
+
+    # A bare spoken/numeric code is also valid. Do not promote an isolated year,
+    # phone number or account number from a longer ordinary transcript to OTP.
+    ordinary_words = [
+        token for token in re.findall(r"[a-z]+", norm)
+        if token not in _NORM_WORD2DIG
+    ]
+    return (selected if not ordinary_words else ""), all_digits
 
 
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Missing audio file argument"}))
+        return
+    if sys.argv[1] == "--prepare-model":
+        model_name = sys.argv[2] if len(sys.argv) > 2 else "small"
+        cache_dir = sys.argv[3] if len(sys.argv) > 3 else None
+        try:
+            from faster_whisper.utils import download_model
+            model_path = download_model(model_name, cache_dir=cache_dir)
+            print(json.dumps({"ready": True, "model_path": model_path}))
+        except Exception as ex:
+            print(json.dumps({"error": str(ex), "ready": False}))
         return
     audio = sys.argv[1]
     model_name = sys.argv[2] if len(sys.argv) > 2 else "small"
@@ -153,18 +199,67 @@ def main():
 
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel(model_name, device="cpu", compute_type="int8")
-        segments, _info = model.transcribe(
-            audio,
-            language="vi",
-            beam_size=5,
-            vad_filter=True
+        from faster_whisper.audio import decode_audio
+        model = WhisperModel(
+            model_name,
+            device="cpu",
+            compute_type="int8",
+            download_root=os.environ.get("TOOLGSM_WHISPER_CACHE_DIR") or None,
+            local_files_only=os.path.isdir(model_name),
         )
-        raw_text = " ".join(s.text for s in segments).strip()
-        text = clean_transcript(raw_text)
+        audio_data = decode_audio(audio)
+        detected_language, language_probability, _all_languages = model.detect_language(
+            audio=audio_data,
+            vad_filter=True,
+            language_detection_segments=3
+        )
+        prompts = {
+            "en": "Your verification code is zero one two three four five six seven eight nine. I repeat, your verification code is.",
+            "vi": "Mã xác thực của bạn là không một hai ba bốn năm sáu bảy tám chín. Xin nhắc lại mã xác thực."
+        }
+        selected_prompt = prompts.get(detected_language)
+
+        def transcribe_once(initial_prompt):
+            segments, transcription_info = model.transcribe(
+                audio_data,
+                language=detected_language or None,
+                initial_prompt=initial_prompt,
+                beam_size=5,
+                vad_filter=True
+            )
+            return " ".join(s.text for s in segments).strip(), transcription_info
+
+        raw_text, info = transcribe_once(selected_prompt)
         otp, digits = extract_otp(raw_text)
+
+        # A language-specific prompt improves long Vietnamese number sequences,
+        # but can occasionally hurt a very short code. Retry without the prompt
+        # only when the transcript clearly describes an OTP and no valid 4/6
+        # digit value was found. Ordinary long calls still use a single pass.
+        normalized_text = _norm_vn(raw_text.lower())
+        has_otp_context = (
+            _CODE_ANCHOR_RE.search(normalized_text)
+            or _REPEAT_ANCHOR_RE.search(normalized_text)
+        )
+        if selected_prompt and not otp and has_otp_context:
+            fallback_text, fallback_info = transcribe_once(None)
+            fallback_otp, fallback_digits = extract_otp(fallback_text)
+            if fallback_otp:
+                raw_text = fallback_text
+                info = fallback_info
+                otp = fallback_otp
+                digits = fallback_digits
+
+        text = clean_transcript(raw_text)
         locked = is_sim_locked(raw_text)
-        print(json.dumps({"text": text, "otp": otp, "digits": digits, "locked": locked}, ensure_ascii=False))
+        print(json.dumps({
+            "text": text,
+            "otp": otp,
+            "digits": digits,
+            "locked": locked,
+            "language": info.language or detected_language,
+            "language_probability": language_probability
+        }, ensure_ascii=False))
     except Exception as ex:
         print(json.dumps({"error": str(ex), "text": "", "otp": "", "digits": "", "locked": False}))
 

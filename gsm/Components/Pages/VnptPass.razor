@@ -39,6 +39,13 @@
                                Disabled="@(string.IsNullOrWhiteSpace(_vnptPassword))">
                         Đặt mật khẩu
                     </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="Color.Warning" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Replay"
+                               OnClick="RetryFailedVnpt"
+                               Disabled="@(Vm.LastVnptFailedPortCount == 0 || string.IsNullOrWhiteSpace(_vnptPassword))">
+                        Chạy lại COM lỗi (@Vm.LastVnptFailedPortCount)
+                    </MudButton>
                 }
                 else
                 {
@@ -190,6 +197,7 @@
     private bool _isSetting = false;
     private int _vnptStartGuard;
     private CancellationTokenSource? _vnptCts;
+    private List<SimPort>? _retryTargets;
 
     // ========== DATA ==========
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
@@ -214,9 +222,33 @@
     // ========== HELPERS ==========
     List<SimPort> GetTargetPortObjects()
     {
+        if (_retryTargets is not null)
+            return _retryTargets
+                .Where(p => p.Status == SimStatus.Active)
+                .ToList();
         if (_sendMode == "all")
             return ActivePorts.ToList();
         return _selectedPorts.Where(p => p.Status == SimStatus.Active).ToList();
+    }
+
+    async Task RetryFailedVnpt()
+    {
+        List<SimPort> failedPorts = Vm.GetLastVnptFailedPorts();
+        if (failedPorts.Count == 0)
+        {
+            Snackbar.Add("Không còn COM lỗi trong lần chạy gần nhất.", Severity.Normal);
+            return;
+        }
+
+        _retryTargets = failedPorts;
+        try
+        {
+            await SetVnptPassword();
+        }
+        finally
+        {
+            _retryTargets = null;
+        }
     }
 
     // ========== 2. ĐẶT MẬT KHẨU MY VNPT ==========

@@ -10,19 +10,30 @@ namespace gsm.Services;
 public interface INotifyService
 {
     event Action<string>? TelegramStatus;
-    Task SendTelegramAsync(string botToken, string chatId, string text);
+    Task SendTelegramAsync(
+        string botToken,
+        string chatId,
+        string text,
+        string? deduplicationKey = null);
     Task PushWebhookAsync(string url, object payload);
 }
 
 public class NotifyService : INotifyService
 {
-    private static readonly HttpClient Http = new()
+    private static readonly HttpClient TelegramHttp = new()
+    {
+        // A short timeout followed by a retry can create two bot messages when
+        // Telegram accepted the first request but its response arrived late.
+        Timeout = TimeSpan.FromSeconds(60)
+    };
+    private static readonly HttpClient WebhookHttp = new()
     {
         Timeout = TimeSpan.FromSeconds(15)
     };
 
     private readonly TelegramOutboxStore _telegramOutbox;
     private int _telegramWorkerRunning;
+    private DateTimeOffset _telegramRateLimitedUntilUtc;
 
     public event Action<string>? TelegramStatus;
 
@@ -37,7 +48,11 @@ public class NotifyService : INotifyService
         EnsureTelegramWorker();
     }
 
-    public Task SendTelegramAsync(string botToken, string chatId, string text)
+    public Task SendTelegramAsync(
+        string botToken,
+        string chatId,
+        string text,
+        string? deduplicationKey = null)
     {
         if (string.IsNullOrWhiteSpace(text))
             return Task.CompletedTask;
@@ -47,7 +62,14 @@ public class NotifyService : INotifyService
         IReadOnlyList<TelegramOutboxStore.Job> jobs = _telegramOutbox.Enqueue(
             botToken ?? string.Empty,
             chatId ?? string.Empty,
-            PrepareTelegramMessages(text));
+            PrepareTelegramMessages(text),
+            deduplicationKey);
+        if (jobs.Count == 0)
+        {
+            PublishTelegramStatus(
+                $"[TELEGRAM_DUPLICATE_SUPPRESSED] key={deduplicationKey}; SMS đã có job Telegram trong phiên này.");
+            return Task.CompletedTask;
+        }
         bool waitingForConfiguration = string.IsNullOrWhiteSpace(botToken)
             || string.IsNullOrWhiteSpace(chatId);
         PublishTelegramStatus(
@@ -122,6 +144,16 @@ public class NotifyService : INotifyService
                 if (jobs.Count == 0) return;
 
                 DateTimeOffset now = DateTimeOffset.UtcNow;
+                if (_telegramRateLimitedUntilUtc > now)
+                {
+                    TimeSpan rateLimitWait = _telegramRateLimitedUntilUtc - now;
+                    await Task.Delay(rateLimitWait > TimeSpan.FromSeconds(30)
+                            ? TimeSpan.FromSeconds(30)
+                            : rateLimitWait)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
                 TelegramOutboxStore.Job[] due = jobs
                     .Where(job => job.NextAttemptUtc <= now)
                     .ToArray();
@@ -138,9 +170,9 @@ public class NotifyService : INotifyService
 
                 foreach (TelegramOutboxStore.Job job in due)
                 {
-                    (bool delivered, string error) =
+                    (TelegramSendDisposition disposition, string error, TimeSpan? serverRetryAfter) =
                         await TrySendTelegramJobAsync(job).ConfigureAwait(false);
-                    if (delivered)
+                    if (disposition == TelegramSendDisposition.Delivered)
                     {
                         _telegramOutbox.Complete(job.Id);
                         PublishTelegramStatus(
@@ -148,8 +180,18 @@ public class NotifyService : INotifyService
                         continue;
                     }
 
+                    if (disposition == TelegramSendDisposition.DropAmbiguous)
+                    {
+                        _telegramOutbox.Complete(job.Id);
+                        PublishTelegramStatus(
+                            $"[TELEGRAM_UNCERTAIN_NOT_RETRIED] job={job.Id}; {error}; không gửi lại để tránh hiện trùng SMS.");
+                        continue;
+                    }
+
                     int nextAttempt = job.AttemptCount + 1;
-                    TimeSpan retryDelay = nextAttempt switch
+                    TimeSpan retryDelay = serverRetryAfter is { } requestedDelay
+                        ? requestedDelay + TimeSpan.FromSeconds(1)
+                        : nextAttempt switch
                     {
                         1 => TimeSpan.FromSeconds(2),
                         2 => TimeSpan.FromSeconds(5),
@@ -165,6 +207,13 @@ public class NotifyService : INotifyService
                         error);
                     PublishTelegramStatus(
                         $"[TELEGRAM_RETRY] job={job.Id}; attempt={nextAttempt}; retryIn={retryDelay.TotalSeconds:0}s; reason={error}");
+
+                    if (serverRetryAfter.HasValue)
+                    {
+                        _telegramRateLimitedUntilUtc =
+                            DateTimeOffset.UtcNow + retryDelay;
+                        break;
+                    }
                 }
             }
         }
@@ -193,7 +242,17 @@ public class NotifyService : INotifyService
         }
     }
 
-    private static async Task<(bool Delivered, string Error)>
+    internal enum TelegramSendDisposition
+    {
+        Delivered,
+        Retry,
+        DropAmbiguous
+    }
+
+    private async Task<(
+        TelegramSendDisposition Disposition,
+        string Error,
+        TimeSpan? ServerRetryAfter)>
         TrySendTelegramJobAsync(TelegramOutboxStore.Job job)
     {
         try
@@ -207,10 +266,21 @@ public class NotifyService : INotifyService
                     settings.TelegramChatIds,
                     settings.TelegramChatId);
             if (string.IsNullOrWhiteSpace(botToken) || chatIds.Count == 0)
-                return (false, "CONFIG_MISSING: chưa có Bot Token/Chat ID; job vẫn được giữ trong outbox");
+                return (
+                    TelegramSendDisposition.Retry,
+                    "CONFIG_MISSING: chưa có Bot Token/Chat ID; job vẫn được giữ trong outbox",
+                    null);
 
+            HashSet<string> deliveredChatIds =
+                TelegramOutboxStore.ParseDeliveredChatIds(
+                    job.DeliveredChatIds);
             foreach (string chatId in chatIds)
             {
+                // A previous attempt may already have delivered this job to
+                // another configured destination before a later destination
+                // returned 429 or another explicit failure.
+                if (deliveredChatIds.Contains(chatId)) continue;
+
                 var url = $"https://api.telegram.org/bot{botToken}/sendMessage";
                 var body = new Dictionary<string, object>
                 {
@@ -224,20 +294,77 @@ public class NotifyService : INotifyService
                 using var content = new StringContent(
                     json, Encoding.UTF8, "application/json");
                 using HttpResponseMessage response =
-                    await Http.PostAsync(url, content).ConfigureAwait(false);
-                if (response.IsSuccessStatusCode) continue;
+                    await TelegramHttp.PostAsync(url, content).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode)
+                {
+                    _telegramOutbox.MarkChatDelivered(job.Id, chatId);
+                    deliveredChatIds.Add(chatId);
+                    continue;
+                }
 
                 string error = await response.Content
                     .ReadAsStringAsync()
                     .ConfigureAwait(false);
-                return (false, $"chat={chatId}; HTTP {(int)response.StatusCode}: {error}");
+                TimeSpan? retryAfter = response.StatusCode ==
+                        System.Net.HttpStatusCode.TooManyRequests
+                    ? GetTelegramRetryAfter(error)
+                      ?? response.Headers.RetryAfter?.Delta
+                    : null;
+                return (
+                    TelegramSendDisposition.Retry,
+                    $"chat={chatId}; HTTP {(int)response.StatusCode}: {error}",
+                    retryAfter);
             }
 
-            return (true, string.Empty);
+            return (TelegramSendDisposition.Delivered, string.Empty, null);
+        }
+        catch (TaskCanceledException ex)
+        {
+            return (
+                TelegramSendDisposition.DropAmbiguous,
+                $"{ex.GetType().Name}: Telegram phản hồi quá 60 giây",
+                null);
+        }
+        catch (HttpRequestException ex)
+        {
+            return (
+                TelegramSendDisposition.DropAmbiguous,
+                $"{ex.GetType().Name}: {ex.Message}",
+                null);
         }
         catch (Exception ex)
         {
-            return (false, $"{ex.GetType().Name}: {ex.Message}");
+            return (
+                TelegramSendDisposition.Retry,
+                $"{ex.GetType().Name}: {ex.Message}",
+                null);
+        }
+    }
+
+    internal static TimeSpan? GetTelegramRetryAfter(string? responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody)) return null;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(responseBody);
+            if (!document.RootElement.TryGetProperty(
+                    "parameters",
+                    out JsonElement parameters)
+                || !parameters.TryGetProperty(
+                    "retry_after",
+                    out JsonElement retryAfter)
+                || !retryAfter.TryGetInt32(out int seconds)
+                || seconds <= 0)
+            {
+                return null;
+            }
+
+            return TimeSpan.FromSeconds(Math.Min(seconds, 300));
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -301,7 +428,7 @@ public class NotifyService : INotifyService
             using var content = new StringContent(
                 json, Encoding.UTF8, "application/json");
             using HttpResponseMessage response =
-                await Http.PostAsync(url.Trim(), content).ConfigureAwait(false);
+                await WebhookHttp.PostAsync(url.Trim(), content).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 string error = await response.Content

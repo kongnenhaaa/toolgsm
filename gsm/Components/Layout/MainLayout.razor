@@ -76,9 +76,9 @@
         new("ussd", "ussd", "USSD", Icons.Material.Filled.Dialpad),
         new("sms", "sms", "SMS", Icons.Material.Filled.Sms),
         new("call", "call", "Gọi", Icons.Material.Filled.Phone),
-        new("imei", "imei", "IMEI", Icons.Material.Filled.Fingerprint),
         new("ezcom", "ezcom", "EZ COM", Icons.Material.Filled.Router),
         new("vnptpass", "vnpt-pass", "Pass VNPT", Icons.Material.Filled.Key),
+        new("deviceunlock", "device-unlock", "Mở khóa đổi thiết bị", Icons.Material.Filled.PhonelinkLock),
         new("settings", "settings", "Cài đặt", Icons.Material.Filled.Settings)
     };
 
@@ -274,6 +274,7 @@
         {
             "" => "ussd",
             "vnpt-pass" => "vnptpass",
+            "device-unlock" => "deviceunlock",
             _ => _navItems.FirstOrDefault(x => path.StartsWith(x.Route, StringComparison.OrdinalIgnoreCase))?.Key ?? "ussd"
         };
     }

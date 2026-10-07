@@ -36,9 +36,8 @@ namespace gsm
             // WebView2 child processes inherit it and can keep that folder locked
             // briefly after the main window has closed.
 
-            // Only sms_multipart_journal.json persists so a long SMS can be
-            // assembled across restarts. Inbox history, cleanup/recovery state
-            // and Telegram retries are session-only.
+            // Remove only logs left by older builds. Functional state such as
+            // settings, SMS multipart recovery and account history is kept.
             gsm.Services.AppBootstrap.EnsureAll();
 
             var serviceCollection = new ServiceCollection();
@@ -64,6 +63,8 @@ namespace gsm
             serviceCollection.AddSingleton<IGsmCallService, GsmCallService>();
             serviceCollection.AddSingleton<IGsmBackgroundSupervisor, GsmBackgroundSupervisor>();
             serviceCollection.AddSingleton<MainViewModel>();
+            serviceCollection.AddSingleton<DeviceUnlockAuthService>();
+            serviceCollection.AddSingleton<DeviceUnlockAccountHistoryService>();
             serviceCollection.AddSingleton<RealDeviceSmokeTestRunner>();
             serviceCollection.AddSingleton<ToolGsmApiService>();
             serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();
@@ -207,23 +208,11 @@ namespace gsm
         private void LogCrash(Exception? ex, string source)
         {
             if (ex == null) return;
-            try
-            {
-                string logFile = System.IO.Path.Combine(System.AppContext.BaseDirectory, "crash.log");
-                var fi = new System.IO.FileInfo(logFile);
-                if (fi.Exists && fi.Length > 1024 * 1024) // 1MB
-                {
-                    fi.Delete();
-                }
-                
-                string content = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{source}]\r\n{ex.GetType().Name}: {ex.Message}\r\n{ex.StackTrace}\r\n\r\n";
-                if (ex.InnerException != null)
-                {
-                    content += $"Inner Exception:\r\n{ex.InnerException.GetType().Name}: {ex.InnerException.Message}\r\n{ex.InnerException.StackTrace}\r\n\r\n";
-                }
-                System.IO.File.AppendAllText(logFile, content);
-            }
-            catch { }
+            // Crash diagnostics must never be persisted. Keeping this hook
+            // makes the global handlers safe while honoring the RAM-only log
+            // policy.
+            System.Diagnostics.Debug.WriteLine(
+                $"[{source}] {ex.GetType().Name}: {ex.Message}");
         }
 
         protected override void OnExit(ExitEventArgs e)

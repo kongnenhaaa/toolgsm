@@ -70,7 +70,16 @@
                 </MudButton>
             }
 
-                  <MudSpacer />
+            <MudSpacer />
+            <MudTextField @bind-Value="_quickSearch"
+                          Placeholder="Tìm nhanh SĐT / COM / CCID..."
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true"
+                          Clearable="true"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Style="width:240px; min-width:190px;" />
             @if (SelectedItems.Any())
             {
                 <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
@@ -100,7 +109,7 @@
             @foreach (var col in VisibleColumns)
             {
                 var minWidth = col.Name == "LastMessageContent" ? "min-width: 250px;" : "";
-                <MudTh Style="@($"background:{_hBg}; border-bottom:1px solid {_hBrd}; color:{_hClr}; white-space: nowrap; font-weight:700; letter-spacing:0.03em; {minWidth}")">@col.Header</MudTh>
+                <MudTh Style="@($"background:{_hBg}; border-bottom:1px solid {_hBrd}; color:{_hClr}; white-space: nowrap; font-weight:700; letter-spacing:0.03em; {minWidth}")">@GetColumnHeader(col)</MudTh>
             }
         </HeaderContent>
         <RowTemplate>
@@ -194,7 +203,8 @@
                 }
                 else if (col.Name == "VnptStatus")
                 {
-                    <MudTd Style="@($"font-weight:600; font-size:16px; {_brd} color:#FB7185; white-space:nowrap;")">@(string.IsNullOrEmpty(context.VnptStatus) ? "—" : context.VnptStatus)</MudTd>
+                    var operationStatus = GetVnptStatusColumnValue(context);
+                    <MudTd Style="@($"font-weight:600; font-size:16px; {_brd} color:#FB7185; white-space:nowrap;")">@(string.IsNullOrEmpty(operationStatus) ? "—" : operationStatus)</MudTd>
                 }
                 else if (col.Name == "Otp")
                 {
@@ -215,16 +225,31 @@
             }
         </RowTemplate>
         <NoRecordsContent>
-            <div class="empty-state">
-                <MudIcon Icon="@Icons.Material.Outlined.Inbox" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
-                <div class="mb-4">Chưa có dữ liệu. Hãy kết nối thiết bị.</div>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                           StartIcon="@Icons.Material.Filled.Link" OnClick="ConnectAll">
-                    Quét kết nối (Connect All)
-                </MudButton>
-            </div>
+            <span aria-hidden="true"></span>
         </NoRecordsContent>
     </MudTable>
+
+    @if (!VisiblePorts.Any())
+    {
+        <div class="com-empty-overlay">
+            <div class="empty-state">
+                @if (!string.IsNullOrWhiteSpace(_quickSearch))
+                {
+                    <MudIcon Icon="@Icons.Material.Outlined.SearchOff" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
+                    <div>Không tìm thấy SĐT/COM/CCID phù hợp.</div>
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Outlined.Inbox" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
+                    <div class="mb-4">Chưa có dữ liệu. Hãy kết nối thiết bị.</div>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Link" OnClick="ConnectAll">
+                        Quét kết nối (Connect All)
+                    </MudButton>
+                }
+            </div>
+        </div>
+    }
 </MudPaper>
 
 @code {
@@ -247,6 +272,8 @@
     [Parameter] public EventCallback OnDeleteSmsStorage { get; set; }
 
     [Parameter] public bool IsDeletingSmsStorage { get; set; }
+
+    private string _quickSearch = string.Empty;
 
     async Task RefreshOne(SimPort port)
     {
@@ -315,9 +342,22 @@
             var hidden = new HashSet<string>(
                 SettingsService.Current.HiddenComPorts ?? new List<string>(),
                 StringComparer.OrdinalIgnoreCase);
-            return Ports.Where(p => !hidden.Contains(p.PortName));
+            IEnumerable<SimPort> visible = Ports.Where(
+                p => !hidden.Contains(p.PortName));
+            string search = _quickSearch.Trim();
+            if (search.Length == 0) return visible;
+
+            return visible.Where(port =>
+                ContainsSearch(port.PhoneNumber, search)
+                || ContainsSearch(port.PortName, search)
+                || ContainsSearch(port.Serial, search)
+                || ContainsSearch(port.Imei, search));
         }
     }
+
+    private static bool ContainsSearch(string? value, string search) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Contains(search, StringComparison.OrdinalIgnoreCase);
 
     private List<ColumnItem> VisibleColumns
     {
@@ -470,7 +510,7 @@
                     "Lock1C"             => p.Lock1C ?? "",
                     "Lock2C"             => p.Lock2C ?? "",
                     "ForwardedTo"        => p.ForwardedTo ?? "",
-                    "VnptStatus"         => p.VnptStatus ?? "",
+                    "VnptStatus"         => GetVnptStatusColumnValue(p),
                     "Otp"                => p.Otp ?? "",
                     "LastSmsSender"      => p.LastSmsSender ?? "",
                     "LastMessageContent" => GetContentColumnValue(p),
@@ -511,4 +551,15 @@
             Snackbar.Add("Copy Excel lỗi: " + ex.Message, Severity.Error);
         }
     }
+
+    private string GetColumnHeader(ColumnItem column) =>
+        column.Name == "VnptStatus"
+        && Operation.Equals("DKTTTB", StringComparison.OrdinalIgnoreCase)
+            ? "Trạng thái DKTTTB"
+            : column.Header;
+
+    private string GetVnptStatusColumnValue(SimPort port) =>
+        Operation.Equals("DKTTTB", StringComparison.OrdinalIgnoreCase)
+            ? port.DeviceUnlockStatus ?? string.Empty
+            : port.VnptStatus ?? string.Empty;
 }

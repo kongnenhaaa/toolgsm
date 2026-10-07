@@ -15,7 +15,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Windows;
 using OfficeOpenXml;
@@ -65,6 +64,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         public required CancellationToken CancellationToken { get; init; }
         public TaskCompletionSource<MyVnptPasswordResult> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> OtpClaimed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         // SMS có thể về ngay sau khi otp_send được server nhận nhưng trước
         // khi request otp_send trả response về tool. Không được gọi set-pass
         // trong khoảng race này, nếu không VNPT có thể trả "Chưa yêu cầu
@@ -79,14 +80,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (_otpClaimed || _usedOtps.Contains(otp)) return false;
                 _otpClaimed = true;
                 _usedOtps.Add(otp);
-                return true;
             }
+
+            OtpClaimed.TrySetResult(true);
+            return true;
         }
 
     }
 
     private readonly ConcurrentDictionary<string, PendingMyVnptPasswordOperation> _pendingMyVnptPasswordPorts =
         new(StringComparer.OrdinalIgnoreCase);
+    private sealed class PendingDeviceUnlockOperation
+    {
+        private int _otpClaimed;
+        public required string PortName { get; init; }
+        public required string Ccid { get; init; }
+        public required long Epoch { get; init; }
+        public required string Phone { get; init; }
+        public TaskCompletionSource<string> OtpCompletion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool TryClaimOtp(string otp) =>
+            !string.IsNullOrWhiteSpace(otp)
+            && Interlocked.CompareExchange(ref _otpClaimed, 1, 0) == 0;
+    }
+
+    private readonly ConcurrentDictionary<string, PendingDeviceUnlockOperation>
+        _pendingDeviceUnlockPorts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _myVnptOtpPortOwners =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly DeviceUnlockService _deviceUnlockService = new();
+    private readonly DeviceUnlockAutoOutputService _deviceUnlockAutoOutput = new();
+    private readonly SemaphoreSlim _deviceUnlockBatchGate = new(1, 1);
+    public bool IsDeviceUnlockRuntimeAvailable =>
+        _deviceUnlockService.ResolveSourceScriptPath() != null
+        && _deviceUnlockService.ResolveBridgeScriptPath() != null;
     private sealed record MyVnptCleanupReadyPort(
         SimPort Port,
         string Ccid,
@@ -94,6 +122,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         CancellationToken SimToken);
     private readonly SimSessionSmsCleanupBarrier _initialSmsCleanupBarrier = new();
     private readonly SemaphoreSlim _vnptBatchGate = new(1, 1);
+    private const int MaxConcurrentMyVnptWorkflows = 10;
+    private static readonly TimeSpan MyVnptOtpWaitTimeout =
+        TimeSpan.FromMinutes(1);
     private const int MaxConcurrentEzSms = 4;
     private readonly SemaphoreSlim _ezSmsGate =
         new(MaxConcurrentEzSms, MaxConcurrentEzSms);
@@ -103,6 +134,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private int _vnptSuccessCount = 0;
     [ObservableProperty] private int _vnptFailCount = 0;
     private readonly object _vnptLock = new object();
+    private readonly ConcurrentDictionary<string, byte> _lastVnptFailedPortNames =
+        new(StringComparer.OrdinalIgnoreCase);
 
     [ObservableProperty]
     private string _vnptSummaryText = string.Empty;
@@ -144,8 +177,55 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public System.Collections.ObjectModel.ObservableCollection<gsm.Models.VnptResultItem> VnptResults { get; } = new();
 
+    [ObservableProperty] private int _deviceUnlockTotalActiveCount;
+    [ObservableProperty] private int _deviceUnlockSuccessCount;
+    [ObservableProperty] private int _deviceUnlockFailCount;
+    [ObservableProperty] private string _deviceUnlockSummaryText = string.Empty;
+    private readonly object _deviceUnlockLock = new();
+    private readonly List<DeviceUnlockResultItem>
+        _currentDeviceUnlockSessionResults = [];
+    private readonly ConcurrentDictionary<string, byte>
+        _lastDeviceUnlockFailedPortNames = new(StringComparer.OrdinalIgnoreCase);
+    public ObservableCollection<DeviceUnlockResultItem> DeviceUnlockResults { get; } = new();
+
+    public int LastVnptFailedPortCount => _lastVnptFailedPortNames.Count;
+    public int LastDeviceUnlockFailedPortCount =>
+        _lastDeviceUnlockFailedPortNames.Count;
+
+    public int CurrentDeviceUnlockSessionResultCount
+    {
+        get
+        {
+            lock (_deviceUnlockLock)
+                return _currentDeviceUnlockSessionResults.Count;
+        }
+    }
+
+    public IReadOnlyList<DeviceUnlockResultItem>
+        GetCurrentDeviceUnlockSessionResults()
+    {
+        lock (_deviceUnlockLock)
+        {
+            return _currentDeviceUnlockSessionResults
+                .OrderBy(result => result.Time)
+                .ToArray();
+        }
+    }
+
+    public List<SimPort> GetLastVnptFailedPorts() => Ports
+        .Where(port => _lastVnptFailedPortNames.ContainsKey(port.PortName))
+        .ToList();
+
+    public List<SimPort> GetLastDeviceUnlockFailedPorts() => Ports
+        .Where(port => _lastDeviceUnlockFailedPortNames.ContainsKey(
+            port.PortName))
+        .ToList();
+
     private void AddVnptResult(string port, string phone, string password, bool success, string response)
     {
+        if (success) _lastVnptFailedPortNames.TryRemove(port, out _);
+        else _lastVnptFailedPortNames[port] = 0;
+        OnPropertyChanged(nameof(LastVnptFailedPortCount));
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
             VnptResults.Insert(0, new gsm.Models.VnptResultItem
@@ -217,6 +297,110 @@ public partial class MainViewModel : ObservableObject, IDisposable
             VnptFailCount = 0;
             VnptTotalActiveCount = 0;
             VnptSummaryText = string.Empty;
+            _lastVnptFailedPortNames.Clear();
+            OnPropertyChanged(nameof(LastVnptFailedPortCount));
+        });
+    }
+
+    public void ClearDeviceUnlockResults()
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            lock (_deviceUnlockLock)
+                _currentDeviceUnlockSessionResults.Clear();
+            DeviceUnlockResults.Clear();
+            DeviceUnlockSuccessCount = 0;
+            DeviceUnlockFailCount = 0;
+            DeviceUnlockTotalActiveCount = 0;
+            DeviceUnlockSummaryText = string.Empty;
+            _lastDeviceUnlockFailedPortNames.Clear();
+            OnPropertyChanged(nameof(LastDeviceUnlockFailedPortCount));
+            OnPropertyChanged(nameof(CurrentDeviceUnlockSessionResultCount));
+        });
+    }
+
+    private void CompleteDeviceUnlockResult(
+        SimPort port,
+        bool success,
+        bool alreadyCompleted,
+        string fullName,
+        string response)
+    {
+        if (success)
+            _lastDeviceUnlockFailedPortNames.TryRemove(port.PortName, out _);
+        else
+            _lastDeviceUnlockFailedPortNames[port.PortName] = 0;
+        OnPropertyChanged(nameof(LastDeviceUnlockFailedPortCount));
+
+        var resultItem = new DeviceUnlockResultItem
+        {
+            Time = DateTime.Now,
+            Port = port.PortName,
+            Phone = port.PhoneNumber,
+            FullName = fullName,
+            Success = success,
+            AlreadyCompleted = alreadyCompleted,
+            Response = response
+        };
+
+        int successCount;
+        int failCount;
+        int remaining;
+        lock (_deviceUnlockLock)
+        {
+            if (success) DeviceUnlockSuccessCount++;
+            else DeviceUnlockFailCount++;
+            DeviceUnlockTotalActiveCount = Math.Max(
+                0,
+                DeviceUnlockTotalActiveCount - 1);
+            successCount = DeviceUnlockSuccessCount;
+            failCount = DeviceUnlockFailCount;
+            remaining = DeviceUnlockTotalActiveCount;
+            if (_currentDeviceUnlockSessionResults.Count >=
+                DeviceUnlockAutoOutputService.MaximumRows)
+            {
+                _currentDeviceUnlockSessionResults.Clear();
+            }
+            _currentDeviceUnlockSessionResults.Add(resultItem);
+        }
+
+        try
+        {
+            DeviceUnlockAutoOutputAppendResult autoOutput =
+                _deviceUnlockAutoOutput.Append(resultItem);
+            if (autoOutput.WasReset)
+            {
+                AddLog(
+                    $"[DKTTTB_OUTPUT] Đã đủ {DeviceUnlockAutoOutputService.MaximumRows} dòng; " +
+                    "file output tự động đã được làm rỗng và ghi lại từ đầu.",
+                    "INFO");
+            }
+        }
+        catch (Exception outputException)
+        {
+            AddLog(
+                $"[DKTTTB_OUTPUT_ERROR] Không ghi được Excel tự động: {outputException.Message}",
+                "ERROR");
+        }
+
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            if (DeviceUnlockResults.Count >=
+                DeviceUnlockAutoOutputService.MaximumRows)
+            {
+                DeviceUnlockResults.Clear();
+            }
+            DeviceUnlockResults.Insert(0, resultItem);
+            OnPropertyChanged(nameof(CurrentDeviceUnlockSessionResultCount));
+
+            DeviceUnlockSummaryText = remaining > 0
+                ? $"Mở khóa đổi thiết bị: Đang chạy (Thành công: {successCount}, Thất bại: {failCount}, Còn lại: {remaining})"
+                : $"Mở khóa đổi thiết bị: Hoàn tất! (Thành công: {successCount}, Thất bại: {failCount})";
+            if (remaining == 0)
+            {
+                SnackbarMessageQueue.Enqueue(
+                    $"Đã hoàn tất mở khóa đổi thiết bị! Thành công: {successCount}, Thất bại: {failCount}");
+            }
         });
     }
 
@@ -336,23 +520,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             message);
     }
 
-    private sealed record FileLogEntry(DateTime Timestamp, string Level, string Message);
-
     private const int MaxUiLogsPerFlush = 64;
     private const int MaxPendingUiLogs = 2048;
     private static readonly TimeSpan SmsUiDispatchTimeout =
         TimeSpan.FromSeconds(15);
-    private readonly object _logFileLock = new();
-    private readonly Channel<FileLogEntry> _fileLogChannel =
-        Channel.CreateBounded<FileLogEntry>(new BoundedChannelOptions(4096)
-        {
-            SingleReader = true,
-            SingleWriter = false,
-            FullMode = BoundedChannelFullMode.DropOldest
-        });
     private readonly ConcurrentQueue<LogMessage> _pendingUiLogs = new();
-    private readonly CancellationTokenSource _logWriterCts = new();
-    private Task? _logFileWriterTask;
     private int _uiLogFlushScheduled;
     private int _shutdownStarted;
     private int _modemsDisconnected;
@@ -644,6 +816,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         int count = targetPorts.Count;
+        _lastVnptFailedPortNames.Clear();
+        OnPropertyChanged(nameof(LastVnptFailedPortCount));
         lock (_vnptLock)
         {
             VnptSuccessCount = 0;
@@ -659,46 +833,59 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }
 
-        // Global preflight barrier: no selected COM may call any MyVNPT API
-        // until every selected COM has finished its initial SMS cleanup attempt.
-        // A cleanup warning does not block OTP, but the completed task is retained
-        // so delayed post-USSD cleanup cannot wake up later and delete the new OTP.
+        // Giữ trọn vòng đời dọn SMS -> gửi OTP -> chờ OTP -> đặt pass trong
+        // cùng một slot. Chỉ giới hạn từng HTTP request là chưa đủ vì khi chạy
+        // 32 COM, hàng chục phiên OTP vẫn có thể cùng treo và làm VNPT/modem
+        // nghẽn. COM hoàn tất sẽ nhả slot để COM kế tiếp tự chạy.
         AddLog(
-            $"[VNPT_CLEANUP_BARRIER] Đang chờ thao tác xóa SMS kết thúc trên {targetPorts.Count} cổng trước khi gọi MyVNPT.",
+            $"[VNPT_BATCH] Xếp hàng {targetPorts.Count} cổng; chạy tối đa {MaxConcurrentMyVnptWorkflows} COM trọn quy trình cùng lúc.",
             "INFO");
-        MyVnptCleanupReadyPort?[] cleanupResults = await Task.WhenAll(
-            targetPorts.Select(port => PrepareMyVnptPortAfterCleanupAsync(
-                port,
-                password,
-                cancellationToken)));
-        List<MyVnptCleanupReadyPort> readyPorts = cleanupResults
-            .OfType<MyVnptCleanupReadyPort>()
-            .ToList();
 
-        if (readyPorts.Count > 0)
+        Application.Current.Dispatcher.Invoke(() =>
         {
-            AddLog(
-                $"[VNPT_CLEANUP_BARRIER] Mọi thao tác xóa SMS đã kết thúc trên {readyPorts.Count} cổng hợp lệ; bắt đầu MyVNPT.",
-                "SUCCESS");
-        }
-
-        var requestTasks = new List<Task>();
-        foreach (MyVnptCleanupReadyPort readyPort in readyPorts)
-        {
-            SimPort port = readyPort.Port;
-            string vnptCcid = readyPort.Ccid;
-            long vnptEpoch = readyPort.Epoch;
-            CancellationToken simToken = readyPort.SimToken;
-
-            requestTasks.Add(Task.Run(async () =>
+            foreach (SimPort queuedPort in targetPorts)
             {
+                queuedPort.VnptStatus = "Chờ lượt...";
+                queuedPort.LastMessageContent =
+                    $"Đang chờ slot MyVNPT (tối đa {MaxConcurrentMyVnptWorkflows} COM)...";
+            }
+        });
+
+        await BoundedAsyncWorkRunner.RunAsync(
+            targetPorts,
+            MaxConcurrentMyVnptWorkflows,
+            async (targetPort, batchCancellationToken) =>
+            {
+                MyVnptCleanupReadyPort? readyPort =
+                    await PrepareMyVnptPortAfterCleanupAsync(
+                        targetPort,
+                        password,
+                        batchCancellationToken).ConfigureAwait(false);
+                if (readyPort is null) return;
+
+                SimPort port = readyPort.Port;
+                string vnptCcid = readyPort.Ccid;
+                long vnptEpoch = readyPort.Epoch;
+                CancellationToken simToken = readyPort.SimToken;
                 bool resultRecorded = false;
                 PendingMyVnptPasswordOperation? pending = null;
-                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, simToken);
+                string otpOwnerId = $"PASS:{Guid.NewGuid():N}";
+                bool otpOwnerAcquired = false;
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    batchCancellationToken,
+                    simToken);
                 var operationToken = linkedCts.Token;
                 try
                 {
                     operationToken.ThrowIfCancellationRequested();
+                    if (!_myVnptOtpPortOwners.TryAdd(
+                            port.PortName,
+                            otpOwnerId))
+                    {
+                        throw new InvalidOperationException(
+                            "COM đang có một yêu cầu OTP MyVNPT khác");
+                    }
+                    otpOwnerAcquired = true;
                     Application.Current.Dispatcher.Invoke(() =>
                     {
                         port.VnptStatus = "Đang chạy...";
@@ -714,6 +901,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     MyVnptOtpSession apiSession = await MyVnptService.PreparePasswordRequestAsync(
                         port.PhoneNumber,
+                        port.PortName,
                         operationToken,
                         (message, type) => AddLog($"[{port.PortName}] {message}", type));
                     if (!IsSimSessionCurrent(port.PortName, vnptCcid, vnptEpoch)
@@ -765,17 +953,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     PendingMyVnptPasswordOperation activePending = pending
                         ?? throw new InvalidOperationException("Không tạo được phiên chờ OTP MyVNPT");
 
-                    using var otpTimeout = CancellationTokenSource.CreateLinkedTokenSource(operationToken);
-                    otpTimeout.CancelAfter(TimeSpan.FromMinutes(3));
                     MyVnptPasswordResult result;
-                    try
+                    using (var otpTimeout = CancellationTokenSource.CreateLinkedTokenSource(operationToken))
                     {
-                        result = await activePending.Completion.Task.WaitAsync(otpTimeout.Token);
-                    }
-                    catch (OperationCanceledException) when (!operationToken.IsCancellationRequested)
-                    {
-                        result = new MyVnptPasswordResult(false, "Hết hạn OTP (Timeout)");
-                        AddLog($"[{port.PortName}] [VNPT_FLOW] Hết hạn chờ OTP sau 3 phút.", "WARN");
+                        otpTimeout.CancelAfter(MyVnptOtpWaitTimeout);
+                        try
+                        {
+                            // Timeout này chỉ đo thời gian chờ SMS. Sau khi OTP đã
+                            // được bắt, để request đặt pass hoàn tất theo timeout/
+                            // retry riêng của HTTP thay vì báo nhầm là không có OTP.
+                            await activePending.OtpClaimed.Task.WaitAsync(
+                                otpTimeout.Token);
+                            result = await activePending.Completion.Task.WaitAsync(
+                                operationToken);
+                        }
+                        catch (OperationCanceledException)
+                            when (!operationToken.IsCancellationRequested)
+                        {
+                            result = new MyVnptPasswordResult(
+                                false,
+                                "Không nhận được SMS OTP trong 1 phút");
+                            AddLog(
+                                $"[{port.PortName}] [VNPT_FLOW] Không nhận được SMS OTP sau 1 phút.",
+                                "WARN");
+                        }
                     }
 
                     Application.Current.Dispatcher.Invoke(() =>
@@ -832,20 +1033,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         ((ICollection<KeyValuePair<string, PendingMyVnptPasswordOperation>>)_pendingMyVnptPasswordPorts)
                             .Remove(new KeyValuePair<string, PendingMyVnptPasswordOperation>(port.PortName, pending));
                     }
+                    if (otpOwnerAcquired)
+                    {
+                        ((ICollection<KeyValuePair<string, string>>)
+                                _myVnptOtpPortOwners)
+                            .Remove(new KeyValuePair<string, string>(
+                                port.PortName,
+                                otpOwnerId));
+                    }
                 }
-            }));
-
-            // Keep every COM workflow independent, but stagger the initial
-            // VNPT requests like cuibap. Starting 30+ authen_check_account /
-            // otp_send calls in the same millisecond causes burst throttling
-            // and unstable account-branch responses.
-            // Giãn nhịp khởi động giữa các COM để authen_check_account/otp_send
-            // không dồn thành burst lên cùng API VNPT. MyVnptService còn có
-            // pacing trung tâm cho từng HTTP request.
-            await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellationToken);
-        }
-
-        await Task.WhenAll(requestTasks);
+            },
+            cancellationToken);
         
         if (count > 0)
             SnackbarMessageQueue.Enqueue($"Đã hoàn tất xử lý MyVNPT cho {count} cổng.");
@@ -853,6 +1051,330 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             _vnptBatchGate.Release();
+        }
+    }
+
+    public async Task RunDeviceUnlockBatchAsync(
+        IEnumerable<SimPort> requestedPorts,
+        int maxParallelism = 5,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requestedPorts);
+        if (!await _deviceUnlockBatchGate.WaitAsync(0, cancellationToken))
+        {
+            SnackbarMessageQueue.Enqueue(
+                "Tiến trình mở khóa đổi thiết bị đang chạy; không gửi lặp OTP.");
+            return;
+        }
+
+        try
+        {
+            List<SimPort> targetPorts = requestedPorts
+                .Where(port => port.Status == SimStatus.Active
+                    && IsPortReadyForOperation(port.PortName))
+                .Where(port => !string.IsNullOrWhiteSpace(
+                    MyVnptService.NormalizePhone(port.PhoneNumber)))
+                .GroupBy(
+                    port => MyVnptService.NormalizePhone(port.PhoneNumber),
+                    StringComparer.Ordinal)
+                .Select(group => group.First())
+                .ToList();
+            if (targetPorts.Count == 0)
+            {
+                SnackbarMessageQueue.Enqueue(
+                    "Không có cổng Active đã nhận diện được số điện thoại.");
+                return;
+            }
+
+            int effectiveParallelism = Math.Clamp(
+                maxParallelism,
+                1,
+                Math.Min(64, targetPorts.Count));
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                lock (_deviceUnlockLock)
+                {
+                    _currentDeviceUnlockSessionResults.Clear();
+                    DeviceUnlockSuccessCount = 0;
+                    DeviceUnlockFailCount = 0;
+                    DeviceUnlockTotalActiveCount = targetPorts.Count;
+                }
+                _lastDeviceUnlockFailedPortNames.Clear();
+                OnPropertyChanged(nameof(LastDeviceUnlockFailedPortCount));
+                OnPropertyChanged(nameof(CurrentDeviceUnlockSessionResultCount));
+                DeviceUnlockSummaryText =
+                    $"Mở khóa đổi thiết bị: Đang chuẩn bị {targetPorts.Count} cổng...";
+            });
+
+            AddLog(
+                $"[DKTTTB_BATCH] Bắt đầu {targetPorts.Count} cổng với {effectiveParallelism} luồng; mỗi luồng dùng fingerprint MyVNPT riêng.",
+                "INFO");
+            using var workerGate = new SemaphoreSlim(
+                effectiveParallelism,
+                effectiveParallelism);
+            Task[] tasks = targetPorts.Select(RunQueuedPortAsync).ToArray();
+            await Task.WhenAll(tasks);
+
+            async Task RunQueuedPortAsync(SimPort port)
+            {
+                await workerGate.WaitAsync(cancellationToken);
+                try
+                {
+                    await RunDeviceUnlockForPortAsync(
+                        port,
+                        TimeSpan.Zero,
+                        cancellationToken);
+                }
+                finally
+                {
+                    workerGate.Release();
+                }
+            }
+        }
+        finally
+        {
+            _deviceUnlockBatchGate.Release();
+        }
+    }
+
+    private async Task RunDeviceUnlockForPortAsync(
+        SimPort port,
+        TimeSpan requestDelay,
+        CancellationToken batchCancellationToken)
+    {
+        bool resultRecorded = false;
+        string ownerId = $"DKTTTB:{Guid.NewGuid():N}";
+        bool ownerAcquired = false;
+        PendingDeviceUnlockOperation? pending = null;
+
+        if (!TryGetCurrentSimSession(
+                port.PortName,
+                out string ccid,
+                out long epoch,
+                out CancellationToken simToken))
+        {
+            CompleteDeviceUnlockResult(
+                port,
+                false,
+                false,
+                string.Empty,
+                "Phiên SIM không còn hợp lệ");
+            return;
+        }
+
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            batchCancellationToken,
+            simToken);
+        CancellationToken operationToken = linkedCts.Token;
+
+        try
+        {
+            await Task.Delay(requestDelay, operationToken);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.DeviceUnlockStatus = "Đang dọn SMS...";
+                port.LastMessageContent =
+                    "Đang chờ thao tác xóa SMS kết thúc trước khi yêu cầu OTP DKTTTB...";
+            });
+
+            (bool cleanupSuccess, string cleanupMessage) =
+                await EnsureInitialSmsCleanupCompletedAsync(
+                    port.PortName,
+                    ccid,
+                    epoch,
+                    simToken,
+                    operationToken).ConfigureAwait(false);
+            if (!cleanupSuccess)
+            {
+                AddLog(
+                    $"[{port.PortName}] [DKTTTB_CLEANUP_WARNING] {cleanupMessage}; tác vụ xóa đã kết thúc, vẫn tiếp tục OTP.",
+                    "WARN");
+            }
+
+            operationToken.ThrowIfCancellationRequested();
+            if (!IsSimSessionCurrent(port.PortName, ccid, epoch)
+                || port.Status != SimStatus.Active)
+            {
+                throw new OperationCanceledException(operationToken);
+            }
+
+            if (!_myVnptOtpPortOwners.TryAdd(port.PortName, ownerId))
+            {
+                throw new InvalidOperationException(
+                    "COM đang có một yêu cầu OTP MyVNPT khác");
+            }
+            ownerAcquired = true;
+
+            string normalizedPhone = MyVnptService.NormalizePhone(
+                port.PhoneNumber);
+            pending = new PendingDeviceUnlockOperation
+            {
+                PortName = port.PortName,
+                Ccid = ccid,
+                Epoch = epoch,
+                Phone = normalizedPhone
+            };
+            if (!_pendingDeviceUnlockPorts.TryAdd(port.PortName, pending))
+                throw new InvalidOperationException("COM đang chờ OTP DKTTTB");
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.DeviceUnlockStatus = "Yêu cầu OTP...";
+                port.LastMessageContent =
+                    "Đang yêu cầu OTP đăng nhập MyVNPT cho mở khóa đổi thiết bị...";
+            });
+            DeviceUnlockOtpRequestResult otpRequest =
+                await _deviceUnlockService.RequestLoginOtpAsync(
+                normalizedPhone,
+                message => AddLog(
+                    $"[{port.PortName}] [DKTTTB] {message}",
+                    "INFO"),
+                operationToken);
+            if (!otpRequest.Success || otpRequest.Session == null)
+                throw new InvalidOperationException(otpRequest.Message);
+            MyVnptLoginOtpSession loginSession = otpRequest.Session;
+            AddLog(
+                $"[{port.PortName}] [DKTTTB] request_otp OK: HTTP {otpRequest.HttpStatus}, ec={otpRequest.ErrorCode}.",
+                "INFO");
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.DeviceUnlockStatus = "Đợi OTP...";
+                port.LastMessageContent =
+                    "Đã gửi yêu cầu; đang tự động chờ SMS OTP MyVNPT...";
+            });
+
+            string otp;
+            using (var otpTimeout =
+                   CancellationTokenSource.CreateLinkedTokenSource(operationToken))
+            {
+                otpTimeout.CancelAfter(TimeSpan.FromMinutes(2));
+                try
+                {
+                    otp = await pending.OtpCompletion.Task.WaitAsync(
+                        otpTimeout.Token);
+                }
+                catch (OperationCanceledException)
+                    when (!operationToken.IsCancellationRequested)
+                {
+                    string timeoutMessage = "Không nhận được SMS OTP trong 2 phút";
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        port.DeviceUnlockStatus = timeoutMessage;
+                        port.LastMessageContent = timeoutMessage;
+                    });
+                    CompleteDeviceUnlockResult(
+                        port,
+                        false,
+                        false,
+                        string.Empty,
+                        timeoutMessage);
+                    resultRecorded = true;
+                    return;
+                }
+            }
+
+            operationToken.ThrowIfCancellationRequested();
+            if (!IsSimSessionCurrent(port.PortName, ccid, epoch))
+                throw new OperationCanceledException(operationToken);
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.DeviceUnlockStatus = "Đang eKYC...";
+                port.LastMessageContent =
+                    "OTP đã nhận; đang chạy mở khóa đổi thiết bị...";
+            });
+
+            DeviceUnlockRunResult result = await _deviceUnlockService.RunAsync(
+                normalizedPhone,
+                otp,
+                loginSession,
+                line => AddLog(
+                    $"[{port.PortName}] [DKTTTB_PY] {line}",
+                    "INFO"),
+                operationToken);
+
+            string status = result.AlreadyCompleted
+                ? "Đã mở khóa trước đó"
+                : result.Success
+                    ? "Mở khóa thành công"
+                    : result.Message;
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.DeviceUnlockStatus = status;
+                port.LastMessageContent = result.Success
+                    ? status
+                    : $"Lỗi DKTTTB: {status}";
+            });
+            CompleteDeviceUnlockResult(
+                port,
+                result.Success,
+                result.AlreadyCompleted,
+                result.FullName,
+                result.Message);
+            resultRecorded = true;
+        }
+        catch (OperationCanceledException)
+        {
+            string message = IsSimSessionCurrent(port.PortName, ccid, epoch)
+                ? "Đã hủy"
+                : "SIM đã thay đổi trong lúc xử lý";
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.DeviceUnlockStatus = message;
+                port.LastMessageContent = message;
+            });
+            if (!resultRecorded)
+            {
+                CompleteDeviceUnlockResult(
+                    port,
+                    false,
+                    false,
+                    string.Empty,
+                    message);
+                resultRecorded = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            string message = MyVnptService.GetFriendlyExceptionMessage(ex);
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                port.DeviceUnlockStatus = message;
+                port.LastMessageContent = $"Lỗi DKTTTB: {message}";
+            });
+            AddLog(
+                $"[{port.PortName}] [DKTTTB_ERROR] {ex.Message}",
+                "ERROR");
+            if (!resultRecorded)
+            {
+                CompleteDeviceUnlockResult(
+                    port,
+                    false,
+                    false,
+                    string.Empty,
+                    message);
+                resultRecorded = true;
+            }
+        }
+        finally
+        {
+            if (pending != null)
+            {
+                ((ICollection<KeyValuePair<string, PendingDeviceUnlockOperation>>)
+                        _pendingDeviceUnlockPorts)
+                    .Remove(new KeyValuePair<string, PendingDeviceUnlockOperation>(
+                        port.PortName,
+                        pending));
+            }
+            if (ownerAcquired)
+            {
+                ((ICollection<KeyValuePair<string, string>>)_myVnptOtpPortOwners)
+                    .Remove(new KeyValuePair<string, string>(
+                        port.PortName,
+                        ownerId));
+            }
         }
     }
 
@@ -1353,8 +1875,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ussdService = ussdService;
         _callService = callService;
         _backgroundSupervisor = backgroundSupervisor;
-        _logFileWriterTask = Task.Run(
-            () => RunLogFileWriterAsync(_logWriterCts.Token));
         AppSettings = SettingsService.Current;
         _notifyService.TelegramStatus += NotifyService_TelegramStatus;
         _modemService.LogMessage += ModemService_LogMessage;
@@ -1382,7 +1902,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
 
         AddLog("Hệ thống khởi động thành công.");
-        AddLog($"[AT_TRACE] Nhật ký TX/RX UART: {AtCommandTraceLogger.CurrentLogPath}");
+        AddLog("[LOG_POLICY] Nhật ký chỉ được giữ trong RAM; ToolGSM không ghi log ra ổ đĩa.");
+        _ = PrepareVoiceModelAsync();
         Ports.CollectionChanged += (s, e) => UpdateDashboard();
         SmsMessages.CollectionChanged += (s, e) =>
         {
@@ -1417,6 +1938,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
         // SAuto chỉ có một vòng DataPort sở hữu CPIN/CSQ/COPS. Không khởi động
         // supervisor thứ hai vì nó sẽ bắn thêm CSQ/CMGL ngoài log tham chiếu.
+    }
+
+    private async Task PrepareVoiceModelAsync()
+    {
+        AddLog("[VOICE_MODEL] Đang kiểm tra model dịch cuộc gọi...", "INFO");
+        try
+        {
+            string? error = await VoiceTranscriptionService.EnsureDefaultModelAvailableAsync();
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                AddLog("[VOICE_MODEL] Model dịch cuộc gọi đã sẵn sàng.", "SUCCESS");
+            }
+            else
+            {
+                AddLog($"[VOICE_MODEL] {error}", "WARN");
+            }
+        }
+        catch (Exception ex)
+        {
+            AddLog($"[VOICE_MODEL] Không thể chuẩn bị model dịch cuộc gọi: {ex.Message}", "WARN");
+        }
     }
 
     private void UpdateSmsReceiverPhone(string portName, string newPhoneNumber)
@@ -1641,14 +2183,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         message = TextEncodingNormalizer.RepairMojibake(message);
         DateTime timestamp = DateTime.Now;
 
-        // Never perform file I/O on the WPF dispatcher. A bounded queue keeps
-        // a noisy modem from growing memory without making the UI wait.
-        if (!ContainsSmsSensitiveLogData(message))
-        {
-            _fileLogChannel.Writer.TryWrite(
-                new FileLogEntry(timestamp, level, message));
-        }
-
         var newLog = new LogMessage
         {
             Time = timestamp.ToString("HH:mm:ss"),
@@ -1717,87 +2251,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Interlocked.Exchange(ref _uiLogFlushScheduled, 0);
         if (!_pendingUiLogs.IsEmpty)
             ScheduleUiLogFlush();
-    }
-
-    private async Task RunLogFileWriterAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            while (await _fileLogChannel.Reader.WaitToReadAsync(cancellationToken))
-            {
-                var batch = new List<FileLogEntry>(128);
-                while (batch.Count < 256
-                       && _fileLogChannel.Reader.TryRead(out FileLogEntry? entry))
-                {
-                    batch.Add(entry);
-                }
-
-                AppendLogBatch(batch);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Shutdown is bounded; any remaining entries are best-effort.
-        }
-        catch
-        {
-            // Logging must never take down the modem/UI pipeline.
-        }
-    }
-
-    private void AppendLogBatch(IReadOnlyCollection<FileLogEntry> entries)
-    {
-        if (entries.Count == 0) return;
-
-        try
-        {
-            lock (_logFileLock)
-            {
-                string logFile = AppPaths.ForRuntimeFile("system_log.txt");
-                var fi = new FileInfo(logFile);
-                if (fi.Exists && fi.Length > 5 * 1024 * 1024)
-                {
-                    string archive = AppPaths.ForRuntimeFile(
-                        $"system_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt");
-                    File.Move(logFile, archive, overwrite: true);
-
-                    try
-                    {
-                        var dirInfo = new DirectoryInfo(
-                            Path.GetDirectoryName(logFile) ?? string.Empty);
-                        foreach (FileInfo oldLog in dirInfo
-                                     .GetFiles("system_log_*.txt")
-                                     .OrderByDescending(f => f.CreationTime)
-                                     .Skip(5)
-                                     .ToList())
-                        {
-                            oldLog.Delete();
-                        }
-                    }
-                    catch { }
-                }
-
-                var content = new StringBuilder();
-                foreach (FileLogEntry entry in entries)
-                {
-                    content.Append(entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"))
-                        .Append(" [")
-                        .Append(entry.Level)
-                        .Append("] ")
-                        .Append(entry.Message)
-                        .AppendLine();
-                }
-
-                File.AppendAllText(
-                    logFile,
-                    content.ToString(),
-                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            }
-        }
-        catch
-        {
-            // A locked/unavailable log file must not block the application.
-        }
     }
 
     private void AttachPortStateLogging(SimPort port)
@@ -1894,7 +2347,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         message = null;
 
-        _smsInboxStore.Append(record);
+        if (!_smsInboxStore.Append(record))
+            return true;
 
         // A retry during this process must not duplicate the UI row or repeat
         // sounds, webhooks, OTP history or carrier-state side effects.
@@ -2893,10 +3347,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             else if (e.Data.StartsWith("[WAITING_FOR_SIM]"))
             {
-                // Polling progress is not proof that a live SIM was removed.
-                if (port.Status != SimStatus.Active
-                    && string.IsNullOrWhiteSpace(port.Serial))
+                // A hot-plug loop is the authoritative hand-off to the
+                // no-SIM state. Clear stale CCID/Serial data as well; leaving
+                // either value behind used to keep a failed port in
+                // "Đang xử lý" indefinitely.
+                if (port.Status != SimStatus.Active)
                 {
+                    InvalidateSimSession(e.PortName);
+                    _modemService.SetSmsSimIdentity(e.PortName, null);
+                    ClearSimScopedState(
+                        port,
+                        _modemService.GetObservedImei(e.PortName));
                     port.Status = "Chờ cắm SIM";
                     port.DeviceName = "Đang chờ cắm SIM (Hot-plug).";
                     UpdateDashboard();
@@ -3579,7 +4040,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             replayReceiver,
                             senderPhone,
                             extractedOtp,
-                            cleanContent);
+                            cleanContent,
+                            e.SmsTimestampUtc);
                         e.DeliveryAccepted = true;
                         AtCommandTraceLogger.State(
                             e.PortName,
@@ -3700,9 +4162,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var cfg = gsm.Services.SettingsService.Current ?? new AppSettings();
 
                 // ---------- 0. FIREBASE (toolweb) ----------
-                // A pending web SMS command must always receive its correlated OTP result.
-                // WriteOtpToFirebase only controls the general port snapshot, not command replies.
-                if (port != null && extractedOtp != "N/A")
+                // Firebase sync is explicit opt-in. When disabled, received SMS
+                // and OTP remain local (and may still go to Telegram) only.
+                if (cfg.WriteOtpToFirebase && port != null && extractedOtp != "N/A")
                 {
                     _ = _firebaseService.PublishOtpForPendingCommandAsync(
                         port.PortName, extractedOtp, cleanContent, senderPhone);
@@ -3739,7 +4201,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     receiverPhone,
                     senderPhone,
                     extractedOtp,
-                    cleanContent);
+                    cleanContent,
+                    e.SmsTimestampUtc);
 
                 // ---------- 2. WEBHOOK / TOOLWEB ----------
                 // PushOtpToWeb = true  → chỉ đẩy khi có OTP
@@ -3821,24 +4284,59 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     // Phát âm thanh cảnh báo OTP
                     Services.SoundAlertService.PlayOtp();
 
-                    // OTP MyVNPT chỉ được ghép với đúng tác vụ COM + phiên SIM + SĐT.
+                    // OTP MyVNPT chỉ được ghép với đúng tác vụ COM + phiên SIM.
                     // Không xóa pending tại đây: task gốc chỉ hoàn tất sau khi API đặt pass trả kết quả.
                     if (MyVnptService.IsMyVnptOtpMessage(cleanContent))
                     {
+                        bool otpHandled = false;
                         if (_pendingMyVnptPasswordPorts.TryGetValue(e.PortName, out var pending)
                             && IsSimSessionCurrent(e.PortName, pending.Ccid, pending.Epoch)
-                            && string.Equals(
-                                MyVnptService.NormalizePhone(receiverPhone),
-                                pending.ApiSession.Phone,
-                                StringComparison.Ordinal)
+                            // receiverPhone lấy từ cache hiển thị và có thể cập
+                            // nhật chậm. COM + CCID + epoch mới là danh tính SIM
+                            // thật của pending operation; khóa owner đảm bảo trên
+                            // COM chỉ có một luồng OTP MyVNPT tại một thời điểm.
                             && pending.TryClaimOtp(extractedOtp))
                         {
+                            if (port != null)
+                            {
+                                port.VnptStatus = "Đã nhận OTP...";
+                                port.LastMessageContent =
+                                    "Đã nhận OTP; đang đặt mật khẩu MyVNPT...";
+                            }
                             AddLog($"[{e.PortName}] Phát hiện OTP MyVNPT, tiến hành đổi mật khẩu...", "INFO");
                             _ = CompletePendingMyVnptPasswordAsync(pending, extractedOtp);
+                            otpHandled = true;
                         }
-                        else
+
+                        if (!otpHandled
+                            && _pendingDeviceUnlockPorts.TryGetValue(
+                                e.PortName,
+                                out PendingDeviceUnlockOperation? unlockPending)
+                            && IsSimSessionCurrent(
+                                e.PortName,
+                                unlockPending.Ccid,
+                                unlockPending.Epoch)
+                            && unlockPending.TryClaimOtp(extractedOtp))
                         {
-                            AddLog($"[{e.PortName}] Nhận OTP MyVNPT nhưng không có yêu cầu từ tool, bỏ qua đặt mật khẩu.", "INFO");
+                            if (port != null)
+                            {
+                                port.DeviceUnlockStatus = "Đã nhận OTP...";
+                                port.LastMessageContent =
+                                    "Đã nhận OTP; đang chạy mở khóa thiết bị...";
+                            }
+                            AddLog(
+                                $"[{e.PortName}] Phát hiện OTP đăng nhập DKTTTB; bắt đầu mở khóa đổi thiết bị.",
+                                "INFO");
+                            unlockPending.OtpCompletion.TrySetResult(
+                                extractedOtp);
+                            otpHandled = true;
+                        }
+
+                        if (!otpHandled)
+                        {
+                            AddLog(
+                                $"[{e.PortName}] Nhận OTP MyVNPT nhưng không có yêu cầu phù hợp từ tool; chỉ hiển thị SMS.",
+                                "INFO");
                         }
                     }
 
@@ -4020,7 +4518,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Services.SoundAlertService.PlayOtp();
             ToastService.ShowOtp(portName, receiverPhone, extractedOtp, senderPhone);
             // Trả OTP về Web Firebase (cho multipart SMS đã được gộm và timeout)
-            if (port != null)
+            if (SettingsService.Current.WriteOtpToFirebase && port != null)
                 _ = _firebaseService.PublishOtpForPendingCommandAsync(
                     port.PortName, extractedOtp, content, senderPhone);
         }
@@ -4068,7 +4566,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OtpReceivedEvent?.Invoke(portName, newOtp);
 
             // Trả OTP về Web Firebase (multipart SMS đã gộm đủ)
-            if (port != null)
+            if (SettingsService.Current.WriteOtpToFirebase && port != null)
                 _ = _firebaseService.PublishOtpForPendingCommandAsync(
                     port.PortName, newOtp, existing.Content, senderPhone);
             Application.Current.Dispatcher.Invoke(() =>
@@ -4258,10 +4756,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _ = _notifyService.SendTelegramAsync(clipCfg.TelegramBotToken, clipCfg.TelegramChatId, callText);
             }
 
-            // GsmModemService owns the ATA + QAUDRD workflow for voice-capable
-            // profiles. This event is only a notification hook; the old message
-            // claimed that auto-answer was disabled even while the modem service
-            // had already answered and started recording.
             AddLog($"[{e.PortName}] Đã nhận cuộc gọi; đang tự động nghe máy và ghi âm.", "INFO");
         });
     }
@@ -4520,13 +5014,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 AddLog($"[{portName}] [VOICE_STT] File ghi âm không có giọng nói hoặc quá ngắn.", "INFO");
                 return;
             }
+            string languageInfo = string.IsNullOrWhiteSpace(result.Language)
+                ? string.Empty
+                : $" [{result.Language.ToUpperInvariant()} {result.LanguageProbability:P0}]";
 
             var port = Ports.FirstOrDefault(p => p.PortName == portName);
             string receiverPhone = port?.PhoneNumber ?? "Chưa lấy được số";
 
             Application.Current.Dispatcher.Invoke(() =>
             {
-                AddLog($"[{portName}] 📝 Voice STT: \"{text}\"", "INFO");
+                AddLog($"[{portName}] 📝 Voice STT{languageInfo}: \"{text}\"", "INFO");
 
                 // Tìm bản ghi tin nhắn cuộc gọi vừa kết thúc
                 var existingMsg = SmsMessages.FirstOrDefault(m => m.PortName == portName && (m.Content == "Cuộc gọi đến đã kết thúc." || m.Content.StartsWith("[VOICE]")));
@@ -6840,12 +7337,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         string provider = parsedOperator?.Trim() ?? string.Empty;
         string upper = provider.ToUpperInvariant();
-        if (upper.Contains("VINAPHONE")) return "VinaPhone";
-        if (upper.Contains("VIETTEL")) return "Viettel";
-        if (upper.Contains("MOBIFONE")) return "MobiFone";
-        if (upper.Contains("VIETNAMOBILE")) return "Vietnamobile";
+        if (upper.Contains("VINAPHONE") || upper == "VINA" || upper == "45202") return "VinaPhone";
+        if (upper.Contains("VIETTEL") || upper == "45204") return "Viettel";
+        if (upper.Contains("MOBIFONE") || upper == "45201") return "MobiFone";
+        if (upper.Contains("VIETNAMOBILE") || upper == "45205") return "Vietnamobile";
         if (upper.Contains("VNSKY")) return "VNSKY";
-        return "No Signal";
+        return string.IsNullOrWhiteSpace(provider)
+            || upper == "NO SIGNAL"
+            ? "No Signal"
+            : provider;
     }
 
     internal static string ExtractPhoneNumberFromUssd(string? content)
@@ -6914,74 +7414,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (parsed is >= 0 and <= 31)
             percent = (int)Math.Round(parsed / 31d * 100d, MidpointRounding.AwayFromZero);
         return true;
-    }
-
-    public void ExportImeiBackupWorkbook(string filePath)
-    {
-        if (string.IsNullOrWhiteSpace(filePath)) return;
-
-        SaveImeiCache();
-        string sourcePath = File.Exists(_pendingImeiCacheFilePath)
-            ? _pendingImeiCacheFilePath
-            : _imeiCacheFilePath;
-        if (!File.Exists(sourcePath))
-            throw new IOException("Không tạo được file backup XLSX.");
-
-        string fullSource = Path.GetFullPath(sourcePath);
-        string fullTarget = Path.GetFullPath(filePath);
-        if (!string.Equals(fullSource, fullTarget, StringComparison.OrdinalIgnoreCase))
-            File.Copy(fullSource, fullTarget, overwrite: true);
-    }
-
-    public int ImportImeiBackupWorkbook(string filePath)
-    {
-        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return 0;
-
-        ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-        int validRows = 0;
-        using (var package = new ExcelPackage(new FileInfo(filePath)))
-        {
-            var worksheet = package.Workbook.Worksheets["IMEI Backup"]
-                ?? package.Workbook.Worksheets.FirstOrDefault();
-            if (worksheet?.Dimension == null)
-                throw new InvalidDataException("File XLSX không có dữ liệu.");
-
-            int ccidColumn = 0;
-            int imeiColumn = 0;
-            for (int column = 1; column <= worksheet.Dimension.End.Column; column++)
-            {
-                string header = worksheet.Cells[1, column].Text.Trim();
-                if (header.Equals("CCID", StringComparison.OrdinalIgnoreCase)) ccidColumn = column;
-                if (header.Equals("IMEI", StringComparison.OrdinalIgnoreCase)) imeiColumn = column;
-            }
-            if (ccidColumn == 0 || imeiColumn == 0)
-                throw new InvalidDataException("File XLSX thiếu cột CCID hoặc IMEI.");
-
-            for (int row = 2; row <= worksheet.Dimension.End.Row; row++)
-            {
-                if (!string.IsNullOrWhiteSpace(NormalizeCcid(worksheet.Cells[row, ccidColumn].Text))
-                    && !string.IsNullOrWhiteSpace(NormalizeImei(worksheet.Cells[row, imeiColumn].Text)))
-                    validRows++;
-            }
-        }
-
-        if (validRows == 0) return 0;
-        File.Copy(filePath, _pendingImeiCacheFilePath, overwrite: true);
-        lock (_imeiCacheLock)
-        {
-            LoadImeiCacheWorkbook();
-        }
-        return validRows;
-    }
-
-    public void RemoveImeiCacheEntry(string ccid)
-    {
-        if (string.IsNullOrEmpty(ccid)) return;
-        lock (_imeiCacheLock)
-        {
-            _imeiCache.TryRemove(ccid, out _);
-            SaveImeiCache();
-        }
     }
 
     private static string NormalizeImei(string? imei)
@@ -7054,7 +7486,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _portSessions.InvalidateAll();
             _backgroundSupervisor.Stop();
             _firebaseService.Stop();
-            _fileLogChannel.Writer.TryComplete();
         }
 
         if (disconnectModems)
@@ -7067,6 +7498,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? "SUCCESS"
                 : status.Contains("RETRY", StringComparison.OrdinalIgnoreCase)
                   || status.Contains("PAUSED", StringComparison.OrdinalIgnoreCase)
+                  || status.Contains("UNCERTAIN", StringComparison.OrdinalIgnoreCase)
                     ? "WARNING"
                     : "INFO");
 
@@ -7076,7 +7508,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string receiverPhone,
         string senderPhone,
         string extractedOtp,
-        string content)
+        string content,
+        DateTimeOffset? smsTimestampUtc)
     {
         string chatIds = !string.IsNullOrWhiteSpace(config.TelegramChatIds)
             ? config.TelegramChatIds
@@ -7101,7 +7534,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ = _notifyService.SendTelegramAsync(
             config.TelegramBotToken,
             chatIds,
-            text);
+            text,
+            BuildTelegramSmsDeduplicationKey(
+                portName,
+                senderPhone,
+                content,
+                smsTimestampUtc));
+    }
+
+    internal static string BuildTelegramSmsDeduplicationKey(
+        string portName,
+        string senderPhone,
+        string content,
+        DateTimeOffset? smsTimestampUtc)
+    {
+        string normalizedContent = Regex.Replace(
+                content ?? string.Empty,
+                @"\s+",
+                " ")
+            .Trim()
+            .Normalize(NormalizationForm.FormC);
+        string carrierTimestamp = smsTimestampUtc?.ToUniversalTime()
+            .ToString("O") ?? "timestamp-unavailable";
+
+        // Some modem firmware can assign a new internal delivery id while it
+        // repeatedly exposes the same stored/concatenated SMS. The carrier
+        // timestamp and decoded payload identify the physical SMS more
+        // reliably, preventing Telegram spam without merging messages that
+        // arrive later with a different timestamp.
+        return SmsInboxStore.CreateDeliveryId(
+            "telegram-sms-v2",
+            (portName ?? string.Empty).Trim().ToUpperInvariant(),
+            (senderPhone ?? string.Empty).Trim(),
+            normalizedContent,
+            carrierTimestamp);
     }
 
     internal static string BuildTelegramSmsNotification(
@@ -7155,16 +7621,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _backgroundSupervisor.Dispose();
         _portSessions.Dispose();
 
-        try
-        {
-            if (_logFileWriterTask != null
-                && !_logFileWriterTask.Wait(TimeSpan.FromSeconds(2)))
-            {
-                _logWriterCts.Cancel();
-            }
-        }
-        catch { }
-        _logWriterCts.Dispose();
         _lifetimeCts.Dispose();
         _disposed = true;
     }
@@ -7651,13 +8107,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         SnackbarMessageQueue.Enqueue("Tính năng chưa được hỗ trợ.");
         await Task.CompletedTask;
-    }
-
-    [RelayCommand]
-    private void OpenImeiManager()
-    {
-        var win = new ImeiManagerWindow();
-        win.ShowDialog();
     }
 
 }

@@ -44,4 +44,52 @@ public sealed class TelegramSmsNotificationTests
         Assert.Contains("OTP: <b>609998</b>", text);
         Assert.Contains("Nội dung: " + content, WebUtility.HtmlDecode(text));
     }
+
+    [Fact]
+    public void SamePhysicalSms_UsesOneStableTelegramDeduplicationKey()
+    {
+        DateTimeOffset carrierTimestamp = new(
+            2026, 9, 3, 13, 20, 0, TimeSpan.FromHours(7));
+
+        string first = MainViewModel.BuildTelegramSmsDeduplicationKey(
+            "com51",
+            "9114",
+            "Số thuê bao 84848797228 đã được phê duyệt TTTB thành công!",
+            carrierTimestamp);
+        string replay = MainViewModel.BuildTelegramSmsDeduplicationKey(
+            "COM51",
+            "9114",
+            "Số thuê bao 84848797228 đã được phê duyệt TTTB thành công!",
+            carrierTimestamp);
+
+        Assert.Equal(first, replay);
+    }
+
+    [Fact]
+    public void IdenticalSmsAtDifferentCarrierTimes_RemainsARealNewNotification()
+    {
+        string first = MainViewModel.BuildTelegramSmsDeduplicationKey(
+            "COM51",
+            "9114",
+            "Cùng nội dung",
+            new DateTimeOffset(2026, 9, 3, 13, 20, 0, TimeSpan.FromHours(7)));
+        string later = MainViewModel.BuildTelegramSmsDeduplicationKey(
+            "COM51",
+            "9114",
+            "Cùng nội dung",
+            new DateTimeOffset(2026, 9, 3, 13, 21, 0, TimeSpan.FromHours(7)));
+
+        Assert.NotEqual(first, later);
+    }
+
+    [Fact]
+    public void MissingCarrierTimestamp_StillSuppressesSameSessionReplay()
+    {
+        string first = MainViewModel.BuildTelegramSmsDeduplicationKey(
+            "COM51", "9114", "Tin không có timestamp", null);
+        string replay = MainViewModel.BuildTelegramSmsDeduplicationKey(
+            "COM51", "9114", "Tin không có timestamp", null);
+
+        Assert.Equal(first, replay);
+    }
 }

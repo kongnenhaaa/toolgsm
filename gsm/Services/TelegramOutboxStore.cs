@@ -15,10 +15,14 @@ internal sealed class TelegramOutboxStore
         DateTimeOffset CreatedAtUtc,
         int AttemptCount,
         DateTimeOffset NextAttemptUtc,
-        string LastError);
+        string LastError,
+        string DeduplicationKey,
+        string DeliveredChatIds);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, Job> _jobs =
+        new(StringComparer.Ordinal);
+    private readonly HashSet<string> _claimedDeduplicationKeys =
         new(StringComparer.Ordinal);
 
     // The directory is deliberately ignored for source compatibility.
@@ -30,7 +34,8 @@ internal sealed class TelegramOutboxStore
     internal IReadOnlyList<Job> Enqueue(
         string botToken,
         string chatId,
-        IReadOnlyList<(string Text, bool UseHtml)> messages)
+        IReadOnlyList<(string Text, bool UseHtml)> messages,
+        string? deduplicationKey = null)
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return Array.Empty<Job>();
@@ -39,9 +44,23 @@ internal sealed class TelegramOutboxStore
         {
             var added = new List<Job>(messages.Count);
             DateTimeOffset now = DateTimeOffset.UtcNow;
-            foreach ((string text, bool useHtml) in messages)
+            string deduplicationRoot = (deduplicationKey ?? string.Empty).Trim();
+            for (int index = 0; index < messages.Count; index++)
             {
+                (string text, bool useHtml) = messages[index];
                 if (string.IsNullOrWhiteSpace(text)) continue;
+
+                string messageDeduplicationKey = deduplicationRoot.Length == 0
+                    ? string.Empty
+                    : messages.Count == 1
+                        ? deduplicationRoot
+                        : $"{deduplicationRoot}#part-{index + 1}";
+                if (messageDeduplicationKey.Length > 0
+                    && !_claimedDeduplicationKeys.Add(messageDeduplicationKey))
+                {
+                    continue;
+                }
+
                 var job = new Job(
                     $"telegram-v1-{Guid.NewGuid():N}",
                     (botToken ?? string.Empty).Trim(),
@@ -51,6 +70,8 @@ internal sealed class TelegramOutboxStore
                     now,
                     0,
                     now,
+                    string.Empty,
+                    messageDeduplicationKey,
                     string.Empty);
                 _jobs[job.Id] = job;
                 added.Add(job);
@@ -99,4 +120,35 @@ internal sealed class TelegramOutboxStore
             return true;
         }
     }
+
+    internal bool MarkChatDelivered(string id, string chatId)
+    {
+        if (string.IsNullOrWhiteSpace(id)
+            || string.IsNullOrWhiteSpace(chatId))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (!_jobs.TryGetValue(id, out Job? current)) return false;
+
+            HashSet<string> delivered = ParseDeliveredChatIds(
+                current.DeliveredChatIds);
+            if (!delivered.Add(chatId.Trim())) return true;
+
+            _jobs[id] = current with
+            {
+                DeliveredChatIds = string.Join('\n', delivered)
+            };
+            return true;
+        }
+    }
+
+    internal static HashSet<string> ParseDeliveredChatIds(string? value) =>
+        (value ?? string.Empty)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(chatId => chatId.Trim())
+            .Where(chatId => chatId.Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
 }

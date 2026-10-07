@@ -9,7 +9,17 @@
     <RootNamespace>gsm</RootNamespace>
     <AssemblyName>ToolGSM</AssemblyName>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
-    <DefaultItemExcludes>$(DefaultItemExcludes);RegexTest\**;artifacts\**;gsm\**;logs\**;scratch\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);RegexTest\**;artifacts\**;gsm\**;logs\**;scratch\**;**\__pycache__\**;**\*.pyc</DefaultItemExcludes>
+    <!-- Bộ eKYC gốc được đóng gói cạnh ToolGSM.exe khi build/publish. -->
+    <DktttbSourceDirectory>$(MSBuildProjectDirectory)\..\..\..\kyc</DktttbSourceDirectory>
+    <!-- .NET self-contained không chứa Python. Runtime này được chuẩn bị lúc
+         publish và chép cạnh EXE để máy đích không cần cài Python/pip. -->
+    <PortablePythonDirectory>$(BaseIntermediateOutputPath)portable-python\win-x64</PortablePythonDirectory>
+    <PortablePythonRequirements>$(MSBuildProjectDirectory)\..\tools\requirements-portable-python.txt</PortablePythonRequirements>
+    <PortablePythonPrepareScript>$(MSBuildProjectDirectory)\..\tools\PreparePortablePython.ps1</PortablePythonPrepareScript>
+    <PortableWhisperModelDirectory>$(BaseIntermediateOutputPath)portable-models\faster-whisper-small</PortableWhisperModelDirectory>
+    <PortableWhisperModelPrepareScript>$(MSBuildProjectDirectory)\..\tools\PreparePortableWhisperModel.ps1</PortableWhisperModelPrepareScript>
+    <BundleWhisperModel Condition="'$(BundleWhisperModel)' == ''">false</BundleWhisperModel>
   </PropertyGroup>
 
   <ItemGroup>
@@ -31,6 +41,33 @@
     <None Update="voice_otp\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="device_unlock\run_unlock.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>run_unlock.py</TargetPath>
+    </None>
+    <None Update="device_unlock\auth_source.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>auth_source.py</TargetPath>
+    </None>
+  </ItemGroup>
+
+  <!-- Các import nội bộ duy nhất của ekyc_full.py. Không chép tài khoản,
+       token, ảnh hoặc history từ máy phát triển sang bản phát hành. -->
+  <ItemGroup Condition="Exists('$(DktttbSourceDirectory)\ekyc_full.py')">
+    <None Include="$(DktttbSourceDirectory)\ekyc_full.py" Link="ekyc_full.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="$(DktttbSourceDirectory)\cbss_support.py" Link="cbss_support.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="$(DktttbSourceDirectory)\proxy_support.py" Link="proxy_support.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
 
   <!-- Publish vào một thư mục cũ không tự xóa dependency đã bỏ khỏi project. -->
@@ -38,6 +75,57 @@
     <Delete Files="$(PublishDir)libvosk.dll;$(PublishDir)Vosk.dll;$(PublishDir)NAudio.dll;$(PublishDir)System.Speech.dll" />
     <RemoveDir Directories="$(PublishDir)vosk-model-vn-0.4"
                Condition="Exists('$(PublishDir)vosk-model-vn-0.4')" />
+  </Target>
+
+  <Target Name="PreparePortablePythonForPublish"
+          BeforeTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(PortablePythonPrepareScript)&quot; -RuntimeDir &quot;$(PortablePythonDirectory)&quot; -RequirementsFile &quot;$(PortablePythonRequirements)&quot;" />
+  </Target>
+
+  <Target Name="PreparePortableWhisperModelForPublish"
+          BeforeTargets="Publish"
+          DependsOnTargets="PreparePortablePythonForPublish"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64' and '$(BundleWhisperModel)' == 'true'">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(PortableWhisperModelPrepareScript)&quot; -PythonExe &quot;$(PortablePythonDirectory)\python.exe&quot; -ModelDir &quot;$(PortableWhisperModelDirectory)&quot;" />
+  </Target>
+
+  <!-- `dotnet publish -o` may point at a child of TargetDir (for example the
+       user-facing ...\win-x64\gsm folder). In that layout the SDK can leave
+       the app files in TargetDir while custom post-publish files reach the
+       requested folder. Copy the resolved publish manifest explicitly so the
+       requested directory is always a complete portable application. -->
+  <Target Name="EnsureApplicationFilesAfterPublish"
+          AfterTargets="Publish">
+    <Copy SourceFiles="@(ResolvedFileToPublish)"
+          DestinationFiles="@(ResolvedFileToPublish-&gt;'$(PublishDir)%(RelativePath)')"
+          SkipUnchangedFiles="true"
+          Condition="'@(ResolvedFileToPublish)' != ''" />
+  </Target>
+
+  <Target Name="CopyPortablePythonAfterPublish"
+          AfterTargets="Publish"
+          DependsOnTargets="PreparePortablePythonForPublish;EnsureApplicationFilesAfterPublish"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <ItemGroup>
+      <_PortablePythonFile Include="$(PortablePythonDirectory)\**\*"
+                           Exclude="$(PortablePythonDirectory)\Scripts\**\*;$(PortablePythonDirectory)\**\__pycache__\**\*;$(PortablePythonDirectory)\**\*.pyc" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PortablePythonFile)"
+          DestinationFiles="@(_PortablePythonFile-&gt;'$(PublishDir)python_runtime\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyPortableWhisperModelAfterPublish"
+          AfterTargets="Publish"
+          DependsOnTargets="PreparePortableWhisperModelForPublish;EnsureApplicationFilesAfterPublish"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64' and '$(BundleWhisperModel)' == 'true'">
+    <ItemGroup>
+      <_PortableWhisperModelFile Include="$(PortableWhisperModelDirectory)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_PortableWhisperModelFile)"
+          DestinationFiles="@(_PortableWhisperModelFile-&gt;'$(PublishDir)voice_otp\models\faster-whisper-small\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

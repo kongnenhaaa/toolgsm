@@ -1142,6 +1142,24 @@ public class GsmModemService : IGsmModemService
                             expectedGeneration))
                         return;
 
+                    if (!_serialPorts.TryGetValue(
+                            portName,
+                            out SerialPort? serialPort)
+                        || !serialPort.IsOpen
+                        || !await RestoreSmsReceiveModeWhilePortLockedAsync(
+                                portName,
+                                serialPort,
+                                lifetime.Token)
+                            .ConfigureAwait(false))
+                    {
+                        LogMessage?.Invoke(this, new GsmDataEventArgs
+                        {
+                            PortName = portName,
+                            Data = "[SMS_RECEIVE_ARM_RETRY] Modem chưa xác nhận CMGF=1/CSCS=GSM/CPMS=SM/CNMI=1,1; giữ SMS trong bộ nhớ modem và sẽ tự thử lại."
+                        });
+                        return;
+                    }
+
                     var nextGate = new SmsReceiveMaintenanceGate(
                         normalized,
                         expectedGeneration);
@@ -2417,11 +2435,28 @@ public class GsmModemService : IGsmModemService
 
     private async Task<bool> RestoreSmsReceiveModeWhilePortLockedAsync(
         string portName,
-        SerialPort serialPort)
+        SerialPort serialPort,
+        CancellationToken ct = default)
     {
         const int maxAttempts = 2;
         for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
+            ct.ThrowIfCancellationRequested();
+
+            // URC routing is persistent on Quectel modems and another utility can
+            // leave it pointed at USB AT instead of the UART used by this bank.
+            // Re-assert it before CNMI so ToolGSM never depends on another tool's
+            // previous modem configuration.
+            if (GetModemProfile(portName)?.IsQuectel == true)
+            {
+                await SendCommandWhilePortLockedAsync(
+                    portName,
+                    serialPort,
+                    Uart1UrcRoutingCommand,
+                    5000,
+                    ct);
+            }
+
             foreach (string command in SmsReceiveRestoreCommandOrder)
             {
                 await SendCommandWhilePortLockedAsync(
@@ -2429,24 +2464,47 @@ public class GsmModemService : IGsmModemService
                     serialPort,
                     command,
                     5000,
-                    CancellationToken.None);
+                    ct);
             }
 
             string cmgf = await SendCommandWhilePortLockedAsync(
-                portName, serialPort, "AT+CMGF?", 5000, CancellationToken.None);
+                portName, serialPort, "AT+CMGF?", 5000, ct);
             string cscs = await SendCommandWhilePortLockedAsync(
-                portName, serialPort, "AT+CSCS?", 5000, CancellationToken.None);
+                portName, serialPort, "AT+CSCS?", 5000, ct);
+            string cpms = await SendCommandWhilePortLockedAsync(
+                portName, serialPort, "AT+CPMS?", 5000, ct);
             string cnmi = await SendCommandWhilePortLockedAsync(
-                portName, serialPort, "AT+CNMI?", 5000, CancellationToken.None);
-            if (Regex.IsMatch(cmgf, @"\+CMGF:\s*1\b", RegexOptions.IgnoreCase)
-                && Regex.IsMatch(
-                    cscs, @"\+CSCS:\s*""GSM""", RegexOptions.IgnoreCase)
-                && Regex.IsMatch(
-                    cnmi, @"\+CNMI:\s*1\s*,\s*1\b", RegexOptions.IgnoreCase))
+                portName, serialPort, "AT+CNMI?", 5000, ct);
+            if (IsSmsReceiveModeReady(cmgf, cscs, cpms, cnmi))
                 return true;
         }
         return false;
     }
+
+    internal static bool IsSmsReceiveModeReady(
+        string? cmgf,
+        string? cscs,
+        string? cpms,
+        string? cnmi) =>
+        Regex.IsMatch(
+            cmgf ?? string.Empty,
+            @"\+CMGF:\s*1\b",
+            RegexOptions.IgnoreCase)
+        && Regex.IsMatch(
+            cscs ?? string.Empty,
+            @"\+CSCS:\s*""GSM""",
+            RegexOptions.IgnoreCase)
+        // The first CPMS store is the one used by CMGR/CMGL/CMGD. Verifying it
+        // prevents a +CMTI index from being read in a stale ME store while the
+        // incoming message is in SM.
+        && Regex.IsMatch(
+            cpms ?? string.Empty,
+            @"\+CPMS:\s*""SM""\s*,",
+            RegexOptions.IgnoreCase)
+        && Regex.IsMatch(
+            cnmi ?? string.Empty,
+            @"\+CNMI:\s*1\s*,\s*1\b",
+            RegexOptions.IgnoreCase);
 
     internal static string BuildStoredSmsDeliveryId(
         string scope,
@@ -3916,7 +3974,7 @@ public class GsmModemService : IGsmModemService
 
     internal static bool ShouldRecoverHotplugSimFailure(
         int consecutiveFailures) =>
-        consecutiveFailures >= 3;
+        consecutiveFailures >= 2;
 
     internal static string GetHotplugReadOnlyImei(string? response)
     {
@@ -4093,6 +4151,22 @@ public class GsmModemService : IGsmModemService
             portName,
             serialPort,
             operationToken);
+
+        // Arm incoming SMS as soon as the physical SIM identity is known. The
+        // read/sweep gate still waits for the matching network lifecycle, but
+        // +CMTI is now captured while registration is in progress instead of
+        // relying on a different utility to configure CMGF/CPMS/CNMI first.
+        bool smsReceiveArmed = await RestoreSmsReceiveModeWhilePortLockedAsync(
+            portName,
+            serialPort,
+            operationToken);
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = smsReceiveArmed
+                ? "[SMS_RECEIVE_ARMED] Đã xác minh CMGF=1, CSCS=GSM, CPMS=SM và CNMI=1,1."
+                : "[SMS_RECEIVE_ARM_RETRY] Chưa xác minh được chế độ nhận SMS; sẽ tự cấu hình lại khi mạng sẵn sàng."
+        });
     }
 
     private async Task RecoverRepeatedHotplugSimFailureWhileLockedAsync(
@@ -4141,6 +4215,44 @@ public class GsmModemService : IGsmModemService
                 portName,
                 $"HOTPLUG_SIM_FAILURE_REBOOT_FAILED;retry=false;detail={ex.Message}");
         }
+    }
+
+    private void PublishSautoSimRemoved(string portName, string reason)
+    {
+        UpdateSautoReceiveState(
+            portName,
+            static state =>
+            {
+                state.SimReady = false;
+                state.SimLocked = false;
+                state.Ccid = string.Empty;
+                state.CpinResponse = string.Empty;
+            });
+        SetSmsSimIdentity(portName, null);
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = $"[STATUS_SIM_REMOVED] {reason}"
+        });
+    }
+
+    private void PublishSautoSimContactError(string portName, string reason)
+    {
+        UpdateSautoReceiveState(
+            portName,
+            static state =>
+            {
+                state.SimReady = false;
+                state.SimLocked = false;
+                state.Ccid = string.Empty;
+                state.CpinResponse = string.Empty;
+            });
+        SetSmsSimIdentity(portName, null);
+        LogMessage?.Invoke(this, new GsmDataEventArgs
+        {
+            PortName = portName,
+            Data = $"[SIM_CONTACT_ERROR] {reason}"
+        });
     }
 
     private async Task<bool> ProbeHotplugIccidContactFailureWhileLockedAsync(
@@ -4220,6 +4332,28 @@ public class GsmModemService : IGsmModemService
             bool simReady = simReadyInitially;
             int consecutiveSimFailureResponses = 0;
             int consecutiveCpinUnavailableResponses = 0;
+            int consecutiveCcidReadFailures = 0;
+
+            void RecordCcidReadFailure(string response)
+            {
+                consecutiveCcidReadFailures++;
+                AtCommandTraceLogger.State(
+                    portName,
+                    $"SAUTO_ICCID_READ_FAILED;count={consecutiveCcidReadFailures};threshold=2;result={GetSautoResponseOutcome(response)}");
+                if (consecutiveCcidReadFailures < 2)
+                    return;
+
+                consecutiveCcidReadFailures = 0;
+                PublishSautoSimContactError(
+                    portName,
+                    "CPIN READY nhưng không đọc được ICCID sau 2 lần; chuyển về chờ SIM.");
+            }
+
+            void ResetCcidReadFailures()
+            {
+                consecutiveCcidReadFailures = 0;
+            }
+
             if (!simReadyInitially)
                 LogMessage?.Invoke(this, new GsmDataEventArgs
             {
@@ -4295,6 +4429,18 @@ public class GsmModemService : IGsmModemService
                                             return;
                                         }
                                     }
+                                    else if (contactFailure)
+                                    {
+                                        PublishSautoSimContactError(
+                                            portName,
+                                            "CPIN/ICCID báo lỗi tiếp điểm SIM; đã dùng hết lần reboot tự động.");
+                                    }
+                                    else
+                                    {
+                                        PublishSautoSimRemoved(
+                                            portName,
+                                            "Không xác minh được ICCID sau 2 lần CPIN CME 10; chuyển về chờ SIM.");
+                                    }
                                 }
                                 continue;
                             }
@@ -4304,19 +4450,27 @@ public class GsmModemService : IGsmModemService
                             {
                                 consecutiveSimFailureResponses++;
                                 if (ShouldRecoverHotplugSimFailure(
-                                        consecutiveSimFailureResponses)
-                                    && TryClaimHotplugSimFailureReboot(portName))
+                                        consecutiveSimFailureResponses))
                                 {
-                                    await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
-                                        portName,
-                                        hotplugPort,
-                                        token);
                                     consecutiveSimFailureResponses = 0;
-                                    if (token.IsCancellationRequested
-                                        && _serialPorts.ContainsKey(portName))
+                                    if (TryClaimHotplugSimFailureReboot(portName))
                                     {
-                                        StartHotplugWaitLoop(portName);
-                                        return;
+                                        await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                            portName,
+                                            hotplugPort,
+                                            token);
+                                        if (token.IsCancellationRequested
+                                            && _serialPorts.ContainsKey(portName))
+                                        {
+                                            StartHotplugWaitLoop(portName);
+                                            return;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        PublishSautoSimContactError(
+                                            portName,
+                                            "Modem vẫn trả CME 13; đã dùng hết lần reboot tự động.");
                                     }
                                 }
                                 continue;
@@ -4344,11 +4498,14 @@ public class GsmModemService : IGsmModemService
                             if (simAbsent)
                                 continue;
 
+                            string ccidResponse = string.Empty;
+                            bool ccidReadAttempted = false;
                             if (simReady
                                 && string.IsNullOrWhiteSpace(
                                      GetSautoReceiveSnapshot(portName).Ccid))
                             {
-                                string ccidResponse =
+                                ccidReadAttempted = true;
+                                ccidResponse =
                                     await WriteSautoCommandForResponseWhileLockedAsync(
                                         portName,
                                         hotplugPort,
@@ -4368,12 +4525,17 @@ public class GsmModemService : IGsmModemService
                             if (completed.SimReady
                                 && !string.IsNullOrWhiteSpace(completed.Ccid))
                             {
+                                ResetCcidReadFailures();
                                 await PrepareAcceptedHotplugSimWhileLockedAsync(
                                     portName,
                                     hotplugPort,
                                     completed.Ccid,
                                     token);
                                 break;
+                            }
+                            else if (ccidReadAttempted)
+                            {
+                                RecordCcidReadFailure(ccidResponse);
                             }
                         }
                         else
@@ -4417,6 +4579,18 @@ public class GsmModemService : IGsmModemService
                                             return;
                                         }
                                     }
+                                    else if (contactFailure)
+                                    {
+                                        PublishSautoSimContactError(
+                                            portName,
+                                            "CPIN/ICCID báo lỗi tiếp điểm SIM; đã dùng hết lần reboot tự động.");
+                                    }
+                                    else
+                                    {
+                                        PublishSautoSimRemoved(
+                                            portName,
+                                            "Không xác minh được ICCID sau 2 lần CPIN CME 10; chuyển về chờ SIM.");
+                                    }
                                 }
                                 continue;
                             }
@@ -4426,19 +4600,27 @@ public class GsmModemService : IGsmModemService
                             {
                                 consecutiveSimFailureResponses++;
                                 if (ShouldRecoverHotplugSimFailure(
-                                        consecutiveSimFailureResponses)
-                                    && TryClaimHotplugSimFailureReboot(portName))
+                                        consecutiveSimFailureResponses))
                                 {
-                                    await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
-                                        portName,
-                                        hotplugPort,
-                                        token);
                                     consecutiveSimFailureResponses = 0;
-                                    if (token.IsCancellationRequested
-                                        && _serialPorts.ContainsKey(portName))
+                                    if (TryClaimHotplugSimFailureReboot(portName))
                                     {
-                                        StartHotplugWaitLoop(portName);
-                                        return;
+                                        await RecoverRepeatedHotplugSimFailureWhileLockedAsync(
+                                            portName,
+                                            hotplugPort,
+                                            token);
+                                        if (token.IsCancellationRequested
+                                            && _serialPorts.ContainsKey(portName))
+                                        {
+                                            StartHotplugWaitLoop(portName);
+                                            return;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        PublishSautoSimContactError(
+                                            portName,
+                                            "Modem vẫn trả CME 13; đã dùng hết lần reboot tự động.");
                                     }
                                 }
                                 continue;
@@ -4458,19 +4640,20 @@ public class GsmModemService : IGsmModemService
                                         "AT+ICCID \r",
                                         TimeSpan.FromSeconds(10),
                                         token);
+                                SautoReceiveSnapshot afterCcid =
+                                    GetSautoReceiveSnapshot(portName);
                                 if (HasReadableCcid(ccidResponse)
-                                    && !string.IsNullOrWhiteSpace(
-                                        GetSautoReceiveSnapshot(portName).Ccid))
+                                    && !string.IsNullOrWhiteSpace(afterCcid.Ccid))
                                 {
-                                    SautoReceiveSnapshot completed =
-                                        GetSautoReceiveSnapshot(portName);
+                                    ResetCcidReadFailures();
                                     await PrepareAcceptedHotplugSimWhileLockedAsync(
                                         portName,
                                         hotplugPort,
-                                        completed.Ccid,
+                                        afterCcid.Ccid,
                                         token);
                                     break;
                                 }
+                                RecordCcidReadFailure(ccidResponse);
                             }
                         }
                     }
@@ -4705,7 +4888,7 @@ public class GsmModemService : IGsmModemService
                             consecutiveNetworkCpinUnavailableResponses++;
                             AtCommandTraceLogger.State(
                                 portName,
-                                $"SAUTO_CPIN_UNAVAILABLE;source=NETWORK_POLL;count={consecutiveNetworkCpinUnavailableResponses};threshold=3");
+                                $"SAUTO_CPIN_UNAVAILABLE;source=NETWORK_POLL;count={consecutiveNetworkCpinUnavailableResponses};threshold=2");
                             if (ShouldRecoverHotplugSimFailure(
                                     consecutiveNetworkCpinUnavailableResponses))
                             {
@@ -4739,6 +4922,11 @@ public class GsmModemService : IGsmModemService
                                     }
                                     break;
                                 }
+                                simRemovalDetected = true;
+                                PublishSautoSimRemoved(
+                                    portName,
+                                    "Không xác minh được ICCID sau 2 lần CPIN CME 10; chuyển về chờ SIM.");
+                                break;
                             }
 
                             continue;
@@ -4755,7 +4943,7 @@ public class GsmModemService : IGsmModemService
                             consecutiveNetworkSimFailureResponses++;
                             AtCommandTraceLogger.State(
                                 portName,
-                                $"SAUTO_SIM_FAILURE;source=NETWORK_POLL;count={consecutiveNetworkSimFailureResponses};threshold=3");
+                                $"SAUTO_SIM_FAILURE;source=NETWORK_POLL;count={consecutiveNetworkSimFailureResponses};threshold=2");
                             if (ShouldRecoverHotplugSimFailure(
                                     consecutiveNetworkSimFailureResponses))
                             {
@@ -4932,6 +5120,46 @@ public class GsmModemService : IGsmModemService
                             {
                                 carrier = latestUssdState.Carrier;
                                 networkType = latestUssdState.NetworkType;
+                            }
+
+                            if (IsSautoCarrierRegistered(carrier)
+                                && (!_sautoNetworkStates.TryGetValue(
+                                        portName,
+                                        out SautoNetworkState? liveNetworkState)
+                                    || !string.Equals(
+                                        liveNetworkState.Ccid,
+                                        normalizedExpectedCcid,
+                                        StringComparison.Ordinal)))
+                            {
+                                // A valid COPS line can arrive just after the
+                                // 100 ms write-only sampling window. Persist that
+                                // late registration before opening SMS; otherwise
+                                // CanOpenSmsReceiveMaintenanceGate sees no network
+                                // state even though the shared RX parser has it.
+                                _sautoNetworkStates[portName] =
+                                    new SautoNetworkState(
+                                        normalizedExpectedCcid,
+                                        carrier,
+                                        networkType,
+                                        AutomaticUssdCompleted:
+                                            automaticUssdCompleted,
+                                        LastAutomaticUssdAttemptUtc:
+                                            lastAutomaticUssdAttemptUtc);
+                            }
+
+                            // If the first receive-mode activation failed, keep
+                            // retrying on the normal online polling cadence. Once
+                            // carrier is cached ShouldQuerySautoNetwork is false,
+                            // so retrying only inside the COPS branch would leave
+                            // SMS disabled for the rest of the app session.
+                            if (IsSautoCarrierRegistered(carrier)
+                                && !IsSmsReceiveMaintenanceEnabled(portName))
+                            {
+                                EnableSmsReceiveMaintenanceAfterSauto(
+                                    portName,
+                                    normalizedExpectedCcid,
+                                    smsReceiveMaintenanceGeneration,
+                                    "network-registered-retry");
                             }
 
                             if (!automaticUssdCompleted
@@ -5213,13 +5441,36 @@ public class GsmModemService : IGsmModemService
 
     internal static string ResolveSautoCarrier(string? response)
     {
-        string value = (response ?? string.Empty).ToUpperInvariant();
+        string raw = response ?? string.Empty;
+        if (Regex.IsMatch(
+                raw,
+                @"\+(?:CME|CMS) ERROR:|(?:^|\r?\n)\s*ERROR\s*(?:\r?\n|$)",
+                RegexOptions.IgnoreCase))
+            return "No Signal";
+
+        string value = raw.ToUpperInvariant();
         if (value.Contains("VIETTEL", StringComparison.Ordinal)) return "VIETTEL";
         if (value.Contains("MOBIFONE", StringComparison.Ordinal)) return "MOBIFONE";
         if (value.Contains("VINAPHONE", StringComparison.Ordinal)) return "VINAPHONE";
         if (value.Contains("VIETNAMOBILE", StringComparison.Ordinal)) return "VIETNAMOBILE";
         if (value.Contains("VNSKY", StringComparison.Ordinal)) return "VNSKY";
-        return "No Signal";
+
+        if (!TryParseCopsResponse(
+                raw,
+                out string operatorName,
+                out _))
+            return "No Signal";
+
+        string normalizedOperator = operatorName.Trim().ToUpperInvariant();
+        return normalizedOperator switch
+        {
+            "45201" => "MOBIFONE",
+            "45202" => "VINAPHONE",
+            "45204" => "VIETTEL",
+            "45205" => "VIETNAMOBILE",
+            "VINA" => "VINAPHONE",
+            _ => normalizedOperator
+        };
     }
 
     internal static bool IsSautoCarrierRegistered(string? carrier) =>
@@ -7325,9 +7576,8 @@ public class GsmModemService : IGsmModemService
                         line,
                         StringComparison.Ordinal);
                     state.CsqResponse = line;
-                    // SAuto updates the grid only when the RSSI value changes.
-                    // The complete TX/RX stream remains in at_commands.log, while
-                    // identical polling samples no longer flood system_log/UI.
+                    // SAuto updates the grid only when the RSSI value changes;
+                    // identical polling samples should not flood the RAM log.
                     if (state.SimReady && signalChanged)
                         publishedEvents.Add(line);
                 }
@@ -7508,16 +7758,18 @@ public class GsmModemService : IGsmModemService
         {
             try
             {
-                await SendSautoCommandForResponseAsync(
-                    portName,
-                    "AT+CPMS=\"ME\",\"SM\",\"MT\"\r",
-                    TimeSpan.FromSeconds(10),
-                    CancellationToken.None);
-                await SendSautoCommandForResponseAsync(
-                    portName,
-                    "AT+CNMI=1,1,0,0,0\r",
-                    TimeSpan.FromSeconds(10),
-                    CancellationToken.None);
+                // Keep this legacy ATI callback consistent with the main SMS
+                // receiver. Selecting ME/SM/MT here used to silently undo the
+                // verified SM read store and made later +CMTI indices appear
+                // missing until another utility changed CPMS again.
+                foreach (string command in SmsReceiveRestoreCommandOrder)
+                {
+                    await SendSautoCommandForResponseAsync(
+                        portName,
+                        command,
+                        TimeSpan.FromSeconds(10),
+                        CancellationToken.None);
+                }
             }
             catch
             {
@@ -11862,7 +12114,7 @@ public class GsmModemService : IGsmModemService
 
         IncomingCallRinging?.Invoke(this, session);
 
-        // Tự động nghe máy và ghi âm cho mọi cuộc gọi đến
+        // Tự động nghe máy và ghi âm cho mọi cuộc gọi đến.
         string remoteFileName = $"incoming-{portName}-{DateTime.Now:yyyyMMdd-HHmmss}.wav";
         var state = new IncomingCallRecordingState(remoteFileName)
         {

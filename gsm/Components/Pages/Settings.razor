@@ -383,7 +383,7 @@
     // ========== FIREBASE ==========
     private string _firebaseUrl = "";
     private string _machineId = "machine-1";
-    private bool _writeOtpToFirebase = true;
+    private bool _writeOtpToFirebase = false;
 
     // ========== ÂM THANH ==========
     private string _soundSmsPath = "";
@@ -581,7 +581,7 @@
 
         _firebaseUrl = gsm.Services.FirebaseService.DatabaseUrl;
         _machineId = "machine-1";
-        _writeOtpToFirebase = true;
+        _writeOtpToFirebase = false;
 
         _soundSmsPath = "";
         _soundCallPath = "";

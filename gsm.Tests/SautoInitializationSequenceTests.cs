@@ -164,10 +164,9 @@ public sealed class SautoInitializationSequenceTests
     [Theory]
     [InlineData(0, false)]
     [InlineData(1, false)]
-    [InlineData(2, false)]
-    [InlineData(3, true)]
+    [InlineData(2, true)]
     [InlineData(10, true)]
-    public void HotplugSimFailure_RequiresThreeConsecutiveResponses(
+    public void HotplugSimFailure_RequiresTwoConsecutiveResponses(
         int count,
         bool expected) =>
         Assert.Equal(
@@ -647,6 +646,60 @@ public sealed class SautoInitializationSequenceTests
                 "UCS2",
                 StringComparison.OrdinalIgnoreCase));
     }
+
+    [Theory]
+    [InlineData(
+        "+CMGF: 1\r\nOK",
+        "+CSCS: \"GSM\"\r\nOK",
+        "+CPMS: \"SM\",0,50,\"SM\",0,50,\"SM\",0,50\r\nOK",
+        "+CNMI: 1,1,0,0,0\r\nOK",
+        true)]
+    [InlineData(
+        "+CMGF: 1\r\nOK",
+        "+CSCS: \"GSM\"\r\nOK",
+        "+CPMS: \"ME\",0,50,\"SM\",0,50,\"MT\",0,100\r\nOK",
+        "+CNMI: 1,1,0,0,0\r\nOK",
+        false)]
+    [InlineData(
+        "+CMGF: 0\r\nOK",
+        "+CSCS: \"GSM\"\r\nOK",
+        "+CPMS: \"SM\",0,50,\"SM\",0,50,\"SM\",0,50\r\nOK",
+        "+CNMI: 1,1,0,0,0\r\nOK",
+        false)]
+    [InlineData(
+        "+CMGF: 1\r\nOK",
+        "+CSCS: \"GSM\"\r\nOK",
+        "+CPMS: \"SM\",0,50,\"SM\",0,50,\"SM\",0,50\r\nOK",
+        "+CNMI: 2,2,0,0,0\r\nOK",
+        false)]
+    public void SmsReceiveRestore_VerifiesReadStoreAndNotificationMode(
+        string cmgf,
+        string cscs,
+        string cpms,
+        string cnmi,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsSmsReceiveModeReady(
+                cmgf,
+                cscs,
+                cpms,
+                cnmi));
+
+    [Theory]
+    [InlineData("+COPS: 0,0,\"VINAPHONE\",7\r\nOK", "VINAPHONE")]
+    [InlineData("+COPS: 0,1,\"VINA\",7\r\nOK", "VINAPHONE")]
+    [InlineData("+COPS: 0,2,45202,7\r\nOK", "VINAPHONE")]
+    [InlineData("+COPS: 0,2,45204,7\r\nOK", "VIETTEL")]
+    [InlineData("+COPS: 0,2,45201,7\r\nOK", "MOBIFONE")]
+    [InlineData("+COPS: 0,2,45205,7\r\nOK", "VIETNAMOBILE")]
+    [InlineData("+COPS: 0,0,\"LOCAL MVNO\",7\r\nOK", "LOCAL MVNO")]
+    [InlineData("+COPS: 0,2,45202,7\r\nERROR", "No Signal")]
+    [InlineData("+COPS: 0\r\nOK", "No Signal")]
+    public void NetworkCarrier_RecognizesEveryValidRegisteredCopsFormat(
+        string response,
+        string expected) =>
+        Assert.Equal(expected, GsmModemService.ResolveSautoCarrier(response));
 
     [Theory]
     [InlineData("+QIND: SMS DONE", true)]

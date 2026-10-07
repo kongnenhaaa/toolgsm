@@ -78,20 +78,10 @@ public static class WebhookService
                 var response = await _client.SendAsync(request);
                 if (response.IsSuccessStatusCode) break; // Thành công → dừng retry
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                if (attempt == 1) // Lần cuối vẫn lỗi
-                {
-                    try
-                    {
-                        System.IO.File.AppendAllText(
-                            AppPaths.ForRuntimeFile("webhook_errors.txt"),
-                            $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [ERROR] Rule '{rule.Name}' → {rule.WebhookUrl}\n  Lỗi: {ex.Message}\n"
-                        );
-                    }
-                    catch { }
-                }
-                await Task.Delay(1500); // Chờ 1.5s trước khi thử lại
+                if (attempt == 0)
+                    await Task.Delay(1500); // Chờ 1.5s trước khi thử lại
             }
         }
     }

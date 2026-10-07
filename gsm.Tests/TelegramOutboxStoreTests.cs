@@ -67,6 +67,82 @@ public sealed class TelegramOutboxStoreTests
     }
 
     [Fact]
+    public void SameSmsDelivery_IsQueuedOnlyOnceEvenAfterCompletion()
+    {
+        var store = new TelegramOutboxStore();
+
+        TelegramOutboxStore.Job first = Assert.Single(store.Enqueue(
+            "token",
+            "chat",
+            [("same SMS", true)],
+            "sms-delivery-42"));
+        Assert.Empty(store.Enqueue(
+            "token",
+            "chat",
+            [("same SMS", true)],
+            "sms-delivery-42"));
+
+        Assert.True(store.Complete(first.Id));
+        Assert.Empty(store.Enqueue(
+            "token",
+            "chat",
+            [("same SMS", true)],
+            "sms-delivery-42"));
+    }
+
+    [Fact]
+    public void DeliveredDestination_IsRetainedAcrossSafeRetries()
+    {
+        var store = new TelegramOutboxStore();
+        TelegramOutboxStore.Job job = Assert.Single(store.Enqueue(
+            "token",
+            "chat-a;chat-b",
+            [("one SMS", true)],
+            "sms-delivery-multi-chat"));
+
+        Assert.True(store.MarkChatDelivered(job.Id, "chat-a"));
+        Assert.True(store.Retry(
+            job.Id,
+            DateTimeOffset.UtcNow,
+            "chat-b rate limited"));
+
+        TelegramOutboxStore.Job retried = Assert.Single(store.GetPending());
+        HashSet<string> delivered = TelegramOutboxStore.ParseDeliveredChatIds(
+            retried.DeliveredChatIds);
+        Assert.Contains("chat-a", delivered);
+        Assert.DoesNotContain("chat-b", delivered);
+    }
+
+    [Fact]
+    public void DifferentSmsDeliveries_WithSameTextRemainDistinct()
+    {
+        var store = new TelegramOutboxStore();
+
+        Assert.Single(store.Enqueue(
+            "token",
+            "chat",
+            [("same carrier text", true)],
+            "sms-delivery-a"));
+        Assert.Single(store.Enqueue(
+            "token",
+            "chat",
+            [("same carrier text", true)],
+            "sms-delivery-b"));
+
+        Assert.Equal(2, store.GetPending().Count);
+    }
+
+    [Fact]
+    public void TelegramRetryAfter_IsReadFromRateLimitResponse()
+    {
+        TimeSpan? retryAfter = NotifyService.GetTelegramRetryAfter(
+            "{\"ok\":false,\"parameters\":{\"retry_after\":41}}");
+
+        Assert.Equal(TimeSpan.FromSeconds(41), retryAfter);
+        Assert.Null(NotifyService.GetTelegramRetryAfter("not-json"));
+    }
+
+    [Fact]
     public void LongHtmlMessage_IsSplitWithoutTruncatingUnicodeOrSmsText()
     {
         string sms = string.Concat(Enumerable.Repeat(

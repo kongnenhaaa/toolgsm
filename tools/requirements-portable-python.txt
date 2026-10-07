@@ -1,0 +1,9 @@
+requests==2.32.5
+urllib3==2.5.0
+pycryptodome==3.23.0
+cryptography==45.0.7
+openpyxl==3.1.5
+qrcode==8.2
+Pillow==11.3.0
+pyserial==3.5
+faster-whisper==1.2.0

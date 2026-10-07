@@ -47,7 +47,10 @@ public class AppSettings
     public string InstallationId { get; set; } = "";
     public string FirebaseDbUrl { get; set; } = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
     public string FirebaseAuthToken { get; set; } = "";
-    public bool WriteOtpToFirebase { get; set; } = true;
+    public bool WriteOtpToFirebase { get; set; } = false;
+    // Version 1 changes Firebase OTP/port sync to explicit opt-in. A missing
+    // value in an older settings file is migrated once to the safe default.
+    public int FirebaseSyncPreferenceVersion { get; set; } = 0;
 
     // Tự động Watchdog (Khởi động lại modem khi lỗi)
     public bool EnableAutoWatchdog { get; set; } = true;

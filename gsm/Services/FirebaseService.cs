@@ -42,6 +42,8 @@ namespace gsm.Services
             }
         }
         public const string DatabaseUrl = "https://toolweb-c7702-default-rtdb.firebaseio.com/";
+        internal static bool IsSyncEnabled =>
+            SettingsService.Current?.WriteOtpToFirebase == true;
         private static string RequestedMachineId => SanitizeFirebaseKey(
             string.IsNullOrWhiteSpace(SettingsService.Current.MachineId)
                 ? Environment.MachineName
@@ -179,6 +181,11 @@ namespace gsm.Services
         {
             try
             {
+                while (!ct.IsCancellationRequested && !IsSyncEnabled)
+                {
+                    await Task.Delay(500, ct);
+                }
+                if (ct.IsCancellationRequested) return;
                 string requested = RequestedMachineId;
                 string resolved;
                 while (true)
@@ -211,7 +218,7 @@ namespace gsm.Services
                     _vm.AddLog($"[FIREBASE] Đã giữ tên máy duy nhất '{resolved}'.", "INFO");
                 }
 
-                if (SettingsService.Current.EnableWebNotification)
+                if (IsSyncEnabled)
                 {
                     _vm.AddLog(
                         "[FIREBASE] Khởi động cầu nối Web; giữ nguyên các request đang chờ.",
@@ -252,7 +259,7 @@ namespace gsm.Services
 
         private async Task CleanupStaleOwnedCommandsAsync()
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!IsSyncEnabled) return;
 
             try
             {
@@ -307,6 +314,11 @@ namespace gsm.Services
         {
             while (!ct.IsCancellationRequested)
             {
+                if (!IsSyncEnabled)
+                {
+                    await Task.Delay(500, ct);
+                    continue;
+                }
                 // SSE nhận lệnh tức thời; polling bảo đảm không mất lệnh nếu stream
                 // bị ngắt đúng lúc web vừa ghi command.
                 await PollQueuedCommandsAsync(ct);
@@ -330,7 +342,7 @@ namespace gsm.Services
 
         private async Task SyncPortsAsync(CancellationToken ct)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!IsSyncEnabled) return;
             try
             {
                 // Also applies a Machine ID edited while the app is running,
@@ -386,6 +398,11 @@ namespace gsm.Services
         {
             while (!ct.IsCancellationRequested)
             {
+                if (!IsSyncEnabled)
+                {
+                    await Task.Delay(500, ct);
+                    continue;
+                }
                 try
                 {
                     using var request = new HttpRequestMessage(HttpMethod.Get, $"{_databaseUrl}commands.json");
@@ -444,6 +461,7 @@ namespace gsm.Services
 
         private void ProcessCommandData(string dataJson)
         {
+            if (!IsSyncEnabled) return;
             try
             {
                 // dataJson của Server-Sent Events Firebase: {"path":"/","data":{...}}
@@ -501,7 +519,7 @@ namespace gsm.Services
 
         private async Task FetchAndProcessCommandAsync(string cmdId, CancellationToken ct)
         {
-            if (string.IsNullOrWhiteSpace(cmdId) || ct.IsCancellationRequested) return;
+            if (!IsSyncEnabled || string.IsNullOrWhiteSpace(cmdId) || ct.IsCancellationRequested) return;
             try
             {
                 using var response = await _restClient.GetAsync($"{_databaseUrl}commands/{cmdId}.json", ct);
@@ -521,7 +539,7 @@ namespace gsm.Services
 
         private async Task UpdateCommandStatusAsync(string cmdId, string status, string? error = null)
         {
-            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return;
+            if (!IsSyncEnabled || string.IsNullOrWhiteSpace(cmdId)) return;
             try
             {
                 var payload = new Dictionary<string, object?>
@@ -541,7 +559,7 @@ namespace gsm.Services
 
         private async Task<bool> TryClaimCommandAsync(string cmdId)
         {
-            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return false;
+            if (!IsSyncEnabled || string.IsNullOrWhiteSpace(cmdId)) return false;
             try
             {
                 var commandUrl = $"{_databaseUrl}commands/{cmdId}.json";
@@ -664,7 +682,7 @@ namespace gsm.Services
 
         private async Task<bool> WriteCommandResultAsync(string cmdId, string portId, string recipient, string content, string type, string status, string? result = null, string? error = null, string? smsContent = null)
         {
-            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(cmdId)) return false;
+            if (!IsSyncEnabled || string.IsNullOrWhiteSpace(cmdId)) return false;
             try
             {
                 if (status == "failed" && !IsSpecificSmsError(error))
@@ -726,7 +744,7 @@ namespace gsm.Services
 
         private async Task UpdateWebCommandStateAsync(string portId, string cmdId, string status, string? error = null, string? smsContent = null)
         {
-            if (!SettingsService.Current.EnableWebNotification || string.IsNullOrWhiteSpace(portId) || portId == "ALL") return;
+            if (!IsSyncEnabled || string.IsNullOrWhiteSpace(portId) || portId == "ALL") return;
             try
             {
                 if (status == "failed" && !IsSpecificSmsError(error))
@@ -790,6 +808,7 @@ namespace gsm.Services
             string cmdId,
             IReadOnlyDictionary<string, object?> payload)
         {
+            if (!IsSyncEnabled) return false;
             var stateUrl = $"{_databaseUrl}web_states/machines/{_machineId}/ports/{portId}.json";
             for (var attempt = 0; attempt < 5; attempt++)
             {
@@ -834,6 +853,7 @@ namespace gsm.Services
         }
         private void ExecuteAndRemoveCommand(string cmdId, JsonElement cmdData)
         {
+            if (!IsSyncEnabled) return;
             try
             {
                 // Kiểm tra xem lệnh này có dành cho máy hiện tại không
@@ -1079,6 +1099,12 @@ namespace gsm.Services
             string error,
             string? carrierResponse = null)
         {
+            if (!IsSyncEnabled)
+            {
+                if (!string.IsNullOrWhiteSpace(portId))
+                    _pendingOtpCommands.TryRemove(portId, out _);
+                return;
+            }
             if (string.IsNullOrWhiteSpace(portId)
                 || !_pendingOtpCommands.TryGetValue(portId, out var pending))
             {
@@ -1178,6 +1204,7 @@ namespace gsm.Services
         public async Task PublishOtpForPendingCommandAsync(
             string portId, string otp, string smsContent, string sender)
         {
+            if (!IsSyncEnabled) return;
             if (string.IsNullOrWhiteSpace(portId)
                 || string.IsNullOrWhiteSpace(otp)
                 || otp == "N/A") return;
@@ -1292,6 +1319,7 @@ namespace gsm.Services
 
         private async Task PollQueuedCommandsAsync(CancellationToken ct)
         {
+            if (!IsSyncEnabled) return;
             try
             {
                 using var response = await _restClient.GetAsync($"{_databaseUrl}commands.json", ct);
@@ -1345,7 +1373,7 @@ namespace gsm.Services
 
         public static async Task SendSuccessToWebAsync(string portId)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!IsSyncEnabled) return;
             try
             {
                 using var client = new HttpClient();
@@ -1369,7 +1397,7 @@ namespace gsm.Services
 
         public static async Task SendErrorToWebAsync(string portId, string errorMsg)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!IsSyncEnabled) return;
             try
             {
                 using var client = new HttpClient();
@@ -1391,7 +1419,7 @@ namespace gsm.Services
 
         public static async Task ClearWebStateAsync(string portId)
         {
-            if (!SettingsService.Current.EnableWebNotification) return;
+            if (!IsSyncEnabled) return;
             try
             {
                 using var client = new HttpClient();

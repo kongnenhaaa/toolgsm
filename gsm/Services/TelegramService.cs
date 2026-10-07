@@ -94,14 +94,10 @@ public static class TelegramService
                             response.EnsureSuccessStatusCode();
                             success = true;
                         }
-                        catch (Exception ex)
+                        catch (Exception)
                         {
                             retryCount++;
-                            if (retryCount >= 3)
-                            {
-                                System.IO.File.AppendAllText("tele_error.txt", $"{DateTime.Now}: {ex.Message} (After 3 retries)\n{message}\n");
-                            }
-                            else
+                            if (retryCount < 3)
                             {
                                 await Task.Delay(2000); // Chờ 2s rồi thử lại
                             }

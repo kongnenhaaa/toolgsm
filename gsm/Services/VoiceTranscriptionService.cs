@@ -14,6 +14,8 @@ public class VoiceTranscriptionResult
     public string Text { get; set; } = string.Empty;
     public string Otp { get; set; } = string.Empty;
     public string Digits { get; set; } = string.Empty;
+    public string Language { get; set; } = string.Empty;
+    public double LanguageProbability { get; set; }
     public bool Locked { get; set; }
     public string AudioPath { get; set; } = string.Empty;
     public string? Error { get; set; }
@@ -22,6 +24,13 @@ public class VoiceTranscriptionResult
 
 public static class VoiceTranscriptionService
 {
+    private static readonly SemaphoreSlim ModelDownloadLock = new(1, 1);
+    public static string WhisperModelCacheDirectory { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ToolGSM",
+        "Models",
+        "Whisper");
+
     private static readonly string EmbeddedScriptContent = @"# -*- coding: utf-8 -*-
 import sys, re, json, os, unicodedata
 os.environ.setdefault(""HF_HUB_DISABLE_PROGRESS_BARS"", ""1"")
@@ -60,13 +69,38 @@ def is_sim_locked(text: str) -> bool:
     norm = _norm_vn((text or """").lower())
     return any(kw in norm for kw in SIM_LOCKED_KEYWORDS)
 
-_ANCHOR_RE = re.compile(
-    r""(?:ma\s+)?(?:xac thuc|sac that|xac nhan|otp|xep|he luc)?\s*(?:cua\s*)?(?:ban|ba)?\s*(?:la\b|:|\.)\s*""
+_CODE_ANCHOR_RE = re.compile(
+    r""\b(?:verification\s+code|security\s+code|authentication\s+code|""
+    r""one\s*time\s+password|otp|ma\s+(?:xac\s+thuc|xac\s+nhan|""
+    r""sac\s+that|sat\s+thuc|sac\s+thuc|xep))\b""
 )
+_REPEAT_ANCHOR_RE = re.compile(r""\b(?:i\s+repeat|repeat|xin\s+nhac\s+lai|nhac\s+lai)\b"")
+_VALUE_ANCHOR_RE = re.compile(r""\b(?:is|la)\b"")
+_DIGIT_TOKEN_RE = re.compile(r""[a-z]+|\d+|[^a-z\d]+"")
+
+def _digit_runs(s: str):
+    runs = []
+    current = []
+
+    def flush():
+        if current:
+            runs.append("""".join(current))
+            current.clear()
+
+    for token in _DIGIT_TOKEN_RE.findall(_norm_vn(s or """").lower()):
+        if token.isdigit():
+            current.append(token)
+        elif token in _NORM_WORD2DIG:
+            current.append(_NORM_WORD2DIG[token])
+        elif re.fullmatch(r""[\s.,:;_\-/]+"", token):
+            continue
+        else:
+            flush()
+    flush()
+    return runs
 
 def _digits_of(s: str) -> str:
-    tokens = re.findall(r""[a-z]+|\d+"", _norm_vn(s or """").lower())
-    return """".join(t if t.isdigit() else _NORM_WORD2DIG.get(t, """") for t in tokens)
+    return """".join(_digit_runs(s))
 
 def _norm_otp(run: str) -> str:
     n = len(run)
@@ -80,15 +114,21 @@ def _norm_otp(run: str) -> str:
         return run[:6]
     if n % 4 == 0 and run == run[:4] * (n // 4):
         return run[:4]
-    if n > 6:
-        return run[:6]
     return """"
 
-def _first_otp_in(digits_str: str) -> str:
-    for m in re.finditer(r""\d{4,}"", digits_str):
-        o = _norm_otp(m.group(0))
+def _otp_candidates(text: str):
+    candidates = []
+    for run in _digit_runs(text):
+        o = _norm_otp(run)
         if o:
-            return o
+            candidates.append(o)
+    return candidates
+
+def _candidate_after_matches(norm: str, pattern, window: int = 180):
+    for match in reversed(list(pattern.finditer(norm))):
+        candidates = _otp_candidates(norm[match.end():match.end() + window])
+        if candidates:
+            return candidates[0]
     return """"
 
 def clean_transcript(text: str) -> str:
@@ -113,40 +153,43 @@ def extract_otp(text: str):
     if is_sim_locked(text):
         return """", _digits_of(low)
 
-    p_la = norm.rfind(""la"")
-    if p_la >= 0 and p_la < len(norm) - 2:
-        seg_after_la = norm[p_la + 2:]
-        dig_la = _digits_of(seg_after_la)
-        o = _first_otp_in(dig_la)
-        if o:
-            return o, _digits_of(low)
-
-    matches = list(_ANCHOR_RE.finditer(norm))
-    if matches:
-        seg = _digits_of(norm[matches[-1].end():matches[-1].end() + 120])
-        o = _first_otp_in(seg)
-        if o:
-            return o, _digits_of(low)
-
-    for kw in (""sac that"", ""xac thuc"", ""xac nhan"", ""otp""):
-        start = len(norm)
-        while True:
-            i = norm.rfind(kw, 0, start)
-            if i < 0:
-                break
-            seg = _digits_of(norm[i:i + 150])
-            o = _first_otp_in(seg)
-            if o:
-                return o, _digits_of(low)
-            start = i
-
     all_digits = _digits_of(low)
-    o = _first_otp_in(all_digits)
-    return o, all_digits
+    for pattern in (_CODE_ANCHOR_RE, _REPEAT_ANCHOR_RE, _VALUE_ANCHOR_RE):
+        o = _candidate_after_matches(norm, pattern)
+        if o:
+            return o, all_digits
+
+    candidates = _otp_candidates(norm)
+    if not candidates:
+        return """", all_digits
+
+    winner = max(
+        range(len(candidates)),
+        key=lambda index: (candidates.count(candidates[index]), index)
+    )
+    selected = candidates[winner]
+    if candidates.count(selected) >= 2:
+        return selected, all_digits
+
+    ordinary_words = [
+        token for token in re.findall(r""[a-z]+"", norm)
+        if token not in _NORM_WORD2DIG
+    ]
+    return (selected if not ordinary_words else """"), all_digits
 
 def main():
     if len(sys.argv) < 2:
         print(json.dumps({""error"": ""Missing audio file""}))
+        return
+    if sys.argv[1] == ""--prepare-model"":
+        model_name = sys.argv[2] if len(sys.argv) > 2 else ""small""
+        cache_dir = sys.argv[3] if len(sys.argv) > 3 else None
+        try:
+            from faster_whisper.utils import download_model
+            model_path = download_model(model_name, cache_dir=cache_dir)
+            print(json.dumps({""ready"": True, ""model_path"": model_path}))
+        except Exception as ex:
+            print(json.dumps({""error"": str(ex), ""ready"": False}))
         return
     audio = sys.argv[1]
     model_name = sys.argv[2] if len(sys.argv) > 2 else ""small""
@@ -160,18 +203,62 @@ def main():
         return
     try:
         from faster_whisper import WhisperModel
-        model = WhisperModel(model_name, device=""cpu"", compute_type=""int8"")
-        segments, _info = model.transcribe(
-            audio,
-            language=""vi"",
-            beam_size=5,
-            vad_filter=True
+        from faster_whisper.audio import decode_audio
+        model = WhisperModel(
+            model_name,
+            device=""cpu"",
+            compute_type=""int8"",
+            download_root=os.environ.get(""TOOLGSM_WHISPER_CACHE_DIR"") or None,
+            local_files_only=os.path.isdir(model_name),
         )
-        raw_text = "" "".join(s.text for s in segments).strip()
-        text = clean_transcript(raw_text)
+        audio_data = decode_audio(audio)
+        detected_language, language_probability, _all_languages = model.detect_language(
+            audio=audio_data,
+            vad_filter=True,
+            language_detection_segments=3
+        )
+        prompts = {
+            ""en"": ""Your verification code is zero one two three four five six seven eight nine. I repeat, your verification code is."",
+            ""vi"": ""Mã xác thực của bạn là không một hai ba bốn năm sáu bảy tám chín. Xin nhắc lại mã xác thực.""
+        }
+        selected_prompt = prompts.get(detected_language)
+
+        def transcribe_once(initial_prompt):
+            segments, transcription_info = model.transcribe(
+                audio_data,
+                language=detected_language or None,
+                initial_prompt=initial_prompt,
+                beam_size=5,
+                vad_filter=True
+            )
+            return "" "".join(s.text for s in segments).strip(), transcription_info
+
+        raw_text, info = transcribe_once(selected_prompt)
         otp, digits = extract_otp(raw_text)
+        normalized_text = _norm_vn(raw_text.lower())
+        has_otp_context = (
+            _CODE_ANCHOR_RE.search(normalized_text)
+            or _REPEAT_ANCHOR_RE.search(normalized_text)
+        )
+        if selected_prompt and not otp and has_otp_context:
+            fallback_text, fallback_info = transcribe_once(None)
+            fallback_otp, fallback_digits = extract_otp(fallback_text)
+            if fallback_otp:
+                raw_text = fallback_text
+                info = fallback_info
+                otp = fallback_otp
+                digits = fallback_digits
+
+        text = clean_transcript(raw_text)
         locked = is_sim_locked(raw_text)
-        print(json.dumps({""text"": text, ""otp"": otp, ""digits"": digits, ""locked"": locked}, ensure_ascii=False))
+        print(json.dumps({
+            ""text"": text,
+            ""otp"": otp,
+            ""digits"": digits,
+            ""locked"": locked,
+            ""language"": info.language or detected_language,
+            ""language_probability"": language_probability
+        }, ensure_ascii=False))
     except Exception as ex:
         print(json.dumps({""error"": str(ex), ""text"": """", ""otp"": """", ""digits"": """", ""locked"": False}))
 
@@ -179,9 +266,12 @@ if __name__ == ""__main__"":
     main()
 ";
 
+    internal static string EmbeddedWorkerScript => EmbeddedScriptContent;
+
     public static string FindPythonExecutable()
     {
         string[] candidates = [
+            Path.Combine(AppContext.BaseDirectory, "python_runtime", "python.exe"),
             "python.exe",
             "python",
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WindowsApps\python.exe"),
@@ -194,30 +284,115 @@ if __name__ == ""__main__"":
         {
             try
             {
-                if (File.Exists(candidate))
+                if (Path.IsPathRooted(candidate) && File.Exists(candidate))
                     return candidate;
             }
             catch { }
         }
 
+        // Let Windows resolve python.exe from PATH only after the bundled
+        // runtime and known absolute installations have been checked.
         return "python.exe";
     }
 
     public static string GetOrExtractScriptPath()
     {
         string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        string scriptPath = Path.Combine(baseDir, "voice_otp", "stt_extract.py");
-        if (File.Exists(scriptPath))
-            return scriptPath;
+        return Path.Combine(baseDir, "voice_otp", "stt_extract.py");
+    }
 
-        string dataScriptDir = Path.Combine(AppBootstrap.DataDir, "voice_otp");
-        Directory.CreateDirectory(dataScriptDir);
-        string dataScriptPath = Path.Combine(dataScriptDir, "stt_extract.py");
-        if (!File.Exists(dataScriptPath))
+    public static Task<string?> EnsureDefaultModelAvailableAsync(
+        CancellationToken ct = default) =>
+        EnsureModelAvailableAsync("small", ct);
+
+    private static async Task<string?> EnsureModelAvailableAsync(
+        string model,
+        CancellationToken ct)
+    {
+        string bundledModel = Path.Combine(
+            AppContext.BaseDirectory,
+            "voice_otp",
+            "models",
+            "faster-whisper-" + model);
+        if (Directory.Exists(bundledModel) || IsModelCached()) return null;
+
+        await ModelDownloadLock.WaitAsync(ct);
+        try
         {
-            File.WriteAllText(dataScriptPath, EmbeddedScriptContent, Encoding.UTF8);
+            if (Directory.Exists(bundledModel) || IsModelCached()) return null;
+            Directory.CreateDirectory(WhisperModelCacheDirectory);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = FindPythonExecutable(),
+                WorkingDirectory = AppContext.BaseDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            ConfigureVoicePythonEnvironment(startInfo);
+            startInfo.ArgumentList.Add(GetOrExtractScriptPath());
+            startInfo.ArgumentList.Add("--prepare-model");
+            startInfo.ArgumentList.Add(model);
+            startInfo.ArgumentList.Add(WhisperModelCacheDirectory);
+
+            using var process = new Process { StartInfo = startInfo };
+            if (!process.Start()) return "Không khởi động được tiến trình tải model giọng nói.";
+            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+            Task<string> stderrTask = process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+            string stdout = await stdoutTask;
+            string stderr = await stderrTask;
+            if (process.ExitCode == 0 && IsModelCached()) return null;
+
+            string detail = stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Reverse()
+                .FirstOrDefault() ?? stderr.Trim();
+            return string.IsNullOrWhiteSpace(detail)
+                ? $"Tải model giọng nói thất bại (mã {process.ExitCode})."
+                : $"Tải model giọng nói thất bại: {detail}";
         }
-        return dataScriptPath;
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return $"Tải model giọng nói thất bại: {ex.Message}";
+        }
+        finally
+        {
+            ModelDownloadLock.Release();
+        }
+    }
+
+    private static bool IsModelCached()
+    {
+        try
+        {
+            return Directory.Exists(WhisperModelCacheDirectory)
+                && Directory.EnumerateFiles(
+                        WhisperModelCacheDirectory,
+                        "model.bin",
+                        SearchOption.AllDirectories)
+                    .Any(path => new FileInfo(path).Length > 400_000_000);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void ConfigureVoicePythonEnvironment(ProcessStartInfo startInfo)
+    {
+        startInfo.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
+        startInfo.Environment["HF_HUB_DISABLE_TELEMETRY"] = "1";
+        startInfo.Environment["DO_NOT_TRACK"] = "1";
+        startInfo.Environment["TOOLGSM_WHISPER_CACHE_DIR"] =
+            WhisperModelCacheDirectory;
     }
 
     public static async Task<VoiceTranscriptionResult> TranscribeAudioAsync(
@@ -233,13 +408,45 @@ if __name__ == ""__main__"":
             return result;
         }
 
+        string modelArgument;
+        if (Path.IsPathRooted(model))
+        {
+            if (!Directory.Exists(model))
+            {
+                result.Error = "Không tìm thấy model nhận dạng giọng nói đã chọn.";
+                return result;
+            }
+            modelArgument = model;
+        }
+        else
+        {
+            string bundledModel = Path.Combine(
+                AppContext.BaseDirectory,
+                "voice_otp",
+                "models",
+                "faster-whisper-" + model);
+            if (Directory.Exists(bundledModel))
+            {
+                modelArgument = bundledModel;
+            }
+            else
+            {
+                string? modelError = await EnsureModelAvailableAsync(model, ct);
+                if (modelError != null)
+                {
+                    result.Error = modelError;
+                    return result;
+                }
+                modelArgument = model;
+            }
+        }
+
         string pythonExe = FindPythonExecutable();
         string scriptPath = GetOrExtractScriptPath();
 
         var psi = new ProcessStartInfo
         {
             FileName = pythonExe,
-            Arguments = $"\"{scriptPath}\" \"{wavPath}\" {model}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -247,6 +454,10 @@ if __name__ == ""__main__"":
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+        ConfigureVoicePythonEnvironment(psi);
+        psi.ArgumentList.Add(scriptPath);
+        psi.ArgumentList.Add(wavPath);
+        psi.ArgumentList.Add(modelArgument);
 
         try
         {
@@ -298,6 +509,13 @@ if __name__ == ""__main__"":
                     result.Otp = otpProp.GetString() ?? string.Empty;
                 if (root.TryGetProperty("digits", out var digProp))
                     result.Digits = digProp.GetString() ?? string.Empty;
+                if (root.TryGetProperty("language", out var languageProp))
+                    result.Language = languageProp.GetString() ?? string.Empty;
+                if (root.TryGetProperty("language_probability", out var probabilityProp)
+                    && probabilityProp.TryGetDouble(out double probability))
+                {
+                    result.LanguageProbability = probability;
+                }
                 if (root.TryGetProperty("locked", out var lockProp))
                     result.Locked = lockProp.GetBoolean();
             }

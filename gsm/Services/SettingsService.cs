@@ -29,8 +29,9 @@ public static class SettingsService
                 settings ??= new AppSettings();
                 bool needsInstallationId = string.IsNullOrWhiteSpace(settings.InstallationId)
                     || !Guid.TryParseExact(settings.InstallationId, "N", out _);
+                bool needsFirebaseSyncMigration = settings.FirebaseSyncPreferenceVersion < 1;
                 AppSettings normalized = Normalize(settings);
-                if (needsInstallationId)
+                if (needsInstallationId || needsFirebaseSyncMigration)
                 {
                     // Upgrade old settings once so the identity remains stable
                     // after every restart. Failure is non-fatal for startup.
@@ -109,7 +110,11 @@ public static class SettingsService
         settings.FirebaseUrl = FirebaseService.DatabaseUrl;
         settings.FirebaseDbUrl = FirebaseService.DatabaseUrl;
         settings.FirebaseAuthToken = "";
-        settings.WriteOtpToFirebase = true;
+        if (settings.FirebaseSyncPreferenceVersion < 1)
+        {
+            settings.WriteOtpToFirebase = false;
+            settings.FirebaseSyncPreferenceVersion = 1;
+        }
         // Incoming GSM messages are operational data, not optional marketing
         // notifications. Once Telegram has a destination, every received SMS
         // must be mirrored regardless of whether OTP extraction succeeded.

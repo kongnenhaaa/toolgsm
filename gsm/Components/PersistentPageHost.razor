@@ -12,14 +12,14 @@
     <div class="persistent-page" style="@PageStyle("call")" aria-hidden="@(!IsActive("call"))">
         <Call IsPageActive="@IsActive("call")" />
     </div>
-    <div class="persistent-page" style="@PageStyle("imei")" aria-hidden="@(!IsActive("imei"))">
-        <ImeiManager IsPageActive="@IsActive("imei")" />
-    </div>
     <div class="persistent-page" style="@PageStyle("ezcom")" aria-hidden="@(!IsActive("ezcom"))">
         <EzCom IsPageActive="@IsActive("ezcom")" />
     </div>
     <div class="persistent-page" style="@PageStyle("vnptpass")" aria-hidden="@(!IsActive("vnptpass"))">
         <VnptPass IsPageActive="@IsActive("vnptpass")" />
+    </div>
+    <div class="persistent-page" style="@PageStyle("deviceunlock")" aria-hidden="@(!IsActive("deviceunlock"))">
+        <DeviceUnlock IsPageActive="@IsActive("deviceunlock")" />
     </div>
     <div class="persistent-page" style="@PageStyle("settings")" aria-hidden="@(!IsActive("settings"))">
         <Settings />
@@ -57,9 +57,9 @@
         {
             "" or "ussd" => "ussd",
             "vnpt-pass" => "vnptpass",
+            "device-unlock" => "deviceunlock",
             "sms" => "sms",
             "call" => "call",
-            "imei" => "imei",
             "ezcom" => "ezcom",
             "settings" => "settings",
             _ => "ussd"

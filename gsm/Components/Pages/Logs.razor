@@ -45,7 +45,7 @@
     </MudButton>
     <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
                StartIcon="@Icons.Material.Filled.Download" OnClick="ExportLogs">
-        Export log
+        Xuất log Excel
     </MudButton>
     <MudButton Variant="Variant.Outlined" Size="Size.Small"
                StartIcon="@Icons.Material.Filled.Pause" OnClick="ToggleAutoScroll"
@@ -358,31 +358,52 @@
     }
 
     // =====================================================
-    // EXPORT LOG THẬT (ghi file .txt + .csv)
+    // Chỉ cho phép xuất log theo yêu cầu người dùng dưới dạng Excel.
     // =====================================================
     async Task ExportLogs()
     {
         try
         {
-            var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ToolGSM_Logs");
-            Directory.CreateDirectory(folder);
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "Excel (*.xlsx)|*.xlsx",
+                FileName = $"ToolGSM_Log_{DateTime.Now:yyyyMMdd_HHmmss}.xlsx",
+                Title = "Xuất log Excel"
+            };
+            if (dialog.ShowDialog() != true) return;
 
-            var stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            var txtPath = Path.Combine(folder, $"log_{stamp}.txt");
-            var csvPath = Path.Combine(folder, $"log_{stamp}.csv");
+            OfficeOpenXml.ExcelPackage.LicenseContext =
+                OfficeOpenXml.LicenseContext.NonCommercial;
+            using var package = new OfficeOpenXml.ExcelPackage();
+            var sheet = package.Workbook.Worksheets.Add("Log");
+            string[] headers = ["Thời gian", "Mức", "Cổng", "Nội dung"];
+            for (int column = 0; column < headers.Length; column++)
+            {
+                sheet.Cells[1, column + 1].Value = headers[column];
+                sheet.Cells[1, column + 1].Style.Font.Bold = true;
+            }
 
-            // TXT
-            var txtLines = _logs.OrderBy(x => x.Time)
-                .Select(x => $"{x.Time:yyyy-MM-dd HH:mm:ss}\t[{x.Level.ToUpper()}]\t{x.Port}\t{x.Message}");
-            await File.WriteAllLinesAsync(txtPath, txtLines);
+            int row = 2;
+            foreach (LogItem item in _logs.OrderBy(x => x.Time))
+            {
+                sheet.Cells[row, 1].Value = item.Time;
+                sheet.Cells[row, 1].Style.Numberformat.Format = "dd/mm/yyyy hh:mm:ss";
+                sheet.Cells[row, 2].Value = item.Level;
+                sheet.Cells[row, 3].Value = item.Port;
+                sheet.Cells[row, 4].Value = item.Message;
+                row++;
+            }
 
-            // CSV
-            var csvLines = new List<string> { "Time,Level,Port,Message" };
-            csvLines.AddRange(_logs.OrderBy(x => x.Time)
-                .Select(x => $"\"{x.Time:yyyy-MM-dd HH:mm:ss}\",\"{x.Level}\",\"{x.Port}\",\"{x.Message.Replace("\"", "\"\"")}\""));
-            await File.WriteAllLinesAsync(csvPath, csvLines);
-
-            Snackbar.Add($"Đã export:\n{txtPath}\n{csvPath}", Severity.Success);
+            sheet.View.FreezePanes(2, 1);
+            sheet.Column(1).Width = 21;
+            sheet.Column(2).Width = 12;
+            sheet.Column(3).Width = 12;
+            sheet.Column(4).Width = 100;
+            sheet.Column(4).Style.WrapText = true;
+            await File.WriteAllBytesAsync(
+                dialog.FileName,
+                package.GetAsByteArray());
+            Snackbar.Add($"Đã xuất Excel: {dialog.FileName}", Severity.Success);
         }
         catch (Exception ex)
         {

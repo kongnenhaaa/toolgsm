@@ -27,7 +27,9 @@ public class FirebaseOtpService : IFirebaseOtpService
 
     public async Task WritePortOtpAsync(string machineId, string portId, string? otp, string? content, string? phone)
     {
-        if (string.IsNullOrEmpty(DbUrl) || string.IsNullOrEmpty(portId))
+        if (!FirebaseService.IsSyncEnabled
+            || string.IsNullOrEmpty(DbUrl)
+            || string.IsNullOrEmpty(portId))
             return;
 
         try
@@ -58,7 +60,7 @@ public class FirebaseOtpService : IFirebaseOtpService
 
     public async Task WritePortSnapshotAsync(string machineId, ApiPortDto port)
     {
-        if (string.IsNullOrEmpty(DbUrl)) return;
+        if (!FirebaseService.IsSyncEnabled || string.IsNullOrEmpty(DbUrl)) return;
         try
         {
             machineId = await FirebaseService.EnsureUniqueMachineIdAsync();

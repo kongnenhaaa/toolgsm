@@ -5,10 +5,10 @@ namespace gsm.Tests;
 public sealed class BoundedAsyncWorkRunnerTests
 {
     [Fact]
-    public async Task ThirtyTwoItems_RunAllWithoutExceedingTenActiveWorkers()
+    public async Task SixtyFourItems_RunAllWithoutExceedingTwentyActiveWorkers()
     {
-        const int itemCount = 32;
-        const int maxConcurrency = 10;
+        const int itemCount = 64;
+        const int maxConcurrency = 20;
         int active = 0;
         int maximumActive = 0;
         int completed = 0;
@@ -38,7 +38,7 @@ public sealed class BoundedAsyncWorkRunnerTests
     [Fact]
     public async Task SlotIsHeldUntilTheWholeWorkerFinishes()
     {
-        const int maxConcurrency = 10;
+        const int maxConcurrency = 20;
         int started = 0;
         var firstWaveStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -46,7 +46,7 @@ public sealed class BoundedAsyncWorkRunnerTests
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         Task run = BoundedAsyncWorkRunner.RunAsync(
-            Enumerable.Range(1, 10).ToArray(),
+            Enumerable.Range(1, 20).ToArray(),
             maxConcurrency,
             async (_, cancellationToken) =>
             {
@@ -62,14 +62,14 @@ public sealed class BoundedAsyncWorkRunnerTests
         releaseFirstWave.TrySetResult();
         await run.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(10, Volatile.Read(ref started));
+        Assert.Equal(20, Volatile.Read(ref started));
     }
 
     [Fact]
     public async Task CancellationStillVisitsQueuedItemsForCleanup()
     {
-        const int itemCount = 12;
-        const int maxConcurrency = 10;
+        const int itemCount = 24;
+        const int maxConcurrency = 20;
         int visited = 0;
         int waiting = 0;
         var firstWaveStarted = new TaskCompletionSource(

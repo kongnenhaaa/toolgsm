@@ -29,7 +29,7 @@ public sealed class MyVnptServiceTests
     }
 
     [Fact]
-    public void OtpSendPacing_IsLongEnoughToAvoidApiBursts()
+    public void DeviceUnlockOtpPacing_IsLongEnoughToAvoidApiBursts()
     {
         Assert.InRange(
             MyVnptService.MinimumOtpSendSpacing,
@@ -102,6 +102,23 @@ public sealed class MyVnptServiceTests
         Assert.False(MyVnptService.IsAccountAlreadyExistsResponse("1", "Chưa có tài khoản VNPortal"));
     }
 
+    [Theory]
+    [InlineData("reg_nok", "Thuê bao đã có tài khoản trên hệ thống")]
+    [InlineData("1", "Thuê bao đã có tài khoản trên hệ thống")]
+    public void RegisterConflict_RequestsNewPasswordResetOtp(
+        string code,
+        string message)
+    {
+        Assert.True(MyVnptService.ShouldRetryWithMissPassword(
+            accountExists: false,
+            code,
+            message));
+        Assert.False(MyVnptService.ShouldRetryWithMissPassword(
+            accountExists: true,
+            code,
+            message));
+    }
+
     [Fact]
     public void GetFriendlyExceptionMessage_ExplainsServiceUnavailable()
     {
@@ -117,10 +134,10 @@ public sealed class MyVnptServiceTests
     }
 
     [Fact]
-    public async Task ApiFastPath_AllowsIndependentRequestsInParallel()
+    public async Task ApiFastPath_AllowsTwentyIndependentRequestsInParallel()
     {
-        const int expectedParallelRequests = 3;
-        Assert.True(MyVnptService.ApiConcurrencyLimit >= expectedParallelRequests);
+        const int expectedParallelRequests = 20;
+        Assert.Equal(expectedParallelRequests, MyVnptService.ApiConcurrencyLimit);
 
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         var handler = new ConcurrentRequestHandler(expectedParallelRequests);

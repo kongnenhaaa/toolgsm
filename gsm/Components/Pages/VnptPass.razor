@@ -80,7 +80,8 @@
     @if (_isSetting)
     {
         <MudAlert Severity="Severity.Info" Dense="true" Class="mt-1">
-            Đang gửi yêu cầu OTP qua API MyVNPT... Hệ thống sẽ tự động đặt mật khẩu khi nhận được SMS OTP.
+            Đang chạy song song tối đa 20 cổng. Hệ thống sẽ tự động đặt mật khẩu khi nhận được SMS OTP;
+            cổng chưa nhận được OTP sẽ tự gửi lại một lần.
             @if (!string.IsNullOrWhiteSpace(Vm.VnptSummaryText))
             {
                 <br /><b>@Vm.VnptSummaryText</b>
@@ -174,6 +175,7 @@
                         <li>Kiểm tra tài khoản qua API MyVNPT</li>
                         <li>Gửi yêu cầu nhận OTP</li>
                         <li>Đợi SMS OTP đến</li>
+                        <li>Tự gửi lại một lần nếu sau 1 phút chưa nhận được OTP</li>
                         <li>Tự động xác thực và đặt mật khẩu mới</li>
                     </ul>
                     <b>5.</b> Kết quả hiển thị ở tab <b>Kết quả</b>.
@@ -316,7 +318,7 @@
 
         try
         {
-            // Gọi ViewModel — chạy song song cho tất cả cổng (Task.Run bên trong)
+            // ViewModel xử lý theo wave tối đa 20 COM và tự retry OTP bị mất.
             await Vm.SetMyVnptPassword(validTargets, _vnptPassword.Trim(), _vnptCts.Token);
             Snackbar.Add("Đã hoàn tất tiến trình VNPT cho các cổng đã chọn.", Severity.Success);
         }

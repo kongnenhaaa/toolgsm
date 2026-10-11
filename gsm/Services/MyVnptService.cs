@@ -22,7 +22,10 @@ public sealed record MyVnptLoginOtpSession(
     string MacAddress,
     string UserAgent);
 
-public sealed record MyVnptPasswordResult(bool Success, string Message);
+public sealed record MyVnptPasswordResult(
+    bool Success,
+    string Message,
+    bool NeedsRetryWithMissPassword = false);
 
 public static class MyVnptService
 {
@@ -32,12 +35,14 @@ public static class MyVnptService
         "ToolGSM.MyVNPT.Device.v1";
     private const string StableUserAgent = "okhttp/4.7.2";
     private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(60) };
-    // Giới hạn một burst ở mức vừa phải nhưng vẫn cho nhiều COM chạy thật sự
-    // song song. Bản cũ giãn *mọi* request 1,2 giây nên thời gian tăng tuyến
-    // tính theo số COM, kể cả khi VNPT đang phản hồi bình thường.
-    internal const int ApiConcurrencyLimit = 6;
+    // Một lô Pass VNPT chạy tối đa 20 COM và mỗi COM có fingerprint riêng.
+    // Cho đủ 20 request HTTP đi đồng thời để otp_send không còn bị biến thành
+    // hàng đợi tuần tự ở lớp API.
+    internal const int ApiConcurrencyLimit = 20;
     private static readonly SemaphoreSlim ApiConcurrencyGate =
         new(ApiConcurrencyLimit, ApiConcurrencyLimit);
+    // Pacer này chỉ còn dùng cho luồng đăng nhập eKYC/đổi thiết bị. Pass VNPT
+    // có retry riêng theo từng COM và cần khởi chạy theo lô 20.
     internal static readonly TimeSpan MinimumOtpSendSpacing =
         TimeSpan.FromSeconds(3);
     private static readonly AsyncRequestPacer OtpSendPacer =
@@ -107,13 +112,6 @@ public static class MyVnptService
         CancellationToken cancellationToken = default,
         Action<string, string>? addLogCallback = null)
     {
-        // Ten COM may remain active concurrently, but the observed VNPT flow
-        // starts silently dropping SMS after roughly twenty OTP requests in a
-        // short window. Keep otp_send at about twenty starts per minute;
-        // account checks and OTP waiting still overlap normally.
-        TimeSpan pacingDelay = await WaitForOtpSendTurnAsync(cancellationToken);
-        LogOtpSendPacingDelay(pacingDelay, addLogCallback);
-
         string otpService = session.AccountExists ? "authen_miss_password" : "authen_register";
         string otpContent = await PostAsync(
             "otp_send",
@@ -125,6 +123,34 @@ public static class MyVnptService
 
         string? otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
         string otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
+
+        // authen_check_account đôi khi trả sai nhánh. Nếu chính otp_send phát
+        // hiện trạng thái tài khoản xung đột, thử đúng một lần với nhánh còn
+        // lại và mang session đã sửa về cho caller.
+        if (otpCode != "0"
+            && !IsOtpAlreadyPendingMessage(otpMessage)
+            && IsAccountStateConflictMessage(otpMessage))
+        {
+            bool fallbackAccountExists = !session.AccountExists;
+            string fallbackService = fallbackAccountExists
+                ? "authen_miss_password"
+                : "authen_register";
+            addLogCallback?.Invoke(
+                $"[VNPT_HTTP] otp_send {otpService} báo sai nhánh ({otpMessage.Trim()}); chuyển sang {fallbackService}.",
+                "WARN");
+
+            otpContent = await PostAsync(
+                "otp_send",
+                new { msisdn = session.Phone, otp_service = fallbackService },
+                session.DeviceInfo,
+                session.UserAgent,
+                cancellationToken,
+                addLogCallback);
+            otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
+            otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
+            if (otpCode == "0" || IsOtpAlreadyPendingMessage(otpMessage))
+                session = session with { AccountExists = fallbackAccountExists };
+        }
 
         if (otpCode != "0")
         {
@@ -245,6 +271,21 @@ public static class MyVnptService
             addLogCallback?.Invoke(
                 $"[{portName}] [VNPT_DEBUG] {targetService} error_code={respCode} msg={respMsg}", "WARN");
 
+            // Check account có thể báo chưa có, nhưng authen_register mới là
+            // nguồn xác nhận cuối cùng rằng thuê bao đã tồn tại. OTP register
+            // không dùng được cho quên mật khẩu, nên báo caller phát OTP
+            // authen_miss_password mới thay vì ghi lỗi ngay.
+            if (ShouldRetryWithMissPassword(accountExists, respCode, respMsg))
+            {
+                addLogCallback?.Invoke(
+                    $"[{portName}] [VNPT_FLOW] Thuê bao đã có tài khoản; chuyển sang quên mật khẩu và gửi OTP mới.",
+                    "WARN");
+                return new MyVnptPasswordResult(
+                    false,
+                    respMsg,
+                    NeedsRetryWithMissPassword: true);
+            }
+
             addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {session.Phone} thất bại ({mode}): {respMsg}", "ERROR");
             return new MyVnptPasswordResult(false, respMsg);
         }
@@ -299,6 +340,18 @@ public static class MyVnptService
                 || message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
                 || message.Contains("đăng ký không thành công", StringComparison.OrdinalIgnoreCase)
                 || message.Contains("dang ky khong thanh cong", StringComparison.OrdinalIgnoreCase)));
+
+    internal static bool ShouldRetryWithMissPassword(
+        bool accountExists,
+        string? errorCode,
+        string? message) =>
+        !accountExists && IsAccountAlreadyExistsResponse(errorCode, message);
+
+    private static bool IsAccountStateConflictMessage(string? message) =>
+        !string.IsNullOrWhiteSpace(message)
+        && (message.Contains("tài khoản", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("tai khoan", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("account", StringComparison.OrdinalIgnoreCase));
 
     public static string NormalizePhone(string? phone)
     {

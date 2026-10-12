@@ -410,6 +410,8 @@ public sealed class SautoInitializationSequenceTests
         [
             "AT+CPIN? \r",
             "AT+CSQ \r",
+            "AT+CREG?",
+            "AT+CEREG?",
             "AT+COPS?"
         ], GsmModemService.SautoNetworkPollingCommandOrder);
         Assert.Equal(
@@ -418,6 +420,9 @@ public sealed class SautoInitializationSequenceTests
         Assert.Equal(
             TimeSpan.FromSeconds(2),
             GsmModemService.SautoNetworkRecheckInterval);
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            GsmModemService.SautoOnlineNetworkRecheckInterval);
         Assert.Equal(
             TimeSpan.FromMilliseconds(400),
             GsmModemService.SautoDataPortLoopDelay);
@@ -432,10 +437,15 @@ public sealed class SautoInitializationSequenceTests
             GsmModemService.SautoOnlineDataPortLoopDelay,
             GsmModemService.SelectSautoDataPortLoopDelay(
                 networkRegistered: true));
-        Assert.DoesNotContain(
+        Assert.Contains(
             GsmModemService.SautoNetworkPollingCommandOrder,
             command => command.Contains(
                 "CREG",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            GsmModemService.SautoNetworkPollingCommandOrder,
+            command => command.Contains(
+                "CEREG",
                 StringComparison.OrdinalIgnoreCase));
     }
 
@@ -456,6 +466,42 @@ public sealed class SautoInitializationSequenceTests
                 "com110",
                 "cgreg"));
     }
+
+    [Theory]
+    [InlineData("+CREG: 2,1,\"1817\",\"9516535\",7", "CREG", true, 1)]
+    [InlineData("+CREG: 5", "CREG", true, 5)]
+    [InlineData("+CEREG: 2,0", "CEREG", true, 0)]
+    [InlineData("+CEREG: 2,5,\"00AF\",\"12345678\",7", "CEREG", true, 5)]
+    [InlineData("+CGREG: 2,1", "CREG", false, -1)]
+    [InlineData("ERROR", "CREG", false, -1)]
+    public void SmsNetworkRegistration_ParsesQueryAndUrcForms(
+        string response,
+        string family,
+        bool expectedParsed,
+        int expectedStatus)
+    {
+        bool parsed = GsmModemService.TryParseNetworkRegistrationStatus(
+            response,
+            family,
+            out int status);
+
+        Assert.Equal(expectedParsed, parsed);
+        Assert.Equal(expectedStatus, status);
+    }
+
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public void SmsNetworkRegistration_AcceptsCsOrEps(
+        bool circuitSwitched,
+        bool eps,
+        bool expected) =>
+        Assert.Equal(
+            expected,
+            GsmModemService.IsSmsNetworkRegistered(
+                circuitSwitched,
+                eps));
 
     [Fact]
     public void Ussd_AllowsLateNetworkPayloadBeforeRetry()
@@ -611,22 +657,35 @@ public sealed class SautoInitializationSequenceTests
     }
 
     [Fact]
-    public void NetworkDataPortCycle_RechecksUnknownCarrierOnlyAfterTwoSeconds()
+    public void NetworkDataPortCycle_RechecksOfflineFastAndOnlinePeriodically()
     {
         DateTimeOffset lastCheck = new(
             2026, 7, 29, 0, 0, 0, TimeSpan.Zero);
 
         Assert.False(GsmModemService.ShouldQuerySautoNetwork(
             string.Empty,
+            false,
             lastCheck.AddSeconds(2),
             lastCheck));
         Assert.True(GsmModemService.ShouldQuerySautoNetwork(
             "No Signal",
+            false,
             lastCheck.AddMilliseconds(2001),
             lastCheck));
         Assert.False(GsmModemService.ShouldQuerySautoNetwork(
             "VINAPHONE",
-            lastCheck.AddMinutes(10),
+            true,
+            lastCheck.AddSeconds(30),
+            lastCheck));
+        Assert.True(GsmModemService.ShouldQuerySautoNetwork(
+            "VINAPHONE",
+            true,
+            lastCheck.AddMilliseconds(30001),
+            lastCheck));
+        Assert.True(GsmModemService.ShouldQuerySautoNetwork(
+            "VINAPHONE",
+            false,
+            lastCheck.AddMilliseconds(2001),
             lastCheck));
     }
 
@@ -638,7 +697,7 @@ public sealed class SautoInitializationSequenceTests
             "AT+CMGF=1",
             "AT+CSCS=\"GSM\"",
             "AT+CPMS=\"SM\",\"SM\",\"SM\"",
-            "AT+CNMI=1,1,0,0,0"
+            "AT+CNMI=2,1,0,0,0"
         ], GsmModemService.SmsReceiveRestoreCommandOrder);
         Assert.DoesNotContain(
             GsmModemService.SmsReceiveRestoreCommandOrder,
@@ -652,25 +711,25 @@ public sealed class SautoInitializationSequenceTests
         "+CMGF: 1\r\nOK",
         "+CSCS: \"GSM\"\r\nOK",
         "+CPMS: \"SM\",0,50,\"SM\",0,50,\"SM\",0,50\r\nOK",
-        "+CNMI: 1,1,0,0,0\r\nOK",
+        "+CNMI: 2,1,0,0,0\r\nOK",
         true)]
     [InlineData(
         "+CMGF: 1\r\nOK",
         "+CSCS: \"GSM\"\r\nOK",
         "+CPMS: \"ME\",0,50,\"SM\",0,50,\"MT\",0,100\r\nOK",
-        "+CNMI: 1,1,0,0,0\r\nOK",
+        "+CNMI: 2,1,0,0,0\r\nOK",
         false)]
     [InlineData(
         "+CMGF: 0\r\nOK",
         "+CSCS: \"GSM\"\r\nOK",
         "+CPMS: \"SM\",0,50,\"SM\",0,50,\"SM\",0,50\r\nOK",
-        "+CNMI: 1,1,0,0,0\r\nOK",
+        "+CNMI: 2,1,0,0,0\r\nOK",
         false)]
     [InlineData(
         "+CMGF: 1\r\nOK",
         "+CSCS: \"GSM\"\r\nOK",
         "+CPMS: \"SM\",0,50,\"SM\",0,50,\"SM\",0,50\r\nOK",
-        "+CNMI: 2,2,0,0,0\r\nOK",
+        "+CNMI: 1,1,0,0,0\r\nOK",
         false)]
     public void SmsReceiveRestore_VerifiesReadStoreAndNotificationMode(
         string cmgf,

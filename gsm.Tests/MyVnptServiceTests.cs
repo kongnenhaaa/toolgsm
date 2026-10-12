@@ -37,6 +37,15 @@ public sealed class MyVnptServiceTests
             TimeSpan.FromSeconds(3.5));
     }
 
+    [Fact]
+    public void PasswordOtpPacing_IsShortButPreventsSameMillisecondBurst()
+    {
+        Assert.InRange(
+            MyVnptService.MinimumPasswordOtpSendSpacing,
+            TimeSpan.FromMilliseconds(200),
+            TimeSpan.FromMilliseconds(500));
+    }
+
     [Theory]
     [InlineData("0942 152 795", "84942152795")]
     [InlineData("84942152795", "84942152795")]
@@ -81,6 +90,9 @@ public sealed class MyVnptServiceTests
     [Theory]
     [InlineData("Bạn đang gửi OTP")]
     [InlineData("Ban dang gui OTP, vui long cho")]
+    [InlineData("OTP đã được gửi. Vui lòng đợi 1 phút để tiếp tục thao tác")]
+    [InlineData("OTP da duoc gui. Vui long doi 1 phut")]
+    [InlineData("OTP has been sent. Please wait one minute")]
     public void IsOtpAlreadyPendingMessage_TreatsExistingRequestAsPending(string content)
     {
         Assert.True(MyVnptService.IsOtpAlreadyPendingMessage(content));
@@ -117,6 +129,30 @@ public sealed class MyVnptServiceTests
             accountExists: true,
             code,
             message));
+    }
+
+    [Theory]
+    [InlineData("otp_nok", "")]
+    [InlineData("1", "Mã OTP không hợp lệ")]
+    [InlineData("1", "OTP đã hết hạn")]
+    [InlineData("1", "Chưa yêu cầu otp/pin cho dịch vụ này")]
+    [InlineData("1", "Invalid PIN")]
+    public void RecoverableOtpFailure_RequestsOneFreshOtp(
+        string code,
+        string message)
+    {
+        Assert.True(MyVnptService.IsRecoverableOtpFailure(code, message));
+    }
+
+    [Theory]
+    [InlineData("1", "Thuê bao đã có tài khoản trên hệ thống")]
+    [InlineData("1", "Mật khẩu không đủ mạnh")]
+    [InlineData("1", "Dịch vụ tạm thời không khả dụng")]
+    public void NonOtpFailure_DoesNotRequestFreshOtp(
+        string code,
+        string message)
+    {
+        Assert.False(MyVnptService.IsRecoverableOtpFailure(code, message));
     }
 
     [Fact]
@@ -156,6 +192,26 @@ public sealed class MyVnptServiceTests
         await Task.WhenAll(requests);
 
         Assert.True(handler.MaximumConcurrency >= expectedParallelRequests);
+    }
+
+    [Fact]
+    public async Task TransientTransportFailure_IsRetriedInsteadOfDroppingCom()
+    {
+        using var cancellation = new CancellationTokenSource(
+            TimeSpan.FromSeconds(5));
+        var handler = new TransientThenSuccessHandler();
+        using var client = new HttpClient(handler);
+
+        string response = await MyVnptService.PostAsyncCore(
+            client,
+            "transport-retry-test",
+            new { msisdn = "84900000000" },
+            "test-device",
+            "test-agent",
+            cancellation.Token);
+
+        Assert.Equal("{\"error_code\":\"0\"}", response);
+        Assert.Equal(2, handler.Attempts);
     }
 
     private sealed class ConcurrentRequestHandler(int expectedConcurrency)
@@ -201,6 +257,26 @@ public sealed class MyVnptServiceTests
             {
                 lock (_sync) _activeRequests--;
             }
+        }
+    }
+
+    private sealed class TransientThenSuccessHandler : HttpMessageHandler
+    {
+        private int _attempts;
+
+        public int Attempts => Volatile.Read(ref _attempts);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref _attempts) == 1)
+                throw new HttpRequestException("Temporary connection reset");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"error_code\":\"0\"}")
+            });
         }
     }
 

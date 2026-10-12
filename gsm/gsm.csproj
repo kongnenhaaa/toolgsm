@@ -51,6 +51,11 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       <TargetPath>auth_source.py</TargetPath>
     </None>
+    <None Update="device_unlock\icoc_bridge.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>icoc_bridge.py</TargetPath>
+    </None>
   </ItemGroup>
 
   <!-- Các import nội bộ duy nhất của ekyc_full.py. Không chép tài khoản,

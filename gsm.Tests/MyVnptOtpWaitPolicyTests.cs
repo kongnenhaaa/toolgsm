@@ -6,10 +6,17 @@ namespace gsm.Tests;
 public sealed class MyVnptOtpWaitPolicyTests
 {
     [Fact]
-    public void BatchConfiguration_UsesTwentyWorkersAndOneAutomaticResend()
+    public void BatchConfiguration_StartsFullBankAndAllowsTwoAutomaticResends()
     {
-        Assert.Equal(20, MainViewModel.MaxConcurrentMyVnptWorkflows);
-        Assert.Equal(2, MainViewModel.MaxMyVnptOtpSendAttempts);
+        Assert.Equal(64, MainViewModel.MaxConcurrentMyVnptWorkflows);
+        Assert.Equal(3, MainViewModel.MaxMyVnptOtpSendAttempts);
+        Assert.Equal(6, MainViewModel.MaxMyVnptFreshOtpRecoveryRounds);
+        Assert.Equal(
+            TimeSpan.FromSeconds(65),
+            MainViewModel.MyVnptOtpWaitTimeout);
+        Assert.Equal(
+            TimeSpan.FromSeconds(10),
+            MainViewModel.MyVnptQueuedOtpGraceTimeout);
     }
 
     [Fact]

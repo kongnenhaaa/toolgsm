@@ -223,6 +223,8 @@ public class GsmModemService : IGsmModemService
     [
         "AT+CPIN? \r",
         "AT+CSQ \r",
+        "AT+CREG?",
+        "AT+CEREG?",
         "AT+COPS?"
     ];
 
@@ -279,6 +281,14 @@ public class GsmModemService : IGsmModemService
     internal static TimeSpan SautoNetworkRecheckInterval { get; } =
         TimeSpan.FromSeconds(2);
 
+    // COPS is not a durable proof that a modem is still registered. EC20 can
+    // keep returning the last operator after CREG/CEREG has fallen back to
+    // searching, which leaves mobile-terminated SMS queued at the SMSC. Keep a
+    // low-rate online probe so that state is corrected and registration is
+    // recovered without adding a command burst to large modem banks.
+    internal static TimeSpan SautoOnlineNetworkRecheckInterval { get; } =
+        TimeSpan.FromSeconds(30);
+
     internal static TimeSpan SautoDataPortLoopDelay { get; } =
         TimeSpan.FromMilliseconds(400);
 
@@ -299,7 +309,9 @@ public class GsmModemService : IGsmModemService
         "AT+CMGF=1",
         "AT+CSCS=\"GSM\"",
         "AT+CPMS=\"SM\",\"SM\",\"SM\"",
-        "AT+CNMI=1,1,0,0,0"
+        // Mode 2 buffers unsolicited indications while the UART is temporarily
+        // reserved instead of discarding them as mode 1 is allowed to do.
+        "AT+CNMI=2,1,0,0,0"
     ];
 
     internal const string SmsReceiveWatchdogCommand = "AT+CMGL=\"ALL\"";
@@ -341,6 +353,7 @@ public class GsmModemService : IGsmModemService
         string Ccid,
         string Carrier,
         string NetworkType,
+        bool SmsRegistered,
         bool AutomaticUssdCompleted,
         DateTimeOffset LastAutomaticUssdAttemptUtc);
     private sealed record SmsReceiveMaintenanceGate(
@@ -363,6 +376,8 @@ public class GsmModemService : IGsmModemService
         public string NetworkType { get; set; } = string.Empty;
         public string CsqResponse { get; set; } = string.Empty;
         public string CopsResponse { get; set; } = string.Empty;
+        public bool CircuitSwitchedRegistered { get; set; }
+        public bool EpsRegistered { get; set; }
         public string UssdResponse { get; set; } = string.Empty;
         public string TerminalErrorResponse { get; set; } = string.Empty;
         public string Manufacturer { get; set; } = string.Empty;
@@ -383,6 +398,8 @@ public class GsmModemService : IGsmModemService
         string NetworkType,
         string CsqResponse,
         string CopsResponse,
+        bool CircuitSwitchedRegistered,
+        bool EpsRegistered,
         string UssdResponse,
         string TerminalErrorResponse,
         string Manufacturer,
@@ -949,6 +966,8 @@ public class GsmModemService : IGsmModemService
                     state.Carrier = string.Empty;
                     state.NetworkType = string.Empty;
                     state.CopsResponse = string.Empty;
+                    state.CircuitSwitchedRegistered = false;
+                    state.EpsRegistered = false;
                 });
             _networkIdentityGenerations.AddOrUpdate(
                 portName, 1, static (_, current) => current + 1);
@@ -1073,7 +1092,8 @@ public class GsmModemService : IGsmModemService
                 networkState.Ccid,
                 expectedCcid,
                 StringComparison.Ordinal)
-            && IsSautoCarrierRegistered(networkState.Carrier);
+            && IsSautoCarrierRegistered(networkState.Carrier)
+            && networkState.SmsRegistered;
         return CanOpenSmsReceiveMaintenanceGate(
             expectedGeneration,
             CurrentSmsReceiveMaintenanceGeneration(portName),
@@ -1158,7 +1178,7 @@ public class GsmModemService : IGsmModemService
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = portName,
-                            Data = "[SMS_RECEIVE_ARM_RETRY] Modem chưa xác nhận CMGF=1/CSCS=GSM/CPMS=SM/CNMI=1,1; giữ SMS trong bộ nhớ modem và sẽ tự thử lại."
+                            Data = "[SMS_RECEIVE_ARM_RETRY] Modem chưa xác nhận CMGF=1/CSCS=GSM/CPMS=SM/CNMI=2,1; giữ SMS trong bộ nhớ modem và sẽ tự thử lại."
                         });
                         return;
                     }
@@ -2504,10 +2524,13 @@ public class GsmModemService : IGsmModemService
             cpms ?? string.Empty,
             @"\+CPMS:\s*""SM""\s*,",
             RegexOptions.IgnoreCase)
-        && Regex.IsMatch(
-            cnmi ?? string.Empty,
-            @"\+CNMI:\s*1\s*,\s*1\b",
-            RegexOptions.IgnoreCase);
+        && IsSmsNotificationModeReady(cnmi);
+
+    internal static bool IsSmsNotificationModeReady(string? response) =>
+        Regex.IsMatch(
+            response ?? string.Empty,
+            @"\+CNMI:\s*2\s*,\s*1\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     internal static string BuildStoredSmsDeliveryId(
         string scope,
@@ -2677,7 +2700,7 @@ public class GsmModemService : IGsmModemService
                         LogMessage?.Invoke(this, new GsmDataEventArgs
                         {
                             PortName = port,
-                            Data = "[SMS_RECEIVE_MODE_RESTORE_BLOCKED] Chưa xác minh lại được CMGF=1/CSCS=GSM/CNMI=1,1; giữ cleanup intent trong phiên để thử lại."
+                            Data = "[SMS_RECEIVE_MODE_RESTORE_BLOCKED] Chưa xác minh lại được CMGF=1/CSCS=GSM/CNMI=2,1; giữ cleanup intent trong phiên để thử lại."
                         });
                     }
                 }
@@ -4167,7 +4190,7 @@ public class GsmModemService : IGsmModemService
         {
             PortName = portName,
             Data = smsReceiveArmed
-                ? "[SMS_RECEIVE_ARMED] Đã xác minh CMGF=1, CSCS=GSM, CPMS=SM và CNMI=1,1."
+                ? "[SMS_RECEIVE_ARMED] Đã xác minh CMGF=1, CSCS=GSM, CPMS=SM và CNMI=2,1."
                 : "[SMS_RECEIVE_ARM_RETRY] Chưa xác minh được chế độ nhận SMS; sẽ tự cấu hình lại khi mạng sẵn sàng."
         });
     }
@@ -4810,6 +4833,7 @@ public class GsmModemService : IGsmModemService
         CancellationToken token = loopCts.Token;
         string carrier = string.Empty;
         string networkType = string.Empty;
+        bool smsRegistered = false;
         string lastReportedNetworkStatus = string.Empty;
         bool automaticUssdCompleted = false;
         DateTimeOffset lastNetworkCheckUtc = DateTimeOffset.MinValue;
@@ -4821,12 +4845,13 @@ public class GsmModemService : IGsmModemService
         {
             carrier = cached.Carrier;
             networkType = cached.NetworkType;
+            smsRegistered = cached.SmsRegistered;
             automaticUssdCompleted = cached.AutomaticUssdCompleted;
             lastAutomaticUssdAttemptUtc =
                 cached.LastAutomaticUssdAttemptUtc;
         }
 
-        if (IsSautoCarrierRegistered(carrier))
+        if (IsSautoCarrierRegistered(carrier) && smsRegistered)
         {
             EnableSmsReceiveMaintenanceAfterSauto(
                 portName,
@@ -5018,6 +5043,7 @@ public class GsmModemService : IGsmModemService
 
                             if (ShouldQuerySautoNetwork(
                                     carrier,
+                                    smsRegistered,
                                     DateTimeOffset.UtcNow,
                                     lastNetworkCheckUtc))
                             {
@@ -5029,24 +5055,47 @@ public class GsmModemService : IGsmModemService
                                 await Task.Delay(
                                     SautoDataPortStepDelay,
                                     token);
+                                await WriteSautoCommandWhileLockedAsync(
+                                    portName,
+                                    networkPort,
+                                    SautoNetworkPollingCommandOrder[3],
+                                    token);
+                                await Task.Delay(
+                                    SautoDataPortStepDelay,
+                                    token);
+                                await WriteSautoCommandWhileLockedAsync(
+                                    portName,
+                                    networkPort,
+                                    SautoNetworkPollingCommandOrder[4],
+                                    token);
+                                await Task.Delay(
+                                    SautoDataPortStepDelay,
+                                    token);
                                 lastNetworkCheckUtc = DateTimeOffset.UtcNow;
 
                                 SautoReceiveSnapshot afterCops =
                                     GetSautoReceiveSnapshot(portName);
                                 carrier = afterCops.Carrier;
                                 networkType = afterCops.NetworkType;
-                                if (IsSautoCarrierRegistered(carrier))
+                                smsRegistered = IsSmsNetworkRegistered(
+                                    afterCops.CircuitSwitchedRegistered,
+                                    afterCops.EpsRegistered);
+                                bool networkReadyForSms =
+                                    IsSautoCarrierRegistered(carrier)
+                                    && smsRegistered;
+                                _sautoNetworkStates[portName] =
+                                    new SautoNetworkState(
+                                        normalizedExpectedCcid,
+                                        carrier,
+                                        networkType,
+                                        SmsRegistered: smsRegistered,
+                                        AutomaticUssdCompleted:
+                                            automaticUssdCompleted,
+                                        LastAutomaticUssdAttemptUtc:
+                                            lastAutomaticUssdAttemptUtc);
+                                if (networkReadyForSms)
                                 {
                                     consecutiveCopsNoCarrierResponses = 0;
-                                    _sautoNetworkStates[portName] =
-                                        new SautoNetworkState(
-                                            normalizedExpectedCcid,
-                                            carrier,
-                                            networkType,
-                                            AutomaticUssdCompleted:
-                                                automaticUssdCompleted,
-                                            LastAutomaticUssdAttemptUtc:
-                                                lastAutomaticUssdAttemptUtc);
                                     if (!IsSmsReceiveMaintenanceEnabled(portName))
                                     {
                                         EnableSmsReceiveMaintenanceAfterSauto(
@@ -5080,15 +5129,15 @@ public class GsmModemService : IGsmModemService
                                     consecutiveCopsNoCarrierResponses++;
                                     AtCommandTraceLogger.State(
                                         portName,
-                                        $"SAUTO_STEP_HOLD;step=COPS_REGISTERED;result={GetSautoResponseOutcome(afterCops.CopsResponse)};next_retry_seconds=2;no_carrier_count={consecutiveCopsNoCarrierResponses}");
-                                    // Sau 5 lần COPS liên tiếp không có carrier (~12s), gửi AT+COPS=0,0
-                                    // để force firmware tự đăng ký mạng (giúp EC20CEFAGR08A03M4G, v.v.).
+                                        $"SAUTO_STEP_HOLD;step=SMS_NETWORK_REGISTERED;carrier={carrier};cs={afterCops.CircuitSwitchedRegistered};eps={afterCops.EpsRegistered};result={GetSautoResponseOutcome(afterCops.CopsResponse)};next_retry_seconds=2;not_ready_count={consecutiveCopsNoCarrierResponses}");
+                                    // Sau 5 lần chưa có đăng ký CS/EPS hoặc chưa có
+                                    // operator, yêu cầu firmware đăng ký tự động lại.
                                     if (consecutiveCopsNoCarrierResponses >= 5)
                                     {
                                         consecutiveCopsNoCarrierResponses = 0;
                                         AtCommandTraceLogger.State(
                                             portName,
-                                            "SAUTO_NETWORK_REREGISTER;reason=COPS_NO_CARRIER;action=AT+COPS=0,0");
+                                            "SAUTO_NETWORK_REREGISTER;reason=SMS_NETWORK_NOT_REGISTERED;action=AT+COPS=0,0");
                                         try
                                         {
                                             await WriteSautoCommandWhileLockedAsync(
@@ -5117,45 +5166,38 @@ public class GsmModemService : IGsmModemService
                             // the next statement/loop, so synchronize it here too.
                             SautoReceiveSnapshot latestUssdState =
                                 GetSautoReceiveSnapshot(portName);
-                            if (!IsSautoCarrierRegistered(carrier)
-                                && IsSautoCarrierRegistered(
+                            smsRegistered = IsSmsNetworkRegistered(
+                                latestUssdState.CircuitSwitchedRegistered,
+                                latestUssdState.EpsRegistered);
+                            if (!string.IsNullOrWhiteSpace(
                                     latestUssdState.Carrier))
                             {
                                 carrier = latestUssdState.Carrier;
                                 networkType = latestUssdState.NetworkType;
                             }
 
-                            if (IsSautoCarrierRegistered(carrier)
-                                && (!_sautoNetworkStates.TryGetValue(
-                                        portName,
-                                        out SautoNetworkState? liveNetworkState)
-                                    || !string.Equals(
-                                        liveNetworkState.Ccid,
-                                        normalizedExpectedCcid,
-                                        StringComparison.Ordinal)))
-                            {
-                                // A valid COPS line can arrive just after the
-                                // 100 ms write-only sampling window. Persist that
-                                // late registration before opening SMS; otherwise
-                                // CanOpenSmsReceiveMaintenanceGate sees no network
-                                // state even though the shared RX parser has it.
-                                _sautoNetworkStates[portName] =
-                                    new SautoNetworkState(
-                                        normalizedExpectedCcid,
-                                        carrier,
-                                        networkType,
-                                        AutomaticUssdCompleted:
-                                            automaticUssdCompleted,
-                                        LastAutomaticUssdAttemptUtc:
-                                            lastAutomaticUssdAttemptUtc);
-                            }
+                            // CREG/CEREG/COPS can arrive just after the 100 ms
+                            // write-only sampling window. Persist the shared RX
+                            // state on every loop so late registration and late
+                            // de-registration both immediately control the SMS
+                            // gate instead of leaving a stale online state.
+                            _sautoNetworkStates[portName] =
+                                new SautoNetworkState(
+                                    normalizedExpectedCcid,
+                                    carrier,
+                                    networkType,
+                                    SmsRegistered: smsRegistered,
+                                    AutomaticUssdCompleted:
+                                        automaticUssdCompleted,
+                                    LastAutomaticUssdAttemptUtc:
+                                        lastAutomaticUssdAttemptUtc);
 
                             // If the first receive-mode activation failed, keep
                             // retrying on the normal online polling cadence. Once
-                            // carrier is cached ShouldQuerySautoNetwork is false,
-                            // so retrying only inside the COPS branch would leave
-                            // SMS disabled for the rest of the app session.
+                            // the online health probe is deliberately low-rate,
+                            // so retry receive-mode activation on every loop.
                             if (IsSautoCarrierRegistered(carrier)
+                                && smsRegistered
                                 && !IsSmsReceiveMaintenanceEnabled(portName))
                             {
                                 EnableSmsReceiveMaintenanceAfterSauto(
@@ -5177,6 +5219,7 @@ public class GsmModemService : IGsmModemService
                                         normalizedExpectedCcid,
                                         carrier,
                                         networkType,
+                                        SmsRegistered: smsRegistered,
                                         AutomaticUssdCompleted: true,
                                         LastAutomaticUssdAttemptUtc:
                                             lastAutomaticUssdAttemptUtc);
@@ -5229,6 +5272,7 @@ public class GsmModemService : IGsmModemService
                                             normalizedExpectedCcid,
                                             carrier,
                                             networkType,
+                                            SmsRegistered: smsRegistered,
                                             AutomaticUssdCompleted: true,
                                             LastAutomaticUssdAttemptUtc:
                                                 lastAutomaticUssdAttemptUtc);
@@ -5249,6 +5293,7 @@ public class GsmModemService : IGsmModemService
                                             normalizedExpectedCcid,
                                             carrier,
                                             networkType,
+                                            SmsRegistered: smsRegistered,
                                             AutomaticUssdCompleted: false,
                                             LastAutomaticUssdAttemptUtc:
                                                 lastAutomaticUssdAttemptUtc);
@@ -5284,6 +5329,7 @@ public class GsmModemService : IGsmModemService
                                             normalizedExpectedCcid,
                                             carrier,
                                             networkType,
+                                            SmsRegistered: smsRegistered,
                                             AutomaticUssdCompleted:
                                                 automaticUssdCompleted,
                                             LastAutomaticUssdAttemptUtc:
@@ -5364,7 +5410,8 @@ public class GsmModemService : IGsmModemService
                 }
 
                 TimeSpan loopDelay = SelectSautoDataPortLoopDelay(
-                    IsSautoCarrierRegistered(carrier));
+                    IsSautoCarrierRegistered(carrier)
+                    && smsRegistered);
                 try { await Task.Delay(loopDelay, token); }
                 catch (OperationCanceledException) { break; }
             }
@@ -5483,12 +5530,45 @@ public class GsmModemService : IGsmModemService
             "No Signal",
             StringComparison.OrdinalIgnoreCase);
 
+    internal static bool TryParseNetworkRegistrationStatus(
+        string? response,
+        string expectedFamily,
+        out int status)
+    {
+        status = -1;
+        string family = expectedFamily?.Trim().ToUpperInvariant() ?? string.Empty;
+        if (family is not ("CREG" or "CEREG")) return false;
+
+        Match match = Regex.Match(
+            response ?? string.Empty,
+            $@"(?:^|\r?\n)\s*\+{family}:\s*(?<first>\d+)(?:\s*,\s*(?<second>\d+))?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) return false;
+
+        string value = match.Groups["second"].Success
+            ? match.Groups["second"].Value
+            : match.Groups["first"].Value;
+        return int.TryParse(value, out status);
+    }
+
+    internal static bool IsSmsNetworkRegistered(
+        bool circuitSwitchedRegistered,
+        bool epsRegistered) =>
+        circuitSwitchedRegistered || epsRegistered;
+
     internal static bool ShouldQuerySautoNetwork(
         string? carrier,
+        bool smsRegistered,
         DateTimeOffset nowUtc,
-        DateTimeOffset lastCheckUtc) =>
-        !IsSautoCarrierRegistered(carrier)
-        && nowUtc - lastCheckUtc > SautoNetworkRecheckInterval;
+        DateTimeOffset lastCheckUtc)
+    {
+        bool networkReady = IsSautoCarrierRegistered(carrier)
+            && smsRegistered;
+        TimeSpan interval = networkReady
+            ? SautoOnlineNetworkRecheckInterval
+            : SautoNetworkRecheckInterval;
+        return nowUtc - lastCheckUtc > interval;
+    }
 
     internal static string GetSautoAutomaticUssdCode(string? carrier)
     {
@@ -7384,6 +7464,8 @@ public class GsmModemService : IGsmModemService
                 state.NetworkType,
                 state.CsqResponse,
                 state.CopsResponse,
+                state.CircuitSwitchedRegistered,
+                state.EpsRegistered,
                 state.UssdResponse,
                 state.TerminalErrorResponse,
                 state.Manufacturer,
@@ -7585,6 +7667,46 @@ public class GsmModemService : IGsmModemService
                         publishedEvents.Add(line);
                 }
 
+                bool wasSmsRegistered = IsSmsNetworkRegistered(
+                    state.CircuitSwitchedRegistered,
+                    state.EpsRegistered);
+                bool registrationLineParsed = false;
+                if (TryParseNetworkRegistrationStatus(
+                        line,
+                        "CREG",
+                        out int circuitStatus))
+                {
+                    state.CircuitSwitchedRegistered =
+                        circuitStatus is 1 or 5;
+                    registrationLineParsed = true;
+                }
+                else if (TryParseNetworkRegistrationStatus(
+                             line,
+                             "CEREG",
+                             out int epsStatus))
+                {
+                    state.EpsRegistered = epsStatus is 1 or 5;
+                    registrationLineParsed = true;
+                }
+
+                if (registrationLineParsed)
+                {
+                    bool isSmsRegistered = IsSmsNetworkRegistered(
+                        state.CircuitSwitchedRegistered,
+                        state.EpsRegistered);
+                    if (!wasSmsRegistered && isSmsRegistered)
+                    {
+                        runNetworkRegisteredSmsRecovery = true;
+                        publishedEvents.Add(
+                            "[SMS_NETWORK_REGISTERED] Mạng đã sẵn sàng nhận SMS.");
+                    }
+                    else if (wasSmsRegistered && !isSmsRegistered)
+                    {
+                        publishedEvents.Add(
+                            "[SMS_NETWORK_LOST] Modem đã mất đăng ký mạng SMS; đang tự đăng ký lại.");
+                    }
+                }
+
                 if (line.Contains(
                     "+COPS:",
                     StringComparison.OrdinalIgnoreCase))
@@ -7648,15 +7770,10 @@ public class GsmModemService : IGsmModemService
                     state.Model = line;
                 }
 
-                Match cnmi = Regex.Match(
-                    line,
-                    @"\+CNMI:\s*\d+\s*,\s*(\d+)",
-                    RegexOptions.IgnoreCase);
-                if (cnmi.Success
-                    && !string.Equals(
-                        cnmi.Groups[1].Value,
-                        "1",
-                        StringComparison.Ordinal))
+                if (line.Contains(
+                        "+CNMI:",
+                        StringComparison.OrdinalIgnoreCase)
+                    && !IsSmsNotificationModeReady(line))
                 {
                     runCnmiCorrection = true;
                 }
@@ -7791,7 +7908,7 @@ public class GsmModemService : IGsmModemService
                 string correction =
                     await SendSautoCommandForResponseAsync(
                     portName,
-                    "AT+CNMI=1,1,0,0,0",
+                    "AT+CNMI=2,1,0,0,0",
                     TimeSpan.FromSeconds(10),
                     CancellationToken.None);
                 if (IsSautoOkResponse(correction))

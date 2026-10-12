@@ -25,7 +25,8 @@ public sealed record MyVnptLoginOtpSession(
 public sealed record MyVnptPasswordResult(
     bool Success,
     string Message,
-    bool NeedsRetryWithMissPassword = false);
+    bool NeedsRetryWithMissPassword = false,
+    bool NeedsRetryWithFreshOtp = false);
 
 public static class MyVnptService
 {
@@ -35,9 +36,8 @@ public static class MyVnptService
         "ToolGSM.MyVNPT.Device.v1";
     private const string StableUserAgent = "okhttp/4.7.2";
     private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(60) };
-    // Một lô Pass VNPT chạy tối đa 20 COM và mỗi COM có fingerprint riêng.
-    // Cho đủ 20 request HTTP đi đồng thời để otp_send không còn bị biến thành
-    // hàng đợi tuần tự ở lớp API.
+    // Toàn bộ bank COM có thể cùng chạy workflow, nhưng chỉ cho tối đa 20
+    // request HTTP đi đồng thời để giữ thông lượng cao mà không làm nghẽn API.
     internal const int ApiConcurrencyLimit = 20;
     private static readonly SemaphoreSlim ApiConcurrencyGate =
         new(ApiConcurrencyLimit, ApiConcurrencyLimit);
@@ -47,6 +47,13 @@ public static class MyVnptService
         TimeSpan.FromSeconds(3);
     private static readonly AsyncRequestPacer OtpSendPacer =
         new(MinimumOtpSendSpacing);
+    // API chịu được 20 request đồng thời nhưng cổng giao SMS bị hụt khi hàng
+    // chục otp_send bắt đầu cùng một mili-giây. Chỉ rải thời điểm bắt đầu rất
+    // ngắn; các workflow và request sau khi bắt đầu vẫn chạy song song.
+    internal static readonly TimeSpan MinimumPasswordOtpSendSpacing =
+        TimeSpan.FromMilliseconds(250);
+    private static readonly AsyncRequestPacer PasswordOtpSendPacer =
+        new(MinimumPasswordOtpSendSpacing);
     private const int MaxTransientAttempts = 3;
     // Chỉ giảm nhịp sau khi VNPT thực sự báo quá tải. Cooldown dùng chung giúp
     // các retry không cùng lúc dội ngược vào API, còn fast path không bị delay.
@@ -98,9 +105,20 @@ public static class MyVnptService
         // reg_nok hoặc chỉ trả message "đã có tài khoản". Tất cả phải đi qua
         // authen_miss_password; nếu chọn nhầm authen_register, VNPT sẽ trả lại
         // "Thuê bao đã có tài khoản trên hệ thống".
-        bool accountExists =
+        bool serverAccountExists =
             string.Equals(checkCode, "3", StringComparison.Ordinal)
             || IsAccountAlreadyExistsResponse(checkCode, checkMessage);
+        bool cachedAccountExists =
+            MyVnptAccountStateCache.Default.IsKnownAccount(normalizedPhone);
+        bool accountExists = serverAccountExists || cachedAccountExists;
+        if (serverAccountExists)
+            MyVnptAccountStateCache.Default.MarkAccountExists(normalizedPhone);
+        if (cachedAccountExists && !serverAccountExists)
+        {
+            addLogCallback?.Invoke(
+                "[VNPT_FLOW] authen_check_account chưa đồng bộ; dùng trạng thái tài khoản đã xác nhận ở lần thành công trước.",
+                "INFO");
+        }
         addLogCallback?.Invoke(
             $"[VNPT_HTTP] authen_check_account: code={checkCode}; message={checkMessage}; mode={(accountExists ? "authen_miss_password" : "authen_register")}", "INFO");
 
@@ -112,6 +130,15 @@ public static class MyVnptService
         CancellationToken cancellationToken = default,
         Action<string, string>? addLogCallback = null)
     {
+        TimeSpan pacingDelay = await PasswordOtpSendPacer.WaitForTurnAsync(
+            cancellationToken).ConfigureAwait(false);
+        if (pacingDelay >= TimeSpan.FromMilliseconds(10))
+        {
+            addLogCallback?.Invoke(
+                $"[VNPT_HTTP] otp_send rải tải SMS gateway; chờ {pacingDelay.TotalMilliseconds:0} ms trước khi bắt đầu.",
+                "INFO");
+        }
+
         string otpService = session.AccountExists ? "authen_miss_password" : "authen_register";
         string otpContent = await PostAsync(
             "otp_send",
@@ -149,7 +176,13 @@ public static class MyVnptService
             otpCode = GetResponseValue(otpContent, "error_code", "errorCode");
             otpMessage = GetResponseMessage(otpContent, "Lỗi gửi OTP MyVNPT");
             if (otpCode == "0" || IsOtpAlreadyPendingMessage(otpMessage))
+            {
                 session = session with { AccountExists = fallbackAccountExists };
+                if (fallbackAccountExists)
+                    MyVnptAccountStateCache.Default.MarkAccountExists(session.Phone);
+                else
+                    MyVnptAccountStateCache.Default.MarkAccountMissing(session.Phone);
+            }
         }
 
         if (otpCode != "0")
@@ -161,6 +194,10 @@ public static class MyVnptService
             }
             throw new InvalidOperationException(otpMessage);
         }
+
+        addLogCallback?.Invoke(
+            "[VNPT_HTTP] otp_send được server chấp nhận; OTP mới đã được xếp gửi.",
+            "INFO");
 
         return session;
     }
@@ -262,6 +299,7 @@ public static class MyVnptService
 
             if (respCode == "0")
             {
+                MyVnptAccountStateCache.Default.MarkAccountExists(session.Phone);
                 addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {session.Phone} thành công ({mode}).", "SUCCESS");
                 return new MyVnptPasswordResult(true,
                     accountExists ? "Đặt lại pass thành công" : "Đăng ký thành công");
@@ -277,6 +315,7 @@ public static class MyVnptService
             // authen_miss_password mới thay vì ghi lỗi ngay.
             if (ShouldRetryWithMissPassword(accountExists, respCode, respMsg))
             {
+                MyVnptAccountStateCache.Default.MarkAccountExists(session.Phone);
                 addLogCallback?.Invoke(
                     $"[{portName}] [VNPT_FLOW] Thuê bao đã có tài khoản; chuyển sang quên mật khẩu và gửi OTP mới.",
                     "WARN");
@@ -284,6 +323,20 @@ public static class MyVnptService
                     false,
                     respMsg,
                     NeedsRetryWithMissPassword: true);
+            }
+
+            // Một SMS cũ có thể tới đúng lúc ngay sau khi tool vừa gửi lại
+            // otp_send. Đừng chốt COM là lỗi chỉ vì mã cũ bị VNPT từ chối:
+            // caller sẽ mở một vòng OTP mới, còn mã đã dùng vẫn bị loại.
+            if (IsRecoverableOtpFailure(respCode, respMsg))
+            {
+                addLogCallback?.Invoke(
+                    $"[{portName}] [VNPT_FLOW] OTP/PIN bị từ chối; xin OTP mới trước khi kết luận thất bại.",
+                    "WARN");
+                return new MyVnptPasswordResult(
+                    false,
+                    respMsg,
+                    NeedsRetryWithFreshOtp: true);
             }
 
             addLogCallback?.Invoke($"[{portName}] Đặt mật khẩu MyVNPT {session.Phone} thất bại ({mode}): {respMsg}", "ERROR");
@@ -328,7 +381,10 @@ public static class MyVnptService
     public static bool IsOtpAlreadyPendingMessage(string? message) =>
         !string.IsNullOrWhiteSpace(message)
         && (message.Contains("đang gửi OTP", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("dang gui OTP", StringComparison.OrdinalIgnoreCase));
+            || message.Contains("dang gui OTP", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("OTP đã được gửi", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("OTP da duoc gui", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("OTP has been sent", StringComparison.OrdinalIgnoreCase));
 
     internal static bool IsAccountAlreadyExistsResponse(string? errorCode, string? message) =>
         string.Equals(errorCode, "reg_nok", StringComparison.OrdinalIgnoreCase)
@@ -346,6 +402,42 @@ public static class MyVnptService
         string? errorCode,
         string? message) =>
         !accountExists && IsAccountAlreadyExistsResponse(errorCode, message);
+
+    internal static bool IsRecoverableOtpFailure(
+        string? errorCode,
+        string? message)
+    {
+        if (errorCode is not null
+            && (errorCode.Equals("otp_nok", StringComparison.OrdinalIgnoreCase)
+                || errorCode.Equals("pin_nok", StringComparison.OrdinalIgnoreCase)
+                || errorCode.Equals("otp_invalid", StringComparison.OrdinalIgnoreCase)
+                || errorCode.Equals("invalid_otp", StringComparison.OrdinalIgnoreCase)
+                || errorCode.Equals("otp_expired", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(message)) return false;
+
+        bool mentionsOtp =
+            message.Contains("OTP", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("PIN", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("mã xác thực", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("ma xac thuc", StringComparison.OrdinalIgnoreCase);
+        bool isRejected =
+            message.Contains("không hợp lệ", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("khong hop le", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("không đúng", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("khong dung", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("sai", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("hết hạn", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("het han", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("expired", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("invalid", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("chưa yêu cầu", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("chua yeu cau", StringComparison.OrdinalIgnoreCase);
+        return mentionsOtp && isRejected;
+    }
 
     private static bool IsAccountStateConflictMessage(string? message) =>
         !string.IsNullOrWhiteSpace(message)
@@ -412,9 +504,14 @@ public static class MyVnptService
         for (int attempt = 1; attempt <= MaxTransientAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var queueStopwatch = Stopwatch.StartNew();
             await ApiConcurrencyGate.WaitAsync(cancellationToken);
+            queueStopwatch.Stop();
             try
             {
+                addLogCallback?.Invoke(
+                    $"[VNPT_HTTP] service={service} attempt={attempt} event=gate_acquired queueMs={queueStopwatch.ElapsedMilliseconds}",
+                    "INFO");
                 // Re-check cooldown only after entering the bounded queue. A
                 // request that queued before a 429 must not bypass the newly
                 // published cooldown when a slot becomes available.
@@ -430,6 +527,9 @@ public static class MyVnptService
                 request.Headers.TryAddWithoutValidation("Language", "vi_VN");
                 request.Headers.TryAddWithoutValidation("User-Agent", userAgent);
 
+                addLogCallback?.Invoke(
+                    $"[VNPT_HTTP] service={service} attempt={attempt} event=request_start",
+                    "INFO");
                 using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
                 string content = await response.Content.ReadAsStringAsync(cancellationToken);
                 stopwatch.Stop();
@@ -462,6 +562,32 @@ public static class MyVnptService
                 }
                 addLogCallback?.Invoke(
                     $"[VNPT_HTTP] service={service} tạm lỗi {(int)response.StatusCode}; thử lại sau {retryDelay.TotalSeconds:0.#} giây.",
+                    "WARN");
+            }
+            catch (OperationCanceledException ex)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                if (attempt == MaxTransientAttempts)
+                {
+                    throw new HttpRequestException(
+                        "VNPT timeout sau các lần tự thử lại",
+                        ex);
+                }
+
+                TimeSpan retryDelay = TimeSpan.FromSeconds(attempt * 2);
+                ExtendApiCooldown(retryDelay);
+                addLogCallback?.Invoke(
+                    $"[VNPT_HTTP] service={service} timeout; tự thử lại lần {attempt + 1}/{MaxTransientAttempts} sau {retryDelay.TotalSeconds:0.#} giây.",
+                    "WARN");
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode is null)
+            {
+                if (attempt == MaxTransientAttempts) throw;
+
+                TimeSpan retryDelay = TimeSpan.FromSeconds(attempt * 2);
+                ExtendApiCooldown(retryDelay);
+                addLogCallback?.Invoke(
+                    $"[VNPT_HTTP] service={service} lỗi kết nối ({ex.Message}); tự thử lại lần {attempt + 1}/{MaxTransientAttempts} sau {retryDelay.TotalSeconds:0.#} giây.",
                     "WARN");
             }
             finally

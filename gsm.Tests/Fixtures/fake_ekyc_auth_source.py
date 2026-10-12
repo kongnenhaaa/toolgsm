@@ -2,6 +2,7 @@
 
 
 ONEBSS_BASE = "https://offline.test"
+ONEBSS_DEVICE_ID = "offline-device"
 CBSS_BASE_URL = "https://offline-cbss.test"
 _ONEBSS_SESSION = {}
 _saved_config = {}
@@ -13,6 +14,10 @@ class _CbssRuntime:
     def __init__(self):
         self._accounts = []
         self._last_user = ""
+        self.logged_in = False
+
+    def has_saved_session(self):
+        return False
 
     def saved_credentials(self):
         return list(self._accounts), self._last_user
@@ -31,11 +36,12 @@ _CBSS_RUNTIME = _CbssRuntime()
 
 
 class _Response:
-    status_code = 200
     headers = {"Content-Type": "application/json; charset=utf-8"}
 
-    def __init__(self, payload):
+    def __init__(self, payload, status_code=200, text=""):
         self._payload = payload
+        self.status_code = status_code
+        self.text = text
 
     def json(self):
         return self._payload
@@ -51,6 +57,14 @@ class _Requests:
             })
         if url.endswith("/quantri/oauth/token"):
             return _Response({"access_token": "offline-access-token"})
+        if url.endswith("/quantri/user/thongtin_nv"):
+            authorization = str((_kwargs.get("headers") or {}).get("authorization") or "")
+            if "fallback-signature" in authorization:
+                return _Response(
+                    {"message": "No handler found for POST /user/thongtin_nv"},
+                    status_code=404,
+                )
+            return _Response({"error_code": "BSS-00000000", "message": "OK"})
         return _Response({"message": "Đường dẫn không hợp lệ"})
 
 
@@ -69,3 +83,7 @@ def _save_config(token, device_id, username="", password=""):
         "last_user": username,
         "accounts": [{"u": username, "p": password}],
     })
+
+
+def _onebss_headers(token, _device_id):
+    return {"authorization": f"Bearer {token}"}

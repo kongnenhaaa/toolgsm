@@ -36,9 +36,9 @@ public sealed class BoundedAsyncWorkRunnerTests
     }
 
     [Fact]
-    public async Task SlotIsHeldUntilTheWholeWorkerFinishes()
+    public async Task FullBankStartsWithoutWaitingForEarlierOtpWorkflows()
     {
-        const int maxConcurrency = 20;
+        const int maxConcurrency = 64;
         int started = 0;
         var firstWaveStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -46,7 +46,7 @@ public sealed class BoundedAsyncWorkRunnerTests
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         Task run = BoundedAsyncWorkRunner.RunAsync(
-            Enumerable.Range(1, 20).ToArray(),
+            Enumerable.Range(1, 64).ToArray(),
             maxConcurrency,
             async (_, cancellationToken) =>
             {
@@ -62,7 +62,7 @@ public sealed class BoundedAsyncWorkRunnerTests
         releaseFirstWave.TrySetResult();
         await run.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.Equal(20, Volatile.Read(ref started));
+        Assert.Equal(64, Volatile.Read(ref started));
     }
 
     [Fact]

@@ -95,18 +95,80 @@ public sealed class AppPathsTests
     }
 
     [Fact]
-    public void LogCleanup_RemovesCompleteLogDirectory()
+    public void LogCleanup_RemovesExpiredFilesButKeepsFreshFiles()
     {
         string directory = Path.Combine(
             Path.GetTempPath(),
             "toolgsm-log-cleanup-test-" + Guid.NewGuid().ToString("N"));
-        string nested = Path.Combine(directory, "old");
-        Directory.CreateDirectory(nested);
-        File.WriteAllText(Path.Combine(directory, "at_commands.log"), "trace");
-        File.WriteAllText(Path.Combine(nested, "system_log.txt"), "trace");
+        try
+        {
+            string nested = Path.Combine(directory, "old");
+            Directory.CreateDirectory(nested);
+            string oldLog = Path.Combine(directory, "at_commands.log");
+            string oldNestedLog = Path.Combine(nested, "system_log.txt");
+            string freshLog = Path.Combine(directory, "current.log");
+            File.WriteAllText(oldLog, "trace");
+            File.WriteAllText(oldNestedLog, "trace");
+            File.WriteAllText(freshLog, "trace");
+            DateTime nowUtc = new(
+                2026, 10, 11, 10, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(oldLog, nowUtc - TimeSpan.FromDays(2));
+            File.SetLastWriteTimeUtc(
+                oldNestedLog,
+                nowUtc - TimeSpan.FromDays(1));
+            File.SetLastWriteTimeUtc(
+                freshLog,
+                nowUtc - TimeSpan.FromHours(23));
 
-        AppBootstrap.DeleteLogDirectory(directory);
+            AppBootstrap.DeleteLogDirectory(
+                directory,
+                nowUtc - AppBootstrap.LogRetention);
 
-        Assert.False(Directory.Exists(directory));
+            Assert.False(File.Exists(oldLog));
+            Assert.False(File.Exists(oldNestedLog));
+            Assert.True(File.Exists(freshLog));
+            Assert.False(Directory.Exists(nested));
+            Assert.True(Directory.Exists(directory));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void KnownRuntimeLogCleanup_DoesNotDeleteOtherOrFreshFiles()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "toolgsm-known-log-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string oldLog = Path.Combine(directory, "system_log.txt");
+            string freshLog = Path.Combine(directory, "webhook_errors.txt");
+            string unrelated = Path.Combine(directory, "account_state.json");
+            File.WriteAllText(oldLog, "trace");
+            File.WriteAllText(freshLog, "trace");
+            File.WriteAllText(unrelated, "state");
+            DateTime nowUtc = new(
+                2026, 10, 11, 10, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(oldLog, nowUtc - TimeSpan.FromHours(25));
+            File.SetLastWriteTimeUtc(freshLog, nowUtc - TimeSpan.FromHours(2));
+            File.SetLastWriteTimeUtc(unrelated, nowUtc - TimeSpan.FromDays(10));
+
+            AppBootstrap.DeleteKnownRuntimeLogs(
+                directory,
+                nowUtc - AppBootstrap.LogRetention);
+
+            Assert.False(File.Exists(oldLog));
+            Assert.True(File.Exists(freshLog));
+            Assert.True(File.Exists(unrelated));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

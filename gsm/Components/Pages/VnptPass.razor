@@ -80,8 +80,8 @@
     @if (_isSetting)
     {
         <MudAlert Severity="Severity.Info" Dense="true" Class="mt-1">
-            Đang chạy song song tối đa 20 cổng. Hệ thống sẽ tự động đặt mật khẩu khi nhận được SMS OTP;
-            cổng chưa nhận được OTP sẽ tự gửi lại một lần.
+            Đang khởi chạy toàn bộ cổng; API xử lý song song tối đa 20 yêu cầu. Hệ thống sẽ tự động đặt mật khẩu khi nhận được SMS OTP;
+            cổng chưa nhận được OTP sẽ tự gửi lại tối đa hai lần.
             @if (!string.IsNullOrWhiteSpace(Vm.VnptSummaryText))
             {
                 <br /><b>@Vm.VnptSummaryText</b>
@@ -175,7 +175,7 @@
                         <li>Kiểm tra tài khoản qua API MyVNPT</li>
                         <li>Gửi yêu cầu nhận OTP</li>
                         <li>Đợi SMS OTP đến</li>
-                        <li>Tự gửi lại một lần nếu sau 1 phút chưa nhận được OTP</li>
+                        <li>Tự gửi lại tối đa hai lần nếu sau 65 giây chưa nhận được OTP</li>
                         <li>Tự động xác thực và đặt mật khẩu mới</li>
                     </ul>
                     <b>5.</b> Kết quả hiển thị ở tab <b>Kết quả</b>.
@@ -193,7 +193,9 @@
 @code {
     // ========== BINDINGS ==========
     private string _vnptPassword = "123456a@A";
-    private string _sendMode = "selected";
+    // Mặc định một lần bấm chạy toàn bộ COM Active; người dùng vẫn có thể đổi
+    // về "Cổng đã chọn" khi cần chạy một nhóm nhỏ.
+    private string _sendMode = "all";
     private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
     private bool _isSetting = false;
@@ -318,7 +320,7 @@
 
         try
         {
-            // ViewModel xử lý theo wave tối đa 20 COM và tự retry OTP bị mất.
+            // ViewModel mở đủ bank 64 COM; API giới hạn 20 request đồng thời.
             await Vm.SetMyVnptPassword(validTargets, _vnptPassword.Trim(), _vnptCts.Token);
             Snackbar.Add("Đã hoàn tất tiến trình VNPT cho các cổng đã chọn.", Severity.Success);
         }

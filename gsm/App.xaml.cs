@@ -27,10 +27,13 @@ namespace gsm
         private ToolGsmApiService? _toolGsmApiService;
         private CancellationTokenSource? _toolGsmApiCts;
         private Task? _toolGsmApiTask;
+        private CancellationTokenSource? _myVnptPassCts;
+        private Task? _myVnptPassTask;
         private Mutex? _singleInstanceMutex;
         private bool _ownsSingleInstanceMutex;
         private EventWaitHandle? _singleInstanceActivationEvent;
         private RegisteredWaitHandle? _singleInstanceActivationRegistration;
+        private Timer? _logCleanupTimer;
         private int _activationQueued;
         private int _shutdownStarted;
         public App()
@@ -73,6 +76,7 @@ namespace gsm
             serviceCollection.AddSingleton<MainViewModel>();
             serviceCollection.AddSingleton<DeviceUnlockAuthService>();
             serviceCollection.AddSingleton<DeviceUnlockAccountHistoryService>();
+            serviceCollection.AddSingleton<IcOcService>();
             serviceCollection.AddSingleton<RealDeviceSmokeTestRunner>();
             serviceCollection.AddSingleton<ToolGsmApiService>();
             serviceCollection.AddSingleton<IFileDialogService, FileDialogService>();
@@ -94,6 +98,11 @@ namespace gsm
             }
 
             StartSingleInstanceActivationListener();
+            _logCleanupTimer = new Timer(
+                static _ => AppBootstrap.DeleteExpiredLogs(),
+                null,
+                TimeSpan.FromHours(1),
+                TimeSpan.FromHours(1));
             base.OnStartup(e);
 
             // Resolve từ chính container mà Blazor sử dụng. Container sẽ gọi
@@ -117,6 +126,33 @@ namespace gsm
             _toolGsmApiTask = _toolGsmApiService
                 .RunAsync(_toolGsmApiCts.Token);
             _ = ObserveToolGsmApiTaskAsync(_toolGsmApiTask);
+
+            string[] requestedVnptPorts = e.Args
+                .Where(argument => argument.StartsWith(
+                    "--vnpt-pass-ports=",
+                    StringComparison.OrdinalIgnoreCase))
+                .SelectMany(argument => argument["--vnpt-pass-ports=".Length..]
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries
+                                | StringSplitOptions.TrimEntries))
+                .Where(portName => System.Text.RegularExpressions.Regex.IsMatch(
+                    portName,
+                    "^COM[0-9]{1,4}$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                    | System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (e.Args.Any(argument => string.Equals(
+                        argument,
+                        "--run-vnpt-pass-once",
+                        StringComparison.OrdinalIgnoreCase))
+                || requestedVnptPorts.Length > 0)
+            {
+                _myVnptPassCts = new CancellationTokenSource();
+                _myVnptPassTask = RunMyVnptPassOnceAsync(
+                    requestedVnptPorts,
+                    _myVnptPassCts.Token);
+                _ = ObserveMyVnptPassTaskAsync(_myVnptPassTask);
+            }
         }
 
         internal void BeginShutdown()
@@ -125,6 +161,9 @@ namespace gsm
 
             try { _toolGsmApiCts?.Cancel(); } catch { }
             try { _realDeviceSmokeCts?.Cancel(); } catch { }
+            try { _myVnptPassCts?.Cancel(); } catch { }
+            try { _logCleanupTimer?.Dispose(); } catch { }
+            _logCleanupTimer = null;
 
             bool keepModemForEmergencyHangup =
                 !string.IsNullOrWhiteSpace(
@@ -171,6 +210,90 @@ namespace gsm
                 _mainViewModel?.AddLog(
                     $"[LOCAL_API_FAILED] {ex.Message}", "ERROR");
                 LogCrash(ex, "ToolGSM_Local_API");
+            }
+        }
+
+        private async Task RunMyVnptPassOnceAsync(
+            IReadOnlyCollection<string> requestedPortNames,
+            CancellationToken cancellationToken)
+        {
+            if (_mainViewModel == null) return;
+
+            _mainViewModel.AddLog(
+                "[VNPT_AUTORUN] Đang đợi danh sách COM Active ổn định...",
+                "INFO");
+            DateTime deadlineUtc = DateTime.UtcNow.AddMinutes(2);
+            int previousEligibleCount = -1;
+            int previousTotalCount = -1;
+            int stableSamples = 0;
+            List<Models.SimPort> eligiblePorts = [];
+
+            while (DateTime.UtcNow < deadlineUtc)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                List<Models.SimPort> snapshot =
+                    _mainViewModel.GetPortsSnapshot();
+                eligiblePorts = snapshot
+                    .Where(port => port.Status == Models.SimStatus.Active)
+                    .Where(port => _mainViewModel.IsPortReadyForOperation(
+                        port.PortName))
+                    .Where(port => !string.IsNullOrWhiteSpace(
+                        MyVnptService.NormalizePhone(port.PhoneNumber)))
+                    .Where(port => requestedPortNames.Count == 0
+                        || requestedPortNames.Contains(
+                            port.PortName,
+                            StringComparer.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (eligiblePorts.Count > 0
+                    && eligiblePorts.Count == previousEligibleCount
+                    && snapshot.Count == previousTotalCount)
+                {
+                    stableSamples++;
+                }
+                else
+                {
+                    stableSamples = 0;
+                }
+
+                previousEligibleCount = eligiblePorts.Count;
+                previousTotalCount = snapshot.Count;
+                if (stableSamples >= 8) break;
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
+
+            if (eligiblePorts.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "Không có COM Active đủ SĐT sau 2 phút chờ.");
+            }
+
+            _mainViewModel.AddLog(
+                $"[VNPT_AUTORUN] Danh sách ổn định: {eligiblePorts.Count} COM; tự chạy tạo pass"
+                + (requestedPortNames.Count > 0 ? " cho nhóm retry." : "."),
+                "INFO");
+            await _mainViewModel.SetMyVnptPassword(
+                eligiblePorts,
+                cancellationToken);
+        }
+
+        private async Task ObserveMyVnptPassTaskAsync(Task task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+                _mainViewModel?.AddLog(
+                    "[VNPT_AUTORUN] Tác vụ tạo pass đã kết thúc.",
+                    "INFO");
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                _mainViewModel?.AddLog(
+                    $"[VNPT_AUTORUN] Lỗi: {ex.Message}",
+                    "ERROR");
             }
         }
 
@@ -226,7 +349,12 @@ namespace gsm
                 BeginShutdown();
 
                 Task[] shutdownTasks =
-                    new[] { _toolGsmApiTask, _realDeviceSmokeTask }
+                    new[]
+                    {
+                        _toolGsmApiTask,
+                        _realDeviceSmokeTask,
+                        _myVnptPassTask
+                    }
                         .Where(static task => task != null)
                         .Cast<Task>()
                         .ToArray();
@@ -269,6 +397,10 @@ namespace gsm
                 _toolGsmApiCts = null;
                 _toolGsmApiTask = null;
                 _toolGsmApiService = null;
+
+                _myVnptPassCts?.Dispose();
+                _myVnptPassCts = null;
+                _myVnptPassTask = null;
 
                 // Không gọi MainViewModel.Dispose() trực tiếp: ServiceProvider sở hữu
                 // singleton này và là đường cleanup duy nhất của App.

@@ -21,6 +21,9 @@
     <div class="persistent-page" style="@PageStyle("deviceunlock")" aria-hidden="@(!IsActive("deviceunlock"))">
         <DeviceUnlock IsPageActive="@IsActive("deviceunlock")" />
     </div>
+    <div class="persistent-page" style="@PageStyle("icocunlock")" aria-hidden="@(!IsActive("icocunlock"))">
+        <IcOcUnlock IsPageActive="@IsActive("icocunlock")" />
+    </div>
     <div class="persistent-page" style="@PageStyle("settings")" aria-hidden="@(!IsActive("settings"))">
         <Settings />
     </div>
@@ -58,6 +61,7 @@
             "" or "ussd" => "ussd",
             "vnpt-pass" => "vnptpass",
             "device-unlock" => "deviceunlock",
+            "icoc-unlock" => "icocunlock",
             "sms" => "sms",
             "call" => "call",
             "ezcom" => "ezcom",

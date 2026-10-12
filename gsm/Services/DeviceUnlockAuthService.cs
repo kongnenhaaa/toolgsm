@@ -81,7 +81,15 @@ public sealed class DeviceUnlockAuthService
             otp,
             challenge,
             deviceId,
-            cancellationToken);
+            cancellationToken: cancellationToken);
+
+    public Task<DeviceUnlockAuthResult> LoginEmployWithTokenAsync(
+        string token,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(
+            "employ_token",
+            token: token,
+            cancellationToken: cancellationToken);
 
     public async Task<DeviceUnlockAuthResult> LoginEmployWithOtpAsync(
         string username,
@@ -136,6 +144,7 @@ public sealed class DeviceUnlockAuthService
         string otp = "",
         string challenge = "",
         string deviceId = "",
+        string token = "",
         CancellationToken cancellationToken = default)
     {
         string? sourcePath = _unlockService.ResolveSourceScriptPath();
@@ -173,7 +182,8 @@ public sealed class DeviceUnlockAuthService
                 password,
                 otp,
                 challenge,
-                deviceId
+                deviceId,
+                token
             });
             await process.StandardInput.WriteLineAsync(
                 requestJson.AsMemory(), cancellationToken);

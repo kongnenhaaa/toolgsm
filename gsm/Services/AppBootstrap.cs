@@ -7,6 +7,9 @@ namespace gsm.Services;
 
 public static class AppBootstrap
 {
+    internal static readonly TimeSpan LogRetention = TimeSpan.FromDays(1);
+    private static int _logCleanupRunning;
+
     public static string AppDir => AppContext.BaseDirectory;
 
     public static string SettingsPath => Path.Combine(AppDir, "appsettings.json");
@@ -41,7 +44,7 @@ public static class AppBootstrap
 
     /// <summary>
     /// Keeps normal application state and features intact, but removes logs
-    /// left by older versions before any service starts.
+    /// older than the retention window before any service starts.
     /// </summary>
     public static void EnsureAll()
     {
@@ -50,10 +53,7 @@ public static class AppBootstrap
             Directory.CreateDirectory(DataDir);
             Directory.CreateDirectory(RecordingsDir);
             Directory.CreateDirectory(ConfigDir);
-            DeleteLogDirectory(LogsDir);
-            DeleteLogDirectory(Path.Combine(AppPaths.UserDataDirectory, "Logs"));
-            DeleteKnownRuntimeLogs(AppDir);
-            DeleteKnownRuntimeLogs(AppPaths.UserDataDirectory);
+            DeleteExpiredLogs();
             DeleteObsoleteLocalStateFiles();
             EnsureSettingsFile();
         }
@@ -61,6 +61,41 @@ public static class AppBootstrap
         {
             // Startup diagnostics stay in the debugger/RAM only.
             Debug.WriteLine($"[BOOTSTRAP] {ex}");
+        }
+    }
+
+    /// <summary>
+    /// Removes only known ToolGSM log/diagnostic files older than 24 hours.
+    /// Safe to call from the hourly maintenance timer as well as startup.
+    /// </summary>
+    internal static void DeleteExpiredLogs(DateTime? utcNow = null)
+    {
+        if (Interlocked.Exchange(ref _logCleanupRunning, 1) != 0) return;
+
+        try
+        {
+            DateTime cutoffUtc = (utcNow ?? DateTime.UtcNow) - LogRetention;
+            DeleteLogDirectory(LogsDir, cutoffUtc);
+            DeleteLogDirectory(
+                Path.Combine(AppPaths.UserDataDirectory, "Logs"),
+                cutoffUtc);
+            DeleteLogDirectory(
+                Path.Combine(AppPaths.UserDataDirectory, "Diagnostics"),
+                cutoffUtc);
+            DeleteLogDirectory(
+                Path.Combine(
+                    Environment.GetFolderPath(
+                        Environment.SpecialFolder.LocalApplicationData),
+                    "ToolGSM",
+                    "HardwareFix",
+                    "Logs"),
+                cutoffUtc);
+            DeleteKnownRuntimeLogs(AppDir, cutoffUtc);
+            DeleteKnownRuntimeLogs(AppPaths.UserDataDirectory, cutoffUtc);
+        }
+        finally
+        {
+            Volatile.Write(ref _logCleanupRunning, 0);
         }
     }
 
@@ -78,7 +113,9 @@ public static class AppBootstrap
         }
     }
 
-    internal static void DeleteLogDirectory(string directory)
+    internal static void DeleteLogDirectory(
+        string directory,
+        DateTime cutoffUtc)
     {
         try
         {
@@ -88,7 +125,7 @@ public static class AppBootstrap
             foreach (string file in Directory.EnumerateFiles(
                          root, "*", SearchOption.AllDirectories))
             {
-                TryDeleteFile(file);
+                TryDeleteFileIfExpired(file, cutoffUtc);
             }
 
             foreach (string child in Directory.EnumerateDirectories(
@@ -105,7 +142,9 @@ public static class AppBootstrap
         }
     }
 
-    private static void DeleteKnownRuntimeLogs(string directory)
+    internal static void DeleteKnownRuntimeLogs(
+        string directory,
+        DateTime cutoffUtc)
     {
         if (!Directory.Exists(directory)) return;
         foreach (string pattern in RuntimeLogPatterns)
@@ -117,7 +156,7 @@ public static class AppBootstrap
                              pattern,
                              SearchOption.TopDirectoryOnly))
                 {
-                    TryDeleteFile(path);
+                    TryDeleteFileIfExpired(path, cutoffUtc);
                 }
             }
             catch
@@ -162,6 +201,23 @@ public static class AppBootstrap
         try
         {
             if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteFileIfExpired(
+        string path,
+        DateTime cutoffUtc)
+    {
+        try
+        {
+            if (File.Exists(path)
+                && File.GetLastWriteTimeUtc(path) <= cutoffUtc)
+            {
+                File.Delete(path);
+            }
         }
         catch
         {

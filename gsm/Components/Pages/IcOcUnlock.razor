@@ -1,0 +1,936 @@
+@page "/icoc-unlock"
+@inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.IcOcService IcOcService
+@inject gsm.Services.DeviceUnlockAuthService AuthService
+@inject gsm.Services.DeviceUnlockAccountHistoryService AccountHistory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@using gsm.Models
+@using gsm.Services
+@using gsm.Components.Shared
+@implements IDisposable
+
+<MudPaper Class="pa-3 mx-3 mb-2 feature-toolbar" Elevation="0"
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+        <MudIcon Icon="@Icons.Material.Filled.SettingsPhone" Color="Color.Primary" />
+        <div>
+            <MudText Typo="Typo.subtitle1" Style="font-weight:700;">Mở khóa IC/OC</MudText>
+            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                Có thể chạy theo danh sách CCBS đã lọc hoặc chọn COM để thao tác trực tiếp trên Employ.
+            </MudText>
+        </div>
+        <MudSpacer />
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                 Color="@(_cbssConfigured ? Color.Success : Color.Default)">
+            CCBS: @(_cbssConfigured ? "Đã có phiên" : "Chưa đăng nhập")
+        </MudChip>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined"
+                 Color="@(_employConfigured ? Color.Success : Color.Default)">
+            Employ: @(_employConfigured ? "Đã có phiên" : "Chưa đăng nhập")
+        </MudChip>
+    </MudStack>
+</MudPaper>
+
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true"
+         PanelClass="pa-0" Class="mx-3 mt-1 feature-tabs"
+         Style="background:transparent;" @bind-ActivePanelIndex="_activeTab">
+    <MudTabPanel Text="CCBS">
+        <MudPaper Class="pa-3 mt-2 mb-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700;">Đăng nhập CCBS</MudText>
+            <MudGrid Spacing="1" Class="mt-1">
+                <MudItem xs="12" md="3">
+                    <MudTextField @bind-Value="_cbssUsername" Label="Tài khoản CCBS"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudTextField @bind-Value="_cbssPassword" Label="Mật khẩu"
+                                  InputType="InputType.Password" Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudTextField @bind-Value="_cbssOtp" Label="OTP/PIN (6 số)"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Style="height:100%;">
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                   OnClick="SendCbssPin" Disabled="@(ControlsDisabled || string.IsNullOrWhiteSpace(_cbssUsername))">
+                            Lấy OTP/PIN
+                        </MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                   OnClick="LoginCbss"
+                                   Disabled="@(ControlsDisabled || string.IsNullOrWhiteSpace(_cbssUsername) || string.IsNullOrWhiteSpace(_cbssPassword) || string.IsNullOrWhiteSpace(_cbssOtp))">
+                            Đăng nhập CCBS
+                        </MudButton>
+                    </MudStack>
+                </MudItem>
+            </MudGrid>
+            @if (_cbssSavedAccounts.Count > 0)
+            {
+                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mt-1">
+                    <MudText Typo="Typo.caption">Tài khoản đã lưu:</MudText>
+                    @foreach (string account in _cbssSavedAccounts)
+                    {
+                        <MudButton @key="account" Size="Size.Small" Variant="Variant.Text"
+                                   OnClick="@(() => SelectCbssAccount(account))">@account</MudButton>
+                    }
+                </MudStack>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-3 mb-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" md="3">
+                    <MudSelect T="string" @bind-Value="_sendMode" Dense="true"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Label="Tra cứu trên">
+                        <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
+                        <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudNumericField T="int" @bind-Value="_parallelism" Label="Luồng CCBS"
+                                     Min="1" Max="8" Variant="Variant.Outlined"
+                                     Margin="Margin.Dense" Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="7">
+                    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Style="height:100%;">
+                        @if (!_isRunning)
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Search" OnClick="RunCcbsLookup">
+                                Tra cứu và lọc Gọi đến = Không
+                            </MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Stop" OnClick="StopCurrentRun">Dừng</MudButton>
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                        }
+                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                                   OnClick="ClearCcbsResults" Disabled="@(_ccbsResults.Count == 0 || _isRunning)">
+                            Xóa kết quả
+                        </MudButton>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+                            Đã tra: @_ccbsResults.Count
+                        </MudChip>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">
+                            Chuyển Employ: @CcbsEmployTargets.Count
+                        </MudChip>
+                    </MudStack>
+                </MudItem>
+            </MudGrid>
+            @if (!string.IsNullOrWhiteSpace(_runMessage))
+            {
+                <MudAlert Severity="@(_runMessageIsError ? Severity.Error : Severity.Info)" Dense="true" Class="mt-2">
+                    @_runMessage
+                </MudAlert>
+            }
+        </MudPaper>
+
+        <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight:700;">Danh sách Cổng</MudText>
+        <ComTable Ports="Ports" Operation="ICOC" @bind-SelectedItems="_selectedPorts" />
+        @if (_ccbsResults.Count > 0)
+        {
+            <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1" Style="font-weight:700;">Kết quả CCBS</MudText>
+            @ResultTable(_ccbsResults)
+        }
+    </MudTabPanel>
+
+    <MudTabPanel Text="Employ">
+        <MudPaper Class="pa-3 mt-2 mb-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudText Typo="Typo.subtitle2" Style="font-weight:700;">Đăng nhập Employ (OneBSS)</MudText>
+            <MudGrid Spacing="1" Class="mt-1">
+                <MudItem xs="12" md="3">
+                    <MudTextField @bind-Value="_employUsername" Label="Tài khoản Employ"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudTextField @bind-Value="_employPassword" Label="Mật khẩu"
+                                  InputType="InputType.Password" Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudTextField @bind-Value="_employOtp" Label="OTP Employ"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Style="height:100%;">
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                   OnClick="BeginEmployLogin"
+                                   Disabled="@(ControlsDisabled || string.IsNullOrWhiteSpace(_employUsername) || string.IsNullOrWhiteSpace(_employPassword))">
+                            Gửi OTP Employ
+                        </MudButton>
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                   OnClick="LoginEmployWithOtp"
+                                   Disabled="@(ControlsDisabled || string.IsNullOrWhiteSpace(_employUsername) || string.IsNullOrWhiteSpace(_employPassword) || string.IsNullOrWhiteSpace(_employOtp))">
+                            Đăng nhập OTP
+                        </MudButton>
+                    </MudStack>
+                </MudItem>
+            </MudGrid>
+            <MudGrid Spacing="1" Class="mt-1">
+                <MudItem xs="12" md="8">
+                    <MudTextField @bind-Value="_employToken" Label="Hoặc dán token Employ/OneBSS"
+                                  InputType="InputType.Password" Variant="Variant.Outlined"
+                                  Margin="Margin.Dense" Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                               StartIcon="@Icons.Material.Filled.VpnKey" OnClick="LoginEmployWithToken"
+                               Disabled="@(ControlsDisabled || string.IsNullOrWhiteSpace(_employToken))"
+                               Style="margin-top:6px;">
+                        Đăng nhập bằng token
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
+            @if (_employSavedAccounts.Count > 0)
+            {
+                <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mt-1">
+                    <MudText Typo="Typo.caption">Tài khoản đã lưu:</MudText>
+                    @foreach (string account in _employSavedAccounts)
+                    {
+                        <MudButton @key="account" Size="Size.Small" Variant="Variant.Text"
+                                   OnClick="@(() => SelectEmployAccount(account))">@account</MudButton>
+                    }
+                </MudStack>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-3 mb-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" md="3">
+                    <MudSelect T="string" @bind-Value="_employTargetMode" Dense="true"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Label="Nguồn thuê bao"
+                               Disabled="@ControlsDisabled">
+                        <MudSelectItem Value="@("ccbs")">Danh sách CCBS đã lọc</MudSelectItem>
+                        <MudSelectItem Value="@("selected")">COM chọn trực tiếp (bỏ qua CCBS)</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudSelect T="string" @bind-Value="_icAction" Dense="true"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Label="IC / Gọi đến"
+                               Disabled="@ControlsDisabled">
+                        <MudSelectItem Value="@("GIU")">Giữ nguyên</MudSelectItem>
+                        <MudSelectItem Value="@("MO")">Mở IC</MudSelectItem>
+                        <MudSelectItem Value="@("KHOA")">Đóng IC</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudSelect T="string" @bind-Value="_ocAction" Dense="true"
+                               Variant="Variant.Outlined" Margin="Margin.Dense" Label="OC / Gọi đi"
+                               Disabled="@ControlsDisabled">
+                        <MudSelectItem Value="@("GIU")">Giữ nguyên</MudSelectItem>
+                        <MudSelectItem Value="@("MO")">Mở OC</MudSelectItem>
+                        <MudSelectItem Value="@("KHOA")">Đóng OC</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="2">
+                    <MudNumericField T="int" @bind-Value="_employDelaySeconds"
+                                     Label="Delay mỗi SĐT (giây)" Min="2" Max="3600"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense"
+                                     Disabled="@ControlsDisabled" />
+                </MudItem>
+                <MudItem xs="12" md="3">
+                    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Style="height:100%;">
+                        @if (!_isRunning)
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.SettingsPhone" OnClick="RunEmployUnlock"
+                                       Disabled="@(EmployRunTargets.Count == 0 || BothActionsKeep)">
+                                Chạy IC/OC (@EmployRunTargets.Count số)
+                            </MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Filled.Stop" OnClick="StopCurrentRun">Dừng</MudButton>
+                            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                        }
+                    </MudStack>
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_note" Label="Ghi chú thao tác IC/OC"
+                                  Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Disabled="@ControlsDisabled" />
+                </MudItem>
+            </MudGrid>
+            @if (_employProgressTotal > 0)
+            {
+                <MudPaper Class="pa-3 mt-2" Elevation="0"
+                          Style="border:1px solid #BAE6FD; background:#F0F9FF; border-radius:8px;">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap">
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Filled">
+                            Đã xong @_employProgressCompleted / @_employProgressTotal
+                        </MudChip>
+                        @if (!string.IsNullOrWhiteSpace(_employProgressPort))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Outlined">
+                                @_employProgressPort · @_employProgressPhone
+                            </MudChip>
+                        }
+                        @if (_employProgressWaitSeconds > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled">
+                                Delay còn @_employProgressWaitSeconds giây
+                            </MudChip>
+                        }
+                        <MudText Typo="Typo.body2" Style="font-weight:600;">@_employProgressStage</MudText>
+                    </MudStack>
+                    <MudProgressLinear Color="Color.Info" Value="@EmployProgressPercent"
+                                       Rounded="true" Size="Size.Medium" Class="mt-2" />
+                </MudPaper>
+            }
+            @if (_employProgressTotal > 0 && !_isRunning && !string.IsNullOrWhiteSpace(_runMessage))
+            {
+                <MudAlert Severity="@(_runMessageIsError ? Severity.Error : Severity.Success)"
+                          Dense="true" Class="mt-2">
+                    @_runMessage
+                </MudAlert>
+            }
+            @if (_employTargetMode == "ccbs")
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
+                    Chỉ chạy các số CCBS đã xác nhận <b>Gọi đến = Không</b>. Trạng thái rỗng/không rõ không được gửi sang Employ.
+                </MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                    Chế độ trực tiếp bỏ qua CCBS. Employ vẫn tra trạng thái hiện tại, chỉ đổi IC/OC cần thiết và xác minh lại sau lệnh.
+                </MudAlert>
+            }
+        </MudPaper>
+
+        @if (_employTargetMode == "selected")
+        {
+            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight:700;">
+                Chọn COM chạy trực tiếp trên Employ (@DirectEmployTargets.Count đã chọn)
+            </MudText>
+            <ComTable Ports="Ports" Operation="ICOC" @bind-SelectedItems="_selectedPorts" />
+        }
+        else
+        {
+            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight:700;">
+                Danh sách CCBS đã lọc (@CcbsEmployTargets.Count)
+            </MudText>
+            @ResultTable(CcbsEmployTargets)
+        }
+        @if (_employResults.Count > 0)
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Wrap="Wrap.Wrap" Class="mt-3 mb-1">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:700;">Kết quả Employ</MudText>
+                <MudSpacer />
+                <MudTextField @bind-Value="_openedPortsPassword" Label="Mật khẩu MyVNPT"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" InputType="InputType.Text"
+                              Style="width:190px;" Disabled="@ControlsDisabled" />
+                @if (!_isSettingOpenedPassword)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Lock" OnClick="SetPasswordForOpenedPorts"
+                               Disabled="@(ControlsDisabled || OpenedEmployPorts.Count == 0 || string.IsNullOrWhiteSpace(_openedPortsPassword))">
+                        Đặt pass COM vừa mở (@OpenedEmployPorts.Count)
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Refresh" OnClick="RetryFailedEmploy"
+                               Disabled="@(ControlsDisabled || FailedEmployTargets.Count == 0 || BothActionsKeep)">
+                        Chạy lại COM lỗi (@FailedEmployTargets.Count)
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Filled.Stop" OnClick="StopOpenedPasswordRun">
+                        Dừng đặt pass
+                    </MudButton>
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+                }
+            </MudStack>
+            @if (_isSettingOpenedPassword)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">
+                    Chỉ đang đặt pass cho các COM vừa mở IC/OC thành công.
+                    @if (!string.IsNullOrWhiteSpace(Vm.VnptSummaryText))
+                    {
+                        <b>@Vm.VnptSummaryText</b>
+                    }
+                </MudAlert>
+            }
+            @ResultTable(_employResults)
+        }
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    [Parameter] public bool IsPageActive { get; set; }
+
+    private int _activeTab;
+    private string _sendMode = "selected";
+    private string _employTargetMode = "ccbs";
+    private string _icAction = "MO";
+    private string _ocAction = "MO";
+    private int _parallelism = 4;
+    private HashSet<SimPort> _selectedPorts = [];
+    private List<IcOcResultItem> _ccbsResults = [];
+    private List<IcOcResultItem> _employResults = [];
+    private CancellationTokenSource? _runCts;
+    private CancellationTokenSource? _authCts;
+    private bool _isRunning;
+    private bool _authBusy;
+    private string _runMessage = string.Empty;
+    private bool _runMessageIsError;
+    private bool _cbssConfigured;
+    private bool _employConfigured;
+    private string _cbssUsername = string.Empty;
+    private string _cbssPassword = string.Empty;
+    private string _cbssOtp = string.Empty;
+    private string _employUsername = string.Empty;
+    private string _employPassword = string.Empty;
+    private string _employOtp = string.Empty;
+    private string _employToken = string.Empty;
+    private string _employChallenge = string.Empty;
+    private string _employDeviceId = string.Empty;
+    private string _employPendingUsername = string.Empty;
+    private string _employPendingPassword = string.Empty;
+    private string _note = "-";
+    private string _openedPortsPassword = "123456a@A";
+    private int _employDelaySeconds = 20;
+    private int _employProgressCompleted;
+    private int _employProgressTotal;
+    private int _employProgressWaitSeconds;
+    private string _employProgressPort = string.Empty;
+    private string _employProgressPhone = string.Empty;
+    private string _employProgressStage = string.Empty;
+    private List<string> _cbssSavedAccounts = [];
+    private List<string> _employSavedAccounts = [];
+    private string _lastEmployIcAction = "MO";
+    private string _lastEmployOcAction = "MO";
+    private bool _isSettingOpenedPassword;
+    private CancellationTokenSource? _openedPasswordCts;
+    private System.Threading.Timer? _openedPasswordUiTimer;
+
+    private bool ControlsDisabled => _authBusy || _isRunning || _isSettingOpenedPassword;
+    private double EmployProgressPercent => _employProgressTotal <= 0
+        ? 0
+        : 100d * _employProgressCompleted / _employProgressTotal;
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? [];
+    private bool BothActionsKeep => _icAction == "GIU" && _ocAction == "GIU";
+    private List<IcOcResultItem> CcbsEmployTargets => _ccbsResults
+        .Where(item => item.Success && item.IncomingEnabled == false && item.EligibleForEmploy)
+        .ToList();
+    private List<IcOcResultItem> DirectEmployTargets => _selectedPorts
+        .Where(port => port.Status == SimStatus.Active)
+        .Where(port => !string.IsNullOrWhiteSpace(port.PhoneNumber))
+        .GroupBy(port => port.PortName, StringComparer.OrdinalIgnoreCase)
+        .Select(group => group.First())
+        .Select(port => new IcOcResultItem(
+            port.PortName,
+            port.PhoneNumber,
+            string.Empty,
+            true,
+            null,
+            null,
+            true,
+            false,
+            "COM chọn trực tiếp; chưa tra Employ"))
+        .ToList();
+    private List<IcOcResultItem> EmployRunTargets => _employTargetMode == "selected"
+        ? DirectEmployTargets
+        : CcbsEmployTargets;
+    private List<IcOcResultItem> FailedEmployTargets => _employResults
+        .Where(item => !item.Success)
+        .Where(item => !string.IsNullOrWhiteSpace(item.Phone))
+        .GroupBy(item => item.Port, StringComparer.OrdinalIgnoreCase)
+        .Select(group => group.First())
+        .ToList();
+    private List<SimPort> OpenedEmployPorts
+    {
+        get
+        {
+            if (_lastEmployIcAction != "MO" && _lastEmployOcAction != "MO")
+                return [];
+
+            Dictionary<string, string> successfulPorts = _employResults
+                .Where(item => item.Success)
+                .Where(item =>
+                    (_lastEmployIcAction == "MO" && item.IncomingEnabled == true)
+                    || (_lastEmployOcAction == "MO" && item.OutgoingEnabled == true))
+                .GroupBy(item => item.Port, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group => MyVnptService.NormalizePhone(group.First().Phone),
+                    StringComparer.OrdinalIgnoreCase);
+
+            return Ports
+                .Where(port => port.Status == SimStatus.Active)
+                .Where(port => successfulPorts.TryGetValue(port.PortName, out string? phone)
+                    && !string.IsNullOrWhiteSpace(phone)
+                    && string.Equals(
+                        MyVnptService.NormalizePhone(port.PhoneNumber),
+                        phone,
+                        StringComparison.Ordinal))
+                .DistinctBy(port => port.PortName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        RefreshSavedAccounts();
+        if (_cbssSavedAccounts.Count > 0) SelectCbssAccount(_cbssSavedAccounts[0]);
+        if (_employSavedAccounts.Count > 0) SelectEmployAccount(_employSavedAccounts[0]);
+        _ = RefreshAuthStatus();
+    }
+
+    private async Task RefreshAuthStatus()
+    {
+        try
+        {
+            DeviceUnlockAuthResult result = await AuthService.GetStatusAsync();
+            if (result.Success) ApplyAuthState(result);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+        }
+    }
+
+    private void ApplyAuthState(DeviceUnlockAuthResult result)
+    {
+        _cbssConfigured = result.CbssConfigured;
+        _employConfigured = result.EmployConfigured;
+        if (string.IsNullOrWhiteSpace(_cbssUsername)) _cbssUsername = result.CbssUsername;
+        if (string.IsNullOrWhiteSpace(_employUsername)) _employUsername = result.EmployUsername;
+        if (result.CbssConfigured && !string.IsNullOrWhiteSpace(result.CbssUsername))
+            AccountHistory.RememberCbss(result.CbssUsername);
+        if (result.EmployConfigured && !string.IsNullOrWhiteSpace(result.EmployUsername))
+            AccountHistory.RememberEmploy(result.EmployUsername);
+        RefreshSavedAccounts();
+    }
+
+    private void RefreshSavedAccounts()
+    {
+        _cbssSavedAccounts = AccountHistory.GetCbssAccounts().ToList();
+        _employSavedAccounts = AccountHistory.GetEmployAccounts().ToList();
+    }
+
+    private void SelectCbssAccount(string username)
+    {
+        _cbssUsername = username;
+        _cbssPassword = AccountHistory.GetCbssPassword(username);
+        _cbssOtp = string.Empty;
+    }
+
+    private void SelectEmployAccount(string username)
+    {
+        _employUsername = username;
+        _employPassword = AccountHistory.GetEmployPassword(username);
+        _employOtp = string.Empty;
+        _employChallenge = string.Empty;
+        _employDeviceId = string.Empty;
+    }
+
+    private async Task RunAuthAction(
+        Func<CancellationToken, Task<DeviceUnlockAuthResult>> action,
+        Action<DeviceUnlockAuthResult>? onSuccess = null)
+    {
+        if (ControlsDisabled) return;
+        _authBusy = true;
+        _authCts?.Cancel();
+        _authCts?.Dispose();
+        _authCts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        try
+        {
+            DeviceUnlockAuthResult result = await action(_authCts.Token);
+            if (!string.IsNullOrWhiteSpace(result.Challenge)) _employChallenge = result.Challenge;
+            if (!string.IsNullOrWhiteSpace(result.DeviceId)) _employDeviceId = result.DeviceId;
+            if (!result.Success)
+            {
+                Snackbar.Add(result.Message, Severity.Error);
+                return;
+            }
+            ApplyAuthState(result);
+            onSuccess?.Invoke(result);
+            Snackbar.Add(result.Message, Severity.Success);
+        }
+        catch (OperationCanceledException)
+        {
+            Snackbar.Add("Đăng nhập đã bị hủy hoặc hết thời gian.", Severity.Warning);
+        }
+        finally
+        {
+            _authBusy = false;
+        }
+    }
+
+    private Task SendCbssPin() => RunAuthAction(token =>
+        AuthService.SendCbssPinAsync(_cbssUsername.Trim(), token));
+
+    private Task LoginCbss() => RunAuthAction(
+        token => AuthService.LoginCbssAsync(
+            _cbssUsername.Trim(), _cbssPassword, _cbssOtp.Trim(), token),
+        _ =>
+        {
+            AccountHistory.RememberCbss(_cbssUsername.Trim(), _cbssPassword);
+            _cbssOtp = string.Empty;
+            RefreshSavedAccounts();
+        });
+
+    private Task BeginEmployLogin() => RunAuthAction(
+        token =>
+        {
+            _employPendingUsername = _employUsername.Trim();
+            _employPendingPassword = _employPassword;
+            _employChallenge = string.Empty;
+            _employDeviceId = string.Empty;
+            return AuthService.BeginEmployLoginAsync(
+                _employPendingUsername, _employPendingPassword, token);
+        },
+        result =>
+        {
+            _employChallenge = result.Challenge;
+            _employDeviceId = result.DeviceId;
+            _employOtp = string.Empty;
+            AccountHistory.RememberEmploy(_employPendingUsername, _employPendingPassword);
+            RefreshSavedAccounts();
+        });
+
+    private Task LoginEmployWithOtp()
+    {
+        string username = _employUsername.Trim();
+        string password = _employPassword;
+        if (!string.Equals(_employPendingUsername, username, StringComparison.OrdinalIgnoreCase))
+        {
+            _employChallenge = string.Empty;
+            _employDeviceId = string.Empty;
+        }
+        _employPendingUsername = username;
+        _employPendingPassword = password;
+        return RunAuthAction(
+            token => AuthService.LoginEmployWithOtpAsync(
+                username, password, _employOtp.Trim(),
+                _employChallenge, _employDeviceId, token),
+            _ =>
+            {
+                AccountHistory.RememberEmploy(username, password);
+                _employOtp = string.Empty;
+                _employChallenge = string.Empty;
+                _employDeviceId = string.Empty;
+                RefreshSavedAccounts();
+            });
+    }
+
+    private Task LoginEmployWithToken()
+    {
+        string tokenValue = _employToken.Trim();
+        return RunAuthAction(
+            cancellationToken => AuthService.LoginEmployWithTokenAsync(
+                tokenValue, cancellationToken),
+            _ => _employToken = string.Empty);
+    }
+
+    private List<IcOcPortRequest> GetCcbsTargets() =>
+        (_sendMode == "all" ? Ports : _selectedPorts.ToList())
+        .Where(port => port.Status == SimStatus.Active)
+        .Where(port => !string.IsNullOrWhiteSpace(port.PhoneNumber))
+        .GroupBy(port => port.PortName, StringComparer.OrdinalIgnoreCase)
+        .Select(group => group.First())
+        .Select(port => new IcOcPortRequest(port.PortName, port.PhoneNumber))
+        .ToList();
+
+    private async Task RunCcbsLookup()
+    {
+        if (ControlsDisabled) return;
+        List<IcOcPortRequest> targets = GetCcbsTargets();
+        if (targets.Count == 0)
+        {
+            Snackbar.Add("Không có COM Active có SĐT trong phạm vi đã chọn.", Severity.Warning);
+            return;
+        }
+
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+        _runCts = new CancellationTokenSource();
+        _isRunning = true;
+        _runMessageIsError = false;
+        _runMessage = $"Đang tra cứu CCBS {targets.Count} thuê bao...";
+        try
+        {
+            IcOcBatchResult result = await IcOcService.LookupCcbsAsync(
+                targets, _parallelism, _runCts.Token);
+            _ccbsResults = result.Items.ToList();
+            _employResults.Clear();
+            _runMessage = result.Message;
+            _runMessageIsError = !result.Success;
+            Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+            if (CcbsEmployTargets.Count > 0) _activeTab = 1;
+        }
+        catch (OperationCanceledException)
+        {
+            _runMessage = "Đã dừng tra cứu CCBS.";
+            Snackbar.Add(_runMessage, Severity.Normal);
+        }
+        finally
+        {
+            _isRunning = false;
+        }
+    }
+
+    private Task RunEmployUnlock() => RunEmployUnlockTargets(EmployRunTargets, retryFailed: false);
+
+    private Task RetryFailedEmploy() => RunEmployUnlockTargets(FailedEmployTargets, retryFailed: true);
+
+    private async Task RunEmployUnlockTargets(List<IcOcResultItem> targets, bool retryFailed)
+    {
+        if (ControlsDisabled) return;
+        if (targets.Count == 0)
+        {
+            Snackbar.Add(
+                retryFailed
+                    ? "Lượt gần nhất không còn COM lỗi để chạy lại."
+                    : _employTargetMode == "selected"
+                    ? "Chưa chọn COM Active có SĐT để chạy trực tiếp."
+                    : "CCBS chưa có thuê bao Gọi đến = Không.",
+                Severity.Warning);
+            return;
+        }
+        if (BothActionsKeep)
+        {
+            Snackbar.Add("IC và OC đều đang chọn Giữ nguyên; chưa có thao tác cần chạy.", Severity.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_note))
+        {
+            Snackbar.Add("Phải nhập ghi chú trước khi thao tác IC/OC.", Severity.Warning);
+            return;
+        }
+        string actionSummary = $"IC={ActionText(_icAction)}, OC={ActionText(_ocAction)}";
+        string sourceSummary = retryFailed
+            ? "COM lỗi của lượt gần nhất"
+            : _employTargetMode == "selected"
+            ? "COM đã chọn trực tiếp (không qua CCBS)"
+            : "thuê bao CCBS đã xác nhận Gọi đến = Không";
+        bool? confirmed = await DialogService.ShowMessageBox(
+            "Xác nhận thao tác IC/OC",
+            $"Thực hiện {actionSummary} cho {targets.Count} {sourceSummary}? " +
+            $"Delay {Math.Clamp(_employDelaySeconds, 2, 3600)} giây giữa hai SĐT.",
+            yesText: "Thực hiện",
+            cancelText: "Hủy");
+        if (confirmed != true) return;
+
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+        _runCts = new CancellationTokenSource();
+        _isRunning = true;
+        _runMessageIsError = false;
+        _runMessage = $"Đang thực hiện {actionSummary} cho {targets.Count} thuê bao...";
+        _employProgressCompleted = 0;
+        _employProgressTotal = targets.Count;
+        _employProgressWaitSeconds = 0;
+        _employProgressPort = string.Empty;
+        _employProgressPhone = string.Empty;
+        _employProgressStage = "Đang khởi tạo phiên Employ...";
+        _lastEmployIcAction = _icAction;
+        _lastEmployOcAction = _ocAction;
+        _employResults.Clear();
+        try
+        {
+            var requests = targets
+                .Select(item => new IcOcPortRequest(item.Port, item.Phone))
+                .ToList();
+            IcOcBatchResult result = await IcOcService.UnlockEmployAsync(
+                requests,
+                _note,
+                Math.Clamp(_employDelaySeconds, 2, 3600),
+                _icAction,
+                _ocAction,
+                OnEmployProgress,
+                _runCts.Token);
+            _employResults = result.Items.ToList();
+            _runMessage = result.Message;
+            _runMessageIsError = !result.Success;
+            Snackbar.Add(result.Message, result.Success ? Severity.Success : Severity.Error);
+        }
+        catch (OperationCanceledException)
+        {
+            _runMessage = "Đã dừng Employ. Lệnh đang gửi sẽ không tự gửi lại.";
+            _employProgressWaitSeconds = 0;
+            _employProgressStage = _runMessage;
+            Snackbar.Add(_runMessage, Severity.Warning);
+        }
+        finally
+        {
+            _isRunning = false;
+        }
+    }
+
+    private async Task SetPasswordForOpenedPorts()
+    {
+        if (ControlsDisabled) return;
+        if (_openedPortsPassword.Length < 4 || _openedPortsPassword.Length > 20)
+        {
+            Snackbar.Add("Mật khẩu MyVNPT phải từ 4–20 ký tự.", Severity.Warning);
+            return;
+        }
+        if (Vm.IsMyVnptBatchRunning)
+        {
+            Snackbar.Add("Một tiến trình MyVNPT khác đang chạy; không gửi lặp OTP.", Severity.Warning);
+            return;
+        }
+
+        List<SimPort> targets = OpenedEmployPorts;
+        if (targets.Count == 0)
+        {
+            Snackbar.Add("Không có COM vừa mở IC/OC thành công để đặt pass.", Severity.Warning);
+            return;
+        }
+
+        bool? confirmed = await DialogService.ShowMessageBox(
+            "Xác nhận đặt pass",
+            $"Chỉ đặt mật khẩu MyVNPT cho {targets.Count} COM vừa mở IC/OC thành công?",
+            yesText: "Đặt mật khẩu",
+            cancelText: "Hủy");
+        if (confirmed != true) return;
+
+        _openedPasswordCts?.Cancel();
+        _openedPasswordCts?.Dispose();
+        _openedPasswordCts = new CancellationTokenSource();
+        _isSettingOpenedPassword = true;
+        _openedPasswordUiTimer?.Dispose();
+        _openedPasswordUiTimer = new System.Threading.Timer(_ =>
+        {
+            if (IsPageActive)
+                _ = InvokeAsync(StateHasChanged);
+        }, null, 0, 1000);
+        try
+        {
+            Snackbar.Add($"Đang đặt pass cho đúng {targets.Count} COM vừa mở IC/OC...", Severity.Info);
+            await Vm.SetMyVnptPassword(
+                targets,
+                _openedPortsPassword.Trim(),
+                _openedPasswordCts.Token);
+            Snackbar.Add(
+                $"Đã hoàn tất đặt pass nhóm vừa mở: thành công {Vm.VnptSuccessCount}, lỗi {Vm.VnptFailCount}.",
+                Vm.VnptFailCount == 0 ? Severity.Success : Severity.Warning);
+        }
+        catch (OperationCanceledException)
+        {
+            Snackbar.Add("Đã dừng đặt pass cho nhóm COM vừa mở.", Severity.Normal);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Lỗi đặt pass nhóm COM vừa mở: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _openedPasswordUiTimer?.Dispose();
+            _openedPasswordUiTimer = null;
+            _isSettingOpenedPassword = false;
+        }
+    }
+
+    private void StopOpenedPasswordRun()
+    {
+        _openedPasswordCts?.Cancel();
+        Snackbar.Add("Đang dừng các yêu cầu MyVNPT của nhóm COM vừa mở...", Severity.Normal);
+    }
+
+    private void OnEmployProgress(IcOcProgress progress)
+    {
+        _ = InvokeAsync(() =>
+        {
+            _employProgressCompleted = Math.Clamp(
+                progress.Completed, 0, Math.Max(progress.Total, 0));
+            _employProgressTotal = Math.Max(progress.Total, 0);
+            _employProgressWaitSeconds = Math.Max(progress.WaitSeconds, 0);
+            _employProgressPort = progress.Port;
+            _employProgressPhone = progress.Phone;
+            _employProgressStage = progress.Stage;
+            if (progress.Item is not null)
+            {
+                int existingIndex = _employResults.FindIndex(item =>
+                    item.Port.Equals(progress.Item.Port, StringComparison.OrdinalIgnoreCase)
+                    && item.Phone.Equals(progress.Item.Phone, StringComparison.OrdinalIgnoreCase));
+                if (existingIndex >= 0)
+                    _employResults[existingIndex] = progress.Item;
+                else
+                    _employResults.Add(progress.Item);
+            }
+            StateHasChanged();
+        });
+    }
+
+    private void StopCurrentRun() => _runCts?.Cancel();
+
+    private void ClearCcbsResults()
+    {
+        _ccbsResults.Clear();
+        _employResults.Clear();
+        _runMessage = string.Empty;
+    }
+
+    private static string StateText(bool? value) => value switch
+    {
+        true => "Có / Mở",
+        false => "Không / Khóa",
+        _ => "Không rõ"
+    };
+
+    private static string ActionText(string value) => value switch
+    {
+        "KHOA" => "Đóng",
+        "GIU" => "Giữ nguyên",
+        _ => "Mở"
+    };
+
+    private static Color StateColor(bool? value) => value switch
+    {
+        true => Color.Success,
+        false => Color.Warning,
+        _ => Color.Default
+    };
+
+    private RenderFragment ResultTable(IList<IcOcResultItem> items) => @<MudPaper Class="pa-3 mt-2" Elevation="0"
+            Style="border:1px solid #E2E8F0; border-radius:10px;">
+        <MudTable T="IcOcResultItem" Items="@items" Dense="true" Hover="true"
+                  Elevation="0" FixedHeader="true" Height="calc(100vh - 360px)">
+            <HeaderContent>
+                <MudTh>#</MudTh><MudTh>COM</MudTh><MudTh>SĐT</MudTh>
+                <MudTh>Gọi đến / IC</MudTh><MudTh>Gọi đi / OC</MudTh>
+                <MudTh>Trạng thái</MudTh><MudTh>Phản hồi</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@(items.IndexOf(context) + 1)</MudTd>
+                <MudTd><b>@context.Port</b></MudTd>
+                <MudTd>@context.Phone</MudTd>
+                <MudTd><MudChip T="string" Size="Size.Small" Color="@StateColor(context.IncomingEnabled)">@StateText(context.IncomingEnabled)</MudChip></MudTd>
+                <MudTd><MudChip T="string" Size="Size.Small" Color="@StateColor(context.OutgoingEnabled)">@StateText(context.OutgoingEnabled)</MudChip></MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Color="@(context.Success ? Color.Success : Color.Error)">
+                        @(context.Success ? (context.Changed ? "Đã đổi" : "Đã tra") : "Lỗi")
+                    </MudChip>
+                </MudTd>
+                <MudTd>@context.Message</MudTd>
+            </RowTemplate>
+            <NoRecordsContent><MudText Class="pa-3">Chưa có dữ liệu.</MudText></NoRecordsContent>
+        </MudTable>
+    </MudPaper>;
+
+    public void Dispose()
+    {
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+        _authCts?.Cancel();
+        _authCts?.Dispose();
+        _openedPasswordUiTimer?.Dispose();
+        _openedPasswordCts?.Cancel();
+        _openedPasswordCts?.Dispose();
+    }
+}

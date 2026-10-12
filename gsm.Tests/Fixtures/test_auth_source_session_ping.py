@@ -1,4 +1,7 @@
 import importlib.util
+import base64
+import json
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +51,17 @@ def _fake_module(token="saved-token"):
     )
 
 
+def _live_test_jwt():
+    def encode(value):
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return ".".join((
+        encode({"alg": "RS256", "typ": "JWT"}),
+        encode({"user_name": "offline-user", "id_thietbi": "123", "exp": time.time() + 3600}),
+        "offline-signature",
+    ))
+
+
 class OneBssSessionPingTests(unittest.TestCase):
     def tearDown(self):
         _FakeRequests.response = None
@@ -93,6 +107,19 @@ class OneBssSessionPingTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertEqual(0, result["http_status"])
         self.assertIn("Không kết nối", result["message"])
+
+    def test_missing_profile_handler_accepts_live_signed_jwt_for_business_validation(self):
+        _FakeRequests.response = _FakeResponse(
+            404,
+            {"message": "No handler found for POST /user/thongtin_nv"},
+        )
+
+        result = AUTH_SOURCE.ping_onebss_session(
+            _fake_module(token=_live_test_jwt()))
+
+        self.assertTrue(result["valid"])
+        self.assertEqual(404, result["http_status"])
+        self.assertIn("API nghiệp vụ", result["message"])
 
 
 if __name__ == "__main__":

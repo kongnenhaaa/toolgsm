@@ -483,3 +483,23 @@ $RECYCLE.BIN/
 
 # Codex local build, publish, and smoke-test artifacts
 /.codex-tmp/
+/.codex-build/
+/.codex-publish/
+/.codex-device-probe/
+/.codex-runtime-preserve/
+
+# Local runtime data and device/test artifacts
+/outputs/
+/runtime-state-backups/
+/test-artifacts/
+/.toolgsm-smoke-claimed-*.json
+/real-device-*.json
+
+# Per-user Visual Studio project settings
+*.csproj.user
+
+# Local scratch and diagnostic files
+/gsm/scratch_test.txt
+/gsm/test_plan_and_results.txt
+/gsm/ussd_debug.txt
+/gsm/ViewModels/MainViewModel_b64.txt

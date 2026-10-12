@@ -7,9 +7,11 @@ own accounts.json and history/onebss_config.json formats.
 """
 
 import importlib.util
+import base64
 import json
 import os
 import sys
+import time
 
 
 RESULT_PREFIX = "TOOLGSM_AUTH_RESULT_JSON:"
@@ -62,6 +64,52 @@ def read_json_response(response, service_name):
             f"{service_name} không trả dữ liệu hợp lệ (HTTP {response.status_code}, "
             f"Content-Type: {content_type}). Kiểm tra mạng, VPN/proxy hoặc máy chủ rồi thử lại."
         ) from exc
+
+
+def decode_access_token_payload(token):
+    """Decode public JWT claims without treating them as server verification."""
+    try:
+        parts = str(token or "").split(".")
+        if len(parts) != 3 or not all(parts):
+            return {}
+        encoded = parts[1] + "=" * (-len(parts[1]) % 4)
+        value = json.loads(base64.urlsafe_b64decode(encoded).decode("utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+
+
+def plausible_signed_access_token(token):
+    """Allow profile-endpoint fallback only for signed-looking live JWTs.
+
+    OneBSS still verifies the signature on the first business API call.
+    """
+    try:
+        parts = str(token or "").split(".")
+        if len(parts) != 3 or not all(parts):
+            return False
+        encoded_header = parts[0] + "=" * (-len(parts[0]) % 4)
+        header = json.loads(base64.urlsafe_b64decode(encoded_header).decode("utf-8"))
+        algorithm = str(header.get("alg") or "").strip().lower()
+        claims = decode_access_token_payload(token)
+        expires_at = float(claims.get("exp"))
+        username = str(claims.get("user_name") or claims.get("sub") or "").strip()
+        return bool(algorithm and algorithm != "none" and expires_at > time.time() and username)
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+
+
+def token_identity(token):
+    claims = decode_access_token_payload(token)
+    username = str(claims.get("user_name") or claims.get("sub") or "").strip()
+    device_id = ""
+    for key in ("id_thietbi", "device_id", "deviceId"):
+        value = claims.get(key)
+        if value is not None and not isinstance(value, (dict, list, tuple, set)):
+            device_id = str(value).strip()
+            if device_id:
+                break
+    return username, device_id
 
 
 def load_source(source_path):
@@ -142,9 +190,14 @@ def ping_onebss_session(module):
                 "bss-00000403",
             ))
         )
-        valid = status == 200 and not token_rejected
+        jwt_fallback = not token_rejected and plausible_signed_access_token(token)
+        valid = (status == 200 and not token_rejected) or jwt_fallback
         if valid:
-            message = "HTTP 200 - phiên OneBSS còn hiệu lực"
+            message = (
+                "HTTP 200 - phiên OneBSS còn hiệu lực"
+                if status == 200
+                else "JWT còn hạn; OneBSS sẽ xác nhận bằng API nghiệp vụ"
+            )
         elif token_rejected:
             message = f"HTTP {status} - phiên OneBSS đã hết hạn"
         else:
@@ -304,6 +357,68 @@ def main():
             state["employConfigured"] = True
             state["employUsername"] = username
             emit_result(success=True, message="Đăng nhập Employ thành công", **state)
+            return 0
+
+        if action == "employ_token":
+            token = str(request.get("token") or "").strip()
+            if token.lower().startswith("bearer "):
+                token = token[7:].strip()
+            if not token:
+                raise ValueError("Vui lòng nhập token Employ/OneBSS")
+            if not plausible_signed_access_token(token):
+                raise ValueError("Token Employ không đúng định dạng JWT hoặc đã hết hạn")
+            token_username, token_device_id = token_identity(token)
+            old_config = module._load_saved_config()
+            device_id = str(
+                request.get("deviceId")
+                or token_device_id
+                or old_config.get("device_id")
+                or module.ONEBSS_DEVICE_ID
+                or os.urandom(8).hex()
+            )
+            response = module.requests.post(
+                f"{module.ONEBSS_BASE}/quantri/user/thongtin_nv",
+                headers=module._onebss_headers(token, device_id),
+                json={},
+                timeout=30,
+                verify=False,
+            )
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            code = str(payload.get("error_code", payload.get("errorCode", "")))
+            message = str(payload.get("message") or "").strip()
+            if not message:
+                message = " ".join(str(getattr(response, "text", "") or "").split())[:300]
+            auth_text = f"{code} {message}".lower()
+            rejected = (
+                response.status_code in (401, 403)
+                or any(marker in auth_text for marker in (
+                    "token không hợp lệ", "token khong hop le",
+                    "token hết hạn", "token het han", "unauthorized",
+                    "expired", "bss-00000401", "bss-00000403",
+                ))
+            )
+            # Some OneBSS gateways do not expose thongtin_nv and reply
+            # "No handler found" even for a valid token. In that case accept
+            # only a signed-looking unexpired JWT; the IC/OC permission API is
+            # the authoritative validation before any mutation.
+            profile_valid = response.status_code == 200 and not rejected
+            if rejected:
+                raise RuntimeError(message or f"Token Employ không hợp lệ (HTTP {response.status_code})")
+            if not profile_valid and not plausible_signed_access_token(token):
+                raise RuntimeError(message or f"Token Employ không hợp lệ (HTTP {response.status_code})")
+            module._ONEBSS_SESSION["token"] = token
+            module._ONEBSS_SESSION["device_id"] = device_id
+            module._ONEBSS_SESSION["logged_in"] = True
+            module._save_config(token, device_id, username=token_username)
+            state = auth_status(module)
+            state["employConfigured"] = True
+            state["employUsername"] = token_username
+            emit_result(success=True, message="Đăng nhập Employ bằng token thành công", **state)
             return 0
 
         raise ValueError("Thao tác đăng nhập nguồn ảnh không hợp lệ")

@@ -4986,11 +4986,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // Ma xac nhan Zalo cua ban la 123456
 
         // The modem service deletes the recyclable SIM index only after this
-        // handler returns. Keep the acknowledgement ordering, but cap how long a
-        // blocked WPF/Blazor dispatcher can hold the serial receive pipeline.
+        // handler returns with an accepted delivery. Cap how long a blocked
+        // WPF/Blazor dispatcher can hold the serial receive pipeline.
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher == null)
             return;
+
+        // The serial reader needs the committed inbox row, not the optional
+        // notifications that run later on the dispatcher.
+        var commitCompletion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int acknowledgementState = 0; // 0 = pending, 1 = accepted, 2 = expired
+
+        void AcknowledgeUiCommit()
+        {
+            // A dispatcher callback may finish after the producer timed out.
+            // Never acknowledge a SIM slot after that producer has returned.
+            if (Interlocked.CompareExchange(ref acknowledgementState, 1, 0) != 0)
+                return;
+
+            e.DeliveryAccepted = true;
+            commitCompletion.TrySetResult(true);
+        }
 
         void ProcessOnUiThread()
         {
@@ -5095,6 +5112,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     inboxRecorded = true;
                     if (newlyAddedMessage == null)
                     {
+                        if (!CanAcknowledgeSmsDelivery(
+                                inboxRecorded,
+                                uiDeliveryId,
+                                SmsMessages))
+                        {
+                            AtCommandTraceLogger.Error(
+                                e.PortName,
+                                $"SMS_UI_ACK_BLOCKED;delivery={uiDeliveryId};session=true;ui=false;source_retained=true");
+                            return;
+                        }
+
+                        AcknowledgeUiCommit();
                         string replayReceiver = !string.IsNullOrWhiteSpace(
                             resolvedReceiverPhone)
                             ? resolvedReceiverPhone
@@ -5107,7 +5136,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             extractedOtp,
                             cleanContent,
                             e.SmsTimestampUtc);
-                        e.DeliveryAccepted = true;
                         AtCommandTraceLogger.State(
                             e.PortName,
                             $"SMS_UI_COMMIT_ACCEPTED;delivery={deliveryId};session=true;ui=true;replay=true");
@@ -5223,6 +5251,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     displayContent,
                     DateTimeOffset.UtcNow);
 
+                // Commit the live row and per-port summary before releasing
+                // this COM's reader. Firebase, Telegram, webhooks, history,
+                // sounds and workflow notifications can finish on the UI thread.
+                bool visibleInUi = CanAcknowledgeSmsDelivery(
+                    inboxRecorded,
+                    uiDeliveryId,
+                    SmsMessages);
+                if (visibleInUi)
+                {
+                    AcknowledgeUiCommit();
+                    AtCommandTraceLogger.State(
+                        e.PortName,
+                        $"SMS_UI_COMMIT_ACCEPTED;delivery={uiDeliveryId};session=true;ui=true;replay=false");
+                    AddLog(
+                        $"[{e.PortName}] [SMS_DELIVERY_ACCEPTED] delivery={uiDeliveryId}; session=true; ui=true; SIM slot có thể giải phóng.",
+                        "INFO");
+                }
+                else if (inboxRecorded)
+                {
+                    AtCommandTraceLogger.Error(
+                        e.PortName,
+                        $"SMS_UI_ACK_BLOCKED;delivery={uiDeliveryId};session=true;ui=false;source_retained=true");
+                    AddLog(
+                        $"[{e.PortName}] [SMS_UI_ACK_BLOCKED] delivery={uiDeliveryId}; chưa xác nhận có hàng trên UI, giữ nguyên SMS ở SIM để thử lại.",
+                        "ERROR");
+                    return;
+                }
+
                 // ---------- LOAD SETTINGS ----------
                 // Inbox delivery must not depend on settings being loaded. Use
                 // safe defaults for optional notifications while retaining the
@@ -5261,8 +5317,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 // ---------- 1. TELEGRAM ----------
-                // This call queues the notification in RAM synchronously. The
-                // SIM is acknowledged only afterwards.
+                // The notification is queued after the live inbox/UI commit.
                 QueueTelegramSmsNotification(
                     cfg,
                     e.PortName,
@@ -5304,32 +5359,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (extractedOtp != "N/A")
                     OtpReceivedEvent?.Invoke(e.PortName, extractedOtp);
 
-                // Acknowledge only after the record is present in the live UI
-                // collection. The history remains session-only.
-                bool visibleInUi = CanAcknowledgeSmsDelivery(
-                    inboxRecorded,
-                    uiDeliveryId,
-                    SmsMessages);
-                if (visibleInUi)
-                {
-                    e.DeliveryAccepted = true;
-                    AtCommandTraceLogger.State(
-                        e.PortName,
-                        $"SMS_UI_COMMIT_ACCEPTED;delivery={uiDeliveryId};session=true;ui=true;replay=false");
-                    AddLog(
-                        $"[{e.PortName}] [SMS_DELIVERY_ACCEPTED] delivery={uiDeliveryId}; session=true; ui=true; SIM slot có thể giải phóng.",
-                        "INFO");
-                }
-                else if (inboxRecorded)
-                {
-                    AtCommandTraceLogger.Error(
-                        e.PortName,
-                        $"SMS_UI_ACK_BLOCKED;delivery={uiDeliveryId};session=true;ui=false;source_retained=true");
-                    AddLog(
-                        $"[{e.PortName}] [SMS_UI_ACK_BLOCKED] delivery={uiDeliveryId}; chưa xác nhận có hàng trên UI, giữ nguyên SMS ở SIM để thử lại.",
-                        "ERROR");
-                }
-                
                 if (extractedOtp != "N/A")
                 {
                     AddLog($"[{e.PortName}] Đã bắt được OTP: {extractedOtp} từ {senderPhone}", "SUCCESS");
@@ -5473,7 +5502,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         _ = Services.WebhookService.TriggerAsync(rule, e.PortName, receiverPhone, senderPhone, extractedOtp, cleanContent);
                     }
 
-                    // GsmModemService deletes the SIM record after this handler returns.
+                    // The modem may clean the SIM slot after the core UI commit.
                 }
                 else
                 {
@@ -5495,10 +5524,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             catch (Exception ex)
             {
+                bool committed = Volatile.Read(ref acknowledgementState) == 1;
                 AtCommandTraceLogger.Error(
                     e.PortName,
-                    $"SMS_UI_PROCESSING_FAILED;error={ex.GetType().Name};source_retained=true");
+                    $"SMS_UI_PROCESSING_FAILED;error={ex.GetType().Name};source_retained={!committed}");
                 AddLog($"[{e.PortName}] Lỗi xử lý SMS: {ex.Message}", "ERROR");
+            }
+            finally
+            {
+                if (Interlocked.CompareExchange(ref acknowledgementState, 2, 0) == 0)
+                    commitCompletion.TrySetResult(false);
             }
         }
 
@@ -5511,10 +5546,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             var operation = dispatcher.InvokeAsync(ProcessOnUiThread);
-            if (!operation.Task.Wait(SmsUiDispatchTimeout))
+            Task<Task> firstCompletion = Task.WhenAny(
+                (Task)commitCompletion.Task,
+                operation.Task);
+            if (!firstCompletion.Wait(SmsUiDispatchTimeout)
+                && Interlocked.CompareExchange(
+                    ref acknowledgementState, 2, 0) == 0)
             {
                 // Do not acknowledge here. GsmModemService keeps the exact SIM
                 // record and its retry/sweep path will deliver it later.
+                commitCompletion.TrySetResult(false);
                 AtCommandTraceLogger.Error(
                     e.PortName,
                     $"SMS_UI_DISPATCH_TIMEOUT;seconds={SmsUiDispatchTimeout.TotalSeconds:0};source_retained=true");
@@ -5524,15 +5565,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            operation.Task.GetAwaiter().GetResult();
+            // Commit won the timeout race: optional dispatcher work may still
+            // be running. Surface a failed/aborted dispatcher callback early.
+            Task completed = firstCompletion.GetAwaiter().GetResult();
+            if (completed == operation.Task)
+                operation.Task.GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
+            bool committed = Volatile.Read(ref acknowledgementState) == 1;
             AtCommandTraceLogger.Error(
                 e.PortName,
-                $"SMS_UI_DISPATCH_FAILED;error={ex.GetType().Name};source_retained=true");
+                $"SMS_UI_DISPATCH_FAILED;error={ex.GetType().Name};source_retained={!committed}");
             AddLog(
-                $"[{e.PortName}] [SMS_UI_DISPATCH_FAILED] Không đưa được SMS vào UI: {ex.Message}; giữ SMS trên SIM.",
+                $"[{e.PortName}] [SMS_UI_DISPATCH_FAILED] Lỗi callback nhận SMS: {ex.Message}.",
                 "ERROR");
         }
     }

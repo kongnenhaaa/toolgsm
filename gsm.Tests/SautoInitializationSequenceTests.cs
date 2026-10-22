@@ -781,8 +781,9 @@ public sealed class SautoInitializationSequenceTests
             TimeSpan.FromSeconds(60),
             GsmModemService.SmsReceiveWatchdogInterval);
         Assert.Equal(
-            TimeSpan.FromSeconds(1),
+            TimeSpan.FromMilliseconds(250),
             GsmModemService.SmsReceiveWatchdogTurnGap);
+        Assert.Equal(8, GsmModemService.SmsScanMaxConcurrency);
         Assert.Equal(
             TimeSpan.FromMinutes(5),
             GsmModemService.SmsStorageCleanupInterval);

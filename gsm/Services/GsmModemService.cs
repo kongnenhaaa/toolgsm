@@ -317,8 +317,9 @@ public class GsmModemService : IGsmModemService
     internal const string SmsReceiveWatchdogCommand = "AT+CMGL=\"ALL\"";
     internal static TimeSpan SmsReceiveWatchdogInterval { get; } =
         TimeSpan.FromSeconds(60);
+    internal const int SmsScanMaxConcurrency = 8;
     internal static TimeSpan SmsReceiveWatchdogTurnGap { get; } =
-        TimeSpan.FromSeconds(1);
+        TimeSpan.FromMilliseconds(250);
     internal static TimeSpan SmsStorageCleanupInterval { get; } =
         TimeSpan.FromMinutes(5);
     // A receive gate can remain closed when SAuto/network recovery is stuck.
@@ -834,6 +835,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, DateTime> _deliveredStoredSms = new();
     private readonly ConcurrentDictionary<string, SmsReadQueueState> _smsReadQueues =
         new(StringComparer.OrdinalIgnoreCase);
+    private int _smsReadWorkerStartCount;
+    internal int SmsReadWorkerStartCount => Volatile.Read(ref _smsReadWorkerStartCount);
     private readonly ConcurrentDictionary<string, long> _smsPortGenerations =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _smsSimIdentities =
@@ -867,15 +870,19 @@ public class GsmModemService : IGsmModemService
     private readonly object _smsReceiveWatchdogSchedulerSync = new();
     private CancellationTokenSource? _smsReceiveWatchdogSchedulerCts;
     private Task? _smsReceiveWatchdogSchedulerTask;
+    private bool _smsReceiveWatchdogRestartRequested;
+    private bool _smsReceiveWatchdogStopPending;
     private int _smsReceiveWatchdogCursor;
     private readonly ConcurrentDictionary<string, long> _smsReceiveWatchdogLastProbeTicks =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, long> _smsStorageCleanupLastScheduleTicks =
         new(StringComparer.OrdinalIgnoreCase);
-    // Every periodic or recovery CMGL scan across all physical COM ports owns
-    // this one gate. With 64 ports the modem never receives a 64-command burst.
-    private readonly SemaphoreSlim _smsScanTurnGate = new(1, 1);
-    private long _smsScanTurnCompletedTick;
+    // CMGL scans use separate COM locks, but a bounded bank-wide limit avoids
+    // flooding a shared USB hub when many ports need recovery at once.
+    private readonly SemaphoreSlim _smsScanTurnGate =
+        new(SmsScanMaxConcurrency, SmsScanMaxConcurrency);
+    private readonly SemaphoreSlim _smsScanStartGate = new(1, 1);
+    private long _smsScanLastStartTick;
     private readonly ConcurrentDictionary<string, SmsReceiveMaintenanceGate> _smsReceiveMaintenanceIdentities =
         new(StringComparer.OrdinalIgnoreCase);
     // Every IMEI flow or SIM identity change advances this generation. An old
@@ -1243,9 +1250,13 @@ public class GsmModemService : IGsmModemService
         lock (_smsReceiveWatchdogSchedulerSync)
         {
             if (_smsReceiveWatchdogSchedulerCts is { } existing
-                && !existing.IsCancellationRequested
                 && _smsReceiveWatchdogSchedulerTask is { IsCompleted: false })
             {
+                // A cancelled scheduler may still be draining in-flight
+                // probes. Start its replacement only after that drain ends.
+                if (existing.IsCancellationRequested
+                    || _smsReceiveWatchdogStopPending)
+                    _smsReceiveWatchdogRestartRequested = true;
                 if (newlyRegistered)
                     LogSmsReceiveWatchdogRegistration(portName);
                 return;
@@ -1266,7 +1277,7 @@ public class GsmModemService : IGsmModemService
         LogMessage?.Invoke(this, new GsmDataEventArgs
         {
             PortName = portName,
-            Data = $"[SMS_WATCHDOG_REGISTERED] mode=ROUND_ROBIN; per_port_min={SmsReceiveWatchdogInterval.TotalSeconds:0}s; turn_gap={SmsReceiveWatchdogTurnGap.TotalSeconds:0}s."
+            Data = $"[SMS_WATCHDOG_REGISTERED] mode=ROUND_ROBIN; per_port_min={SmsReceiveWatchdogInterval.TotalSeconds:0}s; turn_gap_ms={SmsReceiveWatchdogTurnGap.TotalMilliseconds:0}; max_scans={SmsScanMaxConcurrency}."
         });
 
     private void StopSmsReceiveWatchdog(string portName)
@@ -1274,22 +1285,47 @@ public class GsmModemService : IGsmModemService
         _smsReceiveWatchdogLastProbeTicks.TryRemove(portName, out _);
         _smsStorageCleanupLastScheduleTicks.TryRemove(portName, out _);
         CancellationTokenSource? schedulerToCancel = null;
+        bool stopPending = false;
         lock (_smsReceiveWatchdogSchedulerSync)
         {
             bool anyEnabledPort = _smsReceiveMaintenanceIdentities.Keys.Any(
                 IsSmsReceiveMaintenanceEnabled);
             if (!anyEnabledPort)
+            {
+                _smsReceiveWatchdogRestartRequested = false;
+                _smsReceiveWatchdogStopPending = true;
+                stopPending = true;
                 schedulerToCancel = _smsReceiveWatchdogSchedulerCts;
+            }
         }
-        try { schedulerToCancel?.Cancel(); } catch { }
+        try { schedulerToCancel?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        finally
+        {
+            if (stopPending)
+            {
+                lock (_smsReceiveWatchdogSchedulerSync)
+                    _smsReceiveWatchdogStopPending = false;
+            }
+        }
     }
 
     private void StopAllSmsReceiveWatchdogs()
     {
         CancellationTokenSource? scheduler;
         lock (_smsReceiveWatchdogSchedulerSync)
+        {
             scheduler = _smsReceiveWatchdogSchedulerCts;
-        try { scheduler?.Cancel(); } catch { }
+            _smsReceiveWatchdogRestartRequested = false;
+            _smsReceiveWatchdogStopPending = true;
+        }
+        try { scheduler?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        finally
+        {
+            lock (_smsReceiveWatchdogSchedulerSync)
+                _smsReceiveWatchdogStopPending = false;
+        }
         _smsReceiveWatchdogLastProbeTicks.Clear();
         _smsStorageCleanupLastScheduleTicks.Clear();
     }
@@ -1341,23 +1377,31 @@ public class GsmModemService : IGsmModemService
         }
     }
 
-    private async Task<IDisposable> AcquireSmsScanTurnAsync(
+    internal async Task<IDisposable> AcquireSmsScanTurnAsync(
         CancellationToken token)
     {
         await _smsScanTurnGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            long lastCompleted = Volatile.Read(
-                ref _smsScanTurnCompletedTick);
-            long gapMilliseconds = checked(
-                (long)SmsReceiveWatchdogTurnGap.TotalMilliseconds);
-            long elapsed = Environment.TickCount64 - lastCompleted;
-            if (lastCompleted != 0 && elapsed < gapMilliseconds)
+            await _smsScanStartGate.WaitAsync(token).ConfigureAwait(false);
+            try
             {
-                await Task.Delay(
-                        TimeSpan.FromMilliseconds(gapMilliseconds - elapsed),
-                        token)
-                    .ConfigureAwait(false);
+                long lastStart = _smsScanLastStartTick;
+                long gapMilliseconds = checked(
+                    (long)SmsReceiveWatchdogTurnGap.TotalMilliseconds);
+                long elapsed = Environment.TickCount64 - lastStart;
+                if (lastStart != 0 && elapsed < gapMilliseconds)
+                {
+                    await Task.Delay(
+                            TimeSpan.FromMilliseconds(gapMilliseconds - elapsed),
+                            token)
+                        .ConfigureAwait(false);
+                }
+                _smsScanLastStartTick = Environment.TickCount64;
+            }
+            finally
+            {
+                _smsScanStartGate.Release();
             }
         }
         catch
@@ -1365,24 +1409,54 @@ public class GsmModemService : IGsmModemService
             _smsScanTurnGate.Release();
             throw;
         }
+        return new BackgroundOperationLease(() => _smsScanTurnGate.Release());
+    }
 
-        return new BackgroundOperationLease(() =>
+    private async Task<IDisposable?> TryAcquireSmsScanForegroundAsync(
+        string portName,
+        string operation,
+        CancellationToken token)
+    {
+        // A busy foreground workflow must not occupy one of the bank-wide
+        // scan slots for its entire duration. Leave that COM to its own retry.
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(token);
+        wait.CancelAfter(TimeSpan.FromMilliseconds(250));
+        try
         {
-            Volatile.Write(
-                ref _smsScanTurnCompletedTick,
-                Environment.TickCount64);
-            _smsScanTurnGate.Release();
-        });
+            return await AcquireForegroundOperationAsync(
+                    portName, operation, wait.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            return null;
+        }
     }
 
     private async Task RunSmsReceiveWatchdogSchedulerAsync(
         CancellationTokenSource scheduler)
     {
         CancellationToken token = scheduler.Token;
+        var activeProbes = new Dictionary<string, Task>(
+            StringComparer.OrdinalIgnoreCase);
+        bool restartAfterFault = false;
         try
         {
             while (!token.IsCancellationRequested)
             {
+                foreach (string completedPort in activeProbes
+                             .Where(pair => pair.Value.IsCompleted)
+                             .Select(pair => pair.Key)
+                             .ToArray())
+                    activeProbes.Remove(completedPort);
+
+                if (activeProbes.Count >= SmsScanMaxConcurrency)
+                {
+                    await Task.WhenAny(activeProbes.Values)
+                        .WaitAsync(token).ConfigureAwait(false);
+                    continue;
+                }
+
                 string[] ports = _smsReceiveMaintenanceIdentities.Keys
                     .Where(IsSmsReceiveMaintenanceEnabled)
                     .OrderBy(GetSmsReceiveWatchdogPortOrder)
@@ -1405,6 +1479,8 @@ public class GsmModemService : IGsmModemService
                 {
                     int index = (start + offset) % ports.Length;
                     string candidate = ports[index];
+                    if (activeProbes.ContainsKey(candidate))
+                        continue;
                     long lastProbe = _smsReceiveWatchdogLastProbeTicks.GetOrAdd(
                         candidate,
                         now);
@@ -1424,23 +1500,9 @@ public class GsmModemService : IGsmModemService
                     continue;
                 }
 
-                await ProbeStoredSmsForWatchdogAsync(selectedPort, token)
-                    .ConfigureAwait(false);
-                if (CanRunSmsScanTurn(selectedPort)
-                    && TryClaimSmsStorageCleanup(selectedPort))
-                {
-                    // Reuse the existing durable receive pipeline: CMGL finds
-                    // every old READ/UNREAD record, the inbox/journal accepts it,
-                    // identity+content are rechecked, then only that exact index
-                    // is released with CMGD=<index>,0. No background bulk delete.
-                    AtCommandTraceLogger.State(
-                        selectedPort,
-                        "SMS_STORAGE_CLEANUP_SCHEDULED;mode=SAFE_SWEEP;interval_minutes=5");
-                    ScheduleSafeUnreadSmsSweep(
-                        selectedPort,
-                        "periodic-storage-cleanup",
-                        initialDelayMs: 250);
-                }
+                activeProbes.Add(
+                    selectedPort,
+                    ProbeStoredSmsAndScheduleCleanupAsync(selectedPort, token));
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -1448,6 +1510,7 @@ public class GsmModemService : IGsmModemService
         }
         catch (Exception ex)
         {
+            restartAfterFault = true;
             // A single unexpected scheduler fault must not permanently disable
             // SMS recovery for every port until the application is restarted.
             LogMessage?.Invoke(this, new GsmDataEventArgs
@@ -1458,6 +1521,30 @@ public class GsmModemService : IGsmModemService
         }
         finally
         {
+            // No probe from this scheduler may outlive its cancellation token
+            // and overlap a replacement scheduler after a fault or shutdown.
+            bool stopRequested = token.IsCancellationRequested;
+            try { scheduler.Cancel(); } catch (ObjectDisposedException) { }
+            try
+            {
+                await Task.WhenAll(activeProbes.Values).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                // A subscriber can fault while reporting a probe failure. The
+                // scheduler must still release its owner and restart if needed.
+                restartAfterFault |= !stopRequested;
+                try
+                {
+                    AtCommandTraceLogger.Error(
+                        "SYSTEM",
+                        $"SMS_WATCHDOG_DRAIN_FAILED;{ex.GetType().Name}:{ex.Message}");
+                }
+                catch { }
+            }
             bool restart = false;
             lock (_smsReceiveWatchdogSchedulerSync)
             {
@@ -1465,9 +1552,11 @@ public class GsmModemService : IGsmModemService
                         _smsReceiveWatchdogSchedulerCts,
                         scheduler))
                 {
-                    restart = !token.IsCancellationRequested
+                    restart = (restartAfterFault
+                            || _smsReceiveWatchdogRestartRequested)
                         && _smsReceiveMaintenanceIdentities.Keys.Any(
                             IsSmsReceiveMaintenanceEnabled);
+                    _smsReceiveWatchdogRestartRequested = false;
                     _smsReceiveWatchdogSchedulerCts = null;
                     _smsReceiveWatchdogSchedulerTask = null;
                     _smsReceiveWatchdogCursor = 0;
@@ -1485,6 +1574,41 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    private async Task ProbeStoredSmsAndScheduleCleanupAsync(
+        string portName,
+        CancellationToken token)
+    {
+        try
+        {
+            await ProbeStoredSmsForWatchdogAsync(portName, token)
+                .ConfigureAwait(false);
+            if (CanRunSmsScanTurn(portName)
+                && TryClaimSmsStorageCleanup(portName))
+            {
+                // Reuse the durable receive pipeline; it verifies the SIM
+                // identity and exact slot content before deleting any index.
+                AtCommandTraceLogger.State(
+                    portName,
+                    "SMS_STORAGE_CLEANUP_SCHEDULED;mode=SAFE_SWEEP;interval_minutes=5");
+                ScheduleSafeUnreadSmsSweep(
+                    portName,
+                    "periodic-storage-cleanup",
+                    initialDelayMs: 250);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            LogMessage?.Invoke(this, new GsmDataEventArgs
+            {
+                PortName = portName,
+                Data = $"[SMS_WATCHDOG_RETRY] mode=ROUND_ROBIN; {ex.Message}"
+            });
+        }
+    }
+
     private async Task ProbeStoredSmsForWatchdogAsync(
         string portName,
         CancellationToken token)
@@ -1499,12 +1623,21 @@ public class GsmModemService : IGsmModemService
             if (!CanRunSmsScanTurn(portName))
                 return;
 
-            using IDisposable foregroundLease =
-                await AcquireForegroundOperationAsync(
+            using IDisposable? foregroundLease =
+                await TryAcquireSmsScanForegroundAsync(
                         portName,
                         "SMS_WATCHDOG_ROUND_ROBIN",
                         token)
                     .ConfigureAwait(false);
+            if (foregroundLease == null)
+            {
+                // Retry this busy COM soon without holding other ports back.
+                _smsReceiveWatchdogLastProbeTicks[portName] =
+                    Environment.TickCount64
+                    - (long)SmsReceiveWatchdogInterval.TotalMilliseconds
+                    + 1000;
+                return;
+            }
             if (!CanRunSmsScanTurn(portName))
                 return;
 
@@ -1696,41 +1829,122 @@ public class GsmModemService : IGsmModemService
         // firmware banks, which turns one long Vietnamese SMS into unrelated 67-char rows.
         // QCMGR either retains the PDU UDH or returns uid/msg_seg/msg_total explicitly.
         // Fall back to standard CMGR for older firmware and non-Quectel modems.
+        if (!EnsurePortOpen(port, out SerialPort? serialPort)
+            || serialPort == null
+            || !_semaphores.TryGetValue(port, out SemaphoreSlim? semaphore))
+            return string.Empty;
+
         IReadOnlyList<string> commands = GetStoredSmsReadCommandOrder(
             GetModemProfile(port), msgIndex);
-        foreach (string command in commands)
+        // An unrelated operation holding this COM must not park its SMS reader
+        // indefinitely. The queue will retry the index while it remains on SIM.
+        if (!await semaphore.WaitAsync(10000, ct).ConfigureAwait(false))
+            return string.Empty;
+        bool pduModeAttempted = false;
+        bool receiveModeRestored = true;
+        string smsResponse = string.Empty;
+        try
         {
-            // A valid SMS body must not be discarded only because the modem
-            // omitted the trailing OK terminator.
-            string response = await SendCommandAsync(
-                port, command, 8000, silent: true, ct: ct);
-            if (command.StartsWith("AT+QCMGR=", StringComparison.OrdinalIgnoreCase))
+            foreach (string command in commands)
             {
-                bool usable =
-                    IsCompleteStoredSmsResponse(response, "+QCMGR:")
-                    || HasUsableStoredSmsBody(response);
-                if (usable)
+                // Keep mode changes and the PDU read atomic for this COM.
+                // A valid SMS body may omit the trailing OK terminator.
+                if (command.Equals("AT+CMGF=0", StringComparison.OrdinalIgnoreCase))
+                    pduModeAttempted = true;
+                string response = await SendCommandWhilePortLockedAsync(
+                        port, serialPort, command, 8000, ct)
+                    .ConfigureAwait(false);
+                if (command.StartsWith("AT+QCMGR=", StringComparison.OrdinalIgnoreCase))
                 {
-                    DecodedSmsBody decoded = SmsBodyDecoder.Decode(response);
-                    if (!ShouldRetryQcmgrInPduMode(decoded))
-                        return response;
+                    bool usable =
+                        IsCompleteStoredSmsResponse(response, "+QCMGR:")
+                        || HasUsableStoredSmsBody(response);
+                    if (usable)
+                    {
+                        DecodedSmsBody decoded = SmsBodyDecoder.Decode(response);
+                        if (!ShouldRetryQcmgrInPduMode(decoded))
+                            return response;
 
-                    // Text mode did not expose uid/msg_seg/msg_total. Read the
-                    // same SIM slot in PDU mode so UDH ref/total/sequence decides
-                    // assembly. Never publish the ambiguous text fallback.
+                        // Text mode did not expose uid/msg_seg/msg_total. Read the
+                        // same SIM slot in PDU mode so UDH ref/total/sequence decides
+                        // assembly. Never publish the ambiguous text fallback.
+                    }
+                    continue;
                 }
-                continue;
+                if (command.Equals("AT+CMGF=0", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Even an error/timeout can follow a mode change that the
+                    // modem applied without returning its acknowledgement.
+                    if (IsCommandFailure(response)) break;
+                    continue;
+                }
+                smsResponse = response;
+                break;
             }
-            if (command.Equals("AT+CMGF=0", StringComparison.OrdinalIgnoreCase))
-            {
-                if (IsCommandFailure(response))
-                    return string.Empty;
-                continue;
-            }
-            return response;
         }
-        return string.Empty;
+        finally
+        {
+            try
+            {
+                if (pduModeAttempted)
+                {
+                    receiveModeRestored = false;
+                    // A cancelled read must still leave the modem in text mode.
+                    // Only CMGF changed here; the remaining receive settings
+                    // are maintained by the existing arm/sweep lifecycle.
+                    for (int attempt = 0; attempt < 2; attempt++)
+                    {
+                        string response = await SendCommandWhilePortLockedAsync(
+                                port, serialPort, "AT+CMGF=1", 5000,
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
+                        if (!IsSautoOkResponse(response))
+                            continue;
+
+                        // A delayed OK from a timed-out PDU command can be
+                        // mistaken for CMGF=1's acknowledgement. Query the
+                        // actual modem mode before publishing this SMS.
+                        string confirmedMode = await SendCommandWhilePortLockedAsync(
+                                port, serialPort, "AT+CMGF?", 5000,
+                                CancellationToken.None)
+                            .ConfigureAwait(false);
+                        if (IsSmsTextModeConfirmed(confirmedMode))
+                        {
+                            receiveModeRestored = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage?.Invoke(this, new GsmDataEventArgs
+                {
+                    PortName = port,
+                    Data = $"[SMS_READ_MODE_RESTORE_RETRY] index={msgIndex}; {ex.Message}"
+                });
+            }
+            finally
+            {
+                semaphore.Release();
+                if (pduModeAttempted && !receiveModeRestored)
+                {
+                    // Never accept/delete a payload while its receive mode is
+                    // uncertain. The slot stays on SIM for a safe recovery sweep.
+                    ScheduleSafeUnreadSmsSweep(
+                        port, "stored-read-mode-restore", initialDelayMs: 250);
+                }
+            }
+        }
+        return receiveModeRestored ? smsResponse : string.Empty;
     }
+
+    internal static bool IsSmsTextModeConfirmed(string? response) =>
+        IsSautoOkResponse(response)
+        && Regex.IsMatch(
+            response ?? string.Empty,
+            @"(?:^|\r?\n)\s*\+CMGF:\s*1\s*(?:\r?\n|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     internal static bool ShouldRetryQcmgrInPduMode(
         DecodedSmsBody decoded) =>
@@ -2029,18 +2243,32 @@ public class GsmModemService : IGsmModemService
                 return;
             }
 
-            state = _smsReadQueues.GetOrAdd(port, p =>
+            if (!_smsReadQueues.TryGetValue(port, out SmsReadQueueState? existing))
             {
                 var created = new SmsReadQueueState(generation);
-                created.Worker = Task.Run(
-                    () => ProcessStoredSmsQueueAsync(p, created),
+                if (!_smsReadQueues.TryAdd(port, created))
+                {
+                    created.Cancellation.Dispose();
+                    continue;
+                }
+
+                // Start only the state that won TryAdd. GetOrAdd may invoke its
+                // factory on several threads and would leave the losing workers
+                // waiting forever on channels that nobody can reach.
+                state = created;
+                state.Worker = Task.Run(
+                    () => ProcessStoredSmsQueueAsync(port, created),
                     created.Cancellation.Token);
-                return created;
-            });
+                Interlocked.Increment(ref _smsReadWorkerStartCount);
+            }
+            else
+            {
+                state = existing;
+            }
             if (state.Generation == generation) break;
 
             // InvalidateSmsQueueGeneration can run between reading generation
-            // and GetOrAdd. Remove that orphaned old state; otherwise every new
+            // and TryAdd. Remove that orphaned old state; otherwise every new
             // enqueue sees the mismatch forever and this COM never reads SMS.
             if (_smsReadQueues.TryRemove(
                     new KeyValuePair<string, SmsReadQueueState>(port, state)))
@@ -11481,8 +11709,7 @@ public class GsmModemService : IGsmModemService
             return;
         }
 
-        // One global turn across every COM. Recovery sweeps and periodic
-        // watchdog probes cannot issue CMGL concurrently on a 64-port rig.
+        // Bound the bank-wide CMGL load while independent COMs scan together.
         using IDisposable scanTurn =
             await AcquireSmsScanTurnAsync(operationToken)
                 .ConfigureAwait(false);
@@ -11500,11 +11727,19 @@ public class GsmModemService : IGsmModemService
 
         try
         {
-            using IDisposable foregroundLease =
-                await AcquireForegroundOperationAsync(
+            using IDisposable? foregroundLease =
+                await TryAcquireSmsScanForegroundAsync(
                     portName,
                     "SMS_SWEEP",
                     operationToken).ConfigureAwait(false);
+            if (foregroundLease == null)
+            {
+                ScheduleSafeUnreadSmsSweep(
+                    portName,
+                    "sweep-deferred-foreground-busy",
+                    initialDelayMs: 1000);
+                return;
+            }
             // State may have changed while this recovery waited behind a user
             // operation. Defer without dropping the request.
             if (!IsSmsReceiveMaintenanceEnabled(portName)

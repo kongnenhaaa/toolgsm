@@ -135,6 +135,15 @@ public class AppSettings
     public bool AutoConnectOnStart { get; set; } = false;
     public bool MinimizeToTray { get; set; } = true;
 
+    // Proxy ngoài chỉ áp dụng cho Pass MyVNPT, DKTTTB và Điện Máy Xanh.
+    public string WorkflowProxyHost { get; set; } = "";
+    public int WorkflowProxyPort { get; set; }
+    public string WorkflowProxyUsername { get; set; } = "";
+    public string WorkflowProxyPassword { get; set; } = "";
+    public bool UseProxyForMyVnpt { get; set; }
+    public bool UseProxyForDeviceUnlock { get; set; }
+    public bool UseProxyForDmx { get; set; }
+
     // Custom Columns and Ports filters
     public System.Collections.Generic.List<string> ColumnOrder { get; set; } = new();
     public System.Collections.Generic.List<string> HiddenColumns { get; set; } = new();

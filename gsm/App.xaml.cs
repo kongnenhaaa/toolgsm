@@ -73,6 +73,7 @@ namespace gsm
             serviceCollection.AddSingleton<IGsmUssdService, GsmUssdService>();
             serviceCollection.AddSingleton<IGsmCallService, GsmCallService>();
             serviceCollection.AddSingleton<IGsmBackgroundSupervisor, GsmBackgroundSupervisor>();
+            serviceCollection.AddSingleton<DataUsageService>();
             serviceCollection.AddSingleton<MainViewModel>();
             serviceCollection.AddSingleton<DeviceUnlockAuthService>();
             serviceCollection.AddSingleton<DeviceUnlockAccountHistoryService>();

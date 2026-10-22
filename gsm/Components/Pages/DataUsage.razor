@@ -1,0 +1,390 @@
+@page "/data-usage"
+@inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.DataUsageService DataService
+@inject ISnackbar Snackbar
+@using gsm.Models
+@using gsm.Components.Shared
+@implements IDisposable
+
+<MudPaper Class="pa-3 mx-3 mb-2 feature-toolbar" Elevation="0"
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+        <MudNumericField @bind-Value="_dataKilobytes"
+                         Label="Dung lượng mỗi SIM"
+                         Min="@DataUsageService.MinimumKilobytes"
+                         Max="@DataUsageService.MaximumKilobytes"
+                         Adornment="Adornment.End"
+                         AdornmentText="KB"
+                         Variant="Variant.Outlined"
+                         Margin="Margin.Dense"
+                         Style="width:190px;" />
+
+        <MudNumericField @bind-Value="_pricePerBlock"
+                         Label="Giá tham khảo / 50 KB"
+                         Min="0" Max="10000"
+                         Adornment="Adornment.End"
+                         AdornmentText="đ"
+                         Variant="Variant.Outlined"
+                         Margin="Margin.Dense"
+                         Style="width:200px;" />
+
+        <MudSelect T="string" @bind-Value="_sendMode" Dense="true"
+                   Variant="Variant.Outlined" Margin="Margin.Dense"
+                   Style="width:160px;" Label="Áp dụng cho">
+            <MudSelectItem Value="@("selected")">Cổng đã chọn</MudSelectItem>
+            <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
+        </MudSelect>
+
+        @if (!_isRunning)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.DataUsage"
+                       OnClick="StartDataUsage"
+                       Disabled="@(_dataKilobytes < DataUsageService.MinimumKilobytes || _dataKilobytes > DataUsageService.MaximumKilobytes)">
+                Phát sinh cước
+            </MudButton>
+        }
+        else
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.Stop"
+                       OnClick="StopDataUsage">
+                Dừng
+            </MudButton>
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+        }
+
+        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
+                   OnClick="ClearResults" Disabled="@(!_results.Any())">
+            Xóa kết quả
+        </MudButton>
+
+        <MudSpacer />
+
+        <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined">
+            Ước tính: <b>@EstimatedCostPerSim.ToString("N0")đ / SIM</b>
+        </MudChip>
+        <MudChip T="string" Color="Color.Success" Size="Size.Small" Variant="Variant.Text">
+            Thành công: <b>@_results.Count(result => result.Success)</b>
+        </MudChip>
+        <MudChip T="string" Color="Color.Error" Size="Size.Small" Variant="Variant.Text">
+            Thất bại: <b>@_results.Count(result => !result.Success)</b>
+        </MudChip>
+    </MudStack>
+
+    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+        Công cụ dùng kết nối dữ liệu di động của modem để tải đúng phần dữ liệu đã nhập.
+        Mặc định 50 KB tương ứng một block cước tham khảo 75đ. Số tiền thực tế phụ thuộc gói cước và cách làm tròn của nhà mạng.
+    </MudAlert>
+
+    @if (_isRunning)
+    {
+        <MudStack Class="mt-2" Spacing="1">
+            <MudText Typo="Typo.caption" Style="color:#64748B;">@_progressText</MudText>
+            <MudProgressLinear Color="Color.Primary" Value="@_progressPercent" />
+        </MudStack>
+    }
+</MudPaper>
+
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true"
+         PanelClass="pa-0" Class="mx-3 mt-1 feature-tabs"
+         Style="background:transparent;"
+         @bind-ActivePanelIndex="_subTab">
+    <MudTabPanel Text="Danh sách Cổng">
+        <ComTable Ports="Ports" @bind-SelectedItems="_selectedPorts" />
+    </MudTabPanel>
+
+    <MudTabPanel Text="@($"Kết quả ({_results.Count})")">
+        <MudPaper Class="pa-4 mt-2" Elevation="0"
+                  Style="border:1px solid #E2E8F0; border-radius:10px;">
+            <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+                <MudText Typo="Typo.subtitle2" Style="font-weight:600;">
+                    Kết quả phát sinh cước data
+                </MudText>
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteSweep"
+                           OnClick="ClearResults" Disabled="@(!_results.Any())">
+                    Xóa kết quả
+                </MudButton>
+            </MudStack>
+
+            <MudTable Items="@_results" Dense="true" Hover="true" Elevation="0"
+                      Height="calc(100vh - 280px)" FixedHeader="true">
+                <HeaderContent>
+                    <MudTh>Thời gian</MudTh>
+                    <MudTh>Cổng</MudTh>
+                    <MudTh>SĐT</MudTh>
+                    <MudTh>Yêu cầu</MudTh>
+                    <MudTh>Thực tế modem báo</MudTh>
+                    <MudTh>Cước ước tính</MudTh>
+                    <MudTh>Trạng thái</MudTh>
+                    <MudTh>Phản hồi</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd Style="font-size:12px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
+                    <MudTd Style="font-weight:600;">@context.Port</MudTd>
+                    <MudTd>@context.Phone</MudTd>
+                    <MudTd>@context.RequestedKilobytes.ToString("N0") KB</MudTd>
+                    <MudTd>@context.ActualText</MudTd>
+                    <MudTd>@context.EstimatedCost.ToString("N0")đ</MudTd>
+                    <MudTd>
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(context.Success ? Color.Success : Color.Error)">
+                            @(context.Success ? "Thành công" : "Lỗi")
+                        </MudChip>
+                    </MudTd>
+                    <MudTd Style="max-width:320px; overflow:hidden; text-overflow:ellipsis; font-size:12px; white-space:nowrap;"
+                           title="@context.Response">
+                        @context.Response
+                    </MudTd>
+                </RowTemplate>
+                <NoRecordsContent>
+                    <div class="pa-12 text-center" style="color:#94A3B8;">
+                        <MudIcon Icon="@Icons.Material.Outlined.DataUsage" Size="Size.Large" Class="mb-2" Style="opacity:0.4;" />
+                        <div>Chưa có lần phát sinh cước data</div>
+                    </div>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+    </MudTabPanel>
+</MudTabs>
+
+@code {
+    private const int BillingBlockKilobytes = 50;
+    private const int MaxParallelPorts = 8;
+
+    private int _dataKilobytes = 50;
+    private int _pricePerBlock = 75;
+    private string _sendMode = "selected";
+    private HashSet<SimPort> _selectedPorts = new();
+    private readonly List<DataUsageResultItem> _results = new();
+    private int _subTab;
+    private bool _isRunning;
+    private int _startGuard;
+    private CancellationTokenSource? _cts;
+    private string _progressText = string.Empty;
+    private double _progressPercent;
+    private System.Threading.Timer? _timer;
+
+    [Parameter] public bool IsPageActive { get; set; }
+
+    private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
+
+    private int EstimatedCostPerSim =>
+        Math.Max(0, _pricePerBlock)
+        * Math.Max(1, (int)Math.Ceiling(Math.Max(1, _dataKilobytes) / (double)BillingBlockKilobytes));
+
+    protected override void OnInitialized()
+    {
+        _timer = new System.Threading.Timer(_ =>
+        {
+            if (IsPageActive)
+                _ = InvokeAsync(StateHasChanged);
+        }, null, 1500, 1500);
+    }
+
+    private List<SimPort> GetTargets()
+    {
+        IEnumerable<SimPort> source = _sendMode == "all"
+            ? Ports
+            : _selectedPorts;
+
+        return source
+            .Where(port => port.Status == SimStatus.Active)
+            .Where(port => Vm.IsPortReadyForOperation(port.PortName))
+            .GroupBy(port => port.PortName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private async Task StartDataUsage()
+    {
+        if (Interlocked.Exchange(ref _startGuard, 1) != 0) return;
+
+        List<SimPort> targets = GetTargets();
+        if (targets.Count == 0)
+        {
+            Interlocked.Exchange(ref _startGuard, 0);
+            Snackbar.Add(
+                _sendMode == "all"
+                    ? "Không có COM Active sẵn sàng dùng data."
+                    : "Hãy chọn ít nhất một COM Active.",
+                Severity.Warning);
+            return;
+        }
+
+        _cts?.Cancel();
+        _cts?.Dispose();
+        var runCts = new CancellationTokenSource();
+        _cts = runCts;
+        CancellationToken token = runCts.Token;
+        _isRunning = true;
+        _subTab = 1;
+        _progressPercent = 0;
+        _progressText = $"Đang chuẩn bị {targets.Count} COM...";
+        int completed = 0;
+        int succeeded = 0;
+        int failed = 0;
+
+        Snackbar.Add(
+            $"Bắt đầu dùng {_dataKilobytes:N0} KB trên {targets.Count} COM.",
+            Severity.Info);
+
+        using var concurrencyGate = new SemaphoreSlim(
+            Math.Min(MaxParallelPorts, targets.Count));
+
+        async Task ProcessPortAsync(SimPort port)
+        {
+            await concurrencyGate.WaitAsync(token);
+            bool claimedBusyMarker = false;
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                if (!Vm.IsPortReadyForOperation(port.PortName))
+                    throw new InvalidOperationException("COM không còn Active hoặc SIM đã thay đổi.");
+
+                claimedBusyMarker = Vm.SmsInProgressPorts.TryAdd(port.PortName, true);
+                if (!claimedBusyMarker)
+                    throw new InvalidOperationException("COM đang thực hiện tác vụ khác.");
+
+                DataUsageRunResult result = await DataService.ConsumeAsync(
+                    port.PortName,
+                    _dataKilobytes,
+                    token);
+                Interlocked.Increment(ref succeeded);
+                port.LastDataResult = result.Message;
+                port.UpdateDisplayResult("Data");
+                Vm.AddLog($"[{port.PortName}] [DATA_USAGE_OK] {result.Message}", "SUCCESS");
+
+                await AddResultAsync(new DataUsageResultItem
+                {
+                    Time = DateTime.Now,
+                    Port = port.PortName,
+                    Phone = string.IsNullOrWhiteSpace(port.PhoneNumber) ? "—" : port.PhoneNumber,
+                    RequestedKilobytes = result.RequestedKilobytes,
+                    ActualBytes = result.ReportedBytes,
+                    EstimatedCost = EstimateCost(result.ReportedBytes, result.RequestedKilobytes),
+                    Success = true,
+                    Response = result.Message
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref failed);
+                port.LastDataResult = "Lỗi: " + ex.Message;
+                port.UpdateDisplayResult("Data");
+                Vm.AddLog($"[{port.PortName}] [DATA_USAGE_FAILED] {ex.Message}", "ERROR");
+
+                await AddResultAsync(new DataUsageResultItem
+                {
+                    Time = DateTime.Now,
+                    Port = port.PortName,
+                    Phone = string.IsNullOrWhiteSpace(port.PhoneNumber) ? "—" : port.PhoneNumber,
+                    RequestedKilobytes = _dataKilobytes,
+                    EstimatedCost = EstimatedCostPerSim,
+                    Success = false,
+                    Response = ex.Message
+                });
+            }
+            finally
+            {
+                if (claimedBusyMarker)
+                    Vm.SmsInProgressPorts.TryRemove(port.PortName, out _);
+                concurrencyGate.Release();
+
+                int current = Interlocked.Increment(ref completed);
+                await InvokeAsync(() =>
+                {
+                    _progressText = $"Đã xử lý {current}/{targets.Count} COM | {port.PortName}";
+                    _progressPercent = current * 100d / targets.Count;
+                    StateHasChanged();
+                });
+            }
+        }
+
+        try
+        {
+            await Task.WhenAll(targets.Select(ProcessPortAsync));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            _isRunning = false;
+            _progressText = token.IsCancellationRequested ? "Đã dừng" : string.Empty;
+            _progressPercent = 0;
+            Interlocked.Exchange(ref _startGuard, 0);
+            if (ReferenceEquals(_cts, runCts))
+            {
+                _cts = null;
+                runCts.Dispose();
+            }
+        }
+
+        Snackbar.Add(
+            token.IsCancellationRequested
+                ? $"Đã dừng: {succeeded} thành công, {failed} lỗi."
+                : $"Hoàn tất: {succeeded} thành công, {failed} lỗi.",
+            failed == 0 && !token.IsCancellationRequested
+                ? Severity.Success
+                : Severity.Warning);
+        StateHasChanged();
+    }
+
+    private Task AddResultAsync(DataUsageResultItem item) => InvokeAsync(() =>
+    {
+        _results.Insert(0, item);
+        if (_results.Count > 500)
+            _results.RemoveRange(500, _results.Count - 500);
+        StateHasChanged();
+    });
+
+    private int EstimateCost(int? actualBytes, int requestedKilobytes)
+    {
+        double kilobytes = actualBytes is > 0
+            ? actualBytes.Value / 1024d
+            : requestedKilobytes;
+        int blocks = Math.Max(1, (int)Math.Ceiling(kilobytes / BillingBlockKilobytes));
+        return blocks * Math.Max(0, _pricePerBlock);
+    }
+
+    private void StopDataUsage()
+    {
+        _cts?.Cancel();
+        _progressText = "Đang dừng...";
+        Snackbar.Add("Đang dừng phát sinh cước data...", Severity.Normal);
+    }
+
+    private void ClearResults()
+    {
+        _results.Clear();
+        Snackbar.Add("Đã xóa kết quả.", Severity.Normal);
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+
+    private sealed class DataUsageResultItem
+    {
+        public DateTime Time { get; init; }
+        public string Port { get; init; } = string.Empty;
+        public string Phone { get; init; } = string.Empty;
+        public int RequestedKilobytes { get; init; }
+        public int? ActualBytes { get; init; }
+        public int EstimatedCost { get; init; }
+        public bool Success { get; init; }
+        public string Response { get; init; } = string.Empty;
+        public string ActualText => ActualBytes is > 0
+            ? $"{ActualBytes.Value / 1024d:N1} KB"
+            : "—";
+    }
+}

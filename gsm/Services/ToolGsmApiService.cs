@@ -87,7 +87,12 @@ public sealed class ToolGsmApiService
                 ok = true,
                 service = "ToolGSM",
                 transport = loopbackOnly ? "localhost" : "web",
-                activePorts = _host.GetPorts().Count(port => port.Ready)
+                activePorts = _host.GetPorts().Count(port => port.Ready),
+                capabilities = new
+                {
+                    pollContentContains = true,
+                    pollPortName = true
+                }
             });
         });
         app.MapPost(SendSmsPath, async (HttpContext context) =>
@@ -136,10 +141,21 @@ public sealed class ToolGsmApiService
 
             string sourcePhone = context.Request.Query["sourcePhone"].ToString().Trim();
             string requestId   = context.Request.Query["requestId"].ToString().Trim();
+            string requestedPort = context.Request.Query["portName"].ToString().Trim();
+            if (!string.IsNullOrEmpty(requestedPort)
+                && !Regex.IsMatch(requestedPort, @"^COM\d+$", RegexOptions.IgnoreCase))
+            {
+                return Results.Json(
+                    new { ok = false, status = "invalid_port", requestId, sourcePhone },
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+            string contentContains = context.Request.Query["contentContains"].ToString().Trim();
+            if (contentContains.Length > 160)
+                contentContains = contentContains[..160];
             long afterMs = long.TryParse(
                 context.Request.Query["afterMs"].ToString(), out long v) ? v : 0L;
             DateTimeOffset afterUtc = afterMs > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds(afterMs).AddSeconds(-5)
+                ? DateTimeOffset.FromUnixTimeMilliseconds(afterMs).AddSeconds(-1)
                 : DateTimeOffset.UtcNow.AddSeconds(-60);
 
             string normalizedSource = NormalizeVietnamPhone(sourcePhone);
@@ -151,7 +167,8 @@ public sealed class ToolGsmApiService
                 StringComparer.OrdinalIgnoreCase);
 
             IReadOnlyList<SmsInboxRecord> recent = _host.GetOtpInbox()
-                .OrderByDescending(r => r.ReceivedAtUtc != default ? r.ReceivedAtUtc : (r.SmsTimestampUtc ?? DateTimeOffset.UtcNow))
+                .OrderByDescending(r => r.SmsTimestampUtc
+                    ?? (r.ReceivedAtUtc != default ? r.ReceivedAtUtc : DateTimeOffset.UtcNow))
                 .ToArray();
 
             SmsInboxRecord? match = null;
@@ -159,10 +176,26 @@ public sealed class ToolGsmApiService
 
             foreach (var r in recent)
             {
-                DateTimeOffset ts = r.ReceivedAtUtc != default
-                    ? r.ReceivedAtUtc
-                    : (r.SmsTimestampUtc ?? DateTimeOffset.UtcNow);
+                // Prefer the network timestamp stored in the SMS. An old SMS can be
+                // replayed from the SIM after ToolGSM restarts, which makes its local
+                // ReceivedAtUtc look new even though the OTP has already expired.
+                DateTimeOffset ts = r.SmsTimestampUtc
+                    ?? (r.ReceivedAtUtc != default ? r.ReceivedAtUtc : DateTimeOffset.UtcNow);
                 if (ts < afterUtc) continue;
+
+                if (!string.IsNullOrEmpty(requestedPort)
+                    && !string.Equals(r.PortName, requestedPort, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(contentContains)
+                    && (r.Content ?? string.Empty).IndexOf(
+                        contentContains,
+                        StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
 
                 // Do not claim an SMS that was already claimed by a different requestId
                 if (!string.IsNullOrEmpty(r.DeliveryId)
@@ -179,7 +212,14 @@ public sealed class ToolGsmApiService
                 }
 
                 if (!string.IsNullOrEmpty(normalizedSource)
+                    && !string.IsNullOrEmpty(recvPhone)
                     && !string.Equals(recvPhone, normalizedSource, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(normalizedSource)
+                    && string.IsNullOrEmpty(recvPhone)
+                    && string.IsNullOrEmpty(requestedPort))
                 {
                     continue;
                 }
@@ -194,7 +234,7 @@ public sealed class ToolGsmApiService
                     if (m.Success) otp = m.Groups[1].Value;
                 }
 
-                if (!string.IsNullOrEmpty(otp))
+                if (!string.IsNullOrEmpty(otp) || !string.IsNullOrEmpty(contentContains))
                 {
                     match = r;
                     matchedOtp = otp;
@@ -206,7 +246,8 @@ public sealed class ToolGsmApiService
                 }
             }
 
-            if (match == null || string.IsNullOrEmpty(matchedOtp))
+            if (match == null
+                || (string.IsNullOrEmpty(contentContains) && string.IsNullOrEmpty(matchedOtp)))
             {
                 return Results.Json(new
                 {
@@ -222,12 +263,15 @@ public sealed class ToolGsmApiService
                 ok = true,
                 status = "otp_received",
                 requestId,
-                sourcePhone = !string.IsNullOrEmpty(match.ReceiverPhone) ? match.ReceiverPhone : sourcePhone,
+                sourcePhone = !string.IsNullOrEmpty(NormalizeVietnamPhone(match.ReceiverPhone))
+                    ? match.ReceiverPhone
+                    : sourcePhone,
                 otp = matchedOtp,
                 smsContent = match.Content,
                 sender = match.Sender,
                 portName = match.PortName,
-                receivedAtMs = (match.ReceivedAtUtc != default ? match.ReceivedAtUtc : (match.SmsTimestampUtc ?? DateTimeOffset.UtcNow))
+                receivedAtMs = (match.SmsTimestampUtc
+                    ?? (match.ReceivedAtUtc != default ? match.ReceivedAtUtc : DateTimeOffset.UtcNow))
                     .ToUnixTimeMilliseconds()
             }, statusCode: StatusCodes.Status200OK);
         });

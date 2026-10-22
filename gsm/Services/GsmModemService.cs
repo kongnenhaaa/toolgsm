@@ -8074,6 +8074,29 @@ public class GsmModemService : IGsmModemService
                 currentData = buffer.ToString();
             }
 
+            // HTTP GET finishes asynchronously: the command first returns OK,
+            // then Quectel emits +QHTTPGET with the modem error, HTTP status and
+            // downloaded byte count. Publish that URC so foreground data-usage
+            // workflows can wait for the real network result instead of treating
+            // the initial OK as a completed transfer.
+            MatchCollection httpGetMatches = Regex.Matches(
+                currentData,
+                @"\+QHTTPGET:\s*\d+(?:\s*,\s*\d+)?(?:\s*,\s*\d+)?\r?\n?",
+                RegexOptions.IgnoreCase);
+            if (httpGetMatches.Count > 0)
+            {
+                foreach (Match httpGetMatch in httpGetMatches)
+                {
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = httpGetMatch.Value.Trim()
+                    });
+                    buffer.Replace(httpGetMatch.Value, string.Empty);
+                }
+                currentData = buffer.ToString();
+            }
+
             // Luồng dev xử lý trực tiếp +CLIP/NO CARRIER ở bên dưới. Không lấy URC
             // ra khỏi buffer trước luồng này, nếu không UI sẽ không nhận được cuộc gọi.
 

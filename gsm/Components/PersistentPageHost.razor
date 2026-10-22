@@ -12,11 +12,20 @@
     <div class="persistent-page" style="@PageStyle("call")" aria-hidden="@(!IsActive("call"))">
         <Call IsPageActive="@IsActive("call")" />
     </div>
+    <div class="persistent-page" style="@PageStyle("datausage")" aria-hidden="@(!IsActive("datausage"))">
+        <DataUsage IsPageActive="@IsActive("datausage")" />
+    </div>
     <div class="persistent-page" style="@PageStyle("ezcom")" aria-hidden="@(!IsActive("ezcom"))">
         <EzCom IsPageActive="@IsActive("ezcom")" />
     </div>
     <div class="persistent-page" style="@PageStyle("vnptpass")" aria-hidden="@(!IsActive("vnptpass"))">
         <VnptPass IsPageActive="@IsActive("vnptpass")" />
+    </div>
+    <div class="persistent-page" style="@PageStyle("dmx")" aria-hidden="@(!IsActive("dmx"))">
+        <DienMayXanh IsPageActive="@IsActive("dmx")" />
+    </div>
+    <div class="persistent-page" style="@PageStyle("proxy")" aria-hidden="@(!IsActive("proxy"))">
+        <Proxy IsPageActive="@IsActive("proxy")" />
     </div>
     <div class="persistent-page" style="@PageStyle("deviceunlock")" aria-hidden="@(!IsActive("deviceunlock"))">
         <DeviceUnlock IsPageActive="@IsActive("deviceunlock")" />
@@ -60,10 +69,13 @@
         {
             "" or "ussd" => "ussd",
             "vnpt-pass" => "vnptpass",
+            "dien-may-xanh" => "dmx",
+            "proxy" => "proxy",
             "device-unlock" => "deviceunlock",
             "icoc-unlock" => "icocunlock",
             "sms" => "sms",
             "call" => "call",
+            "data-usage" => "datausage",
             "ezcom" => "ezcom",
             "settings" => "settings",
             _ => "ussd"

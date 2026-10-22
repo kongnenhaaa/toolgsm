@@ -1,0 +1,188 @@
+@page "/proxy"
+@inject ISnackbar Snackbar
+@using gsm.Services
+@implements IDisposable
+
+<MudPaper Class="pa-4 mx-3 mb-2 feature-toolbar" Elevation="0"
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
+    <MudText Typo="Typo.h6" Style="font-weight:700;">Proxy tác vụ</MudText>
+    <MudText Typo="Typo.body2" Class="mt-1 mb-4" Style="color:#64748B;">
+        Thêm một proxy có xác thực. Proxy chỉ được dùng khi bạn tích
+        <b>Sử dụng proxy</b> tại từng tab Pass MyVNPT, ĐKTTTB hoặc Điện Máy Xanh.
+    </MudText>
+
+    <MudGrid Spacing="2">
+        <MudItem xs="12" md="8">
+            <MudTextField @bind-Value="_proxyValue"
+                          Label="Proxy"
+                          Placeholder="IP:Port:User:Password"
+                          HelperText="Hỗ trợ IP:Port hoặc IP:Port:User:Password"
+                          InputType="InputType.Password"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Disabled="@_testing"
+                          FullWidth="true" />
+        </MudItem>
+        <MudItem xs="12" md="4">
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-1">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.AddLink"
+                           OnClick="AddAndTestProxy"
+                           Disabled="@(_testing || string.IsNullOrWhiteSpace(_proxyValue))">
+                    Thêm và kiểm tra
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteOutline"
+                           OnClick="ClearProxy"
+                           Disabled="@(_testing || !WorkflowProxyService.IsConfigured)">
+                    Xóa
+                </MudButton>
+            </MudStack>
+        </MudItem>
+    </MudGrid>
+
+    @if (_testing)
+    {
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-3">
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Primary" />
+            <MudText Typo="Typo.body2">Đang kết nối qua proxy và kiểm tra IP ra ngoài...</MudText>
+        </MudStack>
+    }
+    else if (!string.IsNullOrWhiteSpace(_statusMessage))
+    {
+        <MudAlert Severity="@(_lastTestSucceeded ? Severity.Success : Severity.Error)"
+                  Dense="true" Class="mt-3">
+            @_statusMessage
+        </MudAlert>
+    }
+</MudPaper>
+
+<MudPaper Class="pa-4 mx-3 mt-2" Elevation="0"
+          Style="background:#FFFFFF; border:1px solid #E2E8F0; border-radius:10px;">
+    <MudText Typo="Typo.subtitle1" Style="font-weight:700;">Trạng thái hiện tại</MudText>
+    @if (WorkflowProxyService.Current is { } proxy)
+    {
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-2" Wrap="Wrap.Wrap">
+            <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">
+                Đã thêm
+            </MudChip>
+            <MudText Typo="Typo.body2"><b>@proxy.Endpoint</b></MudText>
+            @if (!string.IsNullOrWhiteSpace(proxy.Username))
+            {
+                <MudText Typo="Typo.body2" Style="color:#64748B;">
+                    Tài khoản: @Mask(proxy.Username)
+                </MudText>
+            }
+        </MudStack>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+            Chưa thêm proxy. Mọi tác vụ đang dùng kết nối mặc định.
+        </MudAlert>
+    }
+
+    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+        Sau khi thêm proxy, cả ba checkbox ở các tab tác vụ vẫn mặc định tắt.
+        Chỉ tab được tích mới sử dụng proxy.
+    </MudAlert>
+</MudPaper>
+
+@code {
+    [Parameter] public bool IsPageActive { get; set; }
+
+    private string _proxyValue = string.Empty;
+    private bool _testing;
+    private bool _lastTestSucceeded;
+    private string _statusMessage = string.Empty;
+    private CancellationTokenSource? _testCts;
+
+    protected override void OnInitialized()
+    {
+        if (WorkflowProxyService.Current is { } proxy)
+        {
+            _proxyValue = $"{proxy.Host}:{proxy.Port}:{proxy.Username}:{proxy.Password}";
+        }
+    }
+
+    private async Task AddAndTestProxy()
+    {
+        if (!WorkflowProxyService.TryParse(
+                _proxyValue,
+                out WorkflowProxyConfiguration? proxy,
+                out string error)
+            || proxy is null)
+        {
+            _lastTestSucceeded = false;
+            _statusMessage = error;
+            Snackbar.Add(error, Severity.Warning);
+            return;
+        }
+
+        _testCts?.Cancel();
+        _testCts?.Dispose();
+        _testCts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        _testing = true;
+        _statusMessage = string.Empty;
+        try
+        {
+            WorkflowProxyTestResult result = await WorkflowProxyService.TestAsync(
+                proxy,
+                _testCts.Token);
+            _lastTestSucceeded = result.Success;
+            _statusMessage = result.Message;
+            if (!result.Success)
+            {
+                Snackbar.Add(result.Message, Severity.Error);
+                return;
+            }
+
+            if (!WorkflowProxyService.Save(proxy, out error))
+            {
+                _lastTestSucceeded = false;
+                _statusMessage = error;
+                Snackbar.Add(error, Severity.Error);
+                return;
+            }
+
+            Snackbar.Add(
+                "Đã kiểm tra và lưu proxy. Tích chọn tại tab cần sử dụng.",
+                Severity.Success);
+        }
+        catch (OperationCanceledException)
+        {
+            _lastTestSucceeded = false;
+            _statusMessage = "Đã hủy kiểm tra proxy.";
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private void ClearProxy()
+    {
+        if (!WorkflowProxyService.Clear())
+        {
+            Snackbar.Add("Không xóa được cấu hình proxy.", Severity.Error);
+            return;
+        }
+
+        _proxyValue = string.Empty;
+        _lastTestSucceeded = true;
+        _statusMessage = "Đã xóa proxy; các tác vụ trở về kết nối mặc định.";
+        Snackbar.Add(_statusMessage, Severity.Success);
+    }
+
+    private static string Mask(string value)
+    {
+        if (value.Length <= 2) return new string('*', value.Length);
+        return value[..2] + new string('*', Math.Min(8, value.Length - 2));
+    }
+
+    public void Dispose()
+    {
+        _testCts?.Cancel();
+        _testCts?.Dispose();
+    }
+}

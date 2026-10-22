@@ -430,6 +430,9 @@ public sealed class DeviceUnlockService
             StandardErrorEncoding = Encoding.UTF8
         };
         DeviceUnlockAuthService.ConfigureUtf8PythonEnvironment(startInfo);
+        WorkflowProxyService.ApplyToEnvironment(
+            startInfo,
+            SettingsService.Current.UseProxyForDeviceUnlock);
         startInfo.ArgumentList.Add(bridgePath);
         startInfo.ArgumentList.Add(sourcePath);
         return startInfo;

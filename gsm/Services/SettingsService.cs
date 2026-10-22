@@ -131,6 +131,13 @@ public static class SettingsService
         NormalizeTelegramRoutes(settings);
         settings.SignalScanIntervalSeconds = Math.Clamp(
             settings.SignalScanIntervalSeconds, 5, 300);
+        settings.WorkflowProxyHost =
+            (settings.WorkflowProxyHost ?? string.Empty).Trim();
+        settings.WorkflowProxyUsername =
+            (settings.WorkflowProxyUsername ?? string.Empty).Trim();
+        settings.WorkflowProxyPassword ??= string.Empty;
+        if (settings.WorkflowProxyPort is < 1 or > 65535)
+            settings.WorkflowProxyPort = 0;
         if (string.IsNullOrWhiteSpace(settings.MachineId))
             settings.MachineId = Environment.MachineName;
         if (string.IsNullOrWhiteSpace(settings.InstallationId)

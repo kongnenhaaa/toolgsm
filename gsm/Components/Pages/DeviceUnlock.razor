@@ -60,6 +60,12 @@
                     Xóa kết quả
                 </MudButton>
 
+                <MudCheckBox T="bool" Value="@SettingsService.Current.UseProxyForDeviceUnlock"
+                             ValueChanged="SetUseProxy"
+                             Label="Sử dụng proxy"
+                             Color="Color.Primary"
+                             Disabled="@_isRunning" />
+
                 <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
                            StartIcon="@Icons.Material.Filled.FileDownload"
                            OnClick="ExportCurrentSessionExcel"
@@ -390,6 +396,24 @@
         RefreshSavedAccounts();
         RestoreLastSavedCredentials();
         _ = RefreshAuthStatus();
+    }
+
+    private void SetUseProxy(bool enabled)
+    {
+        if (enabled && !WorkflowProxyService.IsConfigured)
+        {
+            Snackbar.Add("Chưa thêm proxy trong tab Proxy.", Severity.Warning);
+            return;
+        }
+
+        bool previous = SettingsService.Current.UseProxyForDeviceUnlock;
+        SettingsService.Current.UseProxyForDeviceUnlock = enabled;
+        if (!SettingsService.SaveSettings(SettingsService.Current))
+        {
+            SettingsService.Current.UseProxyForDeviceUnlock = previous;
+            Snackbar.Add("Không lưu được lựa chọn proxy.", Severity.Error);
+            return;
+        }
     }
 
     private async Task RefreshAuthStatus()

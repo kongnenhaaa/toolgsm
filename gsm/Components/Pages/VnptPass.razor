@@ -31,6 +31,12 @@
                     <MudSelectItem Value="@("all")">Tất cả Active</MudSelectItem>
                 </MudSelect>
 
+                <MudCheckBox T="bool" Value="@SettingsService.Current.UseProxyForMyVnpt"
+                             ValueChanged="SetUseProxy"
+                             Label="Sử dụng proxy"
+                             Color="Color.Primary"
+                             Disabled="@_isSetting" />
+
                 @if (!_isSetting)
                 {
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
@@ -221,6 +227,24 @@
             if (IsPageActive)
                 _ = InvokeAsync(StateHasChanged);
         }, null, 1500, 1500);
+    }
+
+    private void SetUseProxy(bool enabled)
+    {
+        if (enabled && !WorkflowProxyService.IsConfigured)
+        {
+            Snackbar.Add("Chưa thêm proxy trong tab Proxy.", Severity.Warning);
+            return;
+        }
+
+        bool previous = SettingsService.Current.UseProxyForMyVnpt;
+        SettingsService.Current.UseProxyForMyVnpt = enabled;
+        if (!SettingsService.SaveSettings(SettingsService.Current))
+        {
+            SettingsService.Current.UseProxyForMyVnpt = previous;
+            Snackbar.Add("Không lưu được lựa chọn proxy.", Severity.Error);
+            return;
+        }
     }
 
     // ========== HELPERS ==========

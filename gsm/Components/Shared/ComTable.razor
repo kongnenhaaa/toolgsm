@@ -554,12 +554,17 @@
 
     private string GetColumnHeader(ColumnItem column) =>
         column.Name == "VnptStatus"
-        && Operation.Equals("DKTTTB", StringComparison.OrdinalIgnoreCase)
-            ? "Trạng thái DKTTTB"
+            ? Operation.Equals("DKTTTB", StringComparison.OrdinalIgnoreCase)
+                ? "Trạng thái DKTTTB"
+                : Operation.Equals("DMX", StringComparison.OrdinalIgnoreCase)
+                    ? "Trạng thái Điện Máy Xanh"
+                    : column.Header
             : column.Header;
 
     private string GetVnptStatusColumnValue(SimPort port) =>
         Operation.Equals("DKTTTB", StringComparison.OrdinalIgnoreCase)
             ? port.DeviceUnlockStatus ?? string.Empty
-            : port.VnptStatus ?? string.Empty;
+            : Operation.Equals("DMX", StringComparison.OrdinalIgnoreCase)
+                ? port.DmxStatus ?? string.Empty
+                : port.VnptStatus ?? string.Empty;
 }

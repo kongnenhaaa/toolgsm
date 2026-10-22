@@ -144,6 +144,86 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private readonly ConcurrentDictionary<string, PendingMyVnptPasswordOperation> _pendingMyVnptPasswordPorts =
         new(StringComparer.OrdinalIgnoreCase);
+    private sealed class PendingDmxAccountOperation
+    {
+        private readonly object _otpLock = new();
+        private readonly HashSet<string> _usedOtps = new(StringComparer.Ordinal);
+        private bool _otpClaimed;
+
+        public required string PortName { get; init; }
+        public required string Ccid { get; init; }
+        public required long Epoch { get; init; }
+        public required string Password { get; init; }
+        public required DmxProfile Profile { get; init; }
+        public required CancellationToken CancellationToken { get; init; }
+        public required DmxRegistrationSession ApiSession { get; set; }
+        public TaskCompletionSource<DmxAccountResult> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource<bool> OtpClaimed { get; set; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource<bool> OtpSendCompleted { get; set; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool TryClaimOtp(string otp)
+        {
+            lock (_otpLock)
+            {
+                if (_otpClaimed || _usedOtps.Contains(otp)) return false;
+                _otpClaimed = true;
+                _usedOtps.Add(otp);
+                OtpClaimed.TrySetResult(true);
+                return true;
+            }
+        }
+
+        public void UpdateApiSession(DmxRegistrationSession session)
+        {
+            lock (_otpLock)
+                ApiSession = session;
+        }
+
+        public DmxRegistrationSession GetApiSession()
+        {
+            lock (_otpLock)
+                return ApiSession;
+        }
+
+        public Task<bool> GetOtpClaimedTask()
+        {
+            lock (_otpLock)
+                return OtpClaimed.Task;
+        }
+
+        public Task<bool> GetOtpSendCompletedTask()
+        {
+            lock (_otpLock)
+                return OtpSendCompleted.Task;
+        }
+
+        public void MarkOtpSendCompleted(bool accepted)
+        {
+            lock (_otpLock)
+                OtpSendCompleted.TrySetResult(accepted);
+        }
+
+        public bool TryPrepareForNextOtp(DmxRegistrationSession session)
+        {
+            lock (_otpLock)
+            {
+                if (_otpClaimed) return false;
+                ApiSession = session;
+                _otpClaimed = false;
+                OtpClaimed = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                OtpSendCompleted = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                return true;
+            }
+        }
+    }
+
+    private readonly ConcurrentDictionary<string, PendingDmxAccountOperation>
+        _pendingDmxAccountPorts = new(StringComparer.OrdinalIgnoreCase);
     private sealed class PendingDeviceUnlockOperation
     {
         private int _otpClaimed;
@@ -178,6 +258,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly SimSessionSmsCleanupBarrier _initialSmsCleanupBarrier = new();
     private readonly SemaphoreSlim _vnptBatchGate = new(1, 1);
     public bool IsMyVnptBatchRunning => _vnptBatchGate.CurrentCount == 0;
+    private readonly SemaphoreSlim _dmxBatchGate = new(1, 1);
+    public bool IsDmxBatchRunning => _dmxBatchGate.CurrentCount == 0;
     // Cho toàn bộ bank 64 COM vào workflow ngay. Những COM đang chờ SMS không
     // được giữ slot và chặn COM khác; lớp HTTP trong MyVnptService vẫn giới
     // hạn riêng 20 request API đồng thời.
@@ -192,6 +274,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         TimeSpan.FromMinutes(2);
     internal static readonly TimeSpan MyVnptQueuedOtpGraceTimeout =
         TimeSpan.FromSeconds(10);
+    internal const int MaxConcurrentDmxWorkflows = 64;
+    internal const int MaxDmxOtpSendAttempts = 3;
+    internal static readonly TimeSpan DmxOtpWaitTimeout =
+        TimeSpan.FromSeconds(125);
     private const int MaxConcurrentEzSms = 4;
     private readonly SemaphoreSlim _ezSmsGate =
         new(MaxConcurrentEzSms, MaxConcurrentEzSms);
@@ -244,6 +330,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public System.Collections.ObjectModel.ObservableCollection<gsm.Models.VnptResultItem> VnptResults { get; } = new();
 
+    [ObservableProperty] private int _dmxTotalActiveCount;
+    [ObservableProperty] private int _dmxSuccessCount;
+    [ObservableProperty] private int _dmxFailCount;
+    [ObservableProperty] private string _dmxSummaryText = string.Empty;
+    private readonly object _dmxLock = new();
+    private readonly DmxSuccessOutputService _dmxSuccessOutput = new();
+    private readonly ConcurrentDictionary<string, byte> _lastDmxFailedPortNames =
+        new(StringComparer.OrdinalIgnoreCase);
+    public ObservableCollection<DmxResultItem> DmxResults { get; } = new();
+    public string DmxLatestSessionOutputPath =>
+        _dmxSuccessOutput.LatestSessionPath;
+    public string DmxAggregateOutputPath =>
+        _dmxSuccessOutput.AggregatePath;
+
     [ObservableProperty] private int _deviceUnlockTotalActiveCount;
     [ObservableProperty] private int _deviceUnlockSuccessCount;
     [ObservableProperty] private int _deviceUnlockFailCount;
@@ -256,6 +356,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<DeviceUnlockResultItem> DeviceUnlockResults { get; } = new();
 
     public int LastVnptFailedPortCount => _lastVnptFailedPortNames.Count;
+    public int LastDmxFailedPortCount => _lastDmxFailedPortNames.Count;
     public int LastDeviceUnlockFailedPortCount =>
         _lastDeviceUnlockFailedPortNames.Count;
 
@@ -281,6 +382,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public List<SimPort> GetLastVnptFailedPorts() => Ports
         .Where(port => _lastVnptFailedPortNames.ContainsKey(port.PortName))
+        .ToList();
+
+    public List<SimPort> GetLastDmxFailedPorts() => Ports
+        .Where(port => _lastDmxFailedPortNames.ContainsKey(port.PortName))
         .ToList();
 
     public List<SimPort> GetLastDeviceUnlockFailedPorts() => Ports
@@ -309,6 +414,121 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 VnptResults.RemoveAt(VnptResults.Count - 1);
             }
         });
+    }
+
+    private void CompleteDmxWork(bool success)
+    {
+        int successCount;
+        int failCount;
+        int remaining;
+        lock (_dmxLock)
+        {
+            if (success) DmxSuccessCount++;
+            else DmxFailCount++;
+            DmxTotalActiveCount = Math.Max(0, DmxTotalActiveCount - 1);
+            successCount = DmxSuccessCount;
+            failCount = DmxFailCount;
+            remaining = DmxTotalActiveCount;
+        }
+
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            DmxSummaryText = remaining > 0
+                ? $"Điện Máy Xanh: Đang chạy (Thành công: {successCount}, Thất bại: {failCount}, Còn lại: {remaining})"
+                : $"Điện Máy Xanh: Hoàn tất! (Thành công: {successCount}, Thất bại: {failCount})";
+        });
+    }
+
+    private void AddDmxResult(
+        string port,
+        string phone,
+        DmxProfile profile,
+        string password,
+        bool success,
+        string response,
+        bool isPasswordRecovery = false)
+    {
+        if (success) _lastDmxFailedPortNames.TryRemove(port, out _);
+        else _lastDmxFailedPortNames[port] = 0;
+        OnPropertyChanged(nameof(LastDmxFailedPortCount));
+        if (success)
+        {
+            try
+            {
+                _dmxSuccessOutput.RecordSuccess(phone);
+            }
+            catch (Exception outputException)
+            {
+                AddLog(
+                    $"[DMX_OUTPUT_ERROR] Không ghi được SĐT {phone} vào file TXT: " +
+                    outputException.Message,
+                    "ERROR");
+            }
+        }
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            DmxResults.Insert(0, new DmxResultItem
+            {
+                Time = DateTime.Now,
+                Port = port,
+                Phone = phone,
+                FullName = profile.FullName,
+                BirthDate = profile.BirthDate,
+                Password = password,
+                Success = success,
+                IsPasswordRecovery = isPasswordRecovery,
+                Response = response
+            });
+            if (DmxResults.Count > 300)
+                DmxResults.RemoveAt(DmxResults.Count - 1);
+        });
+    }
+
+    private async Task CompletePendingDmxAccountAsync(
+        PendingDmxAccountOperation pending,
+        string otp)
+    {
+        try
+        {
+            bool otpRequestAccepted = await pending.GetOtpSendCompletedTask()
+                .WaitAsync(pending.CancellationToken);
+            if (!otpRequestAccepted)
+            {
+                pending.Completion.TrySetResult(new DmxAccountResult(
+                    false,
+                    "Không xác nhận được yêu cầu gửi OTP Quà Tặng VIP"));
+                return;
+            }
+
+            if (!IsSimSessionCurrent(pending.PortName, pending.Ccid, pending.Epoch))
+            {
+                pending.Completion.TrySetResult(new DmxAccountResult(
+                    false,
+                    "SIM đã thay đổi trước khi xác minh OTP"));
+                return;
+            }
+
+            DmxAccountResult result = await DmxAccountService.CompleteRegistrationAsync(
+                pending.GetApiSession(),
+                otp,
+                pending.Password,
+                pending.Profile,
+                (message, type) => AddLog(
+                    $"[{pending.PortName}] [DMX_FLOW] {message}",
+                    type),
+                pending.CancellationToken);
+            pending.Completion.TrySetResult(result);
+        }
+        catch (OperationCanceledException)
+        {
+            pending.Completion.TrySetResult(new DmxAccountResult(false, "Đã hủy"));
+        }
+        catch (Exception ex)
+        {
+            pending.Completion.TrySetResult(new DmxAccountResult(
+                false,
+                DmxAccountService.GetFriendlyExceptionMessage(ex)));
+        }
     }
 
     private async Task CompletePendingMyVnptPasswordAsync(
@@ -611,6 +831,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             VnptSummaryText = string.Empty;
             _lastVnptFailedPortNames.Clear();
             OnPropertyChanged(nameof(LastVnptFailedPortCount));
+        });
+    }
+
+    public void ClearDmxResults()
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            DmxResults.Clear();
+            DmxSuccessCount = 0;
+            DmxFailCount = 0;
+            DmxTotalActiveCount = 0;
+            DmxSummaryText = string.Empty;
+            _lastDmxFailedPortNames.Clear();
+            OnPropertyChanged(nameof(LastDmxFailedPortCount));
         });
     }
 
@@ -1026,6 +1260,361 @@ public partial class MainViewModel : ObservableObject, IDisposable
         CommandPanelUssdText = string.Empty;
         CommandPanelDelaySeconds = 1;
         ClearCommandPanelErrors();
+    }
+
+    public async Task CreateDmxAccounts(
+        IEnumerable<SimPort> requestedPorts,
+        string password,
+        string oauthAuthorization,
+        int minimumBirthYear,
+        int maximumBirthYear,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requestedPorts);
+        if (string.IsNullOrWhiteSpace(password)
+            || password.Length < 8
+            || !Regex.IsMatch(password, "[A-Za-z]")
+            || !Regex.IsMatch(password, @"\d"))
+        {
+            throw new ArgumentException(
+                "Mật khẩu cần ít nhất 8 ký tự, có cả chữ cái và số.");
+        }
+        if (string.IsNullOrWhiteSpace(oauthAuthorization))
+            throw new ArgumentException("Thiếu OAuth Authorization của ứng dụng Quà Tặng VIP.");
+
+        int currentYear = DateTime.Today.Year;
+        if (minimumBirthYear < 1900
+            || maximumBirthYear >= currentYear
+            || minimumBirthYear > maximumBirthYear)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(minimumBirthYear),
+                $"Khoảng năm sinh phải từ 1900 đến {currentYear - 1}.");
+        }
+
+        if (!await _dmxBatchGate.WaitAsync(0, cancellationToken))
+        {
+            SnackbarMessageQueue.Enqueue(
+                "Tiến trình Điện Máy Xanh đang chạy; không gửi lặp OTP.");
+            return;
+        }
+
+        try
+        {
+            var targetPorts = requestedPorts
+                .Where(port => port.Status == SimStatus.Active
+                    && IsPortReadyForOperation(port.PortName))
+                .DistinctBy(port => port.PortName)
+                .ToList();
+
+            var uniqueTargets = new List<SimPort>(targetPorts.Count);
+            var seenPhones = new HashSet<string>(StringComparer.Ordinal);
+            foreach (SimPort candidate in targetPorts)
+            {
+                string normalizedPhone = DmxAccountService.NormalizePhone(
+                    candidate.PhoneNumber);
+                if (string.IsNullOrWhiteSpace(normalizedPhone))
+                {
+                    AddLog(
+                        $"[{candidate.PortName}] Bỏ qua Điện Máy Xanh vì chưa có số điện thoại hợp lệ.",
+                        "WARN");
+                    continue;
+                }
+                if (seenPhones.Add(normalizedPhone))
+                {
+                    uniqueTargets.Add(candidate);
+                }
+                else
+                {
+                    AddLog(
+                        $"[{candidate.PortName}] Bỏ qua Điện Máy Xanh vì trùng SĐT {candidate.PhoneNumber}.",
+                        "WARN");
+                }
+            }
+            targetPorts = uniqueTargets;
+
+            if (targetPorts.Count == 0)
+            {
+                SnackbarMessageQueue.Enqueue(
+                    "Không có cổng Active nào có số điện thoại hợp lệ.");
+                return;
+            }
+
+            try
+            {
+                _dmxSuccessOutput.BeginSession();
+            }
+            catch (Exception outputException)
+            {
+                AddLog(
+                    "[DMX_OUTPUT_ERROR] Không khởi tạo được 2 file TXT: " +
+                    outputException.Message,
+                    "ERROR");
+                SnackbarMessageQueue.Enqueue(
+                    "Không khởi tạo được file TXT Điện Máy Xanh; tiến trình vẫn tiếp tục.");
+            }
+
+            lock (_dmxLock)
+            {
+                DmxSuccessCount = 0;
+                DmxFailCount = 0;
+                DmxTotalActiveCount = targetPorts.Count;
+                DmxSummaryText =
+                    $"Điện Máy Xanh: Đang chạy (Thành công: 0, Thất bại: 0, Còn lại: {targetPorts.Count})";
+            }
+            _lastDmxFailedPortNames.Clear();
+            OnPropertyChanged(nameof(LastDmxFailedPortCount));
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                foreach (SimPort port in targetPorts)
+                    port.DmxStatus = "Chờ lượt...";
+            });
+            AddLog(
+                $"[DMX_BATCH] Khởi chạy {targetPorts.Count} cổng; tối đa {MaxConcurrentDmxWorkflows} workflow, 20 request API đồng thời, gửi OTP lại tối đa {MaxDmxOtpSendAttempts} lần.",
+                "INFO");
+
+            await BoundedAsyncWorkRunner.RunAsync(
+                targetPorts,
+                MaxConcurrentDmxWorkflows,
+                async (port, batchToken) =>
+                {
+                    string phone = DmxAccountService.NormalizePhone(port.PhoneNumber);
+                    DmxProfile profile = DmxAccountService.CreateRandomProfile(
+                        minimumBirthYear,
+                        maximumBirthYear);
+                    PendingDmxAccountOperation? pending = null;
+                    bool resultRecorded = false;
+
+                    try
+                    {
+                        batchToken.ThrowIfCancellationRequested();
+                        if (!TryGetCurrentSimSession(
+                                port.PortName,
+                                out string ccid,
+                                out long epoch,
+                                out CancellationToken simToken))
+                        {
+                            throw new InvalidOperationException(
+                                "Cổng không còn Active hoặc phiên SIM đã thay đổi");
+                        }
+
+                        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                            batchToken,
+                            simToken);
+                        CancellationToken workflowToken = linkedCts.Token;
+                        workflowToken.ThrowIfCancellationRequested();
+
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.DmxStatus = "Kiểm tra TK...";
+                            port.LastMessageContent =
+                                "Điện Máy Xanh: đang kiểm tra tài khoản...";
+                        });
+                        AddLog(
+                            $"[{port.PortName}] [DMX_FLOW] Bắt đầu xử lý tài khoản {phone}; hồ sơ tạo mới {profile.FullName}, {profile.BirthDate:dd/MM/yyyy}.",
+                            "INFO");
+
+                        DmxRegistrationSession apiSession =
+                            await DmxAccountService.PrepareRegistrationAsync(
+                                phone,
+                                $"{port.PortName}-{ccid}",
+                                oauthAuthorization,
+                                (message, type) => AddLog(
+                                    $"[{port.PortName}] [DMX_FLOW] {message}",
+                                    type),
+                                workflowToken);
+
+                        pending = new PendingDmxAccountOperation
+                        {
+                            PortName = port.PortName,
+                            Ccid = ccid,
+                            Epoch = epoch,
+                            Password = password,
+                            Profile = profile,
+                            ApiSession = apiSession,
+                            CancellationToken = workflowToken
+                        };
+                        if (!_pendingDmxAccountPorts.TryAdd(port.PortName, pending))
+                            throw new InvalidOperationException(
+                                "COM này đã có một luồng Điện Máy Xanh đang chờ OTP");
+
+                        DmxAccountResult? result = null;
+                        for (int attempt = 1;
+                             attempt <= MaxDmxOtpSendAttempts;
+                             attempt++)
+                        {
+                            workflowToken.ThrowIfCancellationRequested();
+                            if (attempt > 1
+                                && !pending.TryPrepareForNextOtp(
+                                    pending.GetApiSession()))
+                            {
+                                result = await pending.Completion.Task.WaitAsync(
+                                    workflowToken);
+                                break;
+                            }
+
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                port.DmxStatus = attempt == 1
+                                    ? "Yêu cầu OTP..."
+                                    : $"Gửi lại OTP {attempt}/{MaxDmxOtpSendAttempts}...";
+                                port.LastMessageContent = attempt == 1
+                                    ? "Điện Máy Xanh: đang yêu cầu SMS OTP..."
+                                    : $"Điện Máy Xanh: gửi lại OTP lần {attempt}...";
+                            });
+
+                            try
+                            {
+                                (DmxRegistrationSession updatedSession, string message) =
+                                    await DmxAccountService.SendOtpAsync(
+                                        pending.GetApiSession(),
+                                        (logMessage, type) => AddLog(
+                                            $"[{port.PortName}] [DMX_FLOW] {logMessage}",
+                                            type),
+                                        workflowToken);
+                                pending.UpdateApiSession(updatedSession);
+                                pending.MarkOtpSendCompleted(true);
+                                AddLog(
+                                    $"[{port.PortName}] [DMX_FLOW] Gửi OTP lần {attempt}/{MaxDmxOtpSendAttempts}: {message}",
+                                    "SUCCESS");
+                            }
+                            catch
+                            {
+                                pending.MarkOtpSendCompleted(false);
+                                throw;
+                            }
+
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                port.DmxStatus =
+                                    $"Đợi OTP {attempt}/{MaxDmxOtpSendAttempts}...";
+                                port.LastMessageContent =
+                                    "Đang đợi SMS từ QuaTangVIP...";
+                            });
+
+                            Task<bool> claimedTask = pending.GetOtpClaimedTask();
+                            bool otpClaimed;
+                            try
+                            {
+                                await claimedTask.WaitAsync(
+                                    DmxOtpWaitTimeout,
+                                    workflowToken);
+                                otpClaimed = true;
+                            }
+                            catch (TimeoutException)
+                            {
+                                otpClaimed = claimedTask.IsCompletedSuccessfully;
+                            }
+
+                            if (otpClaimed)
+                            {
+                                result = await pending.Completion.Task.WaitAsync(
+                                    workflowToken);
+                                break;
+                            }
+
+                            AddLog(
+                                $"[{port.PortName}] [DMX_FLOW] Chưa nhận OTP sau lần {attempt}/{MaxDmxOtpSendAttempts}.",
+                                "WARN");
+                        }
+
+                        result ??= new DmxAccountResult(
+                            false,
+                            $"Không nhận được SMS OTP sau {MaxDmxOtpSendAttempts} lần gửi");
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.DmxStatus = result.Message;
+                            port.LastSmsResult = result.Message;
+                            port.LastMessageContent = result.Success
+                                ? result.Message
+                                : $"Lỗi: {result.Message}";
+                            port.UpdateDisplayResult(CommandPanelTab);
+                        });
+                        CompleteDmxWork(result.Success);
+                        AddDmxResult(
+                            port.PortName,
+                            phone,
+                            profile,
+                            password,
+                            result.Success,
+                            result.Message,
+                            result.PasswordRecovered);
+                        AddLog(
+                            $"[{port.PortName}] [DMX_FLOW] Kết thúc: {result.Message}",
+                            result.Success ? "SUCCESS" : "ERROR");
+                        resultRecorded = true;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.DmxStatus = "Đã hủy";
+                            port.LastMessageContent =
+                                "Đã hủy yêu cầu Điện Máy Xanh";
+                        });
+                        if (!resultRecorded)
+                        {
+                            CompleteDmxWork(false);
+                            AddDmxResult(
+                                port.PortName,
+                                phone,
+                                profile,
+                                password,
+                                false,
+                                "Đã hủy");
+                            resultRecorded = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        string message = DmxAccountService.GetFriendlyExceptionMessage(ex);
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.DmxStatus = message;
+                            port.LastMessageContent = $"Lỗi: {message}";
+                        });
+                        AddLog(
+                            $"[{port.PortName}] [DMX_FLOW] {message}",
+                            "ERROR");
+                        if (!resultRecorded)
+                        {
+                            CompleteDmxWork(false);
+                            AddDmxResult(
+                                port.PortName,
+                                phone,
+                                profile,
+                                password,
+                                false,
+                                message);
+                            resultRecorded = true;
+                        }
+                    }
+                    finally
+                    {
+                        pending?.MarkOtpSendCompleted(false);
+                        if (pending != null)
+                        {
+                            ((ICollection<KeyValuePair<string, PendingDmxAccountOperation>>)
+                                    _pendingDmxAccountPorts)
+                                .Remove(new KeyValuePair<string, PendingDmxAccountOperation>(
+                                    port.PortName,
+                                    pending));
+                        }
+                    }
+                },
+                cancellationToken);
+
+            AddLog(
+                $"[DMX_BATCH] Hoàn tất {targetPorts.Count} cổng; thành công {DmxSuccessCount}, thất bại {DmxFailCount}.",
+                DmxFailCount == 0 ? "SUCCESS" : "WARN");
+            SnackbarMessageQueue.Enqueue(
+                $"Điện Máy Xanh hoàn tất: {DmxSuccessCount} thành công, {DmxFailCount} thất bại.");
+        }
+        finally
+        {
+            _dmxBatchGate.Release();
+        }
     }
 
     [RelayCommand]
@@ -4762,6 +5351,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     // Phát âm thanh cảnh báo OTP
                     Services.SoundAlertService.PlayOtp();
+
+                    // OTP Quà Tặng VIP chỉ được nhận khi nội dung khớp đúng
+                    // mẫu tin nhắn của dịch vụ và đúng COM + phiên SIM đang chạy.
+                    if (DmxAccountService.TryExtractOtp(
+                            cleanContent,
+                            out string dmxOtp)
+                        && _pendingDmxAccountPorts.TryGetValue(
+                            e.PortName,
+                            out PendingDmxAccountOperation? dmxPending)
+                        && IsSimSessionCurrent(
+                            e.PortName,
+                            dmxPending.Ccid,
+                            dmxPending.Epoch)
+                        && dmxPending.TryClaimOtp(dmxOtp))
+                    {
+                        if (port != null)
+                        {
+                            port.DmxStatus = "Đã nhận OTP...";
+                            port.LastMessageContent =
+                                "Đã nhận OTP Quà Tặng VIP; đang hoàn tất tài khoản...";
+                        }
+                        AddLog(
+                            $"[{e.PortName}] Phát hiện OTP Quà Tặng VIP; đang cập nhật hồ sơ và tạo mật khẩu...",
+                            "INFO");
+                        _ = CompletePendingDmxAccountAsync(dmxPending, dmxOtp);
+                    }
 
                     // OTP MyVNPT chỉ được ghép với đúng tác vụ COM + phiên SIM.
                     // Không xóa pending tại đây: task gốc chỉ hoàn tất sau khi API đặt pass trả kết quả.

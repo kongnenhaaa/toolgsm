@@ -92,6 +92,7 @@ public static class AppBootstrap
                 cutoffUtc);
             DeleteKnownRuntimeLogs(AppDir, cutoffUtc);
             DeleteKnownRuntimeLogs(AppPaths.UserDataDirectory, cutoffUtc);
+            DmxSuccessOutputService.DeleteExpiredOutputs(utcNow);
         }
         finally
         {

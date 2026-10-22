@@ -70,6 +70,9 @@ public partial class SimPort : ObservableObject
     private string _vnptStatus = string.Empty;
 
     [ObservableProperty]
+    private string _dmxStatus = string.Empty;
+
+    [ObservableProperty]
     private string _deviceUnlockStatus = string.Empty;
 
     [ObservableProperty]

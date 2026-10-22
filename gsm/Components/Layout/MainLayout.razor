@@ -76,8 +76,11 @@
         new("ussd", "ussd", "USSD", Icons.Material.Filled.Dialpad),
         new("sms", "sms", "SMS", Icons.Material.Filled.Sms),
         new("call", "call", "Gọi", Icons.Material.Filled.Phone),
+        new("datausage", "data-usage", "Phát sinh cước", Icons.Material.Filled.DataUsage),
         new("ezcom", "ezcom", "EZ COM", Icons.Material.Filled.Router),
         new("vnptpass", "vnpt-pass", "Pass VNPT", Icons.Material.Filled.Key),
+        new("dmx", "dien-may-xanh", "Điện Máy Xanh", Icons.Material.Filled.CardGiftcard),
+        new("proxy", "proxy", "Proxy", Icons.Material.Filled.VpnKey),
         new("deviceunlock", "device-unlock", "Mở khóa đổi thiết bị", Icons.Material.Filled.PhonelinkLock),
         new("icocunlock", "icoc-unlock", "Mở khóa IC/OC", Icons.Material.Filled.SettingsPhone),
         new("settings", "settings", "Cài đặt", Icons.Material.Filled.Settings)
@@ -275,8 +278,11 @@
         {
             "" => "ussd",
             "vnpt-pass" => "vnptpass",
+            "dien-may-xanh" => "dmx",
+            "proxy" => "proxy",
             "device-unlock" => "deviceunlock",
             "icoc-unlock" => "icocunlock",
+            "data-usage" => "datausage",
             _ => _navItems.FirstOrDefault(x => path.StartsWith(x.Route, StringComparison.OrdinalIgnoreCase))?.Key ?? "ussd"
         };
     }

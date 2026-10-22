@@ -35,7 +35,19 @@ public static class MyVnptService
     private const string DeviceFingerprintNamespace =
         "ToolGSM.MyVNPT.Device.v1";
     private const string StableUserAgent = "okhttp/4.7.2";
-    private static readonly HttpClient Client = new() { Timeout = TimeSpan.FromSeconds(60) };
+    // Preserve the original MyVNPT transport byte-for-byte when proxy is not
+    // selected. This keeps changes made for other workflows from affecting
+    // the established password flow or its latency.
+    private static readonly HttpClient DirectClient = new()
+    {
+        Timeout = TimeSpan.FromSeconds(60)
+    };
+    private static HttpClient Client => SettingsService.Current.UseProxyForMyVnpt
+        ? WorkflowProxyService.GetHttpClient(
+            "myvnpt",
+            TimeSpan.FromSeconds(60),
+            useConfiguredProxy: true)
+        : DirectClient;
     // Toàn bộ bank COM có thể cùng chạy workflow, nhưng chỉ cho tối đa 20
     // request HTTP đi đồng thời để giữ thông lượng cao mà không làm nghẽn API.
     internal const int ApiConcurrencyLimit = 20;

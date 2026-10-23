@@ -9,27 +9,29 @@
 
 <MudLayout Class="app-shell">
     <MudAppBar Elevation="0" Dense="true" Class="app-shell-bar">
-        <div class="app-brand" aria-label="Tool GSM Professional">
-            <span class="app-brand-mark"><MudIcon Icon="@Icons.Material.Filled.CellTower" /></span>
-            <span class="app-brand-copy">
-                <strong>Tool GSM</strong>
-                <small>EC20 Control Center</small>
-            </span>
+        <div class="app-nav-wrap">
+            <button type="button" class="app-nav-arrow app-nav-arrow-left"
+                    aria-label="Cuộn menu sang trái" title="Cuộn menu sang trái"
+                    @onclick="@(() => ScrollNavAsync(-1))">
+                <MudIcon Icon="@Icons.Material.Filled.ChevronLeft" Size="Size.Small" />
+            </button>
+            <nav class="app-nav" aria-label="Điều hướng chính">
+                @foreach (var item in _navItems)
+                {
+                    <MudButton Variant="Variant.Text" Size="Size.Small"
+                               StartIcon="@item.Icon"
+                               Class="@GetTabClass(item.Key)"
+                               OnClick="@(() => Navigate(item.Route))">
+                        @item.Label
+                    </MudButton>
+                }
+            </nav>
+            <button type="button" class="app-nav-arrow app-nav-arrow-right"
+                    aria-label="Cuộn menu sang phải" title="Cuộn menu sang phải"
+                    @onclick="@(() => ScrollNavAsync(1))">
+                <MudIcon Icon="@Icons.Material.Filled.ChevronRight" Size="Size.Small" />
+            </button>
         </div>
-
-        <nav class="app-nav" aria-label="Điều hướng chính">
-            @foreach (var item in _navItems)
-            {
-                <MudButton Variant="Variant.Text" Size="Size.Small"
-                           StartIcon="@item.Icon"
-                           Class="@GetTabClass(item.Key)"
-                           OnClick="@(() => Navigate(item.Route))">
-                    @item.Label
-                </MudButton>
-            }
-        </nav>
-
-        <MudSpacer />
 
         <div class="app-theme-toggle" title="@(_isDarkMode ? "Chuyển sang giao diện sáng" : "Chuyển sang giao diện tối")">
             <MudIcon Icon="@(_isDarkMode ? Icons.Material.Filled.DarkMode : Icons.Material.Filled.LightMode)"
@@ -168,8 +170,14 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
+        {
             await JS.InvokeVoidAsync("appUi.setDarkMode", _isDarkMode);
+            await JS.InvokeVoidAsync("appUi.initNav");
+        }
     }
+
+    private Task ScrollNavAsync(int direction) =>
+        JS.InvokeVoidAsync("appUi.scrollNav", direction).AsTask();
 
     private async Task SetDarkModeAsync(bool enabled)
     {

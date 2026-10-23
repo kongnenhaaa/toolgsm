@@ -3731,9 +3731,9 @@ public class GsmModemService : IGsmModemService
 
     public string ConnectAll(int baudRate = 115200)
     {
-        var newlyOpenedPorts = new ConcurrentBag<string>();
-        var busyPorts = new ConcurrentBag<string>();
-        var failedPorts = new ConcurrentBag<string>();
+        var newlyOpenedPorts = new List<string>();
+        var busyPorts = new List<string>();
+        var failedPorts = new List<string>();
 
         lock (_connectLock)
         {
@@ -3745,25 +3745,26 @@ public class GsmModemService : IGsmModemService
             BackendConcurrency.ConfigureThreadPool(ports.Count);
             LogMessage?.Invoke(this, new GsmDataEventArgs { PortName = "SYSTEM", Data = $"[HỆ THỐNG] Quét cổng COM: Phát hiện {ports.Count} cổng trong Windows ({string.Join(", ", ports)})" });
 
-            Parallel.ForEach(ports, new ParallelOptions
+            // Some USB-serial driver stacks cannot safely handle a bank of
+            // simultaneous SerialPort.Open calls. Open one COM at a time and
+            // let the driver settle before moving to the next port.
+            foreach (string p in ports)
             {
-                MaxDegreeOfParallelism = Math.Max(1, ports.Count)
-            }, p =>
-            {
-                PortConnectResult result = TryConnectPort(p, baudRate);
-                if (result == PortConnectResult.Opened)
+                PortConnectResult connectResult = TryConnectPort(p, baudRate);
+                if (connectResult == PortConnectResult.Opened)
                 {
                     newlyOpenedPorts.Add(p);
+                    Thread.Sleep(100);
                 }
-                else if (result == PortConnectResult.Failed)
+                else if (connectResult == PortConnectResult.Failed)
                 {
                     failedPorts.Add(p);
                 }
-                else if (result == PortConnectResult.Busy)
+                else if (connectResult == PortConnectResult.Busy)
                 {
                     busyPorts.Add(p);
                 }
-            });
+            }
         }
 
         // CHỈ gửi lệnh khởi tạo SAU KHI đã mở kết nối xong toàn bộ các cổng COM.
@@ -3894,12 +3895,23 @@ public class GsmModemService : IGsmModemService
     private async Task InitializeOpenedPortsAsync(IReadOnlyCollection<string> portNames)
     {
         BackendConcurrency.ConfigureThreadPool(portNames.Count);
+        using var initializationGate = new SemaphoreSlim(4, 4);
         var tasks = portNames.Select(async portName =>
         {
             try
             {
                 if (_portLifetimeCts.TryGetValue(portName, out var lifetime))
-                    await InitializeModemAsync(portName, lifetime.Token);
+                {
+                    await initializationGate.WaitAsync(lifetime.Token);
+                    try
+                    {
+                        await InitializeModemAsync(portName, lifetime.Token);
+                    }
+                    finally
+                    {
+                        initializationGate.Release();
+                    }
+                }
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)

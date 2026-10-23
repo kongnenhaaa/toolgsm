@@ -126,7 +126,7 @@
                     <MudTd>@context.Phone</MudTd>
                     <MudTd>@context.RequestedKilobytes.ToString("N0") KB</MudTd>
                     <MudTd>@context.ActualText</MudTd>
-                    <MudTd>@context.EstimatedCost.ToString("N0")đ</MudTd>
+                    <MudTd>@(context.EstimatedCost.HasValue ? $"{context.EstimatedCost.Value:N0}đ" : "—")</MudTd>
                     <MudTd>
                         <MudChip T="string" Size="Size.Small"
                                  Color="@(context.Success ? Color.Success : Color.Error)">
@@ -285,7 +285,6 @@
                     Port = port.PortName,
                     Phone = string.IsNullOrWhiteSpace(port.PhoneNumber) ? "—" : port.PhoneNumber,
                     RequestedKilobytes = _dataKilobytes,
-                    EstimatedCost = EstimatedCostPerSim,
                     Success = false,
                     Response = ex.Message
                 });
@@ -380,7 +379,7 @@
         public string Phone { get; init; } = string.Empty;
         public int RequestedKilobytes { get; init; }
         public int? ActualBytes { get; init; }
-        public int EstimatedCost { get; init; }
+        public int? EstimatedCost { get; init; }
         public bool Success { get; init; }
         public string Response { get; init; } = string.Empty;
         public string ActualText => ActualBytes is > 0

@@ -11,12 +11,12 @@ public sealed record DataUsageRunResult(
 
 /// <summary>
 /// Creates a small packet-data session on supported Quectel modems and asks
-/// the HTTP server for an exact byte range. The modem downloads the response
+/// the HTTP server for an exact byte count. The modem downloads the response
 /// into its own HTTP buffer, so no temporary file is written to the PC.
 /// </summary>
 public sealed class DataUsageService
 {
-    private const string DownloadUrl = "http://speedtest.tele2.net/1MB.zip";
+    private const string DownloadUrlBase = "http://speed.cloudflare.com/__down?bytes=";
     public const int MinimumKilobytes = 1;
     public const int MaximumKilobytes = 1024;
 
@@ -56,6 +56,9 @@ public sealed class DataUsageService
             _modem.SuspendPortBackgroundOperations(portName);
 
         cancellationToken.ThrowIfCancellationRequested();
+        int requestedBytes = checked(kilobytes * 1024);
+        string downloadUrl = DownloadUrlBase + requestedBytes;
+
         string contextState = await _modem.SendCommandAsync(
             portName,
             "AT+QIACT?",
@@ -69,10 +72,14 @@ public sealed class DataUsageService
                 @"\+QIACT:\s*1\s*,\s*1(?:\s*,|\r|\n|$)",
                 RegexOptions.IgnoreCase))
         {
+            await EnsurePacketNetworkRegisteredAsync(portName, cancellationToken)
+                .ConfigureAwait(false);
+            await ConfigureApnIfMissingAsync(portName, cancellationToken)
+                .ConfigureAwait(false);
             string activateResponse = await _modem.SendCommandAsync(
                 portName,
                 "AT+QIACT=1",
-                timeoutMs: 30_000,
+                timeoutMs: 150_000,
                 silent: true,
                 ct: cancellationToken).ConfigureAwait(false);
             EnsureCommandSucceeded(activateResponse, "kích hoạt dữ liệu di động");
@@ -97,22 +104,9 @@ public sealed class DataUsageService
             "cấu hình HTTP response",
             cancellationToken).ConfigureAwait(false);
 
-        string rangeSupport = await _modem.SendCommandAsync(
-            portName,
-            "AT+QHTTPGETEX=?",
-            timeoutMs: 5000,
-            silent: true,
-            ct: cancellationToken).ConfigureAwait(false);
-        EnsureCommandSucceeded(rangeSupport, "kiểm tra tải theo dung lượng");
-        if (!rangeSupport.Contains("QHTTPGET", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new NotSupportedException(
-                $"Firmware trên {portName} không hỗ trợ tải đúng dung lượng bằng QHTTPGETEX.");
-        }
-
         string urlPrompt = await _modem.SendCommandAsync(
             portName,
-            $"AT+QHTTPURL={DownloadUrl.Length},20",
+            $"AT+QHTTPURL={downloadUrl.Length},20",
             timeoutMs: 25_000,
             silent: true,
             ct: cancellationToken).ConfigureAwait(false);
@@ -125,21 +119,24 @@ public sealed class DataUsageService
         cancellationToken.ThrowIfCancellationRequested();
         string urlResponse = await _modem.SendRawAsync(
             portName,
-            DownloadUrl,
+            downloadUrl,
             timeoutMs: 15_000,
             silent: true).ConfigureAwait(false);
         EnsureCommandSucceeded(urlResponse, "gửi URL tải dữ liệu");
 
-        int requestedBytes = checked(kilobytes * 1024);
-        HttpDownloadResult httpResult = await SendRangeRequestAsync(
+        HttpDownloadResult httpResult = await SendDownloadRequestAsync(
             portName,
-            requestedBytes,
             cancellationToken).ConfigureAwait(false);
 
         if (httpResult.ErrorCode != 0)
         {
-            throw new InvalidOperationException(
-                $"Modem báo lỗi HTTP {httpResult.ErrorCode}.");
+            string reason = httpResult.ErrorCode switch
+            {
+                702 => "Hết thời gian chờ máy chủ tải dữ liệu",
+                714 => "Modem không phân giải được tên máy chủ tải dữ liệu (DNS)",
+                _ => "Modem báo lỗi HTTP"
+            };
+            throw new InvalidOperationException($"{reason}: {httpResult.ErrorCode}.");
         }
         if (httpResult.StatusCode is < 200 or >= 300)
         {
@@ -147,15 +144,14 @@ public sealed class DataUsageService
                 $"Máy chủ tải dữ liệu trả HTTP {httpResult.StatusCode}.");
         }
 
-        string message = httpResult.ContentLength is > 0
-            ? $"Đã dùng {FormatKilobytes(httpResult.ContentLength.Value)} KB qua dữ liệu di động."
-            : $"Đã gửi yêu cầu dùng {kilobytes:N0} KB qua dữ liệu di động.";
-
-        if (httpResult.ContentLength is > 0
-            && httpResult.ContentLength.Value != requestedBytes)
+        if (httpResult.ContentLength != requestedBytes)
         {
-            message += $" Yêu cầu ban đầu: {kilobytes:N0} KB.";
+            throw new InvalidOperationException(
+                $"Modem báo tải {httpResult.ContentLength?.ToString() ?? "không rõ"} byte, "
+                + $"khác {requestedBytes} byte yêu cầu; không xác nhận phát sinh cước.");
         }
+
+        string message = $"Đã tải {FormatKilobytes(requestedBytes)} KB qua dữ liệu di động.";
 
         return new DataUsageRunResult(
             kilobytes,
@@ -180,9 +176,93 @@ public sealed class DataUsageService
         EnsureCommandSucceeded(response, action);
     }
 
-    private async Task<HttpDownloadResult> SendRangeRequestAsync(
+    private async Task EnsurePacketNetworkRegisteredAsync(
         string portName,
-        int requestedBytes,
+        CancellationToken cancellationToken)
+    {
+        string eps = await _modem.SendCommandAsync(
+            portName,
+            "AT+CEREG?",
+            timeoutMs: 5000,
+            silent: true,
+            ct: cancellationToken).ConfigureAwait(false);
+        int? epsStatus = ParseRegistrationStatus(eps, "CEREG");
+        if (epsStatus is 1 or 5) return;
+
+        string packet = await _modem.SendCommandAsync(
+            portName,
+            "AT+CGREG?",
+            timeoutMs: 5000,
+            silent: true,
+            ct: cancellationToken).ConfigureAwait(false);
+        int? packetStatus = ParseRegistrationStatus(packet, "CGREG");
+        if (packetStatus is 1 or 5) return;
+
+        if (epsStatus.HasValue && packetStatus.HasValue)
+        {
+            throw new InvalidOperationException(
+                $"{portName} chưa đăng ký mạng dữ liệu "
+                + $"(CEREG={epsStatus}, CGREG={packetStatus}); kiểm tra SIM và nhà mạng.");
+        }
+    }
+
+    private static int? ParseRegistrationStatus(string response, string command)
+    {
+        Match match = Regex.Match(
+            response,
+            $@"\+{command}:\s*\d+\s*,\s*(?<status>[0-5])\b",
+            RegexOptions.IgnoreCase);
+        return match.Success ? int.Parse(match.Groups["status"].Value) : null;
+    }
+
+    private async Task ConfigureApnIfMissingAsync(
+        string portName,
+        CancellationToken cancellationToken)
+    {
+        string settings = await _modem.SendCommandAsync(
+            portName,
+            "AT+QICSGP=1",
+            timeoutMs: 5000,
+            silent: true,
+            ct: cancellationToken).ConfigureAwait(false);
+        EnsureCommandSucceeded(settings, "đọc cấu hình APN");
+        Match configuredApn = Regex.Match(
+            settings,
+            "\\+QICSGP:\\s*\\d+\\s*,\\s*\"(?<apn>[^\"]*)\"",
+            RegexOptions.IgnoreCase);
+        if (!configuredApn.Success)
+            throw new InvalidOperationException($"Không đọc được APN trên {portName}: {Compact(settings)}");
+        if (!string.IsNullOrWhiteSpace(configuredApn.Groups["apn"].Value))
+            return;
+
+        string imsiResponse = await _modem.SendCommandAsync(
+            portName,
+            "AT+CIMI",
+            timeoutMs: 5000,
+            silent: true,
+            ct: cancellationToken).ConfigureAwait(false);
+        EnsureCommandSucceeded(imsiResponse, "xác định nhà mạng cho APN");
+        Match imsi = Regex.Match(imsiResponse, @"(?m)^\s*(452\d{10,12})\s*$");
+        string network = imsi.Success ? imsi.Groups[1].Value[..5] : string.Empty;
+        (string apn, string username, string password, int authentication) = network switch
+        {
+            "45201" => ("m-wap", "", "", 0),
+            "45202" => ("m3-world", "mms", "mms", 1),
+            "45204" => ("v-internet", "", "", 0),
+            "45205" => ("internet", "", "", 0),
+            _ => throw new InvalidOperationException(
+                $"{portName} chưa có APN và không xác định được nhà mạng từ IMSI.")
+        };
+        await SendRequiredCommandAsync(
+            portName,
+            $"AT+QICSGP=1,1,\"{apn}\",\"{username}\",\"{password}\",{authentication}",
+            5000,
+            "cấu hình APN",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HttpDownloadResult> SendDownloadRequestAsync(
+        string portName,
         CancellationToken cancellationToken)
     {
         var completion = new TaskCompletionSource<HttpDownloadResult>(
@@ -211,7 +291,7 @@ public sealed class DataUsageService
         {
             string response = await _modem.SendCommandAsync(
                 portName,
-                $"AT+QHTTPGETEX=80,0,{requestedBytes}",
+                "AT+QHTTPGET=80",
                 timeoutMs: 15_000,
                 silent: true,
                 ct: cancellationToken).ConfigureAwait(false);

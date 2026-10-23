@@ -3411,14 +3411,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             OtpHistoryList.RemoveAt(OtpHistoryList.Count - 1);
     }
 
-    private static SmsMessage ToSmsMessage(SmsInboxRecord record) => new()
+    internal static SmsMessage ToSmsMessage(SmsInboxRecord record) => new()
     {
         DeliveryId = record.DeliveryId,
         ReceivedAtUtc = record.ReceivedAtUtc,
         SmsTimestampUtc = record.SmsTimestampUtc,
         PortName = record.PortName,
-        ReceivedTime = (record.SmsTimestampUtc ?? record.ReceivedAtUtc)
-            .ToLocalTime().ToString("HH:mm:ss"),
+        // The inbox shows when this app received the SMS. Carrier timestamps
+        // can be stale or use a wrong zone, so keep them only as metadata.
+        ReceivedTime = record.ReceivedAtUtc.ToLocalTime().ToString("HH:mm:ss"),
         Content = record.Content,
         Sender = record.Sender,
         Otp = record.Otp,

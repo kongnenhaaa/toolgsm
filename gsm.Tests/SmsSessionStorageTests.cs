@@ -78,6 +78,25 @@ public sealed class SmsSessionStorageTests
     }
 
     [Fact]
+    public void LiveInboxTime_ShowsAppReceiptTimeWhenCarrierClockIsWrong()
+    {
+        DateTimeOffset receivedAtUtc = new(
+            2026, 10, 23, 6, 19, 47, TimeSpan.Zero);
+        DateTimeOffset carrierTimestampUtc = receivedAtUtc.AddHours(-10);
+        SmsInboxRecord record = Record("clock-skew") with
+        {
+            ReceivedAtUtc = receivedAtUtc,
+            SmsTimestampUtc = carrierTimestampUtc
+        };
+
+        SmsMessage message = MainViewModel.ToSmsMessage(record);
+
+        Assert.Equal(receivedAtUtc.ToLocalTime().ToString("HH:mm:ss"),
+            message.ReceivedTime);
+        Assert.Equal(carrierTimestampUtc, message.SmsTimestampUtc);
+    }
+
+    [Fact]
     public void ReceivedOtp_UpdatesEveryPortColumnUsedByTheSmsTable()
     {
         var port = new SimPort { Otp = "old-otp" };

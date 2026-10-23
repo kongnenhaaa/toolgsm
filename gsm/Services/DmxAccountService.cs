@@ -137,6 +137,8 @@ public static class DmxAccountService
         TimeSpan.FromMilliseconds(500);
     private static readonly AsyncRequestPacer ForgotPasswordSendPacer =
         new(MinimumForgotPasswordSendSpacing);
+    private static readonly AsyncRequestPacer PasswordResetPacer =
+        new(TimeSpan.FromMilliseconds(500));
 
     private static readonly string[] Surnames =
     [
@@ -613,26 +615,46 @@ public static class DmxAccountService
         };
 
         log?.Invoke("OTP hợp lệ; đang đặt lại mật khẩu...", "INFO");
+        TimeSpan resetDelay = await PasswordResetPacer.WaitForTurnAsync(
+            cancellationToken).ConfigureAwait(false);
+        if (resetDelay >= TimeSpan.FromMilliseconds(10))
+        {
+            log?.Invoke(
+                $"Rải tải đặt lại mật khẩu; chờ {resetDelay.TotalMilliseconds:0} ms.",
+                "INFO");
+        }
         JsonElement passwordData = await GraphQlAsync(
             session,
             "createPassword",
             CreatePasswordMutation,
             new { code = password },
             cancellationToken).ConfigureAwait(false);
-        if (!passwordData.TryGetProperty(
-                "createPassword",
-                out JsonElement passwordResult)
-            || passwordResult.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
-            || passwordResult.ValueKind == JsonValueKind.False)
-        {
-            throw new DmxApiException("Đặt lại mật khẩu không thành công.");
-        }
+        string? failure = GetPasswordRecoveryFailure(passwordData);
+        if (failure != null) throw new DmxApiException(failure);
 
         log?.Invoke("Đã đặt lại mật khẩu thành công.", "SUCCESS");
         return new DmxAccountResult(
             true,
             "Đã đặt lại mật khẩu",
             PasswordRecovered: true);
+    }
+
+    internal static string? GetPasswordRecoveryFailure(JsonElement passwordData)
+    {
+        if (passwordData.ValueKind != JsonValueKind.Object
+            || !passwordData.TryGetProperty(
+                "createPassword", out JsonElement result)
+            || result.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return "Máy chủ không trả kết quả đặt lại mật khẩu sau khi xác minh OTP.";
+        }
+        if (result.ValueKind == JsonValueKind.False)
+        {
+            return "Máy chủ từ chối đặt lại mật khẩu sau khi xác minh OTP (createPassword=false).";
+        }
+        return result.ValueKind == JsonValueKind.True
+            ? null
+            : $"Máy chủ trả kết quả đặt lại mật khẩu không hợp lệ ({result.ValueKind}).";
     }
 
     public static string GetFriendlyExceptionMessage(Exception exception)

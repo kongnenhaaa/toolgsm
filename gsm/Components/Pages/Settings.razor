@@ -163,16 +163,16 @@
 
                 <MudDivider Class="my-2" />
 
-                <MudSwitch T="bool" @bind-Value="_telegramOnOtp"
-                           Label="Luôn gửi Telegram khi có OTP"
-                           Color="Color.Primary" Class="mb-1" Disabled="true" />
-                <MudSwitch T="bool" @bind-Value="_telegramOnSms"
-                           Label="Luôn gửi Telegram khi có SMS thường"
-                           Color="Color.Primary" Class="mb-1" Disabled="true" />
-                <MudSwitch T="bool" @bind-Value="_telegramOnCall"
+                <MudSwitch T="bool" Value="@_telegramOnOtp" ValueChanged="@((bool value) => SaveTelegramPreference(TelegramPreference.Otp, value))"
+                           Label="Gửi Telegram khi có OTP"
+                           Color="Color.Primary" Class="mb-1" />
+                <MudSwitch T="bool" Value="@_telegramOnSms" ValueChanged="@((bool value) => SaveTelegramPreference(TelegramPreference.Sms, value))"
+                           Label="Gửi Telegram khi có SMS thường"
+                           Color="Color.Primary" Class="mb-1" />
+                <MudSwitch T="bool" Value="@_telegramOnCall" ValueChanged="@((bool value) => SaveTelegramPreference(TelegramPreference.Call, value))"
                            Label="Gửi Telegram khi có cuộc gọi đến"
                            Color="Color.Primary" Class="mb-1" />
-                <MudSwitch T="bool" @bind-Value="_telegramOnError"
+                <MudSwitch T="bool" Value="@_telegramOnError" ValueChanged="@((bool value) => SaveTelegramPreference(TelegramPreference.Error, value))"
                            Label="Gửi Telegram khi có lỗi hệ thống"
                            Color="Color.Primary" />
             </MudPaper>
@@ -401,10 +401,43 @@
     private bool _soundOnSms = true;
     private bool _soundOnCall = true;
     private bool _soundOnOtp = true;
-    private bool _telegramOnOtp = true;
-    private bool _telegramOnSms = true;
+    private bool _telegramOnOtp = false;
+    private bool _telegramOnSms = false;
     private bool _telegramOnCall = true;
     private bool _telegramOnError = true;
+
+    private enum TelegramPreference { Otp, Sms, Call, Error }
+
+    private void SaveTelegramPreference(TelegramPreference preference, bool enabled)
+    {
+        var cfg = gsm.Services.SettingsService.Current;
+        bool oldOtp = cfg.TelegramOnOtp;
+        bool oldSms = cfg.TelegramOnSms;
+        bool oldCall = cfg.TelegramOnCall;
+        bool oldError = cfg.TelegramOnError;
+
+        switch (preference)
+        {
+            case TelegramPreference.Otp: cfg.TelegramOnOtp = enabled; break;
+            case TelegramPreference.Sms: cfg.TelegramOnSms = enabled; break;
+            case TelegramPreference.Call: cfg.TelegramOnCall = enabled; break;
+            case TelegramPreference.Error: cfg.TelegramOnError = enabled; break;
+        }
+
+        if (!gsm.Services.SettingsService.SaveSettings(cfg))
+        {
+            cfg.TelegramOnOtp = oldOtp;
+            cfg.TelegramOnSms = oldSms;
+            cfg.TelegramOnCall = oldCall;
+            cfg.TelegramOnError = oldError;
+            Snackbar.Add("Không lưu được công tắc Telegram.", Severity.Error);
+        }
+
+        _telegramOnOtp = cfg.TelegramOnOtp;
+        _telegramOnSms = cfg.TelegramOnSms;
+        _telegramOnCall = cfg.TelegramOnCall;
+        _telegramOnError = cfg.TelegramOnError;
+    }
 
     // ========== TELEGRAM ==========
     private sealed class TelegramRouteEditor
@@ -583,8 +616,8 @@
             cfg.SoundOnSms = _soundOnSms;
             cfg.SoundOnCall = _soundOnCall;
             cfg.SoundOnOtp = _soundOnOtp;
-            cfg.TelegramOnOtp = true;
-            cfg.TelegramOnSms = true;
+            cfg.TelegramOnOtp = _telegramOnOtp;
+            cfg.TelegramOnSms = _telegramOnSms;
             cfg.TelegramOnCall = _telegramOnCall;
             cfg.TelegramOnError = _telegramOnError;
 
@@ -649,8 +682,8 @@
         _soundOnSms = true;
         _soundOnCall = true;
         _soundOnOtp = true;
-        _telegramOnOtp = true;
-        _telegramOnSms = true;
+        _telegramOnOtp = false;
+        _telegramOnSms = false;
         _telegramOnCall = true;
         _telegramOnError = true;
         _telegramRoutes =
@@ -848,8 +881,6 @@
             {
                 var cfg = gsm.Services.SettingsService.Current;
                 ApplyTelegramRoutesToSettings(cfg);
-                cfg.TelegramOnOtp = true;
-                cfg.TelegramOnSms = true;
                 if (!gsm.Services.SettingsService.SaveSettings(cfg))
                 {
                     Snackbar.Add("Test thành công nhưng không lưu được cấu hình Telegram.", Severity.Error);

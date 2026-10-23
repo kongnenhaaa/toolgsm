@@ -8,6 +8,8 @@ using gsm.Models;
 
 namespace gsm.Services;
 
+public enum TelegramNotificationKind { Other, Otp, Sms }
+
 public interface INotifyService
 {
     event Action<string>? TelegramStatus;
@@ -15,7 +17,8 @@ public interface INotifyService
         string botToken,
         string chatId,
         string text,
-        string? deduplicationKey = null);
+        string? deduplicationKey = null,
+        TelegramNotificationKind kind = TelegramNotificationKind.Other);
     Task SendTelegramDocumentAsync(
         string botToken,
         string chatId,
@@ -58,9 +61,12 @@ public class NotifyService : INotifyService
         string botToken,
         string chatId,
         string text,
-        string? deduplicationKey = null)
+        string? deduplicationKey = null,
+        TelegramNotificationKind kind = TelegramNotificationKind.Other)
     {
         if (string.IsNullOrWhiteSpace(text))
+            return Task.CompletedTask;
+        if (!IsTelegramNotificationEnabled(SettingsService.Current, kind))
             return Task.CompletedTask;
 
         // Enqueue synchronously so fire-and-forget callers still place the
@@ -69,7 +75,8 @@ public class NotifyService : INotifyService
             botToken ?? string.Empty,
             chatId ?? string.Empty,
             PrepareTelegramMessages(text),
-            deduplicationKey);
+            deduplicationKey,
+            kind);
         if (jobs.Count == 0)
         {
             PublishTelegramStatus(
@@ -276,6 +283,14 @@ public class NotifyService : INotifyService
                         continue;
                     }
 
+                    if (disposition == TelegramSendDisposition.Suppressed)
+                    {
+                        _telegramOutbox.Complete(job.Id);
+                        PublishTelegramStatus(
+                            $"[TELEGRAM_SUPPRESSED] job={job.Id}; {error}");
+                        continue;
+                    }
+
                     if (disposition == TelegramSendDisposition.DropAmbiguous)
                     {
                         _telegramOutbox.Complete(job.Id);
@@ -342,8 +357,18 @@ public class NotifyService : INotifyService
     {
         Delivered,
         Retry,
-        DropAmbiguous
+        DropAmbiguous,
+        Suppressed
     }
+
+    internal static bool IsTelegramNotificationEnabled(
+        AppSettings settings,
+        TelegramNotificationKind kind) => kind switch
+    {
+        TelegramNotificationKind.Otp => settings.TelegramOnOtp,
+        TelegramNotificationKind.Sms => settings.TelegramOnSms,
+        _ => true
+    };
 
     private async Task<(
         TelegramSendDisposition Disposition,
@@ -354,6 +379,8 @@ public class NotifyService : INotifyService
         try
         {
             AppSettings settings = SettingsService.Current ?? new AppSettings();
+            if (!IsTelegramNotificationEnabled(settings, job.Kind))
+                return (TelegramSendDisposition.Suppressed, "Thông báo Telegram đã tắt.", null);
             (string botToken, IReadOnlyList<string> chatIds) =
                 ResolveTelegramTargets(
                     job.BotToken,
@@ -372,6 +399,9 @@ public class NotifyService : INotifyService
                     job.DeliveredChatIds);
             foreach (string chatId in chatIds)
             {
+                if (!IsTelegramNotificationEnabled(
+                        SettingsService.Current ?? new AppSettings(), job.Kind))
+                    return (TelegramSendDisposition.Suppressed, "Thông báo Telegram đã tắt.", null);
                 // A previous attempt may already have delivered this job to
                 // another configured destination before a later destination
                 // returned 429 or another explicit failure.

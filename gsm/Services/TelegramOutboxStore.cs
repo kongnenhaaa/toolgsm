@@ -17,7 +17,8 @@ internal sealed class TelegramOutboxStore
         DateTimeOffset NextAttemptUtc,
         string LastError,
         string DeduplicationKey,
-        string DeliveredChatIds);
+        string DeliveredChatIds,
+        TelegramNotificationKind Kind);
 
     private readonly object _gate = new();
     private readonly Dictionary<string, Job> _jobs =
@@ -35,7 +36,8 @@ internal sealed class TelegramOutboxStore
         string botToken,
         string chatId,
         IReadOnlyList<(string Text, bool UseHtml)> messages,
-        string? deduplicationKey = null)
+        string? deduplicationKey = null,
+        TelegramNotificationKind kind = TelegramNotificationKind.Other)
     {
         ArgumentNullException.ThrowIfNull(messages);
         if (messages.Count == 0) return Array.Empty<Job>();
@@ -72,7 +74,8 @@ internal sealed class TelegramOutboxStore
                     now,
                     string.Empty,
                     messageDeduplicationKey,
-                    string.Empty);
+                    string.Empty,
+                    kind);
                 _jobs[job.Id] = job;
                 added.Add(job);
             }

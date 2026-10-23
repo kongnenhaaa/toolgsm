@@ -274,7 +274,6 @@
             <MudSwitch T="bool" @bind-Value="_notifySms" Label="Thông báo âm thanh khi có SMS mới" Color="Color.Primary" Class="mb-2" />
             <MudSwitch T="bool" @bind-Value="_notifyCall" Label="Thông báo âm thanh khi có cuộc gọi" Color="Color.Primary" Class="mb-2" />
             <MudSwitch T="bool" @bind-Value="_notifyOtp" Label="Thông báo âm thanh khi phát hiện OTP" Color="Color.Primary" Class="mb-2" />
-            <MudSwitch T="bool" @bind-Value="_notifyTelegram" Label="Gửi Telegram khi có OTP" Color="Color.Primary" Class="mb-3" />
             
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small" OnClick="SaveNotifySettings">
                 💾 Lưu cài đặt thông báo
@@ -320,7 +319,6 @@
     private bool _notifySms = true;
     private bool _notifyCall = true;
     private bool _notifyOtp = true;
-    private bool _notifyTelegram = false;
 
     // ========== DATA ==========
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();
@@ -359,7 +357,6 @@
             _notifySms = settings.SoundOnSms;
             _notifyCall = settings.SoundOnCall;
             _notifyOtp = settings.SoundOnOtp;
-            _notifyTelegram = settings.TelegramOnOtp;
         }
     }
 
@@ -1101,7 +1098,6 @@
                 settings.SoundOnSms = _notifySms;
                 settings.SoundOnCall = _notifyCall;
                 settings.SoundOnOtp = _notifyOtp;
-                settings.TelegramOnOtp = _notifyTelegram;
                 gsm.Services.SettingsService.SaveSettings(settings);
                 Snackbar.Add("Đã lưu cài đặt thông báo", Severity.Success);
             }

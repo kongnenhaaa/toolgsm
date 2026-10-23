@@ -10,20 +10,39 @@ namespace gsm.Services;
 /// </summary>
 public sealed class DmxSuccessOutputService
 {
-    public const string OutputDirectoryName = "DienMayXanh";
     public const string LatestSessionFileName =
         "dmx_sdt_thanh_cong_phien_gan_nhat.txt";
     public const string AggregateFileName =
         "dmx_sdt_thanh_cong_tong.txt";
-    public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
 
     private static readonly object FileSync = new();
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
     private readonly string _outputDirectory;
 
     public DmxSuccessOutputService()
-        : this(Path.Combine(AppPaths.UserDataDirectory, OutputDirectoryName))
+        : this(ResolveDefaultOutputDirectory())
     {
+    }
+
+    internal static string ResolveDefaultOutputDirectory(
+        string? runtimeDirectory = null)
+    {
+        string runtime = Path.GetFullPath(
+            runtimeDirectory ?? AppPaths.RuntimeDirectory);
+        var current = new DirectoryInfo(runtime);
+        for (int depth = 0; current != null && depth <= 8;
+             depth++, current = current.Parent)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "gsm.csproj")))
+                return Path.Combine(current.FullName, "Data");
+
+            string siblingProject = Path.Combine(current.FullName, "gsm");
+            if (File.Exists(Path.Combine(siblingProject, "gsm.csproj")))
+                return Path.Combine(siblingProject, "Data");
+        }
+
+        // A standalone copy of ToolGSM still writes beside its executable.
+        return Path.Combine(runtime, "Data");
     }
 
     internal DmxSuccessOutputService(string outputDirectory)
@@ -43,13 +62,10 @@ public sealed class DmxSuccessOutputService
     /// list is preserved. Both files are created so an empty-success run is
     /// represented by an empty latest-session file.
     /// </summary>
-    public void BeginSession(DateTime? utcNow = null)
+    public void BeginSession()
     {
         lock (FileSync)
         {
-            DeleteExpiredOutputsCore(
-                _outputDirectory,
-                utcNow ?? DateTime.UtcNow);
             Directory.CreateDirectory(_outputDirectory);
             WriteLinesAtomically(LatestSessionPath, []);
             if (!File.Exists(AggregatePath))
@@ -76,69 +92,6 @@ public sealed class DmxSuccessOutputService
             Directory.CreateDirectory(_outputDirectory);
             AppendUniquePhone(LatestSessionPath, normalizedPhone);
             AppendUniquePhone(AggregatePath, normalizedPhone);
-        }
-    }
-
-    /// <summary>
-    /// Deletes only the two known output files after seven days without a
-    /// write. This is called at startup, hourly, and before a new batch.
-    /// </summary>
-    public static void DeleteExpiredOutputs(DateTime? utcNow = null)
-    {
-        string directory = Path.Combine(
-            AppPaths.UserDataDirectory,
-            OutputDirectoryName);
-        DeleteExpiredOutputs(directory, utcNow);
-    }
-
-    internal static void DeleteExpiredOutputs(
-        string outputDirectory,
-        DateTime? utcNow = null)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
-        lock (FileSync)
-        {
-            DeleteExpiredOutputsCore(
-                Path.GetFullPath(outputDirectory),
-                utcNow ?? DateTime.UtcNow);
-        }
-    }
-
-    private static void DeleteExpiredOutputsCore(
-        string outputDirectory,
-        DateTime utcNow)
-    {
-        if (!Directory.Exists(outputDirectory)) return;
-
-        DateTime cutoffUtc = utcNow - Retention;
-        foreach (string fileName in new[]
-                 {
-                     LatestSessionFileName,
-                     AggregateFileName
-                 })
-        {
-            string path = Path.Combine(outputDirectory, fileName);
-            try
-            {
-                if (File.Exists(path)
-                    && File.GetLastWriteTimeUtc(path) <= cutoffUtc)
-                {
-                    File.Delete(path);
-                }
-            }
-            catch
-            {
-                // Locked files are retried by the next hourly cleanup.
-            }
-        }
-
-        try
-        {
-            if (!Directory.EnumerateFileSystemEntries(outputDirectory).Any())
-                Directory.Delete(outputDirectory);
-        }
-        catch
-        {
         }
     }
 

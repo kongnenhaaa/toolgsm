@@ -9,7 +9,7 @@
     <RootNamespace>gsm</RootNamespace>
     <AssemblyName>ToolGSM</AssemblyName>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
-    <DefaultItemExcludes>$(DefaultItemExcludes);RegexTest\**;artifacts\**;gsm\**;logs\**;scratch\**;**\__pycache__\**;**\*.pyc</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);RegexTest\**;artifacts\**;Data\**;gsm\**;logs\**;scratch\**;**\__pycache__\**;**\*.pyc</DefaultItemExcludes>
     <!-- Bộ eKYC gốc được đóng gói cạnh ToolGSM.exe khi build/publish. -->
     <DktttbSourceDirectory>$(MSBuildProjectDirectory)\..\..\..\kyc</DktttbSourceDirectory>
     <!-- .NET self-contained không chứa Python. Runtime này được chuẩn bị lúc

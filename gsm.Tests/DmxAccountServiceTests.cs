@@ -1,9 +1,29 @@
 using gsm.Services;
+using System.Text.Json;
 
 namespace gsm.Tests;
 
 public sealed class DmxAccountServiceTests
 {
+    [Theory]
+    [InlineData("{\"createPassword\":true}", null)]
+    [InlineData("{\"createPassword\":false}", "createPassword=false")]
+    [InlineData("{\"createPassword\":null}", "không trả kết quả")]
+    [InlineData("{}", "không trả kết quả")]
+    public void PasswordRecovery_ReportsTheActualResponseStage(
+        string json, string? expectedError)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+
+        string? error = DmxAccountService.GetPasswordRecoveryFailure(
+            document.RootElement);
+
+        if (expectedError == null)
+            Assert.Null(error);
+        else
+            Assert.Contains(expectedError, error);
+    }
+
     [Fact]
     public void DeviceIdentity_IsStableForTheSameComAndSim()
     {

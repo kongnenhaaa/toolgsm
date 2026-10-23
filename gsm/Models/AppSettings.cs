@@ -22,8 +22,9 @@ public class AppSettings
     public string TelegramPhoneWhitelist { get; set; } = "";
     public System.Collections.Generic.List<TelegramRouteSettings>
         TelegramRoutes { get; set; } = new();
-    public bool TelegramOnOtp { get; set; } = true;
-    public bool TelegramOnSms { get; set; } = true;
+    public bool TelegramOnOtp { get; set; } = false;
+    public bool TelegramOnSms { get; set; } = false;
+    public int TelegramMessagePreferenceVersion { get; set; } = 0;
     public bool PushOtpToWeb { get; set; } = true;
     public string OtpWebhookUrl { get; set; } = "";
     public bool SoundOnOtp { get; set; } = true;

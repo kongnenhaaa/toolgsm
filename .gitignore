@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Local ToolGSM output (includes phone numbers)
+gsm/Data/
+
 # User-specific files
 *.rsuser
 *.suo

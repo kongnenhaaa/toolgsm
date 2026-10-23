@@ -5,6 +5,27 @@ namespace gsm.Tests;
 public sealed class DmxSuccessOutputServiceTests
 {
     [Fact]
+    public void DefaultOutputDirectory_UsesProjectGsmDataFromNestedRelease()
+    {
+        string directory = CreateDirectory();
+        try
+        {
+            string project = Path.Combine(directory, "gsm");
+            string runtime = Path.Combine(project, "bin", "Release",
+                "net10.0-windows10.0.19041.0", "win-x64", "gsm");
+            Directory.CreateDirectory(runtime);
+            File.WriteAllText(Path.Combine(project, "gsm.csproj"), "");
+
+            Assert.Equal(Path.Combine(project, "Data"),
+                DmxSuccessOutputService.ResolveDefaultOutputDirectory(runtime));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Sessions_ResetLatestFileAndKeepDeduplicatedAggregateFile()
     {
         string directory = CreateDirectory();
@@ -66,43 +87,7 @@ public sealed class DmxSuccessOutputServiceTests
     }
 
     [Fact]
-    public void Cleanup_DeletesOnlyKnownOutputFilesAfterSevenDays()
-    {
-        string directory = CreateDirectory();
-        try
-        {
-            var output = new DmxSuccessOutputService(directory);
-            output.BeginSession();
-            output.RecordSuccess("0911111111");
-            string unrelated = Path.Combine(directory, "ghi_chu.txt");
-            File.WriteAllText(unrelated, "keep");
-
-            DateTime nowUtc = new(
-                2026, 10, 17, 12, 0, 0, DateTimeKind.Utc);
-            File.SetLastWriteTimeUtc(
-                output.LatestSessionPath,
-                nowUtc - TimeSpan.FromDays(7));
-            File.SetLastWriteTimeUtc(
-                output.AggregatePath,
-                nowUtc - TimeSpan.FromDays(8));
-            File.SetLastWriteTimeUtc(
-                unrelated,
-                nowUtc - TimeSpan.FromDays(30));
-
-            DmxSuccessOutputService.DeleteExpiredOutputs(directory, nowUtc);
-
-            Assert.False(File.Exists(output.LatestSessionPath));
-            Assert.False(File.Exists(output.AggregatePath));
-            Assert.True(File.Exists(unrelated));
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void Cleanup_KeepsFilesNewerThanSevenDays()
+    public void OldAggregateFile_IsPreservedWhenStartingNewSession()
     {
         string directory = CreateDirectory();
         try
@@ -113,16 +98,13 @@ public sealed class DmxSuccessOutputServiceTests
             DateTime nowUtc = new(
                 2026, 10, 17, 12, 0, 0, DateTimeKind.Utc);
             File.SetLastWriteTimeUtc(
-                output.LatestSessionPath,
-                nowUtc - TimeSpan.FromDays(6));
-            File.SetLastWriteTimeUtc(
                 output.AggregatePath,
-                nowUtc - TimeSpan.FromDays(6));
+                nowUtc - TimeSpan.FromDays(365));
 
-            DmxSuccessOutputService.DeleteExpiredOutputs(directory, nowUtc);
+            output.BeginSession();
 
-            Assert.True(File.Exists(output.LatestSessionPath));
-            Assert.True(File.Exists(output.AggregatePath));
+            Assert.Empty(File.ReadAllLines(output.LatestSessionPath));
+            Assert.Equal(["0911111111"], File.ReadAllLines(output.AggregatePath));
         }
         finally
         {

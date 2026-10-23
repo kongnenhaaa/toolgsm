@@ -33,12 +33,15 @@ public static class SettingsService
                 bool needsInstallationId = string.IsNullOrWhiteSpace(settings.InstallationId)
                     || !Guid.TryParseExact(settings.InstallationId, "N", out _);
                 bool needsFirebaseSyncMigration = settings.FirebaseSyncPreferenceVersion < 1;
+                bool needsTelegramMessagePreferenceMigration =
+                    settings.TelegramMessagePreferenceVersion < 1;
                 bool needsTelegramRoutesMigration =
                     settings.TelegramRoutes == null
                     || settings.TelegramRoutes.Count == 0;
                 AppSettings normalized = Normalize(settings);
                 if (needsInstallationId
                     || needsFirebaseSyncMigration
+                    || needsTelegramMessagePreferenceMigration
                     || needsTelegramRoutesMigration)
                 {
                     // Upgrade old settings once so the identity remains stable
@@ -123,11 +126,12 @@ public static class SettingsService
             settings.WriteOtpToFirebase = false;
             settings.FirebaseSyncPreferenceVersion = 1;
         }
-        // Incoming GSM messages are operational data, not optional marketing
-        // notifications. Once Telegram has a destination, every received SMS
-        // must be mirrored regardless of whether OTP extraction succeeded.
-        settings.TelegramOnOtp = true;
-        settings.TelegramOnSms = true;
+        if (settings.TelegramMessagePreferenceVersion < 1)
+        {
+            settings.TelegramOnOtp = false;
+            settings.TelegramOnSms = false;
+            settings.TelegramMessagePreferenceVersion = 1;
+        }
         NormalizeTelegramRoutes(settings);
         settings.SignalScanIntervalSeconds = Math.Clamp(
             settings.SignalScanIntervalSeconds, 5, 300);

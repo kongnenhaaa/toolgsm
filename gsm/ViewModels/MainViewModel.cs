@@ -5771,7 +5771,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         $"OTP: <b>{newOtp}</b>\n" +
                         $"Nội dung: {System.Net.WebUtility.HtmlEncode(existing.Content)}\n" +
                         $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                    QueueTelegramForReceiver(cfg2, simPhone, tgText);
+                    QueueTelegramForReceiver(cfg2, simPhone, tgText,
+                        kind: TelegramNotificationKind.Otp);
                 }
 
                 // Webhook rules
@@ -5835,7 +5836,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             $"Từ: {safeSender}\n" +
                             $"Nội dung: <i>{safeContent}</i>\n" +
                             $"Time: {DateTime.Now:HH:mm:ss dd/MM}";
-                        QueueTelegramForReceiver(cfg2, simPhone, tgText);
+                        QueueTelegramForReceiver(cfg2, simPhone, tgText,
+                            kind: TelegramNotificationKind.Sms);
                     }
                 }
                 catch (TaskCanceledException) { } // Bị hủy vì có đoạn mới đến — bình thường
@@ -8783,7 +8785,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         AppSettings config,
         string receiverPhone,
         string text,
-        string? deduplicationKey = null)
+        string? deduplicationKey = null,
+        TelegramNotificationKind kind = TelegramNotificationKind.Other)
     {
         IReadOnlyList<TelegramRouteSettings> routes =
             TelegramPhoneWhitelist.GetEligibleRoutes(
@@ -8799,7 +8802,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 route.BotToken,
                 route.ChatIds,
                 text,
-                routeDeduplicationKey);
+                routeDeduplicationKey,
+                kind);
         }
 
         return routes.Count;
@@ -8814,6 +8818,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string content,
         DateTimeOffset? smsTimestampUtc)
     {
+        if (!ShouldSendTelegramSmsNotification(config, extractedOtp)) return;
+
         string text = BuildTelegramSmsNotification(
             portName,
             receiverPhone,
@@ -8829,7 +8835,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 portName,
                 senderPhone,
                 content,
-                smsTimestampUtc));
+                smsTimestampUtc),
+            !string.IsNullOrWhiteSpace(extractedOtp)
+                && !string.Equals(extractedOtp, "N/A", StringComparison.OrdinalIgnoreCase)
+                ? TelegramNotificationKind.Otp
+                : TelegramNotificationKind.Sms);
         if (queuedRouteCount > 0) return;
 
         bool hasConfiguredRoute =
@@ -8853,6 +8863,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             "WARNING");
         SnackbarMessageQueue.Enqueue(
             $"[{portName}] Telegram chưa có cấu hình Bot/Chat hợp lệ.");
+    }
+
+    internal static bool ShouldSendTelegramSmsNotification(
+        AppSettings config,
+        string extractedOtp)
+    {
+        bool hasOtp = !string.IsNullOrWhiteSpace(extractedOtp)
+            && !string.Equals(extractedOtp, "N/A", StringComparison.OrdinalIgnoreCase);
+        return hasOtp ? config.TelegramOnOtp : config.TelegramOnSms;
     }
 
     internal static string BuildTelegramSmsDeduplicationKey(

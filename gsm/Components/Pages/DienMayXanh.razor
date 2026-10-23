@@ -93,9 +93,9 @@
             TXT tổng
         </MudButton>
 
-        <MudTooltip Text="Chỉ lưu SĐT thành công; file không được cập nhật trong 7 ngày sẽ tự xóa">
+        <MudTooltip Text="Lưu SĐT thành công tại gsm\Data; TXT tổng giữ lâu dài, TXT phiên tạo lại khi bắt đầu phiên mới">
             <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info">
-                Tự lưu TXT · giữ 7 ngày
+                Tự lưu TXT · giữ lâu dài
             </MudChip>
         </MudTooltip>
 
@@ -408,7 +408,7 @@
             if (!System.IO.File.Exists(path))
             {
                 Snackbar.Add(
-                    "File chưa có hoặc đã tự xóa sau 7 ngày.",
+                    "Chưa có file TXT. Hãy chạy một phiên Điện Máy Xanh trước.",
                     Severity.Info);
                 return;
             }

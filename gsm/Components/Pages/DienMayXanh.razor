@@ -132,12 +132,13 @@
     </MudTabPanel>
 
     <MudTabPanel Text="@($"Kết quả ({Vm.DmxResults.Count})")">
+        @{ var orderedResults = PortDisplayOrder.Sort(Vm.DmxResults, Ports, item => item.Port); }
         <MudPaper Class="pa-4 mt-2" Elevation="0"
                   Style="border:1px solid #E2E8F0; border-radius:10px;">
             <MudText Typo="Typo.subtitle2" Class="mb-3" Style="font-weight:600;">
                 Kết quả xử lý tài khoản Điện Máy Xanh
             </MudText>
-            <MudTable Items="@Vm.DmxResults" Dense="true" Hover="true" Elevation="0"
+            <MudTable Items="@orderedResults" Dense="true" Hover="true" Elevation="0"
                       Height="calc(100vh - 300px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>#</MudTh>
@@ -151,7 +152,7 @@
                     <MudTh>Phản hồi</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd Style="font-size:11px; color:#94A3B8;">@(Vm.DmxResults.IndexOf(context) + 1)</MudTd>
+                    <MudTd Style="font-size:11px; color:#94A3B8;">@(orderedResults.IndexOf(context) + 1)</MudTd>
                     <MudTd Style="font-size:12px; white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@context.Phone</MudTd>

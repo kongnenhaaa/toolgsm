@@ -119,7 +119,7 @@
                     </MudButton>
                 </MudStack>
             </MudStack>
-            <MudTable Items="@_callHistory" Dense="true" Hover="true" Elevation="0"
+            <MudTable Items="@OrderedCallHistory" Dense="true" Hover="true" Elevation="0"
                       Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
@@ -238,7 +238,7 @@
                 </MudItem>
             </MudGrid>
 
-            <MudTable Items="@_callQueue" Dense="true" Hover="true" Elevation="0"
+            <MudTable Items="@OrderedCallQueue" Dense="true" Hover="true" Elevation="0"
                       Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>SĐT</MudTh>
@@ -367,6 +367,8 @@
 
     // Lịch sử
     private List<CallHistoryItem> _callHistory = new();
+    private List<CallHistoryItem> OrderedCallHistory =>
+        PortDisplayOrder.Sort(_callHistory, Ports, item => item.Port);
 
     // Hàng đợi
     private string _queuePhones = "";
@@ -374,6 +376,8 @@
     private int _queueDuration = 30;
     private bool _queueRecord = false;
     private List<CallQueueItem> _callQueue = new();
+    private List<CallQueueItem> OrderedCallQueue =>
+        PortDisplayOrder.Sort(_callQueue, Ports, item => item.Port);
     private bool _isRunningQueue = false;
     private CancellationTokenSource? _queueCts;
 

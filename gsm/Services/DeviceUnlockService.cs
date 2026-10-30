@@ -160,6 +160,10 @@ public sealed class DeviceUnlockService
             TryKillProcessTree(process);
             return OtpFailure($"Không gửi được OTP bằng eKYC: {ex.Message}");
         }
+        finally
+        {
+            await TransientPythonWorkspace.CleanupAsync(process.StartInfo);
+        }
     }
 
     public async Task<DeviceUnlockRunResult> RunAsync(
@@ -254,6 +258,10 @@ public sealed class DeviceUnlockService
             TryKillProcessTree(process);
             return Failure($"Không chạy được DKTTTB: {ex.Message}");
         }
+        finally
+        {
+            await TransientPythonWorkspace.CleanupAsync(process.StartInfo);
+        }
     }
 
     internal static string BuildBridgeRequestJson(
@@ -263,6 +271,10 @@ public sealed class DeviceUnlockService
         {
             phone,
             otp,
+            localImageDirectory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+                "kyc",
+                "anh"),
             deviceProfile = new
             {
                 di = loginSession.DeviceInfo,

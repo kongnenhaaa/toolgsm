@@ -261,9 +261,10 @@
     </MudTabPanel>
 
     <MudTabPanel Text="@($"Kết quả ({Vm.DeviceUnlockResults.Count})")">
+        @{ var orderedResults = PortDisplayOrder.Sort(Vm.DeviceUnlockResults, Ports, item => item.Port); }
         <MudPaper Class="pa-4 mt-2" Elevation="0"
                   Style="border:1px solid #E2E8F0; border-radius:10px;">
-            <MudTable Items="@Vm.DeviceUnlockResults" Dense="true" Hover="true"
+            <MudTable Items="@orderedResults" Dense="true" Hover="true"
                       Elevation="0" Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>#</MudTh>
@@ -275,7 +276,7 @@
                     <MudTh>Phản hồi</MudTh>
                 </HeaderContent>
                 <RowTemplate>
-                    <MudTd>@(Vm.DeviceUnlockResults.IndexOf(context) + 1)</MudTd>
+                    <MudTd>@(orderedResults.IndexOf(context) + 1)</MudTd>
                     <MudTd Style="white-space:nowrap;">@context.Time.ToString("HH:mm:ss dd/MM")</MudTd>
                     <MudTd Style="font-weight:600;">@context.Port</MudTd>
                     <MudTd>@context.Phone</MudTd>

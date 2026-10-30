@@ -108,7 +108,7 @@
                 </MudButton>
             </MudStack>
 
-            <MudTable Items="@_results" Dense="true" Hover="true" Elevation="0"
+            <MudTable Items="@OrderedResults" Dense="true" Hover="true" Elevation="0"
                       Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
@@ -158,6 +158,8 @@
     private string _sendMode = "selected";
     private HashSet<SimPort> _selectedPorts = new();
     private readonly List<DataUsageResultItem> _results = new();
+    private List<DataUsageResultItem> OrderedResults =>
+        PortDisplayOrder.Sort(_results, Ports, item => item.Port);
     private int _subTab;
     private bool _isRunning;
     private int _startGuard;

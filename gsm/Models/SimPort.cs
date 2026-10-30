@@ -327,7 +327,7 @@ public partial class SimPort : ObservableObject
     [ObservableProperty]
     private DateTime? _lastSignalScanAt;
 
-    public string LastSignalScanDisplay => LastSignalScanAt?.ToString("HH:mm:ss") ?? string.Empty;
+    public string LastSignalScanDisplay => LastSignalScanAt?.ToString("dd/MM/yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
 
     public string SignalDisplay => SignalRssi switch
     {

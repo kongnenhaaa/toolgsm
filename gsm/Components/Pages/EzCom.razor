@@ -109,7 +109,7 @@
                 </MudButton>
             </MudStack>
 
-            <MudTable Items="@_ezResults" Dense="true" Hover="true" Elevation="0"
+            <MudTable Items="@OrderedEzResults" Dense="true" Hover="true" Elevation="0"
                       Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
@@ -165,6 +165,8 @@
     private double _progressPercent = 0;
 
     private List<EzResultItem> _ezResults = new();
+    private List<EzResultItem> OrderedEzResults =>
+        PortDisplayOrder.Sort(_ezResults, Ports, item => item.Port);
 
     // ========== DATA ==========
     private List<SimPort> Ports => Vm.Ports?.ToList() ?? new();

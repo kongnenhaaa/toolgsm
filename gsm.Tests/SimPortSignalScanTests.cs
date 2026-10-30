@@ -33,7 +33,7 @@ public class SimPortSignalScanTests
     }
 
     [Fact]
-    public void LastSignalScanAt_FormatsTimeAndNotifiesDisplay()
+    public void LastSignalScanAt_FormatsDateAndTimeAndNotifiesDisplay()
     {
         var port = new SimPort();
         var changed = new List<string?>();
@@ -41,7 +41,7 @@ public class SimPortSignalScanTests
 
         port.LastSignalScanAt = new DateTime(2026, 7, 22, 14, 5, 9);
 
-        Assert.Equal("14:05:09", port.LastSignalScanDisplay);
+        Assert.Equal("22/07/2026 14:05:09", port.LastSignalScanDisplay);
         Assert.Contains(nameof(SimPort.LastSignalScanAt), changed);
         Assert.Contains(nameof(SimPort.LastSignalScanDisplay), changed);
     }

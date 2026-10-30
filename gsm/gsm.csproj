@@ -73,6 +73,10 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
+    <None Include="$(DktttbSourceDirectory)\myvnpt_usage_history.py" Link="myvnpt_usage_history.py">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
 
   <!-- Publish vào một thư mục cũ không tự xóa dependency đã bỏ khỏi project. -->

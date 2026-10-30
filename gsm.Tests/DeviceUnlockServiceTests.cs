@@ -138,6 +138,9 @@ public sealed class DeviceUnlockServiceTests
 
         Assert.Equal("1", startInfo.Environment["PYTHONUTF8"]);
         Assert.Equal("utf-8", startInfo.Environment["PYTHONIOENCODING"]);
+        Assert.Equal(
+            Path.Combine(AppContext.BaseDirectory, "anh"),
+            startInfo.Environment["TOOLGSM_IMAGE_DIR"]);
         Assert.Empty(DeviceUnlockAuthService.Utf8WithoutBom.GetPreamble());
     }
 
@@ -159,6 +162,7 @@ public sealed class DeviceUnlockServiceTests
             session);
 
         Assert.Contains("\"deviceProfile\"", json);
+        Assert.Contains("\"localImageDirectory\"", json);
         Assert.Contains("\"model\":\"CPH2179\"", json);
         Assert.Contains("\"android_ver\":\"11\"", json);
         Assert.Contains("\"fcm_token\":\"", json);

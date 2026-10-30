@@ -217,6 +217,10 @@ public sealed class DeviceUnlockAuthService
             TryKillProcessTree(process);
             return Failure($"Không đăng nhập được nguồn ảnh: {ex.Message}");
         }
+        finally
+        {
+            await TransientPythonWorkspace.CleanupAsync(startInfo);
+        }
     }
 
     private static string? ResolveBridgeScriptPath()
@@ -237,10 +241,9 @@ public sealed class DeviceUnlockAuthService
         startInfo.Environment["PYTHONNOUSERSITE"] = "1";
         startInfo.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
         startInfo.Environment["TOOLGSM_TRANSIENT_MODE"] = "1";
-        startInfo.Environment["TOOLGSM_TRANSIENT_PARENT"] = Path.Combine(
-            Path.GetTempPath(),
-            "ToolGSM",
-            "DKTTTB");
+        startInfo.Environment["TOOLGSM_IMAGE_DIR"] = Path.Combine(
+            AppContext.BaseDirectory, "anh");
+        TransientPythonWorkspace.Prepare(startInfo);
         startInfo.Environment["TOOLGSM_ACCOUNT_STATE_DIR"] =
             AppPaths.UserDataDirectory;
     }

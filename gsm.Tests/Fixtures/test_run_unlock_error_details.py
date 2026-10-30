@@ -1,5 +1,7 @@
 import importlib.util
 import pathlib
+import tempfile
+import types
 import unittest
 
 
@@ -15,6 +17,42 @@ SPEC.loader.exec_module(TARGET)
 
 
 class RunUnlockErrorDetailTests(unittest.TestCase):
+    def test_stages_only_current_subscriber_images_for_near_far_flow(self):
+        with tempfile.TemporaryDirectory() as root:
+            source_dir = pathlib.Path(root) / "source"
+            source_dir.mkdir()
+            images = pathlib.Path(root) / "kyc" / "anh"
+            images.mkdir(parents=True)
+            target = pathlib.Path(root) / "session" / "anh"
+            for name in (
+                "0912345678.jpg",
+                "0912345678_cccd_front.jpg",
+                "0912345678_cccd_back.jpg",
+                "0999999999.jpg",
+            ):
+                (images / name).write_bytes(b"x" * 2049)
+
+            module = types.SimpleNamespace(TEMP_FACES_DIR=str(target))
+            count = TARGET.stage_local_reference_images(
+                module, str(source_dir / "ekyc_full.py"), "84912345678",
+                str(images),
+            )
+
+            self.assertEqual(3, count)
+            self.assertEqual(
+                {"0912345678.jpg", "0912345678_cccd_front.jpg",
+                 "0912345678_cccd_back.jpg"},
+                {file.name for file in target.iterdir()},
+            )
+
+            (target / "0912345678.jpg").write_bytes(b"new" * 1000)
+            TARGET.stage_local_reference_images(
+                module, str(source_dir / "ekyc_full.py"), "84912345678",
+                str(images),
+            )
+            self.assertEqual(b"new" * 1000,
+                             (target / "0912345678.jpg").read_bytes())
+
     def test_extracts_exact_error_code_and_message_from_system_response(self):
         priority, detail = TARGET.extract_ekyc_failure_detail(
             'Response: {"errorCode":"1314","message":"Ảnh khuôn mặt không hợp lệ"}'

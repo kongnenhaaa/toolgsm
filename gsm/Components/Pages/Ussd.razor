@@ -206,7 +206,7 @@
                 }
             </MudStack>
 
-            <MudTable Items="@_callCheckHistory" Dense="true" Hover="true" Elevation="0" Height="calc(100vh - 280px)" FixedHeader="true">
+            <MudTable Items="@OrderedCallCheckHistory" Dense="true" Hover="true" Elevation="0" Height="calc(100vh - 280px)" FixedHeader="true">
                 <HeaderContent>
                     <MudTh>Thời gian</MudTh>
                     <MudTh>Cổng</MudTh>
@@ -307,6 +307,8 @@
     private string _checkCallPhone = "";
     private int _checkCallDuration = 15;
     private List<CallCheckItem> _callCheckHistory = new();
+    private List<CallCheckItem> OrderedCallCheckHistory =>
+        PortDisplayOrder.Sort(_callCheckHistory, Ports, item => item.Port);
     private bool _isCheckingCall = false;
     private CancellationTokenSource? _checkCallCts;
 

@@ -151,6 +151,10 @@ public sealed class IcOcService
             TryKillProcessTree(process);
             return Failure($"Không chạy được IC/OC: {ex.Message}");
         }
+        finally
+        {
+            await TransientPythonWorkspace.CleanupAsync(startInfo);
+        }
     }
 
     internal static bool TryParseResultLine(

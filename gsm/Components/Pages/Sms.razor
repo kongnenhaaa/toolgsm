@@ -336,9 +336,12 @@
     [Parameter] public bool IsPageActive { get; set; }
 
     private IEnumerable<CommandQueueItem> SmsQueue =>
-        (Vm.CommandQueue ?? Enumerable.Empty<CommandQueueItem>())
-            .Where(x => string.Equals(x.Type, "SMS", StringComparison.OrdinalIgnoreCase)
-                     || string.IsNullOrEmpty(x.Type));
+        PortDisplayOrder.Sort(
+            (Vm.CommandQueue ?? Enumerable.Empty<CommandQueueItem>())
+                .Where(x => string.Equals(x.Type, "SMS", StringComparison.OrdinalIgnoreCase)
+                         || string.IsNullOrEmpty(x.Type)),
+            Ports,
+            item => item.PortId);
 
     private int SmsQueueCount => SmsQueue.Count();
 

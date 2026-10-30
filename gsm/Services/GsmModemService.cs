@@ -422,7 +422,8 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, byte> _hotplugRfRecoveryAttempts =
         new(StringComparer.OrdinalIgnoreCase);
     // Some EC20 firmwares report +CME ERROR: 13 forever after a physical SIM
-    // change. Allow one reboot for the current COM lifetime, never a loop.
+    // change. Keep the claim when USB disconnects during a reboot; otherwise
+    // reconnecting the same COM grants another reboot and can create a loop.
     private readonly ConcurrentDictionary<string, byte> _hotplugSimFailureReboots =
         new(StringComparer.OrdinalIgnoreCase);
     // Shared one-reboot budget for automatic *101# recovery.  IMS/UT
@@ -431,6 +432,9 @@ public class GsmModemService : IGsmModemService
     private readonly ConcurrentDictionary<string, byte> _automaticUssdRecoveryAttempts =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _imsUtRecoveryGate = new(2, 2);
+    // All automatic/manual CFUN=1,1 paths share one USB-bank reset cadence.
+    private readonly ModemRebootPacer _modemRebootPacer =
+        new(TimeSpan.FromSeconds(10));
     private readonly SemaphoreSlim _sautoAutomaticUssdGate = new(
         SautoAutomaticUssdMaxConcurrency,
         SautoAutomaticUssdMaxConcurrency);
@@ -4462,12 +4466,16 @@ public class GsmModemService : IGsmModemService
             : loopToken;
         try
         {
-            await WriteSautoCommandWhileLockedAsync(
-                portName,
-                serialPort,
-                ImsUtRecoveryRebootCommand,
-                operationToken,
-                allowHotplugSimFailureRecovery: true);
+            await _modemRebootPacer.RunAsync(async token =>
+            {
+                await WriteSautoCommandWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    ImsUtRecoveryRebootCommand,
+                    token,
+                    allowHotplugSimFailureRecovery: true);
+                return true;
+            }, operationToken);
             AtCommandTraceLogger.State(
                 portName,
                 "HOTPLUG_SIM_FAILURE_REBOOT_SENT;reason=SIM_CONTACT_FAILURE;budget=ONE");
@@ -8838,9 +8846,6 @@ public class GsmModemService : IGsmModemService
     {
         InvalidateSmsReceiveMaintenance(portName);
         ClearHotplugRfRecoveryClaims(portName);
-        _hotplugSimFailureReboots.TryRemove(
-            portName.Trim().ToUpperInvariant(),
-            out _);
         _networkSimIdentities.TryRemove(portName, out _);
         _networkIdentityGenerations.TryRemove(portName, out _);
         ClearPublishedNetworkRegistrations(portName);
@@ -8966,34 +8971,19 @@ public class GsmModemService : IGsmModemService
             return;
         }
 
-        Task writeTask = Task.Run(() =>
-        {
-            AtCommandTraceLogger.Tx(
+        await SerialWriteCompletionGuard.RunAsync(
+            () =>
+            {
+                AtCommandTraceLogger.Tx(
+                    portName,
+                    command + serialPort.NewLine);
+                serialPort.WriteLine(command);
+            },
+            TimeSpan.FromSeconds(3),
+            () => AtCommandTraceLogger.Timeout(
                 portName,
-                command + serialPort.NewLine);
-            serialPort.WriteLine(command);
-        });
-
-        Task completed = await Task.WhenAny(
-            writeTask,
-            Task.Delay(TimeSpan.FromSeconds(3), ct));
-        if (ReferenceEquals(completed, writeTask))
-        {
-            await writeTask;
-            return;
-        }
-
-        ct.ThrowIfCancellationRequested();
-        AtCommandTraceLogger.Timeout(portName, $"WRITE:{command}");
-        _ = writeTask.ContinueWith(
-            task => AtCommandTraceLogger.Error(
-                portName,
-                $"WRITE_TIMEOUT_TASK:{command}: {task.Exception?.GetBaseException().Message}"),
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted,
-            TaskScheduler.Default);
-        throw new TimeoutException(
-            $"{portName} write timeout for {command}; COM was preserved.");
+                $"SLOW_WRITE:{command}"),
+            ct);
     }
 
     private async Task<string> WriteSautoCommandForResponseWhileLockedAsync(
@@ -9568,12 +9558,16 @@ public class GsmModemService : IGsmModemService
             // CFUN is deliberately write-only here. Once the write task has
             // completed the modem may reset UART before returning a final OK;
             // readiness below is the authoritative acknowledgement.
-            await WriteSautoCommandWhileLockedAsync(
-                portName,
-                serialPort,
-                ImsUtRecoveryRebootCommand,
-                recoveryToken,
-                allowImsUtRecovery: true);
+            await _modemRebootPacer.RunAsync(async token =>
+            {
+                await WriteSautoCommandWhileLockedAsync(
+                    portName,
+                    serialPort,
+                    ImsUtRecoveryRebootCommand,
+                    token,
+                    allowImsUtRecovery: true);
+                return true;
+            }, recoveryToken);
 
             UpdateSautoReceiveState(
                 portName,
@@ -10190,10 +10184,12 @@ public class GsmModemService : IGsmModemService
             // This is the sole reboot submission in this workflow. Wait at
             // most three seconds so an explicit rejection is not hidden, but
             // accept a missing final OK because the UART may restart first.
-            string rebootResponse = await SendAsync(
-                    ImsUtRecoveryRebootCommand,
-                    TimeSpan.FromSeconds(3),
-                    allowFixRfCommand: true)
+            string rebootResponse = await _modemRebootPacer.RunAsync(
+                    _ => SendAsync(
+                        ImsUtRecoveryRebootCommand,
+                        TimeSpan.FromSeconds(3),
+                        allowFixRfCommand: true),
+                    ct)
                 .ConfigureAwait(false);
             if (Regex.IsMatch(
                     rebootResponse,

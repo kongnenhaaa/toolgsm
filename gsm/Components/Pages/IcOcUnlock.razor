@@ -897,9 +897,12 @@
         _ => Color.Default
     };
 
-    private RenderFragment ResultTable(IList<IcOcResultItem> items) => @<MudPaper Class="pa-3 mt-2" Elevation="0"
+    private RenderFragment ResultTable(IList<IcOcResultItem> items)
+    {
+        var orderedItems = PortDisplayOrder.Sort(items, Ports, item => item.Port);
+        return @<MudPaper Class="pa-3 mt-2" Elevation="0"
             Style="border:1px solid #E2E8F0; border-radius:10px;">
-        <MudTable T="IcOcResultItem" Items="@items" Dense="true" Hover="true"
+        <MudTable T="IcOcResultItem" Items="@orderedItems" Dense="true" Hover="true"
                   Elevation="0" FixedHeader="true" Height="calc(100vh - 360px)">
             <HeaderContent>
                 <MudTh>#</MudTh><MudTh>COM</MudTh><MudTh>SĐT</MudTh>
@@ -907,7 +910,7 @@
                 <MudTh>Trạng thái</MudTh><MudTh>Phản hồi</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd>@(items.IndexOf(context) + 1)</MudTd>
+                <MudTd>@(orderedItems.IndexOf(context) + 1)</MudTd>
                 <MudTd><b>@context.Port</b></MudTd>
                 <MudTd>@context.Phone</MudTd>
                 <MudTd><MudChip T="string" Size="Size.Small" Color="@StateColor(context.IncomingEnabled)">@StateText(context.IncomingEnabled)</MudChip></MudTd>
@@ -922,6 +925,7 @@
             <NoRecordsContent><MudText Class="pa-3">Chưa có dữ liệu.</MudText></NoRecordsContent>
         </MudTable>
     </MudPaper>;
+    }
 
     public void Dispose()
     {

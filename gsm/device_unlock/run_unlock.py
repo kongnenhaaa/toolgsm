@@ -11,6 +11,8 @@ import hashlib
 import json
 import os
 import random
+import re
+import shutil
 import sys
 
 
@@ -138,6 +140,46 @@ def fallback_ekyc_output_detail(line):
     if not any(character.isalnum() for character in detail):
         return ""
     return detail
+
+
+def stage_local_reference_images(module, source_path, phone,
+                                 local_image_directory=""):
+    """Expose this subscriber's local images to the isolated eKYC process.
+
+    ekyc_full.py normally reads SOURCE_DIR/anh. ToolGSM imports it with a
+    temporary BASE_DIR, so copy only the current subscriber's files there.
+    The eKYC child then receives the portrait through --face and uses the
+    source module's own near/far and mask flow.
+    """
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if digits.startswith("84") and len(digits) == 11:
+        digits = "0" + digits[2:]
+    if not re.fullmatch(r"0\d{9}", digits):
+        return 0
+
+    image_sources = [
+        local_image_directory,
+        os.path.join(os.path.dirname(source_path), "anh"),
+    ]
+    image_target = module.TEMP_FACES_DIR
+    copied = 0
+    for suffix in ("", "_cccd_front", "_cccd_back"):
+        name = f"{digits}{suffix}.jpg"
+        target = os.path.join(image_target, name)
+        if os.path.isfile(target) and os.path.getsize(target) > 2048:
+            continue
+        for image_source in image_sources:
+            if not image_source:
+                continue
+            source = os.path.join(image_source, name)
+            if (not os.path.isfile(source) or os.path.getsize(source) <= 2048
+                    or os.path.abspath(source) == os.path.abspath(target)):
+                continue
+            os.makedirs(image_target, exist_ok=True)
+            shutil.copyfile(source, target)
+            copied += 1
+            break
+    return copied
 
 
 def stable_device_profile(device_key):
@@ -288,6 +330,12 @@ def main():
     source_dir = os.path.dirname(source_path)
     if source_dir not in sys.path:
         sys.path.insert(0, source_dir)
+    # Older ToolGSM builds do not pass TOOLGSM_IMAGE_DIR. Published bridges
+    # live next to ToolGSM.exe, so keep downloaded portraits in that anh/ too.
+    bridge_dir = os.path.dirname(os.path.abspath(__file__))
+    if ("TOOLGSM_IMAGE_DIR" not in os.environ
+            and os.path.isfile(os.path.join(bridge_dir, "ToolGSM.exe"))):
+        os.environ["TOOLGSM_IMAGE_DIR"] = os.path.join(bridge_dir, "anh")
 
     try:
         spec = importlib.util.spec_from_file_location(
@@ -348,6 +396,16 @@ def main():
             if fallback:
                 last_safe_output = fallback
             print(text, flush=True)
+
+        local_image_count = stage_local_reference_images(
+            module, source_path, phone,
+            str(request.get("localImageDirectory") or "").strip()
+            or os.path.join(os.path.expanduser("~"), "Pictures", "kyc", "anh"),
+        )
+        if local_image_count:
+            forward_log(
+                f"[TOOLGSM][LOCAL] Đã nạp {local_image_count} ảnh thuê bao "
+                "vào phiên eKYC tạm.")
 
         success, full_name, msisdn, error = module.run_ekyc_auto(
             phone,

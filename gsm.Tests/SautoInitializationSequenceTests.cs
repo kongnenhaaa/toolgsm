@@ -212,6 +212,17 @@ public sealed class SautoInitializationSequenceTests
     }
 
     [Fact]
+    public void HotplugSimFailure_ReconnectDoesNotGrantAnotherAutomaticReboot()
+    {
+        var service = new GsmModemService();
+
+        Assert.True(service.TryClaimHotplugSimFailureReboot("COM75"));
+        service.Disconnect("COM75");
+
+        Assert.False(service.TryClaimHotplugSimFailureReboot("com75"));
+    }
+
+    [Fact]
     public void InitialUssdCommandOrder_ContainsOnlyCapturedCommands()
     {
         Assert.Equal(

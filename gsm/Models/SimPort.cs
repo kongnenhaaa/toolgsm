@@ -73,6 +73,9 @@ public partial class SimPort : ObservableObject
     private string _dmxStatus = string.Empty;
 
     [ObservableProperty]
+    private string _tammiStatus = string.Empty;
+
+    [ObservableProperty]
     private string _deviceUnlockStatus = string.Empty;
 
     [ObservableProperty]
@@ -255,15 +258,19 @@ public partial class SimPort : ObservableObject
     private string _deviceName = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ModemIdentityDisplay))]
     private string _hardwareName = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ModemIdentityDisplay))]
     private string _modemManufacturer = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ModemIdentityDisplay))]
     private string _modemModel = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ModemIdentityDisplay))]
     private string _modemFirmware = string.Empty;
 
     [ObservableProperty]
@@ -275,6 +282,20 @@ public partial class SimPort : ObservableObject
             : !string.IsNullOrWhiteSpace(HardwareName)
             ? HardwareName
             : (!string.IsNullOrWhiteSpace(DeviceName) ? DeviceName : "GSM Modem");
+
+    public string ModemIdentityDisplay
+    {
+        get
+        {
+            string name = !string.IsNullOrWhiteSpace(ModemModel) || !string.IsNullOrWhiteSpace(HardwareName)
+                ? DeviceDisplayName
+                : ModemManufacturer;
+
+            return string.IsNullOrWhiteSpace(ModemFirmware)
+                ? name
+                : $"{name} Revision: {ModemFirmware}".TrimStart();
+        }
+    }
 
     partial void OnDeviceNameChanged(string value) => OnPropertyChanged(nameof(DeviceDisplayName));
     partial void OnHardwareNameChanged(string value) => OnPropertyChanged(nameof(DeviceDisplayName));

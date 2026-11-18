@@ -133,6 +133,7 @@ public static class SettingsService
             settings.TelegramMessagePreferenceVersion = 1;
         }
         NormalizeTelegramRoutes(settings);
+        NormalizeGoogleSheetTargets(settings);
         settings.SignalScanIntervalSeconds = Math.Clamp(
             settings.SignalScanIntervalSeconds, 5, 300);
         settings.WorkflowProxyHost =
@@ -150,6 +151,49 @@ public static class SettingsService
             settings.InstallationId = Guid.NewGuid().ToString("N");
         }
         return settings;
+    }
+
+    private static void NormalizeGoogleSheetTargets(AppSettings settings)
+    {
+        settings.GoogleSheetsWebAppUrl =
+            (settings.GoogleSheetsWebAppUrl ?? string.Empty).Trim();
+        settings.GoogleSheetsSharedSecret =
+            (settings.GoogleSheetsSharedSecret ?? string.Empty).Trim();
+
+        var normalizedTargets = new List<GoogleSheetTargetSettings>();
+        var targetIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (GoogleSheetTargetSettings? target in
+                 settings.GoogleSheetTargets ?? [])
+        {
+            if (target == null) continue;
+
+            string name = (target.Name ?? string.Empty).Trim();
+            string spreadsheetUrl =
+                (target.SpreadsheetUrl ?? string.Empty).Trim();
+            if (name.Length == 0 && spreadsheetUrl.Length == 0) continue;
+
+            string id = (target.Id ?? string.Empty).Trim();
+            if (id.Length == 0 || !targetIds.Add(id))
+            {
+                do
+                {
+                    id = Guid.NewGuid().ToString("N");
+                }
+                while (!targetIds.Add(id));
+            }
+
+            normalizedTargets.Add(new GoogleSheetTargetSettings
+            {
+                Id = id,
+                Name = name,
+                SpreadsheetUrl = spreadsheetUrl,
+                WorksheetName = string.IsNullOrWhiteSpace(target.WorksheetName)
+                    ? "ToolGSM"
+                    : target.WorksheetName.Trim()
+            });
+        }
+
+        settings.GoogleSheetTargets = normalizedTargets;
     }
 
     public static TelegramRouteSettings CreateDefaultTelegramRoute() =>

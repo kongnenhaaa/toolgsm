@@ -3271,6 +3271,8 @@ public class GsmModemService : IGsmModemService
         }
     }
 
+    private const string QuectelModelPattern = @"(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}";
+
     internal static bool HasReadableModemIdentity(string? atiResponse)
     {
         string response = atiResponse ?? string.Empty;
@@ -3278,8 +3280,29 @@ public class GsmModemService : IGsmModemService
             return true;
         return Regex.IsMatch(
             response,
-            @"\b(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}\b",
+            $@"\b{QuectelModelPattern}\b",
             RegexOptions.IgnoreCase);
+    }
+
+    internal static QuectelModemProfile? ParseAtiModemProfile(string response)
+    {
+        if (!IsSautoOkResponse(response) || !HasReadableModemIdentity(response))
+            return null;
+
+        const RegexOptions options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline;
+        Match revision = Regex.Match(response, @"\bRevision:[ \t]*(?<firmware>[^\r\n]+)", options);
+        string identification = revision.Success ? response[..revision.Index] : response;
+        Match model = Regex.Match(
+            identification,
+            $@"^[ \t]*(?:Quectel[ \t]+)?(?<model>{QuectelModelPattern})[ \t]*\r?$",
+            options);
+
+        // Detect capabilities from the full response even when it omits the model line.
+        return QuectelModemProfile.FromIdentity("Quectel", response, response) with
+        {
+            Model = model.Groups["model"].Value,
+            Firmware = revision.Groups["firmware"].Value.Trim()
+        };
     }
 
     internal static bool IsStaleCmsErrorTerminator(
@@ -4129,9 +4152,15 @@ public class GsmModemService : IGsmModemService
                     "ATI",
                     TimeSpan.FromSeconds(2),
                     ct);
-                if (IsSautoOkResponse(ati))
+                if (ParseAtiModemProfile(ati) is { } profile)
                 {
-                    _modemProfiles[portName] = QuectelModemProfile.FromIdentity("Quectel", ati, ati);
+                    ct.ThrowIfCancellationRequested();
+                    _modemProfiles[portName] = profile;
+                    LogMessage?.Invoke(this, new GsmDataEventArgs
+                    {
+                        PortName = portName,
+                        Data = "[MODEM_PROFILE]"
+                    });
                 }
             }
             catch { }
@@ -8012,7 +8041,7 @@ public class GsmModemService : IGsmModemService
                 }
                 else if (Regex.IsMatch(
                     line,
-                    @"^(?:EC|EG|BG|RG|RM|EM|EP|UC)[A-Z0-9-]{2,}$",
+                    $@"^{QuectelModelPattern}$",
                     RegexOptions.IgnoreCase))
                 {
                     state.Model = line;

@@ -24,6 +24,9 @@
     <div class="persistent-page" style="@PageStyle("dmx")" aria-hidden="@(!IsActive("dmx"))">
         <DienMayXanh IsPageActive="@IsActive("dmx")" />
     </div>
+    <div class="persistent-page" style="@PageStyle("tammi")" aria-hidden="@(!IsActive("tammi"))">
+        <Tammi IsPageActive="@IsActive("tammi")" />
+    </div>
     <div class="persistent-page" style="@PageStyle("proxy")" aria-hidden="@(!IsActive("proxy"))">
         <Proxy IsPageActive="@IsActive("proxy")" />
     </div>
@@ -70,6 +73,7 @@
             "" or "ussd" => "ussd",
             "vnpt-pass" => "vnptpass",
             "dien-may-xanh" => "dmx",
+            "viettel-tammi" => "tammi",
             "proxy" => "proxy",
             "device-unlock" => "deviceunlock",
             "icoc-unlock" => "icocunlock",

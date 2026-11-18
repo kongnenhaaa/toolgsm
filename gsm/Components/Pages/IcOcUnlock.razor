@@ -134,7 +134,7 @@
         </MudPaper>
 
         <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight:700;">Danh sách Cổng</MudText>
-        <ComTable Ports="Ports" Operation="ICOC" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="Ports" Operation="ICOC" @bind-SelectedItems="Vm.SelectedComPorts" />
         @if (_ccbsResults.Count > 0)
         {
             <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1" Style="font-weight:700;">Kết quả CCBS</MudText>
@@ -314,7 +314,7 @@
             <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight:700;">
                 Chọn COM chạy trực tiếp trên Employ (@DirectEmployTargets.Count đã chọn)
             </MudText>
-            <ComTable Ports="Ports" Operation="ICOC" @bind-SelectedItems="_selectedPorts" />
+            <ComTable Ports="Ports" Operation="ICOC" @bind-SelectedItems="Vm.SelectedComPorts" />
         }
         else
         {
@@ -377,7 +377,6 @@
     private string _icAction = "MO";
     private string _ocAction = "MO";
     private int _parallelism = 4;
-    private HashSet<SimPort> _selectedPorts = [];
     private List<IcOcResultItem> _ccbsResults = [];
     private List<IcOcResultItem> _employResults = [];
     private CancellationTokenSource? _runCts;
@@ -425,7 +424,7 @@
     private List<IcOcResultItem> CcbsEmployTargets => _ccbsResults
         .Where(item => item.Success && item.IncomingEnabled == false && item.EligibleForEmploy)
         .ToList();
-    private List<IcOcResultItem> DirectEmployTargets => _selectedPorts
+    private List<IcOcResultItem> DirectEmployTargets => Vm.SelectedComPorts
         .Where(port => port.Status == SimStatus.Active)
         .Where(port => !string.IsNullOrWhiteSpace(port.PhoneNumber))
         .GroupBy(port => port.PortName, StringComparer.OrdinalIgnoreCase)
@@ -637,7 +636,7 @@
     }
 
     private List<IcOcPortRequest> GetCcbsTargets() =>
-        (_sendMode == "all" ? Ports : _selectedPorts.ToList())
+        (_sendMode == "all" ? Ports : Vm.SelectedComPorts.ToList())
         .Where(port => port.Status == SimStatus.Active)
         .Where(port => !string.IsNullOrWhiteSpace(port.PhoneNumber))
         .GroupBy(port => port.PortName, StringComparer.OrdinalIgnoreCase)

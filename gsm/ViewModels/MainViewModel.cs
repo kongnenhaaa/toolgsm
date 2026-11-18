@@ -29,7 +29,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IGsmUssdService _ussdService;
     private readonly IGsmCallService _callService;
     private readonly IGsmBackgroundSupervisor _backgroundSupervisor;
+    private readonly ToolLicenseService _licenseService;
     private GsmBackgroundSupervisorContext? _backgroundSupervisorContext;
+    private int _licensedRuntimeStarted;
     private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
     private readonly gsm.Services.IFirebaseOtpService _firebaseOtpService = new gsm.Services.FirebaseOtpService();
     // SMS history is session-only. It is displayed while ToolGSM is open and
@@ -224,6 +226,68 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private readonly ConcurrentDictionary<string, PendingDmxAccountOperation>
         _pendingDmxAccountPorts = new(StringComparer.OrdinalIgnoreCase);
+    private sealed class PendingTammiAccountOperation
+    {
+        private readonly object _otpLock = new();
+        private readonly HashSet<string> _usedOtps = new(StringComparer.Ordinal);
+        private bool _otpClaimed;
+
+        public required string PortName { get; init; }
+        public required string Ccid { get; init; }
+        public required long Epoch { get; init; }
+        public required string Password { get; init; }
+        public required CancellationToken CancellationToken { get; init; }
+        public required TammiOtpSession ApiSession { get; set; }
+        public TaskCompletionSource<TammiAccountResult> Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource<bool> OtpClaimed { get; set; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource<bool> OtpSendCompleted { get; set; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool TryClaimOtp(string otp)
+        {
+            lock (_otpLock)
+            {
+                if (_otpClaimed || _usedOtps.Contains(otp)) return false;
+                _otpClaimed = true;
+                _usedOtps.Add(otp);
+                OtpClaimed.TrySetResult(true);
+                return true;
+            }
+        }
+
+        public Task<bool> GetOtpClaimedTask()
+        {
+            lock (_otpLock) return OtpClaimed.Task;
+        }
+
+        public Task<bool> GetOtpSendCompletedTask()
+        {
+            lock (_otpLock) return OtpSendCompleted.Task;
+        }
+
+        public void MarkOtpSendCompleted(bool accepted)
+        {
+            lock (_otpLock) OtpSendCompleted.TrySetResult(accepted);
+        }
+
+        public bool TryPrepareForNextOtp()
+        {
+            lock (_otpLock)
+            {
+                if (_otpClaimed) return false;
+                OtpClaimed = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                OtpSendCompleted = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                return true;
+            }
+        }
+    }
+
+    private readonly ConcurrentDictionary<string, PendingTammiAccountOperation>
+        _pendingTammiAccountPorts = new(StringComparer.OrdinalIgnoreCase);
     private sealed class PendingDeviceUnlockOperation
     {
         private int _otpClaimed;
@@ -260,6 +324,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public bool IsMyVnptBatchRunning => _vnptBatchGate.CurrentCount == 0;
     private readonly SemaphoreSlim _dmxBatchGate = new(1, 1);
     public bool IsDmxBatchRunning => _dmxBatchGate.CurrentCount == 0;
+    private readonly SemaphoreSlim _tammiBatchGate = new(1, 1);
+    public bool IsTammiBatchRunning => _tammiBatchGate.CurrentCount == 0;
     // Cho toàn bộ bank 64 COM vào workflow ngay. Những COM đang chờ SMS không
     // được giữ slot và chặn COM khác; lớp HTTP trong MyVnptService vẫn giới
     // hạn riêng 20 request API đồng thời.
@@ -278,6 +344,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     internal const int MaxDmxOtpSendAttempts = 3;
     internal static readonly TimeSpan DmxOtpWaitTimeout =
         TimeSpan.FromSeconds(125);
+    internal const int MaxConcurrentTammiWorkflows = 64;
+    internal const int MaxTammiOtpSendAttempts = 3;
+    internal static readonly TimeSpan TammiOtpWaitTimeout =
+        TimeSpan.FromSeconds(65);
     private const int MaxConcurrentEzSms = 4;
     private readonly SemaphoreSlim _ezSmsGate =
         new(MaxConcurrentEzSms, MaxConcurrentEzSms);
@@ -339,10 +409,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConcurrentDictionary<string, byte> _lastDmxFailedPortNames =
         new(StringComparer.OrdinalIgnoreCase);
     public ObservableCollection<DmxResultItem> DmxResults { get; } = new();
+    public string DmxOutputDirectory => _dmxSuccessOutput.OutputDirectory;
     public string DmxLatestSessionOutputPath =>
         _dmxSuccessOutput.LatestSessionPath;
     public string DmxAggregateOutputPath =>
         _dmxSuccessOutput.AggregatePath;
+
+    [ObservableProperty] private int _tammiTotalActiveCount;
+    [ObservableProperty] private int _tammiSuccessCount;
+    [ObservableProperty] private int _tammiFailCount;
+    [ObservableProperty] private string _tammiSummaryText = string.Empty;
+    private readonly object _tammiLock = new();
+    private readonly ConcurrentDictionary<string, byte> _lastTammiFailedPortNames =
+        new(StringComparer.OrdinalIgnoreCase);
+    public ObservableCollection<TammiResultItem> TammiResults { get; } = new();
 
     [ObservableProperty] private int _deviceUnlockTotalActiveCount;
     [ObservableProperty] private int _deviceUnlockSuccessCount;
@@ -357,6 +437,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public int LastVnptFailedPortCount => _lastVnptFailedPortNames.Count;
     public int LastDmxFailedPortCount => _lastDmxFailedPortNames.Count;
+    public int LastTammiFailedPortCount => _lastTammiFailedPortNames.Count;
     public int LastDeviceUnlockFailedPortCount =>
         _lastDeviceUnlockFailedPortNames.Count;
 
@@ -386,6 +467,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public List<SimPort> GetLastDmxFailedPorts() => Ports
         .Where(port => _lastDmxFailedPortNames.ContainsKey(port.PortName))
+        .ToList();
+
+    public List<SimPort> GetLastTammiFailedPorts() => Ports
+        .Where(port => _lastTammiFailedPortNames.ContainsKey(port.PortName))
         .ToList();
 
     public List<SimPort> GetLastDeviceUnlockFailedPorts() => Ports
@@ -528,6 +613,100 @@ public partial class MainViewModel : ObservableObject, IDisposable
             pending.Completion.TrySetResult(new DmxAccountResult(
                 false,
                 DmxAccountService.GetFriendlyExceptionMessage(ex)));
+        }
+    }
+
+    private void CompleteTammiWork(bool success)
+    {
+        int successCount;
+        int failCount;
+        int remaining;
+        lock (_tammiLock)
+        {
+            if (success) TammiSuccessCount++;
+            else TammiFailCount++;
+            TammiTotalActiveCount = Math.Max(0, TammiTotalActiveCount - 1);
+            successCount = TammiSuccessCount;
+            failCount = TammiFailCount;
+            remaining = TammiTotalActiveCount;
+        }
+
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            TammiSummaryText = remaining > 0
+                ? $"Tammi: Đang chạy (Thành công: {successCount}, Thất bại: {failCount}, Còn lại: {remaining})"
+                : $"Tammi: Hoàn tất! (Thành công: {successCount}, Thất bại: {failCount})";
+        });
+    }
+
+    private void AddTammiResult(
+        string port,
+        string phone,
+        string password,
+        bool success,
+        string response,
+        bool isPasswordRecovery)
+    {
+        if (success) _lastTammiFailedPortNames.TryRemove(port, out _);
+        else _lastTammiFailedPortNames[port] = 0;
+        OnPropertyChanged(nameof(LastTammiFailedPortCount));
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            TammiResults.Insert(0, new TammiResultItem
+            {
+                Time = DateTime.Now,
+                Port = port,
+                Phone = phone,
+                Password = password,
+                Success = success,
+                IsPasswordRecovery = isPasswordRecovery,
+                Response = response
+            });
+            if (TammiResults.Count > 300)
+                TammiResults.RemoveAt(TammiResults.Count - 1);
+        });
+    }
+
+    private async Task CompletePendingTammiAccountAsync(
+        PendingTammiAccountOperation pending,
+        string otp)
+    {
+        try
+        {
+            bool otpRequestAccepted = await pending.GetOtpSendCompletedTask()
+                .WaitAsync(pending.CancellationToken);
+            if (!otpRequestAccepted)
+            {
+                pending.Completion.TrySetResult(new TammiAccountResult(
+                    false,
+                    "Không xác nhận được yêu cầu gửi OTP Tammi"));
+                return;
+            }
+
+            if (!IsSimSessionCurrent(pending.PortName, pending.Ccid, pending.Epoch))
+            {
+                pending.Completion.TrySetResult(new TammiAccountResult(
+                    false,
+                    "SIM đã thay đổi trước khi xác minh OTP"));
+                return;
+            }
+
+            TammiAccountResult result = await TammiService.CompleteAsync(
+                pending.ApiSession,
+                otp,
+                pending.Password,
+                pending.CancellationToken);
+            pending.Completion.TrySetResult(result);
+        }
+        catch (OperationCanceledException)
+        {
+            pending.Completion.TrySetResult(new TammiAccountResult(false, "Đã hủy"));
+        }
+        catch (Exception ex)
+        {
+            pending.Completion.TrySetResult(new TammiAccountResult(
+                false,
+                TammiService.GetFriendlyExceptionMessage(ex)));
         }
     }
 
@@ -848,6 +1027,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
+    public void ClearTammiResults()
+    {
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            TammiResults.Clear();
+            TammiSuccessCount = 0;
+            TammiFailCount = 0;
+            TammiTotalActiveCount = 0;
+            TammiSummaryText = string.Empty;
+            _lastTammiFailedPortNames.Clear();
+            OnPropertyChanged(nameof(LastTammiFailedPortCount));
+        });
+    }
+
     public void ClearDeviceUnlockResults()
     {
         Application.Current.Dispatcher.Invoke(() =>
@@ -1158,6 +1351,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private ObservableCollection<SimPort> _ports = new();
+
+    public HashSet<SimPort> SelectedComPorts { get; set; } = new();
 
     [ObservableProperty]
     private ObservableCollection<CommandQueueItem> _commandQueue = new();
@@ -1614,6 +1809,298 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             _dmxBatchGate.Release();
+        }
+    }
+
+    public async Task CreateTammiAccounts(
+        IEnumerable<SimPort> requestedPorts,
+        string password,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requestedPorts);
+        if (!TammiService.IsValidPassword(password, out string passwordError))
+            throw new ArgumentException(passwordError, nameof(password));
+
+        if (!await _tammiBatchGate.WaitAsync(0, cancellationToken))
+        {
+            SnackbarMessageQueue.Enqueue(
+                "Tiến trình Tammi đang chạy; không gửi lặp OTP.");
+            return;
+        }
+
+        try
+        {
+            var targetPorts = requestedPorts
+                .Where(port => port.Status == SimStatus.Active
+                    && IsPortReadyForOperation(port.PortName))
+                .DistinctBy(port => port.PortName)
+                .ToList();
+            var uniqueTargets = new List<SimPort>(targetPorts.Count);
+            var seenPhones = new HashSet<string>(StringComparer.Ordinal);
+            foreach (SimPort candidate in targetPorts)
+            {
+                string normalizedPhone = TammiService.NormalizePhone(
+                    candidate.PhoneNumber);
+                if (string.IsNullOrWhiteSpace(normalizedPhone))
+                {
+                    AddLog(
+                        $"[{candidate.PortName}] Bỏ qua Tammi vì chưa có số điện thoại hợp lệ.",
+                        "WARN");
+                    continue;
+                }
+                if (seenPhones.Add(normalizedPhone))
+                    uniqueTargets.Add(candidate);
+                else
+                    AddLog(
+                        $"[{candidate.PortName}] Bỏ qua Tammi vì trùng SĐT {candidate.PhoneNumber}.",
+                        "WARN");
+            }
+            targetPorts = uniqueTargets;
+            if (targetPorts.Count == 0)
+            {
+                SnackbarMessageQueue.Enqueue(
+                    "Không có cổng Active nào có số điện thoại hợp lệ cho Tammi.");
+                return;
+            }
+
+            lock (_tammiLock)
+            {
+                TammiSuccessCount = 0;
+                TammiFailCount = 0;
+                TammiTotalActiveCount = targetPorts.Count;
+                TammiSummaryText =
+                    $"Tammi: Đang chạy (Thành công: 0, Thất bại: 0, Còn lại: {targetPorts.Count})";
+            }
+            _lastTammiFailedPortNames.Clear();
+            OnPropertyChanged(nameof(LastTammiFailedPortCount));
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                foreach (SimPort port in targetPorts)
+                    port.TammiStatus = "Chờ lượt...";
+            });
+            AddLog(
+                $"[TAMMI_BATCH] Khởi chạy {targetPorts.Count} cổng; tối đa {MaxConcurrentTammiWorkflows} workflow, {TammiService.ApiConcurrencyLimit} request API, gửi OTP lại tối đa {MaxTammiOtpSendAttempts} lần.",
+                "INFO");
+
+            await BoundedAsyncWorkRunner.RunAsync(
+                targetPorts,
+                MaxConcurrentTammiWorkflows,
+                async (port, batchToken) =>
+                {
+                    string phone = TammiService.NormalizePhone(port.PhoneNumber);
+                    PendingTammiAccountOperation? pending = null;
+                    bool resultRecorded = false;
+                    bool passwordRecovery = false;
+                    try
+                    {
+                        batchToken.ThrowIfCancellationRequested();
+                        if (!TryGetCurrentSimSession(
+                                port.PortName,
+                                out string ccid,
+                                out long epoch,
+                                out CancellationToken simToken))
+                        {
+                            throw new InvalidOperationException(
+                                "Cổng không còn Active hoặc phiên SIM đã thay đổi");
+                        }
+
+                        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                            batchToken,
+                            simToken);
+                        CancellationToken workflowToken = linkedCts.Token;
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.TammiStatus = "Kiểm tra TK...";
+                            port.LastMessageContent =
+                                "Tammi: đang kiểm tra tài khoản...";
+                        });
+
+                        TammiOtpSession apiSession = await TammiService.PrepareAsync(
+                            phone,
+                            workflowToken);
+                        passwordRecovery = apiSession.IsPasswordRecovery;
+                        string action = passwordRecovery
+                            ? "quên mật khẩu"
+                            : "đăng ký tài khoản";
+                        AddLog(
+                            $"[{port.PortName}] [TAMMI_FLOW] {phone}: bắt đầu {action}; device={apiSession.DeviceId}.",
+                            "INFO");
+
+                        pending = new PendingTammiAccountOperation
+                        {
+                            PortName = port.PortName,
+                            Ccid = ccid,
+                            Epoch = epoch,
+                            Password = password,
+                            ApiSession = apiSession,
+                            CancellationToken = workflowToken
+                        };
+                        if (!_pendingTammiAccountPorts.TryAdd(port.PortName, pending))
+                            throw new InvalidOperationException(
+                                "COM này đã có một luồng Tammi đang chờ OTP");
+
+                        TammiAccountResult? result = null;
+                        for (int attempt = 1;
+                             attempt <= MaxTammiOtpSendAttempts;
+                             attempt++)
+                        {
+                            workflowToken.ThrowIfCancellationRequested();
+                            if (attempt > 1 && !pending.TryPrepareForNextOtp())
+                            {
+                                result = await pending.Completion.Task.WaitAsync(
+                                    workflowToken);
+                                break;
+                            }
+
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                port.TammiStatus = attempt == 1
+                                    ? "Yêu cầu OTP..."
+                                    : $"Gửi lại OTP {attempt}/{MaxTammiOtpSendAttempts}...";
+                                port.LastMessageContent =
+                                    $"Tammi: đang yêu cầu OTP {apiSession.Scope}...";
+                            });
+                            try
+                            {
+                                string message = await TammiService.SendOtpAsync(
+                                    apiSession,
+                                    workflowToken);
+                                pending.MarkOtpSendCompleted(true);
+                                AddLog(
+                                    $"[{port.PortName}] [TAMMI_FLOW] Gửi OTP lần {attempt}/{MaxTammiOtpSendAttempts}: {message}",
+                                    "SUCCESS");
+                            }
+                            catch
+                            {
+                                pending.MarkOtpSendCompleted(false);
+                                throw;
+                            }
+
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                port.TammiStatus =
+                                    $"Đợi OTP {attempt}/{MaxTammiOtpSendAttempts}...";
+                                port.LastMessageContent =
+                                    "Đang đợi SMS OTP Viettel Tammi...";
+                            });
+                            Task<bool> claimedTask = pending.GetOtpClaimedTask();
+                            bool otpClaimed;
+                            try
+                            {
+                                await claimedTask.WaitAsync(
+                                    TammiOtpWaitTimeout,
+                                    workflowToken);
+                                otpClaimed = true;
+                            }
+                            catch (TimeoutException)
+                            {
+                                otpClaimed = claimedTask.IsCompletedSuccessfully;
+                            }
+                            if (otpClaimed)
+                            {
+                                result = await pending.Completion.Task.WaitAsync(
+                                    workflowToken);
+                                break;
+                            }
+                            AddLog(
+                                $"[{port.PortName}] [TAMMI_FLOW] Chưa nhận OTP sau lần {attempt}/{MaxTammiOtpSendAttempts}.",
+                                "WARN");
+                        }
+
+                        result ??= new TammiAccountResult(
+                            false,
+                            $"Không nhận được SMS OTP sau {MaxTammiOtpSendAttempts} lần gửi",
+                            passwordRecovery);
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.TammiStatus = result.Message;
+                            port.LastSmsResult = result.Message;
+                            port.LastMessageContent = result.Success
+                                ? result.Message
+                                : $"Lỗi: {result.Message}";
+                            port.UpdateDisplayResult(CommandPanelTab);
+                        });
+                        CompleteTammiWork(result.Success);
+                        AddTammiResult(
+                            port.PortName,
+                            phone,
+                            password,
+                            result.Success,
+                            result.Message,
+                            result.PasswordRecovered);
+                        AddLog(
+                            $"[{port.PortName}] [TAMMI_FLOW] Kết thúc: {result.Message}",
+                            result.Success ? "SUCCESS" : "ERROR");
+                        resultRecorded = true;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.TammiStatus = "Đã hủy";
+                            port.LastMessageContent = "Đã hủy yêu cầu Tammi";
+                        });
+                        if (!resultRecorded)
+                        {
+                            CompleteTammiWork(false);
+                            AddTammiResult(
+                                port.PortName,
+                                phone,
+                                password,
+                                false,
+                                "Đã hủy",
+                                passwordRecovery);
+                            resultRecorded = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        string message = TammiService.GetFriendlyExceptionMessage(ex);
+                        Application.Current.Dispatcher.Invoke(() =>
+                        {
+                            port.TammiStatus = message;
+                            port.LastMessageContent = $"Lỗi Tammi: {message}";
+                        });
+                        AddLog(
+                            $"[{port.PortName}] [TAMMI_FLOW] {message}",
+                            "ERROR");
+                        if (!resultRecorded)
+                        {
+                            CompleteTammiWork(false);
+                            AddTammiResult(
+                                port.PortName,
+                                phone,
+                                password,
+                                false,
+                                message,
+                                passwordRecovery);
+                            resultRecorded = true;
+                        }
+                    }
+                    finally
+                    {
+                        pending?.MarkOtpSendCompleted(false);
+                        if (pending != null)
+                        {
+                            ((ICollection<KeyValuePair<string, PendingTammiAccountOperation>>)
+                                    _pendingTammiAccountPorts)
+                                .Remove(new KeyValuePair<string, PendingTammiAccountOperation>(
+                                    port.PortName,
+                                    pending));
+                        }
+                    }
+                },
+                cancellationToken);
+
+            AddLog(
+                $"[TAMMI_BATCH] Hoàn tất {targetPorts.Count} cổng; thành công {TammiSuccessCount}, thất bại {TammiFailCount}.",
+                TammiFailCount == 0 ? "SUCCESS" : "WARN");
+            SnackbarMessageQueue.Enqueue(
+                $"Tammi hoàn tất: {TammiSuccessCount} thành công, {TammiFailCount} thất bại.");
+        }
+        finally
+        {
+            _tammiBatchGate.Release();
         }
     }
 
@@ -2825,7 +3312,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IGsmSmsService smsService,
         IGsmUssdService ussdService,
         IGsmCallService callService,
-        IGsmBackgroundSupervisor backgroundSupervisor)
+        IGsmBackgroundSupervisor backgroundSupervisor,
+        ToolLicenseService licenseService)
     {
         FilteredPortsView = System.Windows.Data.CollectionViewSource.GetDefaultView(Ports);
         FilteredPortsView.Filter = o => 
@@ -2865,6 +3353,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ussdService = ussdService;
         _callService = callService;
         _backgroundSupervisor = backgroundSupervisor;
+        _licenseService = licenseService;
         AppSettings = SettingsService.Current;
         _notifyService.TelegramStatus += NotifyService_TelegramStatus;
         _modemService.LogMessage += ModemService_LogMessage;
@@ -2877,7 +3366,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _modemService.IncomingCallEnded += ModemService_IncomingCallEnded;
         _modemService.CallRecordingSaved += ModemService_CallRecordingSaved;
 
-        InitializeHardware();
         OtpHistoryList.Clear();
         
         ConnectionSeries = new ISeries[]
@@ -2893,7 +3381,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         AddLog("Hệ thống khởi động thành công.");
         AddLog("[LOG_POLICY] Nhật ký chỉ được giữ trong RAM; ToolGSM không ghi log ra ổ đĩa.");
-        _ = PrepareVoiceModelAsync();
         Ports.CollectionChanged += (s, e) => UpdateDashboard();
         SmsMessages.CollectionChanged += (s, e) =>
         {
@@ -2903,11 +3390,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // Khởi động Firebase Service chạy ngầm
         _firebaseService = new FirebaseService(this);
-        _firebaseService.Start();
 
         // Khởi động Proxy Manager
         ProxyManager = new ProxyManagerService();
-        ProxyManager.Start();
 
         _backgroundSupervisorContext = new GsmBackgroundSupervisorContext
         {
@@ -2928,6 +3413,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
         // SAuto chỉ có một vòng DataPort sở hữu CPIN/CSQ/COPS. Không khởi động
         // supervisor thứ hai vì nó sẽ bắn thêm CSQ/CMGL ngoài log tham chiếu.
+        _licenseService.ActivationChanged += LicenseService_ActivationChanged;
+        if (_licenseService.IsActivated)
+        {
+            StartLicensedRuntime();
+        }
+        else
+        {
+            AddLog(
+                "[LICENSE_REQUIRED] ToolGSM chưa kích hoạt; phần cứng và các dịch vụ làm việc đang khóa.",
+                "WARN");
+        }
     }
 
     private async Task PrepareVoiceModelAsync()
@@ -3006,7 +3502,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         string status,
         string? result = null,
         string? error = null,
-        string? source = null)
+        string? source = null,
+        string? otp = null)
     {
         if (string.IsNullOrWhiteSpace(commandId)) return;
 
@@ -3031,6 +3528,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             item.Result = result ?? item.Result;
             item.Error = error ?? string.Empty;
             item.UpdatedAt = DateTime.Now.ToString("HH:mm:ss");
+            if (otp != null)
+                CommandQueueOtpBinder.TryAssign([item], commandId, otp, status);
 
             // Multi-port SMS batches can legitimately contain thousands of rows.
             // A 200-row cap silently discarded pending work.
@@ -3040,6 +3539,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
             UpdateCommandCounts();
         }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess()) Update();
+        else dispatcher.InvokeAsync(Update);
+    }
+
+    public void SetCommandQueueOtp(
+        string commandId,
+        string otp,
+        string status = "otp_received")
+    {
+        void Update() => CommandQueueOtpBinder.TryAssign(
+            CommandQueue,
+            commandId,
+            otp,
+            status);
 
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher == null || dispatcher.CheckAccess()) Update();
@@ -3575,6 +4090,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
             case "SMS":  Services.SoundAlertService.PlaySms();  break;
             case "CALL": Services.SoundAlertService.PlayCall(); break;
         }
+    }
+
+    private void LicenseService_ActivationChanged(object? sender, EventArgs e)
+    {
+        if (!_licenseService.IsActivated) return;
+        try
+        {
+            Application.Current.Dispatcher.Invoke(StartLicensedRuntime);
+        }
+        catch (TaskCanceledException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    private void StartLicensedRuntime()
+    {
+        if (Interlocked.Exchange(ref _licensedRuntimeStarted, 1) != 0) return;
+
+        AddLog("[LICENSE_OK] Key hợp lệ; mở khóa phần cứng và dịch vụ ToolGSM.", "SUCCESS");
+        InitializeHardware();
+        _ = PrepareVoiceModelAsync();
+        _firebaseService.Start();
+        ProxyManager.Start();
     }
 
     private void InitializeHardware()
@@ -4299,6 +4836,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         CacheObservedPhoneNumber(e);
 
+        bool isModemProfile = e.Data == "[MODEM_PROFILE]";
+        var modemProfile = isModemProfile ? _modemService.GetModemProfile(e.PortName) : null;
+
         // Chỉ ghi transport SMS xuống log chẩn đoán khi COM đang có workflow
         // MyVNPT. Nhờ vậy có thể phân biệt nhà mạng không giao SMS với tool có
         // nhận +CMTI/CMGR nhưng lỗi đọc, mà không tạo trace UART thường trực.
@@ -4314,7 +4854,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Application.Current.Dispatcher.InvokeAsync(() =>
         {
             bool isInternalEvent = e.Data.StartsWith("[PARSE_")
-                || e.Data == "[STATUS_ACTIVE]";
+                || e.Data == "[STATUS_ACTIVE]"
+                || isModemProfile;
             bool isHighFrequencyTelemetry = e.Data.StartsWith(
                 "+CSQ:",
                 StringComparison.OrdinalIgnoreCase);
@@ -4354,21 +4895,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
             }
 
-            if (e.Data.StartsWith("[MODEM_PROFILE]", StringComparison.Ordinal))
+            if (modemProfile != null)
             {
-                string Payload(string key)
-                {
-                    Match match = Regex.Match(e.Data, $@"(?:\[MODEM_PROFILE\]\s*|;\s*){Regex.Escape(key)}=([^;]*)", RegexOptions.IgnoreCase);
-                    return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
-                }
-                port.ModemManufacturer = Payload("manufacturer");
-                port.ModemModel = Payload("model");
-                port.ModemFirmware = Payload("firmware");
-                port.ModemCapabilities = Payload("capabilities");
+                port.ModemManufacturer = modemProfile.Manufacturer;
+                port.ModemModel = modemProfile.Model;
+                port.ModemFirmware = modemProfile.Firmware;
+                port.ModemCapabilities = modemProfile.CapabilityText;
             }
 
             if (e.Data == "[PORT_OPENED]")
             {
+                port.ModemManufacturer = string.Empty;
+                port.ModemModel = string.Empty;
+                port.ModemFirmware = string.Empty;
+                port.ModemCapabilities = string.Empty;
                 ClearSimScopedState(
                     port,
                     _modemService.GetObservedImei(e.PortName));
@@ -5406,6 +5946,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
                             $"[{e.PortName}] Phát hiện OTP Quà Tặng VIP; đang cập nhật hồ sơ và tạo mật khẩu...",
                             "INFO");
                         _ = CompletePendingDmxAccountAsync(dmxPending, dmxOtp);
+                    }
+
+                    // OTP Tammi chỉ được nhận khi đúng nội dung dịch vụ, COM
+                    // và phiên SIM đang có workflow đăng ký/quên mật khẩu.
+                    if (TammiService.IsTammiOtpMessage(cleanContent, senderPhone)
+                        && TammiService.TryExtractOtp(cleanContent, out string tammiOtp)
+                        && _pendingTammiAccountPorts.TryGetValue(
+                            e.PortName,
+                            out PendingTammiAccountOperation? tammiPending)
+                        && IsSimSessionCurrent(
+                            e.PortName,
+                            tammiPending.Ccid,
+                            tammiPending.Epoch)
+                        && tammiPending.TryClaimOtp(tammiOtp))
+                    {
+                        if (port != null)
+                        {
+                            port.TammiStatus = "Đã nhận OTP...";
+                            port.LastMessageContent =
+                                "Đã nhận OTP Tammi; đang hoàn tất tài khoản...";
+                        }
+                        AddLog(
+                            $"[{e.PortName}] Phát hiện OTP Tammi; đang đăng ký/đặt lại mật khẩu...",
+                            "INFO");
+                        _ = CompletePendingTammiAccountAsync(tammiPending, tammiOtp);
                     }
 
                     // OTP MyVNPT chỉ được ghép với đúng tác vụ COM + phiên SIM.
@@ -8939,6 +9504,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         BeginShutdown();
 
         _notifyService.TelegramStatus -= NotifyService_TelegramStatus;
+        _licenseService.ActivationChanged -= LicenseService_ActivationChanged;
 
         foreach (SimPort trackedPort in _stateTrackedPorts.Values)
             trackedPort.PropertyChanged -= PortState_PropertyChanged;

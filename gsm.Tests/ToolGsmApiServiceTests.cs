@@ -179,6 +179,10 @@ public sealed class ToolGsmApiServiceTests
         {
         }
 
+        public void SetQueueOtp(string requestId, string otp)
+        {
+        }
+
         public void Log(string message, string level)
         {
         }

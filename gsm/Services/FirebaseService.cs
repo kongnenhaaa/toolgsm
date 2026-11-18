@@ -349,30 +349,7 @@ namespace gsm.Services
                 // but only after the new name has been claimed successfully.
                 await EnsureUniqueMachineIdAsync(ct);
                 // Dữ liệu cần thiết cho Web
-                var portsData = _vm.Ports.ToDictionary(p => p.PortName, p => new {
-                    id = p.PortName,
-                    portId = p.PortName,
-                    deviceName = p.DeviceName,
-                    machineId = _machineId,
-                    phone = p.PhoneNumber,
-                    status = p.Status == SimStatus.Active ? "online" : "offline",
-                    otp = GetWebOtpValue(p.Otp),
-                    network = p.NetworkProvider,
-                    balance = p.Balance,
-                    signal = p.SignalStrength,
-                    // Keep the exact carrier message in the periodic snapshot. SyncPortsAsync
-                    // replaces the full ports node, so omitting these fields would erase lastSms.
-                    smsContent = p.LastMessageContent,
-                    smsSender = p.Sender,
-                    smsReceivedAt = p.LastReceivedTime,
-                    timeoutCount = p.TimeoutCount,
-                    smsErrorCount = p.SmsErrorCount,
-                    reconnectCount = p.ReconnectCount,
-                    lastSmsSentAt = p.LastSmsSentAt,
-                    lastError = p.LastError
-                });
-
-                var json = JsonSerializer.Serialize(portsData);
+                var json = SerializePortsData(_vm.Ports, _machineId);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 await _restClient.PutAsync($"{_databaseUrl}machines/{_machineId}/ports.json", content, ct);
@@ -392,6 +369,39 @@ namespace gsm.Services
             }
             catch (OperationCanceledException) { }
             catch { }
+        }
+
+        internal static string SerializePortsData(
+            IEnumerable<SimPort> ports,
+            string machineId)
+        {
+            var portsData = ports.ToDictionary(p => p.PortName, p => new {
+                    id = p.PortName,
+                    portId = p.PortName,
+                    deviceName = p.DeviceName,
+                    machineId,
+                    phone = p.PhoneNumber,
+                    imei = p.Imei,
+                    serial = p.Serial,
+                    simType = p.SimType,
+                    status = p.Status == SimStatus.Active ? "online" : "offline",
+                    otp = GetWebOtpValue(p.Otp),
+                    network = p.NetworkProvider,
+                    balance = p.Balance,
+                    signal = p.SignalStrength,
+                    // Keep the exact carrier message in the periodic snapshot. SyncPortsAsync
+                    // replaces the full ports node, so omitting these fields would erase lastSms.
+                    smsContent = p.LastMessageContent,
+                    smsSender = p.Sender,
+                    smsReceivedAt = p.LastReceivedTime,
+                    timeoutCount = p.TimeoutCount,
+                    smsErrorCount = p.SmsErrorCount,
+                    reconnectCount = p.ReconnectCount,
+                    lastSmsSentAt = p.LastSmsSentAt,
+                    lastError = p.LastError
+                });
+
+            return JsonSerializer.Serialize(portsData);
         }
 
         private async Task ListenForCommandsAsync(CancellationToken ct)
@@ -1302,7 +1312,7 @@ namespace gsm.Services
 
                 _vm.UpsertCommandQueue(
                     pending.CommandId, portId, "sms", pending.Recipient, pending.Content,
-                    "otp_received", "OTP received", source: "Firebase");
+                    "otp_received", "OTP received", source: "Firebase", otp: otp);
                 _pendingOtpCommands.TryRemove(
                     new KeyValuePair<string, PendingWebOtpCommand>(portId, pending));
                 }

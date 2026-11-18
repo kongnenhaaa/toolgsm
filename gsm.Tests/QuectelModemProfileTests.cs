@@ -5,6 +5,40 @@ namespace gsm.Tests;
 
 public class QuectelModemProfileTests
 {
+    [Theory]
+    [InlineData("ATI\r\nQuectel\r\nEC20F\r\nRevision: EC20CEHCLGR06A11M1G_AUD\r\n\r\nOK")]
+    [InlineData("Quectel EC20F Revision: EC20CEHCLGR06A11M1G_AUD\r\nOK")]
+    public void AtiProfile_KeepsTheModelAndCompleteRevision(string response)
+    {
+        QuectelModemProfile? profile = GsmModemService.ParseAtiModemProfile(response);
+
+        Assert.NotNull(profile);
+        Assert.Equal("Quectel", profile.Manufacturer);
+        Assert.Equal("EC20F", profile.Model);
+        Assert.Equal("EC20CEHCLGR06A11M1G_AUD", profile.Firmware);
+        Assert.True(profile.Supports(ModemCapability.QuectelStoredSms));
+
+        var port = new SimPort
+        {
+            ModemManufacturer = profile.Manufacturer,
+            ModemModel = profile.Model,
+            ModemFirmware = profile.Firmware
+        };
+        Assert.Equal("Quectel EC20F Revision: EC20CEHCLGR06A11M1G_AUD", port.ModemIdentityDisplay);
+    }
+
+    [Fact]
+    public void AtiProfile_ModelWithoutRevision_ShowsOnlyDeviceName()
+    {
+        QuectelModemProfile? profile = GsmModemService.ParseAtiModemProfile("EC20F\r\nOK");
+        Assert.NotNull(profile);
+        Assert.Equal("EC20F", profile.Model);
+        Assert.Empty(profile.Firmware);
+
+        var port = new SimPort { ModemManufacturer = profile.Manufacturer, ModemModel = profile.Model };
+        Assert.Equal("Quectel EC20F", port.ModemIdentityDisplay);
+    }
+
     [Fact]
     public void Ec20_EnablesVoiceSmsAudioAndHttpCapabilities()
     {

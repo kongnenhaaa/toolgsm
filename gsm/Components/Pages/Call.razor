@@ -97,7 +97,7 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" Operation="Call" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" Operation="Call" @bind-SelectedItems="Vm.SelectedComPorts" />
     </MudTabPanel>
 
     <!-- TAB 2: LỊCH SỬ CUỘC GỌI -->
@@ -275,7 +275,7 @@
                 Cấu hình chuyển tiếp cuộc gọi (AT+CCFC)
             </MudText>
             <MudText Typo="Typo.caption" Color="Color.Secondary" Class="d-block mb-3">
-                Chọn các cổng cần thực hiện từ bảng bên dưới. Đang chọn: <b>@_selectedPorts.Count</b> cổng.
+                Chọn các cổng cần thực hiện từ bảng bên dưới. Đang chọn: <b>@Vm.SelectedComPorts.Count</b> cổng.
             </MudText>
 
             <MudStack Row="true" Spacing="2" AlignItems="AlignItems.End" Wrap="Wrap.Wrap" Class="mb-3">
@@ -313,7 +313,7 @@
             }
 
             <MudTable Items="@FilteredPorts" Dense="true" Hover="true" Elevation="0"
-                      Height="calc(100vh - 280px)" FixedHeader="true" MultiSelection="true" @bind-SelectedItems="_selectedPorts">
+                      Height="calc(100vh - 280px)" FixedHeader="true" MultiSelection="true" @bind-SelectedItems="Vm.SelectedComPorts">
                 <HeaderContent>
                     <MudTh>Cổng</MudTh>
                     <MudTh>SĐT SIM</MudTh>
@@ -352,7 +352,6 @@
     private bool _recordCall = false;
     private string _dtmf = "";
     private string _sendMode = "selected";
-    private HashSet<SimPort> _selectedPorts = new();
     private int _callSubTab = 0;
 
     // Trạng thái cuộc gọi
@@ -409,8 +408,8 @@
     {
         if (_sendMode == "all")
             return ActivePorts.Select(p => p.PortName).ToList();
-        if (_selectedPorts.Any())
-            return _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
+        if (Vm.SelectedComPorts.Any())
+            return Vm.SelectedComPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList();
         return ActivePorts.Select(p => p.PortName).ToList();
     }
 
@@ -626,7 +625,7 @@
             return;
         }
 
-        string port = _selectedPorts
+        string port = Vm.SelectedComPorts
             .Where(candidate => _activeCallPorts.ContainsKey(candidate.PortName))
             .Select(candidate => candidate.PortName)
             .FirstOrDefault()
@@ -864,7 +863,7 @@
             return;
         }
 
-        var ports = _selectedPorts
+        var ports = Vm.SelectedComPorts
             .Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
             .ToList();
         if (!ports.Any())
@@ -926,7 +925,7 @@
     // ========== 9. CHUYỂN TIẾP – HỦY ==========
     async Task CancelForwardingSelected()
     {
-        var ports = _selectedPorts
+        var ports = Vm.SelectedComPorts
             .Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
             .ToList();
         if (!ports.Any())
@@ -983,7 +982,7 @@
     // ========== 10. CHUYỂN TIẾP – KIỂM TRA ==========
     async Task CheckForwardingStatusSelected()
     {
-        var ports = _selectedPorts
+        var ports = Vm.SelectedComPorts
             .Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
             .ToList();
         if (!ports.Any())

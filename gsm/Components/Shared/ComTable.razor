@@ -2,6 +2,7 @@
 @using gsm.Components.Shared
 @inject gsm.Services.IGsmModemService ModemService
 @inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.GoogleSheetsSyncService GoogleSheetsSync
 @inject ISnackbar Snackbar
 
 <MudPaper Elevation="0" Class="com-table-shell">
@@ -72,14 +73,16 @@
 
             <MudSpacer />
             <MudTextField @bind-Value="_quickSearch"
-                          Placeholder="Tìm nhanh SĐT / COM / CCID..."
+                          Placeholder="Tìm 1 số hoặc dán danh sách..."
                           Adornment="Adornment.Start"
                           AdornmentIcon="@Icons.Material.Filled.Search"
                           Immediate="true"
                           Clearable="true"
+                          Lines="2"
                           Variant="Variant.Outlined"
                           Margin="Margin.Dense"
-                          Style="width:240px; min-width:190px;" />
+                          Style="width:290px; min-width:230px;"
+                          title="Dán nhiều SĐT/COM/CCID, ngăn cách bằng xuống dòng, dấu phẩy, chấm phẩy hoặc khoảng trắng. Kết quả giữ nguyên thứ tự GSM." />
             @if (SelectedItems.Any())
             {
                 <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" 
@@ -88,6 +91,12 @@
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.TableView"
                        Variant="Variant.Outlined" Color="Color.Success" OnClick="CopyToExcel"
                        title="Copy đúng cột vào Excel (TSV)">Copy Excel</MudButton>
+            <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.CloudUpload"
+                       Variant="Variant.Filled" Color="Color.Success" Class="ml-2"
+                       OnClick="SyncGoogleSheetsAsync" Disabled="@_isGoogleSheetSyncing"
+                       title="Chọn một Google Sheet đã đặt tên và đồng bộ toàn bộ dữ liệu">
+                @(_isGoogleSheetSyncing ? "Đang đồng bộ..." : "Đồng bộ Google Sheet")
+            </MudButton>
             <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Settings" 
                        Variant="Variant.Text" Color="Color.Default" OnClick="OpenSettingsDialog">Cấu hình Cột/Cổng</MudButton>
         </MudToolBar>
@@ -180,6 +189,10 @@
                 else if (col.Name == "Serial")
                 {
                     <MudTd Style="@($"font-family:monospace; font-size:16px; {_brd} {_muted} white-space:nowrap; mso-number-format:'\\@';")">@RenderLoadingOrValue(context, context.Serial)</MudTd>
+                }
+                else if (col.Name == nameof(SimPort.ModemIdentityDisplay))
+                {
+                    <MudTd Style="@($"{_brd} {_body} white-space:nowrap; font-size:16px;")">@RenderLoadingOrValue(context, context.ModemIdentityDisplay)</MudTd>
                 }
                 else if (col.Name == "ExpiryDate")
                 {
@@ -274,6 +287,7 @@
     [Parameter] public bool IsDeletingSmsStorage { get; set; }
 
     private string _quickSearch = string.Empty;
+    private bool _isGoogleSheetSyncing;
 
     async Task RefreshOne(SimPort port)
     {
@@ -290,10 +304,10 @@
     async Task RefreshSelected()
     {
         var ports = SelectedItems.Any() ? SelectedItems.ToList() : VisiblePorts.ToList();
+        await ClearSelectionAsync();
         Snackbar.Add($"Đang làm mới {ports.Count} cổng...", Severity.Info);
         await Vm.RefreshPortsAsync(ports.Select(p => p.PortName));
         Snackbar.Add($"Đã gửi lệnh làm mới {ports.Count} cổng; trạng thái sẽ cập nhật khi kết nối lại.", Severity.Success);
-        await OnTableSelectionChanged(new HashSet<SimPort>());
     }
 
     async Task ClearSelectionAsync()
@@ -339,25 +353,18 @@
     {
         get
         {
-            var hidden = new HashSet<string>(
-                SettingsService.Current.HiddenComPorts ?? new List<string>(),
-                StringComparer.OrdinalIgnoreCase);
-            IEnumerable<SimPort> visible = Ports.Where(
-                p => !hidden.Contains(p.PortName));
-            string search = _quickSearch.Trim();
-            if (search.Length == 0) return visible;
-
-            return visible.Where(port =>
-                ContainsSearch(port.PhoneNumber, search)
-                || ContainsSearch(port.PortName, search)
-                || ContainsSearch(port.Serial, search)
-                || ContainsSearch(port.Imei, search));
+            IEnumerable<SimPort> visible = GetConfiguredPorts();
+            return PortSearchFilter.Filter(visible, _quickSearch);
         }
     }
 
-    private static bool ContainsSearch(string? value, string search) =>
-        !string.IsNullOrWhiteSpace(value)
-        && value.Contains(search, StringComparison.OrdinalIgnoreCase);
+    private IEnumerable<SimPort> GetConfiguredPorts()
+    {
+        var hidden = new HashSet<string>(
+            SettingsService.Current.HiddenComPorts ?? new List<string>(),
+            StringComparer.OrdinalIgnoreCase);
+        return Ports.Where(port => !hidden.Contains(port.PortName));
+    }
 
     private List<ColumnItem> VisibleColumns
     {
@@ -471,6 +478,34 @@
             ? port.LastUssdResult ?? string.Empty
             : port.LastMessageContent ?? string.Empty;
 
+    private string GetExportValue(SimPort port, string columnName, int rowNumber) =>
+        columnName switch
+        {
+            "Stt"                => rowNumber.ToString(),
+            "PortName"           => port.PortName ?? "",
+            "Status"             => port.GetOperationStatus(Operation) ?? "",
+            "NetworkProvider"    => port.NetworkProvider ?? "",
+            "NetworkType"        => port.NetworkType ?? "",
+            "Signal"             => port.SignalDisplay,
+            "LastSignalScan"     => port.LastSignalScanDisplay,
+            "Balance"            => FormatBalanceValue(port.Balance),
+            "PhoneNumber"        => port.PhoneNumber ?? "",
+            "SimType"            => port.SimType ?? "",
+            "Imei"               => port.Imei ?? "",
+            "Serial"             => port.Serial ?? "",
+            nameof(SimPort.ModemIdentityDisplay) => port.ModemIdentityDisplay,
+            "ExpiryDate"         => port.ExpiryDate ?? "",
+            "SimRegDate"         => port.SimRegDate ?? "",
+            "Lock1C"             => port.Lock1C ?? "",
+            "Lock2C"             => port.Lock2C ?? "",
+            "ForwardedTo"        => port.ForwardedTo ?? "",
+            "VnptStatus"         => GetVnptStatusColumnValue(port),
+            "Otp"                => port.Otp ?? "",
+            "LastSmsSender"      => port.LastSmsSender ?? "",
+            "LastMessageContent" => GetContentColumnValue(port),
+            _                     => ""
+        };
+
     void CopyToExcel()
     {
         var cols = VisibleColumns;
@@ -489,34 +524,10 @@
         var exportRows = new List<IReadOnlyList<string>>();
         foreach (var p in rows)
         {
-            string[] values = cols.Select(col =>
-            {
-                return col.Name switch
-                {
-                    "Stt"                => (visibleRows.IndexOf(p) + 1).ToString(),
-                    "PortName"           => p.PortName ?? "",
-                    "Status"             => p.GetOperationStatus(Operation) ?? "",
-                    "NetworkProvider"    => p.NetworkProvider ?? "",
-                    "NetworkType"        => p.NetworkType ?? "",
-                    "Signal"             => p.SignalDisplay,
-                    "LastSignalScan"     => p.LastSignalScanDisplay,
-                    "Balance"            => FormatBalanceValue(p.Balance),
-                    "PhoneNumber"        => p.PhoneNumber ?? "",
-                    "SimType"            => p.SimType ?? "",
-                    "Imei"               => p.Imei ?? "",
-                    "Serial"             => p.Serial ?? "",
-                    "ExpiryDate"         => p.ExpiryDate ?? "",
-                    "SimRegDate"         => p.SimRegDate ?? "",
-                    "Lock1C"             => p.Lock1C ?? "",
-                    "Lock2C"             => p.Lock2C ?? "",
-                    "ForwardedTo"        => p.ForwardedTo ?? "",
-                    "VnptStatus"         => GetVnptStatusColumnValue(p),
-                    "Otp"                => p.Otp ?? "",
-                    "LastSmsSender"      => p.LastSmsSender ?? "",
-                    "LastMessageContent" => GetContentColumnValue(p),
-                    _                    => ""
-                };
-            }).ToArray();
+            string[] values = cols.Select(col => GetExportValue(
+                p,
+                col.Name,
+                visibleRows.IndexOf(p) + 1)).ToArray();
             exportRows.Add(values);
         }
 
@@ -552,12 +563,97 @@
         }
     }
 
+    private async Task SyncGoogleSheetsAsync()
+    {
+        var settings = SettingsService.Current;
+        var targets = (settings.GoogleSheetTargets ?? new List<GoogleSheetTargetSettings>())
+            .Where(target => !string.IsNullOrWhiteSpace(target.Name)
+                             && !string.IsNullOrWhiteSpace(target.SpreadsheetUrl))
+            .ToList();
+        if (targets.Count == 0)
+        {
+            Snackbar.Add(
+                "Chưa có link Google Sheet. Hãy thêm và đặt tên link trong Cài đặt.",
+                Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.GoogleSheetsWebAppUrl)
+            || string.IsNullOrWhiteSpace(settings.GoogleSheetsSharedSecret))
+        {
+            Snackbar.Add(
+                "Chưa cấu hình Apps Script Web App URL và mã bảo mật trong Cài đặt.",
+                Severity.Warning);
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            [nameof(GoogleSheetSyncDialog.Targets)] = targets
+        };
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+        var dialog = await DialogService.ShowAsync<GoogleSheetSyncDialog>(
+            "Chọn Google Sheet",
+            parameters,
+            options);
+        DialogResult? dialogResult = await dialog.Result;
+        if (dialogResult is null
+            || dialogResult.Canceled
+            || dialogResult.Data is not string targetId)
+        {
+            return;
+        }
+
+        GoogleSheetTargetSettings? target = targets.FirstOrDefault(
+            item => item.Id == targetId);
+        if (target == null) return;
+
+        List<ColumnItem> columns = GetDefaultColumns();
+        List<SimPort> ports = GetConfiguredPorts().ToList();
+        var syncColumns = columns
+            .Select(column => new GoogleSheetSyncColumn(
+                column.Name,
+                GetColumnHeader(column)))
+            .ToList();
+        var rows = ports
+            .Select((port, index) => (IReadOnlyList<string>)columns
+                .Select(column => GetExportValue(port, column.Name, index + 1))
+                .ToArray())
+            .ToList();
+
+        _isGoogleSheetSyncing = true;
+        try
+        {
+            GoogleSheetSyncResult result = await GoogleSheetsSync.SyncAsync(
+                settings.GoogleSheetsWebAppUrl,
+                settings.GoogleSheetsSharedSecret,
+                target,
+                syncColumns,
+                rows,
+                FirebaseService.MachineId);
+            Snackbar.Add(
+                result.Message,
+                result.Success ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _isGoogleSheetSyncing = false;
+        }
+    }
+
     private string GetColumnHeader(ColumnItem column) =>
         column.Name == "VnptStatus"
             ? Operation.Equals("DKTTTB", StringComparison.OrdinalIgnoreCase)
                 ? "Trạng thái DKTTTB"
                 : Operation.Equals("DMX", StringComparison.OrdinalIgnoreCase)
                     ? "Trạng thái Điện Máy Xanh"
+                    : Operation.Equals("TAMMI", StringComparison.OrdinalIgnoreCase)
+                        ? "Trạng thái Viettel Tammi"
                     : column.Header
             : column.Header;
 
@@ -566,5 +662,7 @@
             ? port.DeviceUnlockStatus ?? string.Empty
             : Operation.Equals("DMX", StringComparison.OrdinalIgnoreCase)
                 ? port.DmxStatus ?? string.Empty
+                : Operation.Equals("TAMMI", StringComparison.OrdinalIgnoreCase)
+                    ? port.TammiStatus ?? string.Empty
                 : port.VnptStatus ?? string.Empty;
 }

@@ -11,7 +11,7 @@ public sealed class ComTableColumnCatalogTests
         [
             "Stt", "PortName", "Status", "NetworkProvider", "NetworkType", "Signal",
             "LastSignalScan", "Balance", "PhoneNumber", "SimType", "Imei", "Serial",
-            "ExpiryDate", "SimRegDate", "Lock1C", "Lock2C", "ForwardedTo", "VnptStatus",
+            "ModemIdentityDisplay", "ExpiryDate", "SimRegDate", "Lock1C", "Lock2C", "ForwardedTo", "VnptStatus",
             "Otp", "LastSmsSender", "LastMessageContent"
         ];
 

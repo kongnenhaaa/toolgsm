@@ -73,6 +73,7 @@ namespace gsm
             serviceCollection.AddSingleton<IGsmUssdService, GsmUssdService>();
             serviceCollection.AddSingleton<IGsmCallService, GsmCallService>();
             serviceCollection.AddSingleton<IGsmBackgroundSupervisor, GsmBackgroundSupervisor>();
+            serviceCollection.AddSingleton<ToolLicenseService>();
             serviceCollection.AddSingleton<DataUsageService>();
             serviceCollection.AddSingleton<MainViewModel>();
             serviceCollection.AddSingleton<DeviceUnlockAuthService>();
@@ -84,6 +85,7 @@ namespace gsm
             serviceCollection.AddSingleton<IAudioService, AudioService>();
             serviceCollection.AddSingleton<INotifyService, NotifyService>();
             serviceCollection.AddSingleton<IFirebaseOtpService, FirebaseOtpService>();
+            serviceCollection.AddSingleton<GoogleSheetsSyncService>();
 
             _serviceProvider = serviceCollection.BuildServiceProvider();
             Resources.Add("services", _serviceProvider);

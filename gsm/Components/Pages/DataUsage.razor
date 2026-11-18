@@ -91,7 +91,7 @@
          Style="background:transparent;"
          @bind-ActivePanelIndex="_subTab">
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="Ports" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="Ports" @bind-SelectedItems="Vm.SelectedComPorts" />
     </MudTabPanel>
 
     <MudTabPanel Text="@($"Kết quả ({_results.Count})")">
@@ -156,7 +156,6 @@
     private int _dataKilobytes = 50;
     private int _pricePerBlock = 75;
     private string _sendMode = "selected";
-    private HashSet<SimPort> _selectedPorts = new();
     private readonly List<DataUsageResultItem> _results = new();
     private List<DataUsageResultItem> OrderedResults =>
         PortDisplayOrder.Sort(_results, Ports, item => item.Port);
@@ -189,7 +188,7 @@
     {
         IEnumerable<SimPort> source = _sendMode == "all"
             ? Ports
-            : _selectedPorts;
+            : Vm.SelectedComPorts;
 
         return source
             .Where(port => port.Status == SimStatus.Active)

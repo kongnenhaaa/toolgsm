@@ -71,7 +71,7 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" Operation="USSD" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" Operation="USSD" @bind-SelectedItems="Vm.SelectedComPorts" />
     </MudTabPanel>
 
     <!-- TAB 2: TIN NHẮN TỚI -->
@@ -287,7 +287,6 @@
     // ========== BINDINGS ==========
     private string _ussdCode = "*101#";
     private string _scanMode = "Auto";
-    private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
     private readonly ConcurrentDictionary<string, byte> _ussdInFlight = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _networkInFlight = new(StringComparer.OrdinalIgnoreCase);
@@ -368,8 +367,8 @@
         if (string.IsNullOrWhiteSpace(_ussdCode)) return;
         string requestedCode = _ussdCode.Trim();
 
-        var requested = _selectedPorts.Any()
-            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
+        var requested = Vm.SelectedComPorts.Any()
+            ? Vm.SelectedComPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!requested.Any())
@@ -399,8 +398,8 @@
         }
 
         // Nhả selection ngay sau khi chụp danh sách để người dùng chọn COM khác trong lúc chạy.
-        if (_selectedPorts.Any())
-            _selectedPorts.RemoveWhere(p => targets.Contains(p.PortName, StringComparer.OrdinalIgnoreCase));
+        if (Vm.SelectedComPorts.Any())
+            Vm.SelectedComPorts.RemoveWhere(p => targets.Contains(p.PortName, StringComparer.OrdinalIgnoreCase));
 
         foreach (string portName in targets)
             SetPortContent(portName, $"[USSD][ĐANG CHẠY] Đang gửi {requestedCode}...");
@@ -474,7 +473,7 @@
     // explicitly selected by the user are touched, and each reboots once.
     async Task FixSelectedUssd()
     {
-        var requested = _selectedPorts
+        var requested = Vm.SelectedComPorts
             .Where(port => port.Status == SimStatus.Active)
             .Select(port => port.PortName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -513,7 +512,7 @@
             return;
         }
 
-        _selectedPorts.RemoveWhere(port =>
+        Vm.SelectedComPorts.RemoveWhere(port =>
             targets.Contains(port.PortName, StringComparer.OrdinalIgnoreCase));
         foreach (string portName in targets)
             SetPortContent(portName, "[FIX USSD][ĐANG CHẠY] Đang chạy đúng quy trình gsm_fix_tool.py...");
@@ -574,8 +573,8 @@
 
     async Task ApplyScanMode()
     {
-        var requested = _selectedPorts.Any()
-            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
+        var requested = Vm.SelectedComPorts.Any()
+            ? Vm.SelectedComPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!requested.Any())
@@ -729,8 +728,8 @@
     // ========== 5. KHÔI PHỤC SÓNG ==========
     async Task RecoverSignal()
     {
-        var requested = _selectedPorts.Any()
-            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
+        var requested = Vm.SelectedComPorts.Any()
+            ? Vm.SelectedComPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!requested.Any())
@@ -837,8 +836,8 @@
             return;
         }
 
-        var ports = _selectedPorts.Any()
-            ? _selectedPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
+        var ports = Vm.SelectedComPorts.Any()
+            ? Vm.SelectedComPorts.Where(p => p.Status == SimStatus.Active).Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 
         if (!ports.Any())
@@ -959,8 +958,8 @@
             return;
         }
 
-        var ports = _selectedPorts.Any()
-            ? _selectedPorts.Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
+        var ports = Vm.SelectedComPorts.Any()
+            ? Vm.SelectedComPorts.Where(p => p.Status == SimStatus.Active && Vm.IsPortReadyForOperation(p.PortName))
                             .Select(p => p.PortName).ToList()
             : ActivePorts.Select(p => p.PortName).ToList();
 

@@ -93,7 +93,13 @@
             TXT tổng
         </MudButton>
 
-        <MudTooltip Text="Lưu SĐT thành công tại gsm\Data; TXT tổng giữ lâu dài, TXT phiên tạo lại khi bắt đầu phiên mới">
+        <MudButton Variant="Variant.Outlined" Color="Color.Info" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.FolderOpen" OnClick="OpenOutputFolder"
+                   title="@Vm.DmxOutputDirectory">
+            Mở thư mục TXT
+        </MudButton>
+
+        <MudTooltip Text="TXT tổng giữ lâu dài, TXT phiên tạo lại khi bắt đầu phiên mới">
             <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Info">
                 Tự lưu TXT · giữ lâu dài
             </MudChip>
@@ -128,7 +134,7 @@
          PanelClass="pa-0" Class="mx-3 mt-1 feature-tabs"
          Style="background:transparent;" @bind-ActivePanelIndex="_subTab">
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="Ports" Operation="DMX" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="Ports" Operation="DMX" @bind-SelectedItems="Vm.SelectedComPorts" />
     </MudTabPanel>
 
     <MudTabPanel Text="@($"Kết quả ({Vm.DmxResults.Count})")">
@@ -216,7 +222,6 @@
     private int _minimumBirthYear = 1990;
     private int _maximumBirthYear = 2007;
     private string _sendMode = "all";
-    private HashSet<SimPort> _selectedPorts = new();
     private int _subTab;
     private bool _isRunning;
     private int _startGuard;
@@ -268,7 +273,7 @@
         }
         return _sendMode == "all"
             ? ActivePorts.ToList()
-            : _selectedPorts.Where(port => port.Status == SimStatus.Active).ToList();
+            : Vm.SelectedComPorts.Where(port => port.Status == SimStatus.Active).ToList();
     }
 
     private async Task RetryFailedPorts()
@@ -423,6 +428,24 @@
         catch (Exception ex)
         {
             Snackbar.Add("Không mở được file TXT: " + ex.Message, Severity.Error);
+        }
+    }
+
+    private void OpenOutputFolder()
+    {
+        try
+        {
+            string folder = Vm.DmxOutputDirectory;
+            System.IO.Directory.CreateDirectory(folder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = folder,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Không mở được thư mục TXT: " + ex.Message, Severity.Error);
         }
     }
 

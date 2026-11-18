@@ -2,6 +2,7 @@
 @implements IDisposable
 @inject NavigationManager Nav
 @inject gsm.ViewModels.MainViewModel Vm
+@inject gsm.Services.ToolLicenseService License
 @inject IJSRuntime JS
 @inject ISnackbar Snackbar
 
@@ -51,6 +52,65 @@
         </div>
     </MudAppBar>
 
+    @if (ShowLicenseLock)
+    {
+        <div style="position:fixed; inset:0; z-index:5000; background:rgba(9,11,16,.82); backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center; padding:24px;">
+            <MudPaper Class="pa-6" Elevation="12" Style="width:min(560px, 94vw); border-radius:18px; text-align:center;">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Warning" Style="font-size:58px;" />
+                <MudText Typo="Typo.h5" Class="mt-2 mb-2" Style="font-weight:800;">
+                    ToolGSM chưa được kích hoạt
+                </MudText>
+                <MudText Typo="Typo.body1" Class="mb-3" Style="color:var(--mud-palette-text-secondary);">
+                    Giao diện vẫn mở nhưng phần cứng và các chức năng làm việc đang khóa.
+                    Nhập key bên dưới để kích hoạt máy này.
+                </MudText>
+                <MudText Typo="Typo.caption" Style="display:block; color:var(--mud-palette-text-secondary);">
+                    HWID
+                </MudText>
+                <MudText Typo="Typo.subtitle1" Class="mb-2" Style="font-family:Consolas,monospace; font-weight:700; letter-spacing:.05em;">
+                    @License.HardwareId
+                </MudText>
+                <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                           Class="mb-3"
+                           StartIcon="@Icons.Material.Filled.ContentCopy"
+                           OnClick="CopyLicenseHardwareIdAsync">
+                    Copy HWID
+                </MudButton>
+
+                <MudTextField T="string"
+                              Label="Nhập key kích hoạt"
+                              Variant="Variant.Outlined"
+                              @bind-Value="_licenseKeyInput"
+                              Immediate="true"
+                              InputType="InputType.Password"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.VpnKey"
+                              Class="mb-2" />
+
+                @if (!string.IsNullOrWhiteSpace(_licenseActivationMessage))
+                {
+                    <MudText Typo="Typo.body2" Color="@(_licenseActivationFailed ? Color.Error : Color.Success)" Class="mb-2">
+                        @_licenseActivationMessage
+                    </MudText>
+                }
+
+                <MudStack Row="true" Justify="Justify.Center" Spacing="2" Wrap="Wrap.Wrap">
+                    <MudButton Variant="Variant.Filled" Color="Color.Success"
+                               StartIcon="@Icons.Material.Filled.LockOpen"
+                               Disabled="@string.IsNullOrWhiteSpace(_licenseKeyInput)"
+                               OnClick="ActivateLicense">
+                        Kích hoạt
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Settings"
+                               OnClick="@(() => Navigate("settings"))">
+                        Mở Cài đặt
+                    </MudButton>
+                </MudStack>
+            </MudPaper>
+        </div>
+    }
+
     <MudMainContent Class="app-main-content">
         <div class="page-enter">
             @if (ChildContent is not null)
@@ -82,6 +142,7 @@
         new("ezcom", "ezcom", "EZ COM", Icons.Material.Filled.Router),
         new("vnptpass", "vnpt-pass", "Pass VNPT", Icons.Material.Filled.Key),
         new("dmx", "dien-may-xanh", "Điện Máy Xanh", Icons.Material.Filled.CardGiftcard),
+        new("tammi", "viettel-tammi", "Viettel Tammi", Icons.Material.Filled.Security),
         new("proxy", "proxy", "Proxy", Icons.Material.Filled.VpnKey),
         new("deviceunlock", "device-unlock", "Mở khóa đổi thiết bị", Icons.Material.Filled.PhonelinkLock),
         new("icocunlock", "icoc-unlock", "Mở khóa IC/OC", Icons.Material.Filled.SettingsPhone),
@@ -90,6 +151,10 @@
 
     private string _current = "ussd";
     private bool _isDarkMode;
+    private string _licenseKeyInput = string.Empty;
+    private string _licenseActivationMessage = string.Empty;
+    private bool _licenseActivationFailed;
+    private bool ShowLicenseLock => !License.IsActivated && _current != "settings";
     private int ActiveComCount => Vm.Ports?.Count(p => p.Status == gsm.Models.SimStatus.Active) ?? 0;
     private int TotalComCount => Vm.Ports?.Count ?? 0;
 
@@ -150,6 +215,7 @@
         Nav.LocationChanged += OnLocationChanged;
         Vm.Ports.CollectionChanged += OnPortsChanged;
         Vm.SnackbarRequested += OnSnackbarRequested;
+        License.ActivationChanged += OnLicenseActivationChanged;
         foreach (gsm.Models.SimPort port in Vm.Ports)
             AttachPort(port);
     }
@@ -165,6 +231,29 @@
             }
             catch { }
         });
+    }
+
+    private void OnLicenseActivationChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(StateHasChanged);
+
+    private async Task CopyLicenseHardwareIdAsync()
+    {
+        await JS.InvokeVoidAsync("clipboardCopy.copyText", License.HardwareId);
+        _licenseActivationFailed = false;
+        _licenseActivationMessage = "Đã copy HWID.";
+    }
+
+    private void ActivateLicense()
+    {
+        gsm.Services.ToolLicenseActivationResult result = License.Activate(_licenseKeyInput);
+        _licenseActivationFailed = !result.Success;
+        _licenseActivationMessage = result.Message;
+
+        if (result.Success)
+        {
+            _licenseKeyInput = string.Empty;
+            Snackbar.Add(result.Message, Severity.Success);
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -287,6 +376,7 @@
             "" => "ussd",
             "vnpt-pass" => "vnptpass",
             "dien-may-xanh" => "dmx",
+            "viettel-tammi" => "tammi",
             "proxy" => "proxy",
             "device-unlock" => "deviceunlock",
             "icoc-unlock" => "icocunlock",
@@ -305,6 +395,7 @@
         Nav.LocationChanged -= OnLocationChanged;
         Vm.Ports.CollectionChanged -= OnPortsChanged;
         Vm.SnackbarRequested -= OnSnackbarRequested;
+        License.ActivationChanged -= OnLicenseActivationChanged;
         foreach (gsm.Models.SimPort port in _observedPorts.ToArray())
             DetachPort(port);
     }

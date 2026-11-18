@@ -25,7 +25,7 @@ public sealed record WorkflowProxyTestResult(
 
 /// <summary>
 /// Stores and applies the single authenticated proxy used by the MyVNPT,
-/// DKTTTB and Dien May Xanh workflows. Other application traffic is left
+/// DKTTTB, Dien May Xanh and Tammi workflows. Other application traffic is left
 /// unchanged.
 /// </summary>
 public static class WorkflowProxyService
@@ -170,6 +170,7 @@ public static class WorkflowProxyService
         settings.UseProxyForMyVnpt = false;
         settings.UseProxyForDeviceUnlock = false;
         settings.UseProxyForDmx = false;
+        settings.UseProxyForTammi = false;
         return SettingsService.SaveSettings(settings);
     }
 

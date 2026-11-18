@@ -90,7 +90,7 @@
 
     <!-- TAB 1: DANH SÁCH CỔNG -->
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="FilteredPorts" Operation="SMS" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="FilteredPorts" Operation="SMS" @bind-SelectedItems="Vm.SelectedComPorts" />
     </MudTabPanel>
 
     <!-- TAB 2: KẾT QUẢ ĐĂNG KÝ -->
@@ -155,7 +155,6 @@
     private string _ezNumber = "888";
     private string _sendMode = "selected";
     private int _delayMs = 0;
-    private HashSet<SimPort> _selectedPorts = new();
     private int _subTab = 0;
 
     // State
@@ -195,7 +194,7 @@
                 .ToList();
         // "Cổng đã chọn" phải tôn trọng đúng selection; không tự mở rộng
         // thành toàn bộ Active khi người dùng chưa tick cổng nào.
-        return _selectedPorts
+        return Vm.SelectedComPorts
             .Where(p => p.Status == SimStatus.Active)
             .Select(p => p.PortName)
             .Distinct(StringComparer.OrdinalIgnoreCase)

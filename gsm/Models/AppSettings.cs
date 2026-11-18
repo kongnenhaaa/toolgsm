@@ -11,6 +11,14 @@ public class TelegramRouteSettings
     public string PhoneWhitelist { get; set; } = "";
 }
 
+public class GoogleSheetTargetSettings
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "";
+    public string SpreadsheetUrl { get; set; } = "";
+    public string WorksheetName { get; set; } = "ToolGSM";
+}
+
 public class AppSettings
 {
     public bool DarkMode { get; set; } = false;
@@ -65,6 +73,14 @@ public class AppSettings
     // Version 1 changes Firebase OTP/port sync to explicit opt-in. A missing
     // value in an older settings file is migrated once to the safe default.
     public int FirebaseSyncPreferenceVersion { get; set; } = 0;
+
+    // Google Sheets synchronization. The Apps Script endpoint is deployed
+    // once and can write to every configured spreadsheet that its owner may
+    // edit. Individual spreadsheet links remain friendly, named destinations.
+    public string GoogleSheetsWebAppUrl { get; set; } = "";
+    public string GoogleSheetsSharedSecret { get; set; } = "";
+    public System.Collections.Generic.List<GoogleSheetTargetSettings>
+        GoogleSheetTargets { get; set; } = new();
 
     // Tự động Watchdog (Khởi động lại modem khi lỗi)
     public bool EnableAutoWatchdog { get; set; } = true;
@@ -136,7 +152,7 @@ public class AppSettings
     public bool AutoConnectOnStart { get; set; } = false;
     public bool MinimizeToTray { get; set; } = true;
 
-    // Proxy ngoài chỉ áp dụng cho Pass MyVNPT, DKTTTB và Điện Máy Xanh.
+    // Proxy ngoài chỉ áp dụng cho các workflow tài khoản/OTP được chọn.
     public string WorkflowProxyHost { get; set; } = "";
     public int WorkflowProxyPort { get; set; }
     public string WorkflowProxyUsername { get; set; } = "";
@@ -144,6 +160,7 @@ public class AppSettings
     public bool UseProxyForMyVnpt { get; set; }
     public bool UseProxyForDeviceUnlock { get; set; }
     public bool UseProxyForDmx { get; set; }
+    public bool UseProxyForTammi { get; set; }
 
     // Custom Columns and Ports filters
     public System.Collections.Generic.List<string> ColumnOrder { get; set; } = new();

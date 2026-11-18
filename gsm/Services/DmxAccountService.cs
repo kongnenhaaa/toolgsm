@@ -19,7 +19,8 @@ public sealed record DmxRegistrationSession(
     string CustomerId,
     string CredentialStage,
     bool IsPasswordRecovery = false,
-    string? PasswordToken = null);
+    string? PasswordToken = null,
+    string? PasswordDeviceToken = null);
 
 public sealed record DmxProfile(
     string FullName,
@@ -80,6 +81,7 @@ public static class DmxAccountService
             pbxPhoneNumber
             expireTime
             passwordToken
+            passwordDeviceToken
             remaining
           }
         }
@@ -332,7 +334,7 @@ public static class DmxAccountService
     {
         if (session.IsPasswordRecovery)
         {
-            const int maximumRequestAttempts = 2;
+            const int maximumRequestAttempts = 3;
             for (int requestAttempt = 1;
                  requestAttempt <= maximumRequestAttempts;
                  requestAttempt++)
@@ -388,13 +390,17 @@ public static class DmxAccountService
                     throw new DmxApiException(
                         "Yêu cầu quên mật khẩu không trả password token.");
                 }
+                string passwordDeviceToken = GetString(
+                    recoveryResult,
+                    "passwordDeviceToken");
 
                 log?.Invoke(recoveryMessage, "SUCCESS");
                 return (
                     session with
                     {
                         PbxPhoneNumber = recoveryPbxPhoneNumber,
-                        PasswordToken = passwordToken
+                        PasswordToken = passwordToken,
+                        PasswordDeviceToken = passwordDeviceToken
                     },
                     recoveryMessage);
             }
@@ -586,15 +592,16 @@ public static class DmxAccountService
                 "Xác minh OTP quên mật khẩu không trả access token.");
         }
 
-        string deviceToken = FindStringByPropertyName(
+        string deviceToken = GetPasswordRecoveryDeviceToken(
             oauthResponse,
-            "DeviceToken",
-            "deviceToken");
-        if (string.IsNullOrWhiteSpace(deviceToken)
-            || deviceToken.Equals("{noop}", StringComparison.OrdinalIgnoreCase))
+            session.PasswordDeviceToken);
+        if (string.IsNullOrWhiteSpace(deviceToken))
         {
-            throw new DmxApiException(
-                "Xác minh OTP quên mật khẩu không trả device token.");
+            // Current OAuth deployments can omit the redundant DeviceToken
+            // even when OTP verification returned a valid access token.
+            log?.Invoke(
+                "OTP hợp lệ; máy chủ không trả device token riêng, tiếp tục bằng access token.",
+                "WARNING");
         }
 
         string customerId = FindStringByPropertyName(
@@ -652,9 +659,41 @@ public static class DmxAccountService
         {
             return "Máy chủ từ chối đặt lại mật khẩu sau khi xác minh OTP (createPassword=false).";
         }
-        return result.ValueKind == JsonValueKind.True
-            ? null
-            : $"Máy chủ trả kết quả đặt lại mật khẩu không hợp lệ ({result.ValueKind}).";
+        if (result.ValueKind == JsonValueKind.True) return null;
+        if (result.ValueKind == JsonValueKind.String)
+        {
+            string value = result.GetString()?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return "Máy chủ trả kết quả đặt lại mật khẩu rỗng.";
+            }
+            if (value.Equals("false", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Máy chủ từ chối đặt lại mật khẩu sau khi xác minh OTP (createPassword=false).";
+            }
+
+            // createPassword is currently declared as String by the server.
+            // GraphQL errors are handled before this result is evaluated.
+            return null;
+        }
+        return $"Máy chủ trả kết quả đặt lại mật khẩu không hợp lệ ({result.ValueKind}).";
+    }
+
+    internal static string GetPasswordRecoveryDeviceToken(
+        JsonElement oauthResponse,
+        string? passwordDeviceToken)
+    {
+        string deviceToken = FindStringByPropertyName(
+            oauthResponse,
+            "DeviceToken",
+            "deviceToken",
+            "device_token",
+            "devicetoken",
+            "passwordDeviceToken");
+        if (IsUsableDeviceToken(deviceToken)) return deviceToken.Trim();
+        return IsUsableDeviceToken(passwordDeviceToken)
+            ? passwordDeviceToken!.Trim()
+            : string.Empty;
     }
 
     public static string GetFriendlyExceptionMessage(Exception exception)
@@ -894,7 +933,7 @@ public static class DmxAccountService
             ["grant_type"] = "password",
             ["username"] = session.Phone,
             ["password"] = string.Empty,
-            ["changeDeviceToken"] = string.Empty,
+            ["changeDeviceToken"] = session.PasswordDeviceToken ?? string.Empty,
             ["device_id"] = session.DeviceId,
             ["deviceName"] = session.DeviceName,
             ["passwordOTP"] = otp,
@@ -969,8 +1008,9 @@ public static class DmxAccountService
             headers["Authorization"] = $"Bearer {session.AccessToken}";
             headers["accessToken"] = session.AccessToken;
             headers["username"] = session.Phone;
+            headers["devicetoken"] = session.DeviceToken ?? string.Empty;
         }
-        if (!string.IsNullOrWhiteSpace(session.DeviceToken))
+        else if (!string.IsNullOrWhiteSpace(session.DeviceToken))
             headers["devicetoken"] = session.DeviceToken;
         if (!string.IsNullOrWhiteSpace(session.CustomerId))
             headers["customerid"] = session.CustomerId;
@@ -1083,6 +1123,10 @@ public static class DmxAccountService
         }
         return string.Empty;
     }
+
+    private static bool IsUsableDeviceToken(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && !value.Trim().Equals("{noop}", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<JsonElement> PostJsonAsync(
         string url,

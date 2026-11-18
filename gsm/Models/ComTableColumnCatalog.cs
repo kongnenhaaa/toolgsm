@@ -18,6 +18,7 @@ public static class ComTableColumnCatalog
         new("SimType", "Loại SIM"),
         new("Imei", "IMEI"),
         new("Serial", "CCID"),
+        new(nameof(SimPort.ModemIdentityDisplay), "Thiết bị"),
         new("ExpiryDate", "HSD"),
         new("SimRegDate", "Ngày ĐK SIM"),
         new("Lock1C", "Khóa 1C"),

@@ -1,0 +1,70 @@
+@using gsm.Models
+
+<MudDialog Style="min-width:500px; max-width:650px; border-radius:12px;">
+    <TitleContent>
+        <MudText Typo="Typo.h6" Style="font-weight:700;">
+            <MudIcon Icon="@Icons.Material.Filled.CloudUpload" Class="mr-2" />
+            Chọn Google Sheet đồng bộ
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3" Style="color:#64748B;">
+            Toàn bộ dữ liệu đang có trong bảng sẽ thay thế nội dung tab đã cấu hình.
+        </MudText>
+
+        <MudRadioGroup T="string" @bind-Value="_selectedId">
+            @foreach (GoogleSheetTargetSettings target in Targets)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-2" Style="border-radius:9px;">
+                    <MudRadio T="string" Value="@target.Id" Color="Color.Primary">
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700;">
+                                @target.Name
+                            </MudText>
+                            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                                Tab: @target.WorksheetName
+                            </MudText>
+                        </MudStack>
+                    </MudRadio>
+                </MudPaper>
+            }
+        </MudRadioGroup>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Variant="Variant.Text">Hủy</MudButton>
+        <MudButton OnClick="Submit"
+                   Disabled="@string.IsNullOrWhiteSpace(_selectedId)"
+                   Color="Color.Success"
+                   Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.CloudUpload">
+            Đồng bộ
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public IReadOnlyList<GoogleSheetTargetSettings> Targets { get; set; } =
+        Array.Empty<GoogleSheetTargetSettings>();
+
+    private string _selectedId = string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        if (Targets.Count > 0
+            && !Targets.Any(target => target.Id == _selectedId))
+        {
+            _selectedId = Targets[0].Id;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Submit()
+    {
+        if (!string.IsNullOrWhiteSpace(_selectedId))
+            MudDialog.Close(DialogResult.Ok(_selectedId));
+    }
+}

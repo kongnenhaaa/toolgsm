@@ -257,7 +257,7 @@
          PanelClass="pa-0" Class="mx-3 mt-1 feature-tabs"
          Style="background:transparent;" @bind-ActivePanelIndex="_subTab">
     <MudTabPanel Text="Danh sách Cổng">
-        <ComTable Ports="Ports" Operation="DKTTTB" @bind-SelectedItems="_selectedPorts" />
+        <ComTable Ports="Ports" Operation="DKTTTB" @bind-SelectedItems="Vm.SelectedComPorts" />
     </MudTabPanel>
 
     <MudTabPanel Text="@($"Kết quả ({Vm.DeviceUnlockResults.Count})")">
@@ -331,7 +331,6 @@
 
     private string _sendMode = "selected";
     private int _parallelism = 10;
-    private HashSet<SimPort> _selectedPorts = new();
     private int _subTab;
     private bool _isRunning;
     private int _startGuard;
@@ -719,7 +718,7 @@
             ? _retryTargets
             : _sendMode == "all"
             ? Ports
-            : _selectedPorts.ToList())
+            : Vm.SelectedComPorts.ToList())
         .Where(port => port.Status == SimStatus.Active)
         .ToList();
 

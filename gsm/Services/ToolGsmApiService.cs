@@ -258,6 +258,12 @@ public sealed class ToolGsmApiService
                 }, statusCode: StatusCodes.Status200OK);
             }
 
+            if (!string.IsNullOrWhiteSpace(requestId)
+                && !string.IsNullOrWhiteSpace(matchedOtp))
+            {
+                _host.SetQueueOtp(requestId, matchedOtp);
+            }
+
             return Results.Json(new
             {
                 ok = true,
@@ -637,6 +643,7 @@ internal interface IToolGsmApiHost
         string status,
         string? result,
         string? error);
+    void SetQueueOtp(string requestId, string otp);
     void Log(string message, string level);
 }
 
@@ -687,6 +694,9 @@ internal sealed class MainViewModelToolGsmApiHost : IToolGsmApiHost
             result,
             error,
             "ZaloTool API");
+
+    public void SetQueueOtp(string requestId, string otp) =>
+        _viewModel.SetCommandQueueOtp(requestId, otp);
 
     public void Log(string message, string level) =>
         _viewModel.AddLog(message, level);

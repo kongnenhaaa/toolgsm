@@ -7,7 +7,11 @@ public sealed class DmxAccountServiceTests
 {
     [Theory]
     [InlineData("{\"createPassword\":true}", null)]
+    [InlineData("{\"createPassword\":\"SUCCESS\"}", null)]
+    [InlineData("{\"createPassword\":\"Đã cập nhật mật khẩu\"}", null)]
     [InlineData("{\"createPassword\":false}", "createPassword=false")]
+    [InlineData("{\"createPassword\":\"false\"}", "createPassword=false")]
+    [InlineData("{\"createPassword\":\"\"}", "kết quả đặt lại mật khẩu rỗng")]
     [InlineData("{\"createPassword\":null}", "không trả kết quả")]
     [InlineData("{}", "không trả kết quả")]
     public void PasswordRecovery_ReportsTheActualResponseStage(
@@ -104,10 +108,52 @@ public sealed class DmxAccountServiceTests
         Assert.Equal("12345", headers["customerid"]);
     }
 
+    [Fact]
+    public void AuthenticatedHeaders_KeepEmptyDeviceTokenForCurrentServer()
+    {
+        var session = new DmxRegistrationSession(
+            "0841234567",
+            "5d45c3ea-510c-44ed-aaf1-4447ce72bb6c",
+            "SM-G991B",
+            DmxAccountService.DefaultOAuthAuthorization,
+            "access-token",
+            null,
+            null,
+            "12345",
+            "PASSWORD_RECOVERY",
+            IsPasswordRecovery: true);
+
+        Dictionary<string, string> headers =
+            DmxAccountService.CreateGraphQlHeaders(session);
+
+        Assert.True(headers.ContainsKey("devicetoken"));
+        Assert.Equal(string.Empty, headers["devicetoken"]);
+    }
+
+    [Theory]
+    [InlineData("{\"DeviceToken\":\"oauth-token\"}", "forgot-token", "oauth-token")]
+    [InlineData("{\"data\":{\"device_token\":\"nested-token\"}}", "forgot-token", "nested-token")]
+    [InlineData("{\"DeviceToken\":\"{noop}\"}", "forgot-token", "forgot-token")]
+    [InlineData("{}", "forgot-token", "forgot-token")]
+    [InlineData("{}", null, "")]
+    public void PasswordRecoveryDeviceToken_UsesOAuthThenForgotPasswordFallback(
+        string json,
+        string? passwordDeviceToken,
+        string expected)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+
+        string actual = DmxAccountService.GetPasswordRecoveryDeviceToken(
+            document.RootElement,
+            passwordDeviceToken);
+
+        Assert.Equal(expected, actual);
+    }
+
     [Theory]
     [InlineData("Đã có lỗi chức năng quên mật khẩu")]
     [InlineData("Forgot password function error")]
-    public void GenericForgotPasswordFailure_IsRetriedOnce(string message)
+    public void GenericForgotPasswordFailure_IsRetriable(string message)
     {
         Assert.True(DmxAccountService.IsTransientForgotPasswordFailure(message));
     }

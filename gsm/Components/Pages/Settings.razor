@@ -1,9 +1,13 @@
 @page "/settings"
+@implements IDisposable
 @inject MainViewModel Vm
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject gsm.Services.IFileDialogService FileDialog
 @inject gsm.Services.IAudioService Audio
+@inject gsm.Services.GoogleSheetsSyncService GoogleSheetsSync
+@inject gsm.Services.ToolLicenseService License
+@inject IJSRuntime JS
 @using gsm.ViewModels
 @using gsm.Models
 @using System.IO
@@ -33,6 +37,66 @@
             Import cấu hình
         </MudButton>
     </MudStack>
+</MudPaper>
+
+<!-- ========== KÍCH HOẠT TOOLGSM ========== -->
+<MudPaper Class="pa-4 mx-3 mb-4" Elevation="0"
+          Style="@($"border:2px solid {(License.IsActivated ? "#16A34A" : "#D97706")}; border-radius:12px;")">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3" Wrap="Wrap.Wrap">
+        <MudIcon Icon="@(License.IsActivated ? Icons.Material.Filled.VerifiedUser : Icons.Material.Filled.Lock)"
+                 Color="@(License.IsActivated ? Color.Success : Color.Warning)" />
+        <MudText Typo="Typo.subtitle1" Style="font-weight:800;">Kích hoạt ToolGSM</MudText>
+        <MudSpacer />
+        <MudChip T="string" Size="Size.Small"
+                 Color="@(License.IsActivated ? Color.Success : Color.Warning)"
+                 Variant="Variant.Filled">
+            @(License.IsActivated ? "Đã kích hoạt vĩnh viễn" : "Chưa kích hoạt")
+        </MudChip>
+    </MudStack>
+
+    <MudGrid Spacing="2">
+        <MudItem xs="12" md="7">
+            <MudTextField T="string" Value="@License.HardwareId"
+                          Label="HWID máy này" ReadOnly="true"
+                          Variant="Variant.Outlined" Margin="Margin.Dense"
+                          Style="font-family:Consolas,monospace;" />
+        </MudItem>
+        <MudItem xs="12" md="5" Class="d-flex align-center">
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.ContentCopy"
+                       OnClick="CopyLicenseHardwareIdAsync">
+                Copy HWID
+            </MudButton>
+        </MudItem>
+
+        @if (!License.IsActivated)
+        {
+            <MudItem xs="12" md="7">
+                <MudTextField @bind-Value="_licenseKeyInput"
+                              Label="Key kích hoạt"
+                              Placeholder="TGSM-XXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXX"
+                              Variant="Variant.Outlined" Margin="Margin.Dense"
+                              Immediate="true"
+                              Style="font-family:Consolas,monospace;" />
+            </MudItem>
+            <MudItem xs="12" md="5" Class="d-flex align-center">
+                <MudButton Variant="Variant.Filled" Color="Color.Success"
+                           StartIcon="@Icons.Material.Filled.VpnKey"
+                           Disabled="@string.IsNullOrWhiteSpace(_licenseKeyInput)"
+                           OnClick="ActivateLicense">
+                    Kích hoạt key
+                </MudButton>
+            </MudItem>
+        }
+        else
+        {
+            <MudItem xs="12">
+                <MudAlert Severity="Severity.Success" Dense="true">
+                    Key đã được lưu cho đúng HWID này. ToolGSM đã mở khóa toàn bộ chức năng.
+                </MudAlert>
+            </MudItem>
+        }
+    </MudGrid>
 </MudPaper>
 
 <div class="mx-3 settings-grid">
@@ -288,8 +352,87 @@
                               Placeholder="machine-1"
                               Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" />
                 <MudSwitch T="bool" @bind-Value="_writeOtpToFirebase"
-                           Label="Tự động đồng bộ OTP/Ports lên Firebase"
+                           Label="Tự động đồng bộ OTP/Ports/IMEI lên Firebase"
                            Color="Color.Primary" />
+            </MudPaper>
+
+            <!-- GOOGLE SHEETS -->
+            <MudPaper Class="pa-4 mb-4" Elevation="0" Style="border:1px solid #E2E8F0; border-radius:12px;">
+                <MudText Typo="Typo.subtitle1" Class="mb-1" Style="font-weight:600;">
+                    <MudIcon Icon="@Icons.Material.Filled.TableView" Class="mr-1" Size="Size.Small" />
+                    Google Sheets
+                </MudText>
+                <MudText Typo="Typo.body2" Class="mb-3" Style="color:#64748B;">
+                    Cấu hình gateway một lần, sau đó thêm nhiều link Sheet và đặt tên để lựa chọn khi đồng bộ.
+                    Hướng dẫn triển khai nằm trong thư mục <b>google-sheets</b> cạnh ToolGSM.
+                </MudText>
+
+                <MudTextField @bind-Value="_googleSheetsWebAppUrl"
+                              Label="Apps Script Web App URL (dùng chung)"
+                              Placeholder="https://script.google.com/macros/s/.../exec"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2"
+                              HelperText="Deploy Code.gs dạng Web app rồi dán link /exec vào đây." />
+                <MudTextField @bind-Value="_googleSheetsSharedSecret"
+                              Label="Mã bảo mật đồng bộ"
+                              Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3"
+                              HelperText="Phải giống SHARED_SECRET trong Code.gs." />
+                <MudStack Row="true" Spacing="2" Class="mb-3" Wrap="Wrap.Wrap">
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Key"
+                               OnClick="GenerateGoogleSheetsSecret">
+                        Tạo mã đồng bộ
+                    </MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Info"
+                               StartIcon="@Icons.Material.Filled.CloudDone"
+                               OnClick="TestGoogleSheetsConnectionAsync"
+                               Disabled="@_isTestingGoogleSheets">
+                        @(_isTestingGoogleSheets ? "Đang kiểm tra..." : "Test kết nối")
+                    </MudButton>
+                </MudStack>
+
+                @for (int i = 0; i < _googleSheetTargets.Count; i++)
+                {
+                    int targetIndex = i;
+                    GoogleSheetTargetEditor target = _googleSheetTargets[targetIndex];
+                    <MudPaper Outlined="true" Class="pa-3 mb-3" Style="border-radius:9px;">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2">
+                            <MudText Typo="Typo.subtitle2" Style="font-weight:700;">
+                                Link làm việc @(targetIndex + 1)
+                            </MudText>
+                            <MudSpacer />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                           Color="Color.Error" Size="Size.Small"
+                                           OnClick="@(() => RemoveGoogleSheetTarget(targetIndex))"
+                                           title="Xóa link này" />
+                        </MudStack>
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" sm="5">
+                                <MudTextField @bind-Value="target.Name"
+                                              Label="Tên link làm việc"
+                                              Placeholder="VD: Kho SIM 1"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            </MudItem>
+                            <MudItem xs="12" sm="7">
+                                <MudTextField @bind-Value="target.WorksheetName"
+                                              Label="Tên tab trong Sheet"
+                                              Placeholder="ToolGSM"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            </MudItem>
+                            <MudItem xs="12">
+                                <MudTextField @bind-Value="target.SpreadsheetUrl"
+                                              Label="Link Google Sheet"
+                                              Placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+                                              Variant="Variant.Outlined" Margin="Margin.Dense" />
+                            </MudItem>
+                        </MudGrid>
+                    </MudPaper>
+                }
+
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                           StartIcon="@Icons.Material.Filled.AddLink"
+                           OnClick="AddGoogleSheetTarget">
+                    Thêm link Google Sheet
+                </MudButton>
             </MudPaper>
 
             <!-- ÂM THANH FILE -->
@@ -461,6 +604,20 @@
     private string _machineId = "machine-1";
     private bool _writeOtpToFirebase = false;
 
+    // ========== GOOGLE SHEETS ==========
+    private sealed class GoogleSheetTargetEditor
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        public string Name { get; set; } = "";
+        public string SpreadsheetUrl { get; set; } = "";
+        public string WorksheetName { get; set; } = "ToolGSM";
+    }
+
+    private string _googleSheetsWebAppUrl = "";
+    private string _googleSheetsSharedSecret = "";
+    private List<GoogleSheetTargetEditor> _googleSheetTargets = new();
+    private bool _isTestingGoogleSheets;
+
     // ========== ÂM THANH ==========
     private string _soundSmsPath = "";
     private string _soundCallPath = "";
@@ -476,11 +633,31 @@
     // ========== NEW SIM ==========
     private bool _newSimIntake = true;
     private bool _autoAccept = false;
+    private string _licenseKeyInput = "";
 
     // ========== LIFECYCLE ==========
     protected override void OnInitialized()
     {
+        License.ActivationChanged += OnLicenseActivationChanged;
         LoadSettings();
+    }
+
+    private void OnLicenseActivationChanged(object? sender, EventArgs e) =>
+        _ = InvokeAsync(StateHasChanged);
+
+    private async Task CopyLicenseHardwareIdAsync()
+    {
+        await JS.InvokeVoidAsync("clipboardCopy.copyText", License.HardwareId);
+        Snackbar.Add("Đã copy HWID.", Severity.Success);
+    }
+
+    private void ActivateLicense()
+    {
+        ToolLicenseActivationResult result = License.Activate(_licenseKeyInput);
+        Snackbar.Add(
+            result.Message,
+            result.Success ? Severity.Success : Severity.Error);
+        if (result.Success) _licenseKeyInput = "";
     }
 
     // ========== LOAD / SAVE ==========
@@ -541,6 +718,22 @@
             _machineId = cfg.MachineId ?? "machine-1";
             _writeOtpToFirebase = cfg.WriteOtpToFirebase;
 
+            _googleSheetsWebAppUrl = cfg.GoogleSheetsWebAppUrl ?? "";
+            _googleSheetsSharedSecret = cfg.GoogleSheetsSharedSecret ?? "";
+            _googleSheetTargets = (cfg.GoogleSheetTargets ?? new())
+                .Select(target => new GoogleSheetTargetEditor
+                {
+                    Id = string.IsNullOrWhiteSpace(target.Id)
+                        ? Guid.NewGuid().ToString("N")
+                        : target.Id,
+                    Name = target.Name ?? "",
+                    SpreadsheetUrl = target.SpreadsheetUrl ?? "",
+                    WorksheetName = string.IsNullOrWhiteSpace(target.WorksheetName)
+                        ? "ToolGSM"
+                        : target.WorksheetName
+                })
+                .ToList();
+
             _soundSmsPath = cfg.SoundSmsPath ?? "";
             _soundCallPath = cfg.SoundCallPath ?? "";
             _soundOtpPath = cfg.SoundOtpPath ?? "";
@@ -594,6 +787,50 @@
                     Severity.Warning);
                 return;
             }
+            GoogleSheetTargetEditor? incompleteSheet = _googleSheetTargets
+                .FirstOrDefault(target => string.IsNullOrWhiteSpace(target.Name)
+                                          || string.IsNullOrWhiteSpace(target.SpreadsheetUrl)
+                                          || string.IsNullOrWhiteSpace(target.WorksheetName));
+            if (incompleteSheet != null)
+            {
+                Snackbar.Add(
+                    "Mỗi Google Sheet phải có tên link, link Sheet và tên tab.",
+                    Severity.Warning);
+                return;
+            }
+            GoogleSheetTargetEditor? invalidSheet = _googleSheetTargets
+                .FirstOrDefault(target => !GoogleSheetsSyncService.TryExtractSpreadsheetId(
+                    target.SpreadsheetUrl,
+                    out _));
+            if (invalidSheet != null)
+            {
+                Snackbar.Add(
+                    $"Link Google Sheet '{invalidSheet.Name}' không hợp lệ.",
+                    Severity.Warning);
+                return;
+            }
+            if (_googleSheetTargets.Count > 0
+                && (!GoogleSheetsSyncService.TryValidateWebAppUrl(
+                        _googleSheetsWebAppUrl,
+                        out _,
+                        out string webAppError)
+                    || string.IsNullOrWhiteSpace(_googleSheetsSharedSecret)))
+            {
+                Snackbar.Add(
+                    string.IsNullOrWhiteSpace(_googleSheetsSharedSecret)
+                        ? "Hãy nhập mã bảo mật Google Sheets."
+                        : webAppError,
+                    Severity.Warning);
+                return;
+            }
+            bool duplicateSheetName = _googleSheetTargets
+                .GroupBy(target => target.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Any(group => group.Count() > 1);
+            if (duplicateSheetName)
+            {
+                Snackbar.Add("Tên các link Google Sheet không được trùng nhau.", Severity.Warning);
+                return;
+            }
 
             var cfg = gsm.Services.SettingsService.Current;
 
@@ -630,6 +867,19 @@
             cfg.FirebaseDbUrl = gsm.Services.FirebaseService.DatabaseUrl;
             cfg.MachineId = _machineId.Trim();
             cfg.WriteOtpToFirebase = _writeOtpToFirebase;
+
+            cfg.GoogleSheetsWebAppUrl = _googleSheetsWebAppUrl.Trim();
+            cfg.GoogleSheetsSharedSecret = _googleSheetsSharedSecret.Trim();
+            cfg.GoogleSheetTargets = _googleSheetTargets.Select(target =>
+                new GoogleSheetTargetSettings
+                {
+                    Id = string.IsNullOrWhiteSpace(target.Id)
+                        ? Guid.NewGuid().ToString("N")
+                        : target.Id,
+                    Name = target.Name.Trim(),
+                    SpreadsheetUrl = target.SpreadsheetUrl.Trim(),
+                    WorksheetName = target.WorksheetName.Trim()
+                }).ToList();
 
             cfg.SoundSmsPath = _soundSmsPath.Trim();
             cfg.SoundCallPath = _soundCallPath.Trim();
@@ -699,6 +949,10 @@
         _machineId = "machine-1";
         _writeOtpToFirebase = false;
 
+        _googleSheetsWebAppUrl = "";
+        _googleSheetsSharedSecret = "";
+        _googleSheetTargets = new();
+
         _soundSmsPath = "";
         _soundCallPath = "";
         _soundOtpPath = "";
@@ -713,6 +967,64 @@
         _autoAccept = false;
 
         Snackbar.Add("Đã khôi phục mặc định (chưa lưu — nhấn Lưu để áp dụng)", Severity.Info);
+    }
+
+    private void AddGoogleSheetTarget()
+    {
+        _googleSheetTargets.Add(new GoogleSheetTargetEditor());
+        if (string.IsNullOrWhiteSpace(_googleSheetsSharedSecret))
+        {
+            _googleSheetsSharedSecret = Convert.ToHexString(
+                System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+        }
+    }
+
+    private void RemoveGoogleSheetTarget(int index)
+    {
+        if (index >= 0 && index < _googleSheetTargets.Count)
+            _googleSheetTargets.RemoveAt(index);
+    }
+
+    public void Dispose() =>
+        License.ActivationChanged -= OnLicenseActivationChanged;
+
+    private void GenerateGoogleSheetsSecret()
+    {
+        _googleSheetsSharedSecret = Convert.ToHexString(
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+        Snackbar.Add(
+            "Đã tạo mã đồng bộ mới. Hãy copy mã này vào SHARED_SECRET trong Code.gs.",
+            Severity.Success);
+    }
+
+    private async Task TestGoogleSheetsConnectionAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_googleSheetsWebAppUrl))
+        {
+            Snackbar.Add("Hãy dán Apps Script Web App URL trước.", Severity.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_googleSheetsSharedSecret))
+        {
+            Snackbar.Add("Hãy nhập mã bảo mật đồng bộ trước.", Severity.Warning);
+            return;
+        }
+
+        _isTestingGoogleSheets = true;
+        try
+        {
+            GoogleSheetSyncResult result = await GoogleSheetsSync.TestConnectionAsync(
+                _googleSheetsWebAppUrl,
+                _googleSheetsSharedSecret,
+                _machineId);
+            Snackbar.Add(
+                result.Message,
+                result.Success ? Severity.Success : Severity.Error);
+        }
+        finally
+        {
+            _isTestingGoogleSheets = false;
+        }
     }
 
     // ========== EXPORT / IMPORT ==========

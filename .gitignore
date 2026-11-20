@@ -32,6 +32,8 @@ x86/
 [Ww][Ii][Nn]32/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
+# Runtime-specific Windows publish output
+**/win-x64/
 bld/
 [Bb]in/
 [Oo]bj/

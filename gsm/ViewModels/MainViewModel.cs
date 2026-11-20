@@ -29,9 +29,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IGsmUssdService _ussdService;
     private readonly IGsmCallService _callService;
     private readonly IGsmBackgroundSupervisor _backgroundSupervisor;
-    private readonly ToolLicenseService _licenseService;
     private GsmBackgroundSupervisorContext? _backgroundSupervisorContext;
-    private int _licensedRuntimeStarted;
+    private int _runtimeStarted;
     private readonly gsm.Services.INotifyService _notifyService = new gsm.Services.NotifyService();
     private readonly gsm.Services.IFirebaseOtpService _firebaseOtpService = new gsm.Services.FirebaseOtpService();
     // SMS history is session-only. It is displayed while ToolGSM is open and
@@ -3312,8 +3311,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         IGsmSmsService smsService,
         IGsmUssdService ussdService,
         IGsmCallService callService,
-        IGsmBackgroundSupervisor backgroundSupervisor,
-        ToolLicenseService licenseService)
+        IGsmBackgroundSupervisor backgroundSupervisor)
     {
         FilteredPortsView = System.Windows.Data.CollectionViewSource.GetDefaultView(Ports);
         FilteredPortsView.Filter = o => 
@@ -3353,7 +3351,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _ussdService = ussdService;
         _callService = callService;
         _backgroundSupervisor = backgroundSupervisor;
-        _licenseService = licenseService;
         AppSettings = SettingsService.Current;
         _notifyService.TelegramStatus += NotifyService_TelegramStatus;
         _modemService.LogMessage += ModemService_LogMessage;
@@ -3413,17 +3410,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
         // SAuto chỉ có một vòng DataPort sở hữu CPIN/CSQ/COPS. Không khởi động
         // supervisor thứ hai vì nó sẽ bắn thêm CSQ/CMGL ngoài log tham chiếu.
-        _licenseService.ActivationChanged += LicenseService_ActivationChanged;
-        if (_licenseService.IsActivated)
-        {
-            StartLicensedRuntime();
-        }
-        else
-        {
-            AddLog(
-                "[LICENSE_REQUIRED] ToolGSM chưa kích hoạt; phần cứng và các dịch vụ làm việc đang khóa.",
-                "WARN");
-        }
+        StartRuntime();
     }
 
     private async Task PrepareVoiceModelAsync()
@@ -4092,22 +4079,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void LicenseService_ActivationChanged(object? sender, EventArgs e)
+    private void StartRuntime()
     {
-        if (!_licenseService.IsActivated) return;
-        try
-        {
-            Application.Current.Dispatcher.Invoke(StartLicensedRuntime);
-        }
-        catch (TaskCanceledException) { }
-        catch (InvalidOperationException) { }
-    }
+        if (Interlocked.Exchange(ref _runtimeStarted, 1) != 0) return;
 
-    private void StartLicensedRuntime()
-    {
-        if (Interlocked.Exchange(ref _licensedRuntimeStarted, 1) != 0) return;
-
-        AddLog("[LICENSE_OK] Key hợp lệ; mở khóa phần cứng và dịch vụ ToolGSM.", "SUCCESS");
+        AddLog("[RUNTIME_READY] Khởi động phần cứng và dịch vụ ToolGSM.", "SUCCESS");
         InitializeHardware();
         _ = PrepareVoiceModelAsync();
         _firebaseService.Start();
@@ -9504,8 +9480,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         BeginShutdown();
 
         _notifyService.TelegramStatus -= NotifyService_TelegramStatus;
-        _licenseService.ActivationChanged -= LicenseService_ActivationChanged;
-
         foreach (SimPort trackedPort in _stateTrackedPorts.Values)
             trackedPort.PropertyChanged -= PortState_PropertyChanged;
         _stateTrackedPorts.Clear();

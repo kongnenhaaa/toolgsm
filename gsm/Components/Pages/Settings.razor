@@ -1,13 +1,10 @@
 @page "/settings"
-@implements IDisposable
 @inject MainViewModel Vm
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject gsm.Services.IFileDialogService FileDialog
 @inject gsm.Services.IAudioService Audio
 @inject gsm.Services.GoogleSheetsSyncService GoogleSheetsSync
-@inject gsm.Services.ToolLicenseService License
-@inject IJSRuntime JS
 @using gsm.ViewModels
 @using gsm.Models
 @using System.IO
@@ -37,66 +34,6 @@
             Import cấu hình
         </MudButton>
     </MudStack>
-</MudPaper>
-
-<!-- ========== KÍCH HOẠT TOOLGSM ========== -->
-<MudPaper Class="pa-4 mx-3 mb-4" Elevation="0"
-          Style="@($"border:2px solid {(License.IsActivated ? "#16A34A" : "#D97706")}; border-radius:12px;")">
-    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-3" Wrap="Wrap.Wrap">
-        <MudIcon Icon="@(License.IsActivated ? Icons.Material.Filled.VerifiedUser : Icons.Material.Filled.Lock)"
-                 Color="@(License.IsActivated ? Color.Success : Color.Warning)" />
-        <MudText Typo="Typo.subtitle1" Style="font-weight:800;">Kích hoạt ToolGSM</MudText>
-        <MudSpacer />
-        <MudChip T="string" Size="Size.Small"
-                 Color="@(License.IsActivated ? Color.Success : Color.Warning)"
-                 Variant="Variant.Filled">
-            @(License.IsActivated ? "Đã kích hoạt vĩnh viễn" : "Chưa kích hoạt")
-        </MudChip>
-    </MudStack>
-
-    <MudGrid Spacing="2">
-        <MudItem xs="12" md="7">
-            <MudTextField T="string" Value="@License.HardwareId"
-                          Label="HWID máy này" ReadOnly="true"
-                          Variant="Variant.Outlined" Margin="Margin.Dense"
-                          Style="font-family:Consolas,monospace;" />
-        </MudItem>
-        <MudItem xs="12" md="5" Class="d-flex align-center">
-            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                       StartIcon="@Icons.Material.Filled.ContentCopy"
-                       OnClick="CopyLicenseHardwareIdAsync">
-                Copy HWID
-            </MudButton>
-        </MudItem>
-
-        @if (!License.IsActivated)
-        {
-            <MudItem xs="12" md="7">
-                <MudTextField @bind-Value="_licenseKeyInput"
-                              Label="Key kích hoạt"
-                              Placeholder="TGSM-XXXXXXXX-XXXXXXXXXXXXXXXXXXXXXXXX"
-                              Variant="Variant.Outlined" Margin="Margin.Dense"
-                              Immediate="true"
-                              Style="font-family:Consolas,monospace;" />
-            </MudItem>
-            <MudItem xs="12" md="5" Class="d-flex align-center">
-                <MudButton Variant="Variant.Filled" Color="Color.Success"
-                           StartIcon="@Icons.Material.Filled.VpnKey"
-                           Disabled="@string.IsNullOrWhiteSpace(_licenseKeyInput)"
-                           OnClick="ActivateLicense">
-                    Kích hoạt key
-                </MudButton>
-            </MudItem>
-        }
-        else
-        {
-            <MudItem xs="12">
-                <MudAlert Severity="Severity.Success" Dense="true">
-                    Key đã được lưu cho đúng HWID này. ToolGSM đã mở khóa toàn bộ chức năng.
-                </MudAlert>
-            </MudItem>
-        }
-    </MudGrid>
 </MudPaper>
 
 <div class="mx-3 settings-grid">
@@ -633,31 +570,11 @@
     // ========== NEW SIM ==========
     private bool _newSimIntake = true;
     private bool _autoAccept = false;
-    private string _licenseKeyInput = "";
 
     // ========== LIFECYCLE ==========
     protected override void OnInitialized()
     {
-        License.ActivationChanged += OnLicenseActivationChanged;
         LoadSettings();
-    }
-
-    private void OnLicenseActivationChanged(object? sender, EventArgs e) =>
-        _ = InvokeAsync(StateHasChanged);
-
-    private async Task CopyLicenseHardwareIdAsync()
-    {
-        await JS.InvokeVoidAsync("clipboardCopy.copyText", License.HardwareId);
-        Snackbar.Add("Đã copy HWID.", Severity.Success);
-    }
-
-    private void ActivateLicense()
-    {
-        ToolLicenseActivationResult result = License.Activate(_licenseKeyInput);
-        Snackbar.Add(
-            result.Message,
-            result.Success ? Severity.Success : Severity.Error);
-        if (result.Success) _licenseKeyInput = "";
     }
 
     // ========== LOAD / SAVE ==========
@@ -984,9 +901,6 @@
         if (index >= 0 && index < _googleSheetTargets.Count)
             _googleSheetTargets.RemoveAt(index);
     }
-
-    public void Dispose() =>
-        License.ActivationChanged -= OnLicenseActivationChanged;
 
     private void GenerateGoogleSheetsSecret()
     {
